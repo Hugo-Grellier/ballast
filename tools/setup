@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Recreate the ignored Spec Kit installation in this checkout."""
+"""Install Spec Kit and this standard into a project's git-ignored paths.
+
+Usage: tools/setup [--project DIR]
+
+The project commits `agentic.toml` and its own overrides only. Everything this
+script writes is rebuildable and must be ignored; see GITIGNORE below.
+"""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import shutil
@@ -13,9 +20,10 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-OVERRIDES = ROOT / "scripts/spec-kit"
-STAMP = ROOT / ".specify/.loreforge-setup-version"
+import tomllib
+
+STANDARD = Path(__file__).resolve().parent.parent
+PATCHES = STANDARD / "tools/spec-kit"
 VERSION = "1.0.11"
 SOURCES = {
     "core": ("github/spec-kit", "8147943512404afb9d99c6252cb9bf84369fd0b0"),
@@ -36,72 +44,283 @@ SOURCES = {
         "83421f58e0e6768e5701e839b05ecb5bb57eff8c",
     ),
 }
-PRESERVED = (
-    ".specify/.gitignore",
-    ".specify/templates/plan-template.md",
-    ".specify/templates/spec-template.md",
-    ".specify/templates/tasks-template.md",
-    ".specify/workflows/workflow-registry.json",
+GITIGNORE = """\
+# Installed by agentic-repo-standard tools/setup
+.agentic/
+.agents/skills/speckit-*
+.claude/skills/speckit-*
+.specify/*
+!.specify/memory/
+.specify/memory/.constitution-template.json
+"""
+# Representative paths for GITIGNORE: (path, must be ignored).
+IGNORE_PROBES = (
+    (".agentic/spec_workflow/run.py", True),
+    (".agents/skills/speckit-tasks/SKILL.md", True),
+    (".claude/skills/speckit-tasks/SKILL.md", True),
+    (".specify/scripts/python/common.py", True),
+    (".specify/templates/plan-template.md", True),
+    (".specify/workflows/workflow-registry.json", True),
+    (".specify/memory/.constitution-template.json", True),
+    (".specify/memory/constitution.md", False),
 )
-COPY_DIRECTORIES = (
+# Project-owned files that `specify init --force` would overwrite.
+PRESERVED = (".specify/memory/constitution.md",)
+WORKFLOW = "agentic-feature"
+INSTALLED = (
+    ".agentic",
     ".specify/scripts",
     ".specify/integrations",
-    ".specify/extensions/assess",
-    ".specify/extensions/bug",
-    ".specify/extensions/intent",
-    ".specify/extensions/multi-model-review",
-    ".specify/extensions/status-report",
-    ".specify/presets/explicit-task-dependencies",
-    ".specify/workflows/assess",
-    ".specify/workflows/bugfix",
-)
-COPY_FILES = (
+    ".specify/extensions",
+    ".specify/presets",
+    ".specify/workflows",
+    ".specify/templates",
     ".specify/integration.json",
     ".specify/init-options.json",
     ".specify/bundle-records.json",
     ".specify/extensions.yml",
-    ".specify/extensions/.registry",
-    ".specify/presets/.registry",
-    ".specify/templates/checklist-template.md",
-    ".specify/templates/constitution-template.md",
-)
-# Ignored installer output; removed before reinstalling because Spec Kit
-# refuses to add an extension or preset that is already installed.
-GENERATED = (
-    *COPY_DIRECTORIES,
-    *COPY_FILES,
-    ".specify/extensions",
-    ".specify/presets",
-    ".specify/workflows/speckit",
-    ".specify/workflows/.cache",
+    ".specify/.gitignore",
     ".specify/memory/.constitution-template.json",
 )
-MATCH_FILES = (
-    "scripts/setup-speckit",
-    "scripts/spec-kit/skills.patch",
-    "scripts/spec-kit/preset.patch",
-    ".specify/templates/plan-template.md",
-    ".specify/templates/spec-template.md",
-    ".specify/templates/tasks-template.md",
-    ".specify/workflows/loreforge-feature/workflow.yml",
+# Local state a worktree must not copy from its primary checkout.
+LOCAL_STATE = (
+    ".specify/workflows/runs",
+    ".specify/workflows/.cache",
+    ".specify/extensions/.cache",
+    ".specify/extensions/.backup",
 )
 
 
-def _fingerprint() -> str:
-    # Any change to pins, patches or committed templates must reinstall.
-    digest = hashlib.sha256()
-    for path in MATCH_FILES:
-        digest.update(path.encode() + b"\0" + (ROOT / path).read_bytes() + b"\0")
-    return f"{VERSION} {digest.hexdigest()}"
+class Setup:
+    """One installation of the standard into one project checkout."""
+
+    def __init__(self, project: Path) -> None:
+        self.root = project
+        self.stamp = project / ".agentic/.setup-version"
+        config = project / "agentic.toml"
+        self.config_bytes = config.read_bytes() if config.is_file() else b""
+        self.config = tomllib.loads(self.config_bytes.decode())
+
+    def fingerprint(self) -> str:
+        # Any change to the standard, its pins or the project config reinstalls.
+        digest = hashlib.sha256(self.config_bytes)
+        for base in (STANDARD / "tools", STANDARD / "templates/spec-kit"):
+            for path in sorted(base.rglob("*")):
+                if "__pycache__" in path.parts or path.is_dir():
+                    continue
+                content = (
+                    str(path.readlink()).encode()
+                    if path.is_symlink()
+                    else path.read_bytes()
+                )
+                name = str(path.relative_to(STANDARD)).encode()
+                digest.update(name + b"\0" + content + b"\0")
+        return f"{VERSION} {digest.hexdigest()}"
+
+    def run(self, *args: str, cwd: Path | None = None) -> None:
+        # Executable names and source locations are fixed by this script.
+        subprocess.run(args, cwd=cwd or self.root, check=True)  # noqa: S603
+
+    def specify(self, *args: str) -> None:
+        self.run("uvx", "--from", f"specify-cli=={VERSION}", "specify", *args)
+
+    def check_ignored(self) -> None:
+        wrong = [
+            path
+            for path, ignored in IGNORE_PROBES
+            if ignored
+            != (
+                subprocess.run(  # noqa: S603
+                    ["git", "check-ignore", "-q", "--no-index", path],  # noqa: S607
+                    cwd=self.root,
+                    check=False,
+                ).returncode
+                == 0
+            )
+        ]
+        if wrong:
+            message = (
+                f"Installed paths are not ignored correctly ({', '.join(wrong)}). "
+                f"Add this block to {self.root / '.gitignore'}:\n\n{GITIGNORE}"
+            )
+            raise RuntimeError(message)
+
+    def remove_installed(self) -> None:
+        skills = (
+            *self.root.glob(".agents/skills/speckit-*"),
+            *self.root.glob(".claude/skills/speckit-*"),
+        )
+        for path in (*skills, *(self.root / name for name in INSTALLED)):
+            if path == self.root / ".specify/workflows" and path.is_dir():
+                # Keep run state so a reinstall never loses a paused run.
+                for child in path.iterdir():
+                    if child.name != "runs":
+                        _remove(child)
+            else:
+                _remove(path)
+
+    def matching_primary(self) -> Path | None:
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],  # noqa: S607
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        primary = Path(common).resolve().parent
+        stamp = primary / self.stamp.relative_to(self.root)
+        if (
+            primary == self.root.resolve()
+            or not stamp.is_file()
+            or stamp.read_text().strip() != self.fingerprint()
+        ):
+            return None
+        return primary
+
+    def copy_from_primary(self) -> bool:
+        primary = self.matching_primary()
+        if primary is None:
+            return False
+        ignore = shutil.ignore_patterns(*(Path(p).name for p in LOCAL_STATE))
+        sources = (
+            *(primary / name for name in INSTALLED),
+            *primary.glob(".agents/skills/speckit-*"),
+            *primary.glob(".claude/skills/speckit-*"),
+        )
+        for source in sources:
+            if not source.exists():
+                continue
+            target = self.root / source.relative_to(primary)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, target, symlinks=True, ignore=ignore)
+            else:
+                shutil.copy2(source, target)
+        sys.stdout.write("Copied the installation from the primary checkout\n")
+        return True
+
+    def install_spec_kit(self, temporary: Path) -> None:
+        for executable in ("uvx", "patch"):
+            if shutil.which(executable) is None:
+                message = f"Required setup tool is missing: {executable}"
+                raise RuntimeError(message)
+        sources = {name: _fetch_source(name, temporary) for name in SOURCES}
+        preserved = {
+            path: (self.root / path).read_bytes()
+            for path in PRESERVED
+            if (self.root / path).is_file()
+        }
+        try:
+            self.specify(
+                "init",
+                "--here",
+                "--force",
+                "--non-interactive",
+                "--ignore-agent-tools",
+                "--integration",
+                "codex",
+                "--integration-options=--skills",
+                "--script",
+                "py",
+            )
+        finally:
+            for path, content in preserved.items():
+                (self.root / path).write_bytes(content)
+        self.specify("integration", "install", "claude", "--script", "py")
+        for bundle in ("bugfix", "assess"):
+            self.specify("bundle", "install", str(sources["core"] / "bundles" / bundle))
+        for extension in ("multi-model-review", "status-report", "intent"):
+            self.specify("extension", "add", str(sources[extension]), "--dev")
+        self.specify("preset", "add", "--dev", str(sources["preset"]))
+        self.run(
+            "patch", "-p1", "--batch", "--forward", "-i", str(PATCHES / "skills.patch")
+        )
+        self.complete_claude_extension_skills()
+        self.run(
+            "patch",
+            "-p1",
+            "--batch",
+            "--forward",
+            "-i",
+            str(PATCHES / "preset.patch"),
+            cwd=self.root / ".specify/presets/explicit-task-dependencies",
+        )
+
+    def complete_claude_extension_skills(self) -> None:
+        # Spec Kit 1.0.11 installs extension skills only for the default integration.
+        # Claude skills use slash command names, except intent, which keeps
+        # Codex's `$speckit-` names.
+        for source in (self.root / ".agents/skills").glob("speckit-*/SKILL.md"):
+            target = self.root / ".claude/skills" / source.parent.name / "SKILL.md"
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = source.read_text()
+            if not source.parent.name.startswith("speckit-intent-"):
+                content = content.replace("$speckit-", "/speckit-")
+            target.write_text(content)
+
+    def install_standard(self) -> None:
+        agentic = self.root / ".agentic"
+        shutil.copytree(
+            STANDARD / "tools/spec_workflow",
+            agentic / "spec_workflow",
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        settings = agentic / "spec_workflow/claude-settings.json"
+        settings.write_text(
+            json.dumps(
+                merge_permissions(json.loads(settings.read_text()), self.config),
+                indent=2,
+            )
+            + "\n"
+        )
+        for template in (STANDARD / "templates/spec-kit/templates").glob("*.md"):
+            shutil.copy2(template, self.root / ".specify/templates" / template.name)
+        self.specify(
+            "workflow",
+            "add",
+            "--dev",
+            str(STANDARD / "templates/spec-kit/workflows/feature"),
+        )
+
+    def main(self) -> None:
+        if (
+            self.stamp.is_file()
+            and self.stamp.read_text().strip() == self.fingerprint()
+        ):
+            sys.stdout.write("The standard is already set up in this checkout\n")
+            return
+        self.check_ignored()
+        self.remove_installed()
+        if not self.copy_from_primary():
+            with tempfile.TemporaryDirectory(prefix="agentic-setup-") as directory:
+                self.install_spec_kit(Path(directory))
+            self.install_standard()
+        self.stamp.parent.mkdir(exist_ok=True)
+        self.stamp.write_text(self.fingerprint() + "\n")
+        sys.stdout.write(f"Spec Kit {VERSION} and the standard are set up\n")
 
 
-def _run(*args: str, cwd: Path = ROOT) -> None:
-    # Executable names and source locations are fixed by this script.
-    subprocess.run(args, cwd=cwd, check=True)  # noqa: S603
+def merge_permissions(settings: dict, config: dict) -> dict:
+    """Append the project's extra allow/deny rules to the base settings."""
+    extra = config.get("agents", {}).get("permissions", {})
+    permissions = settings["permissions"]
+    for key in ("allow", "deny"):
+        rules = extra.get(f"extra_{key}", [])
+        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+            message = f"agents.permissions.extra_{key} must be a list of strings"
+            raise ValueError(message)
+        permissions[key] = list(dict.fromkeys([*permissions[key], *rules]))
+    return settings
 
 
-def _specify(*args: str) -> None:
-    _run("uvx", "--from", f"specify-cli=={VERSION}", "specify", *args)
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _fetch_source(name: str, temporary: Path) -> Path:
@@ -121,153 +340,10 @@ def _fetch_source(name: str, temporary: Path) -> Path:
     return children[0]
 
 
-def _apply_patch(name: str, cwd: Path) -> None:
-    _run("patch", "-p1", "--batch", "--forward", "-i", str(OVERRIDES / name), cwd=cwd)
-
-
-def _complete_claude_extension_skills() -> None:
-    # Spec Kit 1.0.11 installs extension skills only for the default integration.
-    # Existing Claude extension skills use slash command names, except intent,
-    # which was shared with Codex through local symlinks.
-    for source in (ROOT / ".agents/skills").glob("speckit-*/SKILL.md"):
-        target = ROOT / ".claude/skills" / source.parent.name / "SKILL.md"
-        if target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        content = source.read_text()
-        if not source.parent.name.startswith("speckit-intent-"):
-            content = content.replace("$speckit-", "/speckit-")
-        target.write_text(content)
-
-
-def _remove_generated() -> None:
-    STAMP.unlink(missing_ok=True)
-    skills = (
-        *ROOT.glob(".agents/skills/speckit-*"),
-        *ROOT.glob(".claude/skills/speckit-*"),
-    )
-    for path in (*skills, *(ROOT / name for name in GENERATED)):
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
-
-
-def _matching_primary() -> Path | None:
-    git = shutil.which("git")
-    if git is None:
-        return None
-    common = subprocess.run(  # noqa: S603
-        [git, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    primary = Path(common).resolve().parent
-    if primary == ROOT or any(
-        not (primary / path).is_file()
-        or (primary / path).read_bytes() != (ROOT / path).read_bytes()
-        for path in MATCH_FILES
-    ):
-        return None
-    options = primary / ".specify/init-options.json"
-    stamp = primary / STAMP.relative_to(ROOT)
-    if (
-        not options.is_file()
-        or json.loads(options.read_text()).get("speckit_version") != VERSION
-        or not stamp.is_file()
-        or stamp.read_text().strip() != _fingerprint()
-    ):
-        return None
-    required = (*COPY_DIRECTORIES, *COPY_FILES)
-    if any(not (primary / path).exists() for path in required):
-        return None
-    if any(
-        not (primary / path).is_file()
-        for path in (
-            ".agents/skills/speckit-tasks/SKILL.md",
-            ".claude/skills/speckit-tasks/SKILL.md",
-        )
-    ):
-        return None
-    return primary
-
-
-def _copy_from_primary() -> bool:
-    primary = _matching_primary()
-    if primary is None:
-        return False
-    for integration in (".agents", ".claude"):
-        for source in (primary / integration / "skills").glob("speckit-*"):
-            shutil.copytree(source, ROOT / integration / "skills" / source.name)
-    for path in COPY_DIRECTORIES:
-        shutil.copytree(primary / path, ROOT / path, dirs_exist_ok=True)
-    for path in COPY_FILES:
-        target = ROOT / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(primary / path, target)
-    STAMP.write_text(_fingerprint() + "\n")
-    sys.stdout.write(f"Copied Spec Kit {VERSION} from primary checkout\n")
-    return True
-
-
-def _main() -> None:
-    if STAMP.exists() and STAMP.read_text().strip() == _fingerprint():
-        sys.stdout.write(f"Spec Kit {VERSION} is already set up in this checkout\n")
-        return
-    _remove_generated()
-    if _copy_from_primary():
-        return
-    for executable in ("uvx", "patch"):
-        if shutil.which(executable) is None:
-            message = f"Required setup tool is missing: {executable}"
-            raise RuntimeError(message)
-
-    preserved = {path: (ROOT / path).read_bytes() for path in PRESERVED}
-    with tempfile.TemporaryDirectory(prefix="loreforge-speckit-") as directory:
-        temporary = Path(directory)
-        sources = {name: _fetch_source(name, temporary) for name in SOURCES}
-
-        try:
-            _specify(
-                "init",
-                "--here",
-                "--force",
-                "--non-interactive",
-                "--ignore-agent-tools",
-                "--integration",
-                "codex",
-                "--integration-options=--skills",
-                "--script",
-                "py",
-            )
-        finally:
-            for path, content in preserved.items():
-                (ROOT / path).write_bytes(content)
-
-        _specify("integration", "install", "claude", "--script", "py")
-        for bundle in ("bugfix", "assess"):
-            _specify("bundle", "install", str(sources["core"] / "bundles" / bundle))
-            # The committed registry can mark a workflow installed even when
-            # its ignored workflow file is absent in a fresh checkout.
-            shutil.copytree(
-                sources["core"] / "workflows" / bundle,
-                ROOT / ".specify/workflows" / bundle,
-                dirs_exist_ok=True,
-            )
-        for extension in ("multi-model-review", "status-report", "intent"):
-            _specify("extension", "add", str(sources[extension]), "--dev")
-        _specify("preset", "add", "--dev", str(sources["preset"]))
-
-        _apply_patch("skills.patch", ROOT)
-        _complete_claude_extension_skills()
-        _apply_patch(
-            "preset.patch", ROOT / ".specify/presets/explicit-task-dependencies"
-        )
-        STAMP.write_text(_fingerprint() + "\n")
-    sys.stdout.write(f"Spec Kit {VERSION} setup complete\n")
-
-
 if __name__ == "__main__":
-    _main()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    try:
+        Setup(parser.parse_args().project.resolve()).main()
+    except (RuntimeError, ValueError) as error:
+        sys.exit(f"setup: {error}")

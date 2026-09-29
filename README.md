@@ -16,6 +16,23 @@ This repository is the source of the standard. The files under `templates/` are 
 
 Review each template before copying it into a project. Replace project-specific placeholders, remove guidance that does not apply, and keep the resulting instructions close to the code they govern. Treat templates as a starting point, not as a substitute for the target project's own conventions.
 
+## Installing the Spec Kit workflow
+
+`tools/setup` installs pinned Spec Kit sources and this standard's workflow tooling into a project. Everything it writes is rebuildable and git-ignored; the project commits only its own files.
+
+1. Add the ignore block that `tools/setup` prints on its first run to the project's `.gitignore`. The block keeps `.specify/memory/constitution.md` tracked.
+2. Optionally add `agentic.toml` at the project root to extend the headless-agent permissions:
+
+   ```toml
+   [agents.permissions]
+   extra_allow = ["Bash(./scripts/check)"]
+   extra_deny = ["Edit(./private/**)"]
+   ```
+
+3. From a checkout of this repository, run `tools/setup --project /path/to/project`. It needs `git`, `uvx`, `patch`, and network access to GitHub.
+
+The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `agentic-feature` workflow, and its tools under `.agentic/spec_workflow/`. A rerun is a no-op until this repository or `agentic.toml` changes. A new Git worktree copies the installation from its primary checkout when both match. A reinstall keeps `.specify/workflows/runs/` and the project constitution.
+
 ## Status
 
-Initial draft. The structure and scope are documented; policies, skills, GitHub templates, and profiles have not yet been populated.
+Initial draft. The Spec Kit workflow tooling is backported from LoreForge; policies, skills, GitHub templates, and profiles have not yet been populated.

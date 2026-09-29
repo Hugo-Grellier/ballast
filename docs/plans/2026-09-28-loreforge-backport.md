@@ -101,6 +101,8 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
    - Check: `./scripts/check`. Then check that `python3 tools/spec_workflow/artifacts.py convergence --feature specs/103-...` still passes on existing specs. Then do one fresh `run.py start` to the intent gate.
    - Backward compatibility: the workflow id becomes `agentic-feature` and the launcher variable becomes `AGENTIC_SPEC_WORKFLOW`. No compatibility alias: finish or restart any local `loreforge-feature` run before migrating.
    - Restore LoreForge's project permissions through `agentic.toml` `extra_allow`/`extra_deny`, since the base list no longer has them: `./scripts/check`, `./scripts/generate-api`, `uv run --locked ruff *`, `uv run --locked ty check*`, `uv run --locked python -m unittest *`, `pnpm --dir web run lint|typecheck|test*`, and deny `Read`/`Edit(./campaigns/**)`.
+   - LoreForge's `.gitignore` Spec Kit lines are replaced by the block `tools/setup` prints. `.specify/.gitignore`, `.specify/templates/*` and `.specify/workflows/workflow-registry.json` become untracked; only `.specify/memory/constitution.md` stays committed.
+   - Report upstream in LoreForge: its `skills.patch` garbles `speckit-intent-decisions` ("preserve .specify/extensions/intent/intent/spec/plan").
 4. **Upgrade path.** Bumping `ref` in `agentic.toml` changes the fingerprint, so `setup` reinstalls. Document this in the standard's README.
 
 ## Decisions (resolved 2026-09-28)

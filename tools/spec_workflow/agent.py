@@ -213,7 +213,8 @@ def main() -> int:
     blocked = BLOCKING.findall(b"".join(stdout).decode("utf-8", "replace"))
     if exit_code == 0 and blocked:
         sys.stderr.write(
-            f"spec workflow agent wrapper: agent reported {blocked[0]}; failing this step\n"
+            f"spec workflow agent wrapper: agent reported {blocked[0]}; "
+            "failing this step\n"
         )
         exit_code = EXIT_BLOCKED
     after = _protected_state(root, key, log_dir)
