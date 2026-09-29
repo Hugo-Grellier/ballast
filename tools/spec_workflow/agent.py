@@ -133,10 +133,12 @@ def _protected_state(root: Path, key: str, own_log: Path) -> dict[str, str]:
 
     Codex's workspace-write sandbox cannot deny paths, and run state is
     gitignored, so edits here would be invisible in the diff yet could skip
-    gates on resume or neuter the validators. Spec Kit writes none of these
-    while a command step runs.
+    gates on resume or neuter the validators. agentic.toml is tracked, but
+    tools/setup can apply its permissions before anyone reviews the diff.
+    Spec Kit writes none of these while a command step runs.
     """
     bases = [
+        root / "agentic.toml",
         root / ".agentic/spec_workflow",
         root / ".specify/workflows/agentic-feature",
     ]
@@ -147,7 +149,7 @@ def _protected_state(root: Path, key: str, own_log: Path) -> dict[str, str]:
         ]
     digests: dict[str, str] = {}
     for base in bases:
-        for path in sorted(base.rglob("*")) if base.is_dir() else []:
+        for path in sorted(base.rglob("*")) if base.is_dir() else [base]:
             if "__pycache__" in path.parts or path.is_relative_to(own_log):
                 continue
             name = str(path.relative_to(root))

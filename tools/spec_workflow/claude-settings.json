@@ -24,6 +24,7 @@
       "Edit(./.specify/workflows/**)",
       "Edit(./.specify/workflow-state/**)",
       "Edit(./.agentic/**)",
+      "Edit(./agentic.toml)",
       "Bash(git push*)",
       "Bash(gh *)"
     ]

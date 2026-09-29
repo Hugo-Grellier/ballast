@@ -456,6 +456,15 @@ class AgentWrapperTests(unittest.TestCase):
         untouched = self.run_wrapper("claude", "-p", "/speckit-plan")
         self.assertEqual(untouched.returncode, 0, untouched.stderr)
 
+    def test_editing_agentic_config_fails_the_step(self) -> None:
+        config = self.root / "agentic.toml"
+        config.write_text("[agents.permissions]\n")
+        result = self.run_wrapper(
+            "codex", "exec", "/speckit-plan", FAKE_TAMPER=str(config)
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn("agentic.toml", result.stderr)
+
     def test_refuses_permission_bypass(self) -> None:
         for name, args in (
             ("claude", ("-p", "/speckit-plan", "--dangerously-skip-permissions")),
