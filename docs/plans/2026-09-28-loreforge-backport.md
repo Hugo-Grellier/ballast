@@ -99,7 +99,8 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
    - Turn the project-specific parts into `docs/policies/project/*.md` files: the security boundaries, the R2 list, the architecture areas in `spec-kit-workflow`, and the `claude-settings` extras.
    - Keep `constitution.md`, `acceptance.yml`, the domain skills and `specs/`.
    - Check: `./scripts/check`. Then check that `python3 tools/spec_workflow/artifacts.py convergence --feature specs/103-...` still passes on existing specs. Then do one fresh `run.py start` to the intent gate.
-   - Backward compatibility: the running workflow id `loreforge-feature` changes. Keep `[project] workflow_id = "loreforge-feature"` so in-flight local runs still resume.
+   - Backward compatibility: the workflow id becomes `agentic-feature` and the launcher variable becomes `AGENTIC_SPEC_WORKFLOW`. No compatibility alias: finish or restart any local `loreforge-feature` run before migrating.
+   - Restore LoreForge's project permissions through `agentic.toml` `extra_allow`/`extra_deny`, since the base list no longer has them: `./scripts/check`, `./scripts/generate-api`, `uv run --locked ruff *`, `uv run --locked ty check*`, `uv run --locked python -m unittest *`, `pnpm --dir web run lint|typecheck|test*`, and deny `Read`/`Edit(./campaigns/**)`.
 4. **Upgrade path.** Bumping `ref` in `agentic.toml` changes the fingerprint, so `setup` reinstalls. Document this in the standard's README.
 
 ## Decisions (resolved 2026-09-28)
@@ -107,6 +108,7 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 - **Distribution:** pinned tarball of the standard at a commit SHA or tag, installed into git-ignored paths. No submodule.
 - **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml` plus a thin wrapper script.
 - **Project overrides:** go in `docs/policies/project/<name>.md` (committed). Generic bases are installed to `docs/policies/<name>.md` (ignored). A skill reads the base, then the project file if it exists.
+- **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
 - **Language:** full English. `specs/PRODUCT-SPEC.md` gets translated before `v0.1.0`.
 
 ## Risks

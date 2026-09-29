@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless agent wrapper for the loreforge-feature workflow.
+"""Headless agent wrapper for the agentic-feature workflow.
 
 Spec Kit 1.0.11 runs `claude -p ...` or `codex exec ...` for command steps and
 only records the exit code. The launcher points SPECKIT_INTEGRATION_<KEY>_
@@ -45,7 +45,7 @@ EXIT_INTERRUPTED = 130
 
 
 def permission_args(integration: str, args: list[str]) -> list[str]:
-    """Return argv with LoreForge's bounded headless permission model."""
+    """Return argv with the bounded headless permission model."""
     if len(args) < 2 or args[0] not in {"-p", "exec"}:  # noqa: PLR2004
         message = f"unexpected {integration} invocation: {args[:1]}"
         raise ValueError(message)
@@ -137,8 +137,8 @@ def _protected_state(root: Path, key: str, own_log: Path) -> dict[str, str]:
     while a command step runs.
     """
     bases = [
-        root / "scripts/spec_workflow",
-        root / ".specify/workflows/loreforge-feature",
+        root / ".agentic/spec_workflow",
+        root / ".specify/workflows/agentic-feature",
     ]
     if key != "no-run":
         bases += [
@@ -162,7 +162,7 @@ def main() -> int:
     """Run the real agent CLI with bounded permissions and persistent logs."""
     integration = Path(sys.argv[0]).name
     if integration not in {"claude", "codex"}:
-        sys.stderr.write("invoke through scripts/spec_workflow/bin/{claude,codex}\n")
+        sys.stderr.write("invoke through .agentic/spec_workflow/bin/{claude,codex}\n")
         return EXIT_USAGE
     try:
         argv = [
@@ -170,7 +170,7 @@ def main() -> int:
             *permission_args(integration, sys.argv[1:]),
         ]
     except (ValueError, FileNotFoundError) as error:
-        sys.stderr.write(f"loreforge agent wrapper: {error}\n")
+        sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
         return EXIT_USAGE
 
     root = Path.cwd()
@@ -213,7 +213,7 @@ def main() -> int:
     blocked = BLOCKING.findall(b"".join(stdout).decode("utf-8", "replace"))
     if exit_code == 0 and blocked:
         sys.stderr.write(
-            f"loreforge agent wrapper: agent reported {blocked[0]}; failing this step\n"
+            f"spec workflow agent wrapper: agent reported {blocked[0]}; failing this step\n"
         )
         exit_code = EXIT_BLOCKED
     after = _protected_state(root, key, log_dir)
@@ -224,7 +224,7 @@ def main() -> int:
     )
     if tampered:
         sys.stderr.write(
-            "loreforge agent wrapper: agent changed protected workflow files; "
+            "spec workflow agent wrapper: agent changed protected workflow files; "
             f"failing this step: {', '.join(tampered)}\n"
         )
         exit_code = EXIT_TAMPERED

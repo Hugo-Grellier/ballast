@@ -1,4 +1,4 @@
-"""Regression tests for loreforge-feature workflow postconditions.
+"""Regression tests for agentic-feature workflow postconditions.
 
 No test calls a real model: validators run as subprocesses against temporary
 repositories, the agent wrapper runs a fake CLI, and the optional engine test
@@ -50,7 +50,7 @@ Store imported transcript evidence behind the session ingestion boundary.
 TASKS = """# Tasks: Demo import
 
 - [ ] T001 Add import test for [AC-001] in tests/test_import.py
-- [ ] T002 Implement import in src/loreforge/import.py (depends on T001)
+- [ ] T002 Implement import in src/demo/import.py (depends on T001)
 """
 
 
@@ -59,7 +59,7 @@ def _git(root: Path, *args: str) -> None:
 
 
 class Repository:
-    """A temporary Git repository shaped like a LoreForge checkout."""
+    """A temporary Git repository shaped like a project checkout."""
 
     def __init__(self, directory: str) -> None:
         """Create the checkout with one empty feature directory."""
@@ -344,13 +344,13 @@ class FeaturePathTests(unittest.TestCase):
         env = {
             key: value
             for key, value in os.environ.items()
-            if key != "LOREFORGE_SPEC_WORKFLOW"
+            if key != "AGENTIC_SPEC_WORKFLOW"
         }
         self.assertIn(
-            "scripts/spec_workflow/run", self.repo.check("preflight", env=env).stderr
+            ".agentic/spec_workflow/run", self.repo.check("preflight", env=env).stderr
         )
         passing = self.repo.check(
-            "preflight", env={**env, "LOREFORGE_SPEC_WORKFLOW": "1"}
+            "preflight", env={**env, "AGENTIC_SPEC_WORKFLOW": "1"}
         )
         self.assertEqual(passing.returncode, 0)
 
@@ -565,17 +565,15 @@ class EngineRunTests(unittest.TestCase):
         root = self.repo.root
         shutil.rmtree(root / FEATURE)
         # Lay the standard out the way the installer places it in a project.
-        (root / "scripts").mkdir()
-        (root / "scripts/spec_workflow").symlink_to(ROOT / "tools/spec_workflow")
-        (root / ".venv/bin").mkdir(parents=True)
-        (root / ".venv/bin/python").symlink_to(sys.executable)
+        (root / ".agentic").mkdir()
+        (root / ".agentic/spec_workflow").symlink_to(ROOT / "tools/spec_workflow")
         agent = root / "fake-agent"
         agent.write_text(FAKE_INTEGRATION)
         agent.chmod(0o755)
         (root / "spec-fixture.md").write_text(SPEC)
         self.env = {
             **os.environ,
-            "LOREFORGE_SPEC_WORKFLOW": "1",
+            "AGENTIC_SPEC_WORKFLOW": "1",
             "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(agent),
         }
 
@@ -667,7 +665,7 @@ class RunHistoryTests(unittest.TestCase):
         (run_dir / "state.json").write_text(
             json.dumps(
                 {
-                    "workflow_id": "loreforge-feature",
+                    "workflow_id": "agentic-feature",
                     "status": "paused",
                     "workflow_dir": str(self.repo.root / "secret-path"),
                     "step_results": {

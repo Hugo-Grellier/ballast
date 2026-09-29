@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic postconditions for the loreforge-feature Spec Kit workflow.
+"""Deterministic postconditions for the agentic-feature Spec Kit workflow.
 
 An agent exiting 0 does not prove it produced anything. Each check below
 verifies an observable artifact contract and exits non-zero with a diagnostic
@@ -215,7 +215,7 @@ def record_intent(feature: Feature) -> None:
             APPROVAL_START,
             "- **Approved by**: human user",
             f"- **Approved**: {datetime.now(UTC).replace(microsecond=0).isoformat()}",
-            f"- **Source**: loreforge-feature approve-intent gate ({feature.key})",
+            f"- **Source**: agentic-feature approve-intent gate ({feature.key})",
             f"- **Spec**: {feature.relative}/spec.md",
             f"- **Approved spec digest**: {spec_digest(spec)}",
             APPROVAL_END,
@@ -342,7 +342,7 @@ def worktree_tree(root: Path) -> str:
     index = Path(
         _git(root, "rev-parse", "--path-format=absolute", "--git-path", "index")
     )
-    with tempfile.TemporaryDirectory(prefix="loreforge-tree-") as directory:
+    with tempfile.TemporaryDirectory(prefix="agentic-tree-") as directory:
         temporary = Path(directory) / "index"
         if index.exists():
             shutil.copyfile(index, temporary)
@@ -442,10 +442,10 @@ def check_convergence(feature: Feature) -> None:
 
 
 def check_preflight(feature: Feature) -> None:
-    """Require a run started through scripts/spec_workflow/run.py."""
-    if os.environ.get("LOREFORGE_SPEC_WORKFLOW") != "1":
+    """Require a run started through .agentic/spec_workflow/run.py."""
+    if os.environ.get("AGENTIC_SPEC_WORKFLOW") != "1":
         message = (
-            "start loreforge-feature with scripts/spec_workflow/run so headless "
+            "start agentic-feature with .agentic/spec_workflow/run so headless "
             "agents get the bounded permission model and run logs"
         )
         raise ContractError(message)

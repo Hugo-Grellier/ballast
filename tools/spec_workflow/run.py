@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Start or resume loreforge-feature with bounded headless agents.
+"""Start or resume agentic-feature with bounded headless agents.
 
-    scripts/spec_workflow/run.py start -i idea="Issue #N: ..." \
+    .agentic/spec_workflow/run.py start -i idea="Issue #N: ..." \
         -i feature_directory=specs/N-slug [-i integration=claude|codex]
-    scripts/spec_workflow/run.py resume RUN_ID [-i integration=claude|codex]
+    .agentic/spec_workflow/run.py resume RUN_ID [-i integration=claude|codex]
 
 Routes Spec Kit's Claude/Codex dispatch through `bin/` (see agent.py), assigns
 the run ID up front so agent logs land in `.specify/workflow-state/<run>/`, and
@@ -32,8 +32,8 @@ from pathlib import Path
 from artifacts import FEATURE_PATTERN
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "scripts/spec_workflow/bin"
-WORKFLOW = "loreforge-feature"
+BIN = ROOT / ".agentic/spec_workflow/bin"
+WORKFLOW = "agentic-feature"
 RESUMABLE_INPUTS = {"integration"}
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -135,7 +135,7 @@ def main(argv: list[str]) -> int:
         command = [specify, "workflow", "resume", *options]
     env = {
         **os.environ,
-        "LOREFORGE_SPEC_WORKFLOW": "1",
+        "AGENTIC_SPEC_WORKFLOW": "1",
         "SPECKIT_WORKFLOW_RUN_ID": run_id,
         "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(BIN / "claude"),
         "SPECKIT_INTEGRATION_CODEX_EXECUTABLE": str(BIN / "codex"),
