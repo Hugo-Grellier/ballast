@@ -45,20 +45,19 @@
 ## Architecture Boundaries
 
 - **Affected areas**: [Select only areas this feature touches, using current
-  terminology in `docs/v1-architecture.md`; do not create new package boundaries
-  by implication.]
+  terminology from the accepted architecture documents; do not create new
+  package boundaries by implication.]
 - **Contracts and data flow**: [Describe interfaces between affected areas,
   their owners, and relevant source-of-truth boundaries.]
-- **Architecture references**: [Link relevant sections of `docs/v1-architecture.md`,
-  `CONTEXT.md`, and accepted ADRs.]
+- **Architecture references**: [Link relevant sections of the accepted
+  architecture documents, domain glossary, and ADRs.]
 - **Proposed architecture decisions**: [None, or list decisions that need human
   review and an ADR before they become project-wide authority.]
 
 ## Repository Impact
 
-Use the current layout as evidence for paths: `src/loreforge/`, `migrations/`,
-`web/`, `tests/`, and existing integration directories. Name only paths that
-exist or that this plan explicitly proposes. The modular monolith and its
+Use the current repository layout as evidence for paths. Name only paths that
+exist or that this plan explicitly proposes. The architecture and its
 boundaries can evolve; do not copy a generic project tree into this plan.
 
 ## Feature Artifacts
