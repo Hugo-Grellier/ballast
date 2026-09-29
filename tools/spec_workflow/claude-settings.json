@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python .specify/scripts/python/*)",
+      "Bash(mkdir -p specs/*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git rev-parse*)",
+      "Bash(git ls-files*)",
+      "Bash(./scripts/check)",
+      "Bash(./scripts/generate-api)",
+      "Bash(uv run --locked ruff *)",
+      "Bash(uv run --locked ty check*)",
+      "Bash(uv run --locked python -m unittest *)",
+      "Bash(pnpm --dir web run lint)",
+      "Bash(pnpm --dir web run typecheck)",
+      "Bash(pnpm --dir web run test*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./**/.env)",
+      "Read(./*.local.md)",
+      "Read(./campaigns/**)",
+      "Edit(./campaigns/**)",
+      "Edit(./.env)",
+      "Edit(./**/.env)",
+      "Edit(./*.local.md)",
+      "Edit(./.github/**)",
+      "Edit(./.claude/**)",
+      "Edit(./.codex/**)",
+      "Edit(./.specify/workflows/**)",
+      "Edit(./.specify/workflow-state/**)",
+      "Edit(./scripts/spec_workflow/**)",
+      "Bash(git push*)",
+      "Bash(gh *)"
+    ]
+  }
+}
