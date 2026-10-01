@@ -19,7 +19,7 @@ Notable changes to this project are recorded here. This draft has no release ver
 - `tools/agentic-workflow`, the global command installed once per machine. `setup` fetches the standard version pinned in `agentic.toml` (`[standard] ref`) and runs its `tools/setup`; every other command runs that version's launcher from outside the checkout.
 - Review and routing skills (`agentic-engineering-review`, `-test-review`, `-documentation-review`, `-security-review`, `-spec-reconciliation`, `-dependency-evaluation`, `-dependency-migration`, `-database-migration`, `-model-routing`) and their base policies (engineering, documentation, testing, dependencies, migrations, observability, security, the risk and review `workflow`, issue tracker and triage labels). Each policy defers to a project's `docs/policies/project/<name>.md`. Generalized from LoreForge.
 - `templates/AGENTS.md` carries the generic agent guide (artifacts, issue and spec workflow, risk table, conditional policy table, routing, PR rules) with project placeholders; `templates/github/pull_request_template.md` carries the PR template. Both are copied once, since agents and GitHub read them from committed files.
-- This repository's CI runs the test suite.
+- This repository's CI runs Ruff and the test suite, checks Conventional Commit PR titles, and Dependabot updates its Actions. `templates/github/` adds the matching Dependabot configuration and PR-title workflow for projects.
 
 ### Changed
 

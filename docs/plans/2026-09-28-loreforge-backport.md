@@ -139,7 +139,9 @@ The standard is public and merged once every LoreForge process asset is either i
 | `THIRD_PARTY_NOTICES.md` | Done: covers the upstream excerpts in `tools/spec-kit/*.patch` |
 | CI running the workflow tests | Done: `.github/workflows/ci.yml` (systemd, Codex sandbox and Spec Kit CLI tests skip there; run them locally before a release) |
 | `specs/PRODUCT-SPEC.md` and `specs/TECHNICAL-SPEC.md` in English (both were mostly French) | Done |
-| `.github/workflows/*`, `dependabot.yml`, `docs/agents/domain.md`, domain skills | Project-owned; not backported |
+| `dependabot.yml` (patch grouping), `ci.yml` PR-title job | Done as copy-once templates (`templates/github/`); this repository uses both |
+| Ruff `ALL` configuration | Done for this repository (`pyproject.toml`) |
+| `ci.yml` check job, `acceptance.yml`, Release Please, Docker release, `docs/agents/domain.md`, domain skills | Project-owned (stack- or product-specific); not backported |
 
 ## LoreForge content that moves to `docs/policies/project/`
 

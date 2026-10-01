@@ -1883,7 +1883,6 @@ class AgentAdapter:
     status(...)
     stop(...)
     collect_result(...)
-
 ```
 
 Possible adapters:

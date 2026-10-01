@@ -10,7 +10,7 @@ This repository is the source of the standard. Projects pin a version and instal
 - [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) describes the repository structure and the conventions for template content.
 - [`tools/agentic-workflow`](tools/agentic-workflow) is the global command; [`tools/setup`](tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](tools/spec_workflow/) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](tools/feature_intake.py) is the GitHub intake helper.
 - [`templates/policies/`](templates/policies/) are the base policies installed into `docs/policies/`; [`templates/skills/`](templates/skills/) are the `agentic-*` skills; [`templates/spec-kit/`](templates/spec-kit/) holds the feature workflow and Spec Kit templates.
-- [`templates/AGENTS.md`](templates/AGENTS.md) and [`templates/github/pull_request_template.md`](templates/github/pull_request_template.md) are copy-once templates.
+- [`templates/AGENTS.md`](templates/AGENTS.md) and [`templates/github/`](templates/github/) (PR template, Dependabot configuration, Conventional Commit PR-title workflow) are copy-once templates. Stack-specific CI stays in each project.
 - `profiles/` is reserved for curated combinations of templates and will be added later.
 
 ## Using the copy-once templates

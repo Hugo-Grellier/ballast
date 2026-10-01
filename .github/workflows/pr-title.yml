@@ -1,0 +1,24 @@
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a Conventional Commit title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "$PR_TITLE" =~ ^(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([[:alnum:]][[:alnum:]_./-]*\))?(!)?:[[:space:]]+[^[:space:]].*$ ]]; then
+            exit 0
+          fi
+          echo "Invalid PR title: $PR_TITLE"
+          echo "Use <type>(optional-scope)[!]: <description>; squash merge uses it as the commit subject."
+          exit 1
