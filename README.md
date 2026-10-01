@@ -1,18 +1,19 @@
 # Agentic Repo Standard
 
-Agentic Repo Standard is a reusable, repository-level baseline for working with AI coding agents. It defines clear project instructions and a place to add reusable policies, skills, and GitHub workflow templates.
+Agentic Repo Standard is a reusable, repository-level baseline for working with AI coding agents: a Spec Kit feature workflow with deterministic artifact checks, a bounded headless-agent runner, review skills, engineering policies, and agent instruction templates.
 
-This repository is the source of the standard. The files under `templates/` are intended to be copied or adapted into another repository; they are not automatically installed.
+This repository is the source of the standard. Projects pin a version and install it into git-ignored paths with `agentic-workflow setup`; only `AGENTS.md` and the PR template are copied once, because agents and GitHub read them from committed files.
 
 ## Repository map
 
 - [`specs/PRODUCT-SPEC.md`](specs/PRODUCT-SPEC.md) describes the users, problem, goals, and product boundaries.
 - [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) describes the repository structure and the conventions for template content.
-- [`templates/AGENTS.md`](templates/AGENTS.md) is the starting point for repository-specific agent instructions.
-- `templates/policies/`, `templates/skills/`, and `templates/github/` are extension points for future reusable material.
+- [`tools/agentic-workflow`](tools/agentic-workflow) is the global command; [`tools/setup`](tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](tools/spec_workflow/) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](tools/feature_intake.py) is the GitHub intake helper.
+- [`templates/policies/`](templates/policies/) are the base policies installed into `docs/policies/`; [`templates/skills/`](templates/skills/) are the `agentic-*` skills; [`templates/spec-kit/`](templates/spec-kit/) holds the feature workflow and Spec Kit templates.
+- [`templates/AGENTS.md`](templates/AGENTS.md) and [`templates/github/pull_request_template.md`](templates/github/pull_request_template.md) are copy-once templates.
 - `profiles/` is reserved for curated combinations of templates and will be added later.
 
-## Using the templates
+## Using the copy-once templates
 
 Review each template before copying it into a project. Replace project-specific placeholders, remove guidance that does not apply, and keep the resulting instructions close to the code they govern. Treat templates as a starting point, not as a substitute for the target project's own conventions.
 
@@ -50,4 +51,4 @@ Only `setup` downloads; the other commands refuse a version that is not fetched 
 
 ## Status
 
-Initial draft. The Spec Kit workflow tooling is backported from LoreForge; policies, skills, GitHub templates, and profiles have not yet been populated.
+Draft, backported from LoreForge. The [backport plan](docs/plans/2026-09-28-loreforge-backport.md) tracks parity before the first release; profiles are not yet defined.

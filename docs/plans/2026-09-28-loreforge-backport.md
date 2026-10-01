@@ -111,7 +111,7 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 - **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml`; the global `agentic-workflow setup` fetches the pinned version and runs its `tools/setup`.
 - **Project overrides:** go in `docs/policies/project/<name>.md` (committed). Generic bases are installed to `docs/policies/<name>.md` (ignored). A skill reads the base, then the project file if it exists.
 - **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
-- **Language:** full English. `specs/PRODUCT-SPEC.md` gets translated before `v0.1.0`.
+- **Language:** full English. Both specs get translated before `v0.1.0`.
 
 ## Sync log
 
@@ -138,7 +138,7 @@ The standard is public and merged once every LoreForge process asset is either i
 | `.specify/memory/constitution.md` | Project-owned; Spec Kit supplies the template |
 | `THIRD_PARTY_NOTICES.md` | Done: covers the upstream excerpts in `tools/spec-kit/*.patch` |
 | CI running the workflow tests | Done: `.github/workflows/ci.yml` (systemd, Codex sandbox and Spec Kit CLI tests skip there; run them locally before a release) |
-| `specs/PRODUCT-SPEC.md` in English | To do |
+| `specs/PRODUCT-SPEC.md` and `specs/TECHNICAL-SPEC.md` in English (both were mostly French) | In progress |
 | `.github/workflows/*`, `dependabot.yml`, `docs/agents/domain.md`, domain skills | Project-owned; not backported |
 
 ## LoreForge content that moves to `docs/policies/project/`
