@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -47,8 +48,11 @@ SOURCES = {
 GITIGNORE = """\
 # Installed by agentic-repo-standard tools/setup
 .agentic/
+.agents/skills/agentic-*
+.claude/skills/agentic-*
 .agents/skills/speckit-*
 .claude/skills/speckit-*
+docs/policies/*.md
 .specify/*
 !.specify/memory/
 .specify/memory/.constitution-template.json
@@ -56,6 +60,10 @@ GITIGNORE = """\
 # Representative paths for GITIGNORE: (path, must be ignored).
 IGNORE_PROBES = (
     (".agentic/spec_workflow/run.py", True),
+    (".agents/skills/agentic-feature-intake/SKILL.md", True),
+    (".claude/skills/agentic-feature-intake", True),
+    ("docs/policies/model-routing.md", True),
+    ("docs/policies/project/security.md", False),
     (".agents/skills/speckit-tasks/SKILL.md", True),
     (".claude/skills/speckit-tasks/SKILL.md", True),
     (".specify/scripts/python/common.py", True),
@@ -82,6 +90,12 @@ INSTALLED = (
     ".specify/.gitignore",
     ".specify/memory/.constitution-template.json",
 )
+# Installed skill directories, by prefix.
+SKILLS = tuple(
+    f"{integration}/skills/{prefix}-*"
+    for integration in (".agents", ".claude")
+    for prefix in ("agentic", "speckit")
+)
 # Local state a worktree must not copy from its primary checkout.
 LOCAL_STATE = (
     ".specify/workflows/runs",
@@ -104,7 +118,7 @@ class Setup:
     def fingerprint(self) -> str:
         # Any change to the standard, its pins or the project config reinstalls.
         digest = hashlib.sha256(self.config_bytes)
-        for base in (STANDARD / "tools", STANDARD / "templates/spec-kit"):
+        for base in (STANDARD / "tools", STANDARD / "templates"):
             for path in sorted(base.rglob("*")):
                 if "__pycache__" in path.parts or path.is_dir():
                     continue
@@ -145,12 +159,17 @@ class Setup:
             )
             raise RuntimeError(message)
 
+    def installed(self, root: Path) -> list[Path]:
+        """Every path setup owns in a checkout, existing or not."""
+        policies = (STANDARD / "templates/policies").glob("*.md")
+        return [
+            *(path for pattern in SKILLS for path in root.glob(pattern)),
+            *(root / "docs/policies" / policy.name for policy in policies),
+            *(root / name for name in INSTALLED),
+        ]
+
     def remove_installed(self) -> None:
-        skills = (
-            *self.root.glob(".agents/skills/speckit-*"),
-            *self.root.glob(".claude/skills/speckit-*"),
-        )
-        for path in (*skills, *(self.root / name for name in INSTALLED)):
+        for path in self.installed(self.root):
             if path == self.root / ".specify/workflows" and path.is_dir():
                 # Keep run state so a reinstall never loses a paused run.
                 for child in path.iterdir():
@@ -182,17 +201,14 @@ class Setup:
         if primary is None:
             return False
         ignore = shutil.ignore_patterns(*(Path(p).name for p in LOCAL_STATE))
-        sources = (
-            *(primary / name for name in INSTALLED),
-            *primary.glob(".agents/skills/speckit-*"),
-            *primary.glob(".claude/skills/speckit-*"),
-        )
-        for source in sources:
-            if not source.exists():
+        for source in self.installed(primary):
+            if not os.path.lexists(source):
                 continue
             target = self.root / source.relative_to(primary)
             target.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
+            if source.is_symlink():
+                target.symlink_to(source.readlink())
+            elif source.is_dir():
                 shutil.copytree(source, target, symlinks=True, ignore=ignore)
             else:
                 shutil.copy2(source, target)
@@ -276,6 +292,18 @@ class Setup:
             )
             + "\n"
         )
+        shutil.copy2(
+            STANDARD / "tools/feature_intake.py", agentic / "feature_intake.py"
+        )
+        policies = self.root / "docs/policies"
+        policies.mkdir(parents=True, exist_ok=True)
+        for policy in (STANDARD / "templates/policies").glob("*.md"):
+            shutil.copy2(policy, policies / policy.name)
+        for skill in sorted((STANDARD / "templates/skills").glob("*/")):
+            shutil.copytree(skill, self.root / ".agents/skills" / skill.name)
+            link = self.root / ".claude/skills" / skill.name
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(Path("../../.agents/skills") / skill.name)
         for template in (STANDARD / "templates/spec-kit/templates").glob("*.md"):
             shutil.copy2(template, self.root / ".specify/templates" / template.name)
         self.specify(
@@ -300,7 +328,11 @@ class Setup:
             self.install_standard()
         self.stamp.parent.mkdir(exist_ok=True)
         self.stamp.write_text(self.fingerprint() + "\n")
-        sys.stdout.write(f"Spec Kit {VERSION} and the standard are set up\n")
+        sys.stdout.write(
+            f"Spec Kit {VERSION} and the standard are set up.\n"
+            "Review the installed changes, then run `agentic-workflow trust` "
+            "before the next workflow run.\n"
+        )
 
 
 def merge_permissions(settings: dict, config: dict) -> dict:

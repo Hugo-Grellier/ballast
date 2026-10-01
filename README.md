@@ -31,7 +31,7 @@ Review each template before copying it into a project. Replace project-specific 
 
 3. From a checkout of this repository, run `tools/setup --project /path/to/project`. It needs `git`, `uvx`, `patch`, and network access to GitHub.
 
-The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `agentic-feature` workflow, and its tools under `.agentic/spec_workflow/`. A rerun is a no-op until this repository or `agentic.toml` changes. A new Git worktree copies the installation from its primary checkout when both match. A reinstall keeps `.specify/workflows/runs/` and the project constitution.
+The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `agentic-feature` workflow and its tools under `.agentic/`, the `agentic-*` skills under `.agents/skills/` (linked from `.claude/skills/`), and the standard's policies under `docs/policies/`. Project-specific additions go in `docs/policies/project/`, which setup never touches. A rerun is a no-op until this repository or `agentic.toml` changes. A new Git worktree copies the installation from its primary checkout when both match. A reinstall keeps `.specify/workflows/runs/` and the project constitution.
 
 ### Running the workflow
 
