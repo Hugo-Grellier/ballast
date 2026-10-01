@@ -1,13 +1,13 @@
 # Third-party notices
 
 Modifications in this repository remain under its own license. The following
-upstream notices apply to the copied Spec Kit templates.
+upstream notices apply to the copied Spec Kit templates and the upstream excerpts in the Spec Kit patches.
 
 ## GitHub Spec Kit
 
 Source: https://github.com/github/spec-kit/tree/8147943512404afb9d99c6252cb9bf84369fd0b0
 
-Applies to `templates/spec-kit/templates/`. The copies modify the acceptance-evidence instructions.
+Applies to `templates/spec-kit/templates/` and upstream excerpts in `tools/spec-kit/skills.patch`. The copies modify the acceptance-evidence instructions; the patches record those changes.
 
 ```text
 MIT License
@@ -37,7 +37,7 @@ SOFTWARE.
 
 Source: https://github.com/Quratulain-bilal/spec-kit-preset-explicit-task-dependencies/tree/83421f58e0e6768e5701e839b05ecb5bb57eff8c
 
-Applies to `templates/spec-kit/templates/tasks-template.md`. The copy modifies the acceptance-evidence instructions.
+Applies to `templates/spec-kit/templates/tasks-template.md` and upstream excerpts in `tools/spec-kit/preset.patch`. The copy modifies the acceptance-evidence instructions; the patch records those changes.
 
 ```text
 MIT License

@@ -133,11 +133,11 @@ The standard is public and merged once every LoreForge process asset is either i
 | 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | Done (`agentic-*`) |
 | `docs/policies/*.md` (7) and `docs/engineering/workflow.md` (risk and review matrix) | Done (`templates/policies/`); LoreForge specifics move to its `docs/policies/project/` (see below) |
 | `docs/agents/issue-tracker.md`, `triage-labels.md` | Done as policies; `docs/agents/domain.md` stays project-owned |
-| `.github/pull_request_template.md` | To do as a copy-once template (GitHub reads it from the default branch, so it cannot be ignored) |
-| `AGENTS.md` generic sections | To do in `templates/AGENTS.md` (copy-once; agents load it automatically, so it stays committed) |
+| `.github/pull_request_template.md` | Done as a copy-once template (GitHub reads it from the default branch, so it cannot be ignored) |
+| `AGENTS.md` generic sections | Done in `templates/AGENTS.md` (copy-once; agents load it automatically, so it stays committed) |
 | `.specify/memory/constitution.md` | Project-owned; Spec Kit supplies the template |
-| `THIRD_PARTY_NOTICES.md` | To do: cover the upstream excerpts in `tools/spec-kit/*.patch` |
-| CI running the workflow tests | To do: this repository's own CI |
+| `THIRD_PARTY_NOTICES.md` | Done: covers the upstream excerpts in `tools/spec-kit/*.patch` |
+| CI running the workflow tests | Done: `.github/workflows/ci.yml` (systemd, Codex sandbox and Spec Kit CLI tests skip there; run them locally before a release) |
 | `specs/PRODUCT-SPEC.md` in English | To do |
 | `.github/workflows/*`, `dependabot.yml`, `docs/agents/domain.md`, domain skills | Project-owned; not backported |
 

@@ -77,9 +77,11 @@ class LinkTests(unittest.TestCase):
         documents = [
             *(ROOT / "templates/policies").glob("*.md"),
             *(ROOT / "templates/skills").glob("*/SKILL.md"),
+            ROOT / "templates/AGENTS.md",
         ]
         for document in documents:
             relative = document.relative_to(ROOT).as_posix()
+            relative = relative.replace("templates/AGENTS.md", "AGENTS.md")
             for prefix, origin in self.LAYOUT.items():
                 relative = relative.replace(origin, prefix, 1)
             for target in re.findall(r"\]\(([^)#:]+)(?:#[^)]*)?\)", document.read_text()):
