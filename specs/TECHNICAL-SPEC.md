@@ -9,37 +9,37 @@
 
 # 1. Purpose
 
-Cette spécification définit l’architecture technique d’un standard de repository permettant à des agents de développement interchangeables de transformer des spécifications produit en logiciel production-ready avec un minimum d’intervention humaine.
+This specification defines the technical architecture of a repository standard that allows interchangeable development agents to turn product specifications into production-ready software with minimal human intervention.
 
-Le système doit fournir :
+The system must provide:
 
-- une structure standard de repository ;
-- un format de spécification ;
-- une state machine de travail ;
-- des contrats pour les différents rôles agents ;
-- des politiques engineering versionnées ;
-- des quality gates déterministes ;
-- des reviews agentiques spécialisées ;
-- une gestion du risque ;
-- un mécanisme d’escalade humaine ;
-- une abstraction de l’orchestrateur ;
-- une intégration GitHub ;
-- une intégration avec des agents CLI tels que Claude Code et Codex ;
-- un chemin progressif vers l’automatisation complète.
+- a standard repository structure;
+- a specification format;
+- a work state machine;
+- contracts for the different agent roles;
+- versioned engineering policies;
+- deterministic quality gates;
+- specialized agentic reviews;
+- risk management;
+- a human escalation mechanism;
+- an orchestrator abstraction;
+- a GitHub integration;
+- an integration with CLI agents such as Claude Code and Codex;
+- a progressive path toward full automation.
 
-Le système ne doit pas dépendre d’un agent, d’un modèle ou d’un orchestrateur particulier.
+The system must not depend on a particular agent, model or orchestrator.
 
 ---
 
 # 2. Normative language
 
-Les termes suivants sont normatifs :
+The following terms are normative:
 
-- **MUST** : obligatoire ;
-- **MUST NOT** : interdit ;
-- **SHOULD** : recommandé sauf raison documentée ;
-- **SHOULD NOT** : déconseillé sauf raison documentée ;
-- **MAY** : optionnel.
+- **MUST**: mandatory;
+- **MUST NOT**: forbidden;
+- **SHOULD**: recommended unless a documented reason exists;
+- **SHOULD NOT**: discouraged unless a documented reason exists;
+- **MAY**: optional.
 
 ---
 
@@ -47,11 +47,11 @@ Les termes suivants sont normatifs :
 
 ## 3.1 Repository-owned process
 
-Toutes les règles nécessaires pour modifier correctement un projet MUST être présentes ou référencées depuis le repository.
+All the rules needed to modify a project correctly MUST be present in the repository or referenced from it.
 
-Les conversations agentiques ne sont pas une source de vérité durable.
+Agentic conversations are not a durable source of truth.
 
-Les décisions importantes MUST être persistées dans l’un des artifacts suivants :
+Important decisions MUST be persisted in one of the following artifacts:
 
 ```text
 specification
@@ -68,7 +68,7 @@ code
 
 ## 3.2 Provider-independent agents
 
-Le système MUST pouvoir utiliser plusieurs moteurs :
+The system MUST be able to use several engines:
 
 ```text
 Claude Code
@@ -79,7 +79,7 @@ future agents
 
 ```
 
-Le changement de moteur MUST NOT nécessiter de réécrire :
+Changing engines MUST NOT require rewriting:
 
 ```text
 specifications
@@ -94,9 +94,9 @@ GitHub workflow
 
 ## 3.3 Deterministic verification first
 
-Tout comportement vérifiable automatiquement SHOULD être vérifié automatiquement.
+Any behavior that can be verified automatically SHOULD be verified automatically.
 
-Un reviewer agentique ne remplace pas :
+An agentic reviewer does not replace:
 
 ```text
 compiler
@@ -113,23 +113,23 @@ runtime checks
 
 ## 3.4 Independent evaluation
 
-Un agent ayant implémenté un changement MUST NOT être le seul mécanisme chargé de l’approuver.
+An agent that implemented a change MUST NOT be the only mechanism responsible for approving it.
 
-Les reviews critiques SHOULD être exécutées dans un contexte séparé de celui de l’implementer.
+Critical reviews SHOULD be run in a context separate from the implementer's.
 
 ---
 
 ## 3.5 Progressive disclosure
 
-Les instructions globales MUST rester courtes.
+Global instructions MUST remain short.
 
-Les procédures spécialisées MUST être chargées uniquement lorsqu’elles sont pertinentes.
+Specialized procedures MUST be loaded only when they are relevant.
 
 ---
 
 # 4. High-level architecture
 
-Le système est divisé en cinq plans.
+The system is divided into five planes.
 
 ```text
 ┌──────────────────────────────────────────────┐
@@ -163,9 +163,9 @@ Le système est divisé en cinq plans.
 
 # 5. Control plane
 
-GitHub est le control plane de référence initial.
+GitHub is the initial reference control plane.
 
-Il stocke :
+It stores:
 
 ```text
 work item status
@@ -181,15 +181,15 @@ release state
 
 ```
 
-GitHub ne doit pas nécessairement stocker le contenu complet des specifications complexes.
+GitHub does not necessarily have to store the full content of complex specifications.
 
 ---
 
 # 6. Artifact plane
 
-Le repository constitue la source versionnée des artifacts durables.
+The repository is the versioned source of durable artifacts.
 
-Structure cible :
+Target structure:
 
 ```text
 /
@@ -265,13 +265,13 @@ Structure cible :
 
 ```
 
-Cette structure est un baseline et MAY être adaptée au stack.
+This structure is a baseline and MAY be adapted to the stack.
 
 ---
 
 # 7. Instruction hierarchy
 
-L’ordre de résolution des instructions est :
+The instruction resolution order is:
 
 ```text
 1. platform / organization policy
@@ -284,17 +284,17 @@ L’ordre de résolution des instructions est :
 
 ```
 
-Une instruction de niveau inférieur MUST NOT silencieusement contredire une instruction de niveau supérieur.
+A lower-level instruction MUST NOT silently contradict a higher-level instruction.
 
-En cas de contradiction, l’agent MUST signaler le conflit.
+In case of contradiction, the agent MUST report the conflict.
 
 ---
 
-# 8. Root [AGENTS.md](http://AGENTS.md) contract
+# 8. Root `AGENTS.md` contract
 
-Le [`AGENTS.md`](http://AGENTS.md) racine SHOULD rester inférieur à environ 250 lignes.
+The root `AGENTS.md` SHOULD stay under roughly 250 lines.
 
-Il définit uniquement :
+It defines only:
 
 ```text
 repository purpose
@@ -309,7 +309,7 @@ escalation rules
 
 ```
 
-Il ne doit pas contenir les procédures complètes de :
+It must not contain the full procedures for:
 
 ```text
 security review
@@ -320,22 +320,22 @@ documentation review
 
 ```
 
-Ces procédures appartiennent aux skills.
+These procedures belong in skills.
 
 ---
 
-# 9. [CLAUDE.md](http://CLAUDE.md) and provider-specific files
+# 9. `CLAUDE.md` and provider-specific files
 
-Lorsque possible :
+Where possible:
 
 ```text
 CLAUDE.md → AGENTS.md
 
 ```
 
-ou équivalent fonctionnel.
+or a functional equivalent.
 
-Les fichiers provider-specific SHOULD uniquement contenir :
+Provider-specific files SHOULD contain only:
 
 ```text
 provider-specific invocation
@@ -344,20 +344,20 @@ compatibility shim
 
 ```
 
-Ils MUST NOT dupliquer toute la politique engineering.
+They MUST NOT duplicate the whole engineering policy.
 
 ---
 
 # 10. Specification storage
 
-Les features significatives sont stockées sous :
+Significant features are stored under:
 
 ```text
 specs/features/<work-id>-<slug>/
 
 ```
 
-Exemple :
+Example:
 
 ```text
 specs/features/0423-project-sharing/
@@ -369,15 +369,15 @@ specs/features/0423-project-sharing/
 
 ```
 
-Tous ces fichiers ne sont pas obligatoires pour une petite feature.
+Not all of these files are mandatory for a small feature.
 
 ---
 
 # 11. Specification metadata
 
-[`spec.md`](http://spec.md) SHOULD commencer par un frontmatter structuré.
+`spec.md` SHOULD start with structured frontmatter.
 
-Exemple :
+Example:
 
 ```yaml
 ---
@@ -397,7 +397,7 @@ owners:
 
 ```
 
-Champs minimaux :
+Minimum fields:
 
 ```text
 id
@@ -412,7 +412,7 @@ issue
 
 # 12. Specification states
 
-Valeurs autorisées :
+Allowed values:
 
 ```text
 idea
@@ -427,7 +427,7 @@ cancelled
 
 ```
 
-Transition nominale :
+Nominal transition:
 
 ```text
 idea
@@ -450,9 +450,9 @@ validated
 
 # 13. Work item states
 
-La state machine opérationnelle GitHub peut être plus détaillée que la specification.
+The operational GitHub state machine can be more detailed than the specification's.
 
-Baseline :
+Baseline:
 
 ```text
 BACKLOG
@@ -473,9 +473,9 @@ DONE
 
 # 14. State transition authority
 
-Les transitions SHOULD être automatisables.
+Transitions SHOULD be automatable.
 
-Exemples :
+Examples:
 
 ```text
 spec approved
@@ -495,13 +495,13 @@ runtime verification passes
 
 ```
 
-Un agent MUST NOT marquer `DONE` si les conditions de Definition of Done ne sont pas satisfaites.
+An agent MUST NOT mark `DONE` if the Definition of Done conditions are not satisfied.
 
 ---
 
 # 15. Issue contract
 
-Une issue liée à une specification complexe SHOULD contenir :
+An issue linked to a complex specification SHOULD contain:
 
 ```yaml
 type: feature
@@ -511,7 +511,7 @@ status: READY
 
 ```
 
-Le body contient au minimum :
+The body contains at least:
 
 ```text
 goal
@@ -521,17 +521,17 @@ open questions
 
 ```
 
-L’issue reste la surface de discussion.
+The issue remains the discussion surface.
 
-Le repository reste la source durable de la spec.
+The repository remains the durable source of the spec.
 
 ---
 
 # 16. Small work items
 
-Pour un changement suffisamment petit, toute la spec MAY rester dans l’issue.
+For a sufficiently small change, the whole spec MAY stay in the issue.
 
-Critères typiques :
+Typical criteria:
 
 ```text
 single concern
@@ -547,7 +547,7 @@ small diff expected
 
 # 17. Specification format
 
-Une feature spec SHOULD contenir :
+A feature spec SHOULD contain:
 
 ```text
 Context
@@ -565,15 +565,15 @@ Open questions
 
 ```
 
-La spec SHOULD éviter les détails d’implémentation.
+The spec SHOULD avoid implementation details.
 
 ---
 
 # 18. Implementation plan format
 
-[`plan.md`](http://plan.md) est produit après exploration du repository.
+`plan.md` is produced after exploring the repository.
 
-Il contient :
+It contains:
 
 ```text
 Current system analysis
@@ -597,9 +597,9 @@ Alternatives considered
 
 # 19. Tasks format
 
-[`tasks.md`](http://tasks.md) découpe le plan en unités exécutables.
+`tasks.md` breaks the plan down into executable units.
 
-Chaque task SHOULD avoir :
+Each task SHOULD have:
 
 ```yaml
 id: T-01
@@ -609,24 +609,24 @@ depends_on: []
 
 ```
 
-et décrire une unité de travail testable.
+and describe a testable unit of work.
 
-Une task ne doit pas uniquement être :
+A task must not be merely:
 
 ```text
 implement backend
 
 ```
 
-Elle doit être suffisamment précise pour produire un résultat vérifiable.
+It must be precise enough to produce a verifiable result.
 
 ---
 
 # 20. Verification artifact
 
-[`verification.md`](http://verification.md) contient la preuve finale.
+`verification.md` contains the final proof.
 
-Structure indicative :
+Indicative structure:
 
 ```text
 Requirements coverage
@@ -658,9 +658,9 @@ CONVERGED | PARTIAL | FAILED
 
 # 21. Spec Kit integration
 
-Spec Kit MAY être utilisé comme implémentation de la couche SDD.
+Spec Kit MAY be used as the implementation of the SDD layer.
 
-Mapping :
+Mapping:
 
 ```text
 Spec Kit constitution
@@ -683,22 +683,22 @@ speckit converge
 
 ```
 
-Le système MUST néanmoins conserver ses artifacts dans des formats suffisamment standards pour pouvoir abandonner Spec Kit ultérieurement.
+The system MUST nonetheless keep its artifacts in formats standard enough to allow abandoning Spec Kit later.
 
-Spec Kit est donc une implementation possible, pas un format propriétaire obligatoire.
+Spec Kit is therefore a possible implementation, not a mandatory proprietary format.
 
 ---
 
 # 22. Agent execution model
 
-Tous les agents sont vus comme implémentant une abstraction logique :
+All agents are seen as implementing a logical abstraction:
 
 ```text
 AgentRuntime
 
 ```
 
-Interface conceptuelle :
+Conceptual interface:
 
 ```text
 run(role, task, context, permissions) -> result
@@ -708,7 +708,7 @@ status(run_id)
 
 ```
 
-Le runtime concret peut être :
+The concrete runtime can be:
 
 ```text
 Claude Code CLI
@@ -723,7 +723,7 @@ future service
 
 # 23. Execution isolation
 
-Chaque tâche d’implémentation SHOULD s’exécuter dans :
+Each implementation task SHOULD run in:
 
 ```text
 isolated worktree
@@ -732,16 +732,16 @@ isolated sandbox
 
 ```
 
-Le travail agentique ne SHOULD pas s’exécuter directement dans le checkout principal de l’utilisateur.
+Agentic work SHOULD NOT run directly in the user's main checkout.
 
-Nom de branche recommandé :
+Recommended branch name:
 
 ```text
 agent/<work-id>-<slug>
 
 ```
 
-Exemple :
+Example:
 
 ```text
 agent/F-0423-project-sharing
@@ -752,9 +752,9 @@ agent/F-0423-project-sharing
 
 # 24. Orca integration
 
-Orca est considéré comme une human interface locale.
+Orca is considered a local human interface.
 
-Le système SHOULD être compatible avec :
+The system SHOULD be compatible with:
 
 ```text
 worktrees created by Orca
@@ -765,13 +765,13 @@ manual takeover
 
 ```
 
-L’orchestrateur MUST NOT exiger que l’utilisateur quitte Orca pour effectuer une intervention manuelle.
+The orchestrator MUST NOT require the user to leave Orca to perform a manual intervention.
 
 ---
 
 # 25. Agent roles
 
-Rôles logiques minimum :
+Minimum logical roles:
 
 ```text
 triage
@@ -787,7 +787,7 @@ spec reconciliation agent
 
 ```
 
-Rôles conditionnels :
+Conditional roles:
 
 ```text
 architecture reviewer
@@ -803,7 +803,7 @@ release reviewer
 
 # 26. Triage agent
 
-Entrées :
+Inputs:
 
 ```text
 issue/spec
@@ -812,7 +812,7 @@ risk policy
 
 ```
 
-Sorties :
+Outputs:
 
 ```yaml
 work_type: feature
@@ -825,13 +825,13 @@ requires_human_approval: false
 
 ```
 
-Le triage agent ne modifie pas le code.
+The triage agent does not modify code.
 
 ---
 
 # 27. Planner
 
-Le planner MUST :
+The planner MUST:
 
 ```text
 read the specification
@@ -844,15 +844,15 @@ produce plan.md
 
 ```
 
-Le planner SHOULD utiliser un modèle capable de raisonnement fort lorsque l’impact est important.
+The planner SHOULD use a model with strong reasoning capability when the impact is significant.
 
 ---
 
 # 28. Plan reviewer
 
-Le plan reviewer travaille avec un contexte séparé.
+The plan reviewer works with a separate context.
 
-Il vérifie :
+It checks:
 
 ```text
 spec coverage
@@ -866,7 +866,7 @@ scope creep
 
 ```
 
-Verdicts :
+Verdicts:
 
 ```text
 APPROVED
@@ -879,7 +879,7 @@ BLOCKED
 
 # 29. Implementer
 
-L’implementer reçoit :
+The implementer receives:
 
 ```text
 spec.md
@@ -890,7 +890,7 @@ relevant existing code
 
 ```
 
-Il MUST :
+It MUST:
 
 ```text
 implement only approved scope
@@ -901,13 +901,13 @@ record deviations
 
 ```
 
-Il MUST NOT modifier la specification produit afin de faire correspondre celle-ci à son implémentation.
+It MUST NOT modify the product specification in order to make it match its implementation.
 
 ---
 
 # 30. Fix agent
 
-Un fix agent reçoit :
+A fix agent receives:
 
 ```text
 current diff
@@ -916,35 +916,35 @@ review findings
 
 ```
 
-Il doit corriger les findings sans introduire de scope supplémentaire.
+It must fix the findings without introducing additional scope.
 
-La boucle est bornée.
+The loop is bounded.
 
-Exemple :
+Example:
 
 ```text
 max_review_fix_cycles = 3
 
 ```
 
-Après dépassement :
+After the limit is exceeded:
 
 ```text
 BLOCKED
 
 ```
 
-ou escalade vers un modèle plus puissant.
+or escalation to a more powerful model.
 
 ---
 
 # 31. Review orchestrator
 
-Le review orchestrator ne juge pas lui-même nécessairement le code.
+The review orchestrator does not necessarily judge the code itself.
 
-Il détermine les reviewers nécessaires en fonction du diff et du risque.
+It determines the required reviewers based on the diff and the risk.
 
-Pseudo-règles :
+Pseudo-rules:
 
 ```text
 if auth_changed:
@@ -968,9 +968,9 @@ if public_behavior_changed:
 
 # 32. Reviewer contract
 
-Chaque reviewer produit un format structuré.
+Each reviewer produces a structured format.
 
-Exemple :
+Example:
 
 ```yaml
 review: security
@@ -985,7 +985,7 @@ findings:
 
 ```
 
-Severities :
+Severities:
 
 ```text
 info
@@ -1000,7 +1000,7 @@ critical
 
 # 33. Review policy
 
-Les findings :
+Findings of severity:
 
 ```text
 critical
@@ -1008,17 +1008,17 @@ high
 
 ```
 
-MUST bloquer la progression.
+MUST block progression.
 
-Les findings `medium` SHOULD bloquer sauf acceptation explicite documentée.
+`medium` findings SHOULD block unless explicitly accepted and documented.
 
-`low` MAY être reporté dans une issue technique.
+`low` MAY be deferred to a technical issue.
 
 ---
 
 # 34. Risk engine
 
-Le risque est calculé à partir :
+Risk is computed from:
 
 ```text
 user declaration
@@ -1031,7 +1031,7 @@ security-sensitive patterns
 
 ```
 
-Le résultat le plus conservateur SHOULD gagner.
+The most conservative result SHOULD win.
 
 ---
 
@@ -1039,9 +1039,9 @@ Le résultat le plus conservateur SHOULD gagner.
 
 ## R0
 
-Faible risque.
+Low risk.
 
-Exemples :
+Examples:
 
 ```text
 docs
@@ -1051,15 +1051,15 @@ minor isolated internal fix
 
 ```
 
-Peut être auto-merge.
+May be auto-merged.
 
 ---
 
 ## R1
 
-Risque engineering standard.
+Standard engineering risk.
 
-Exemples :
+Examples:
 
 ```text
 normal feature
@@ -1070,15 +1070,15 @@ non-destructive schema extension
 
 ```
 
-Peut progresser sans humain si toutes les gates passent.
+May progress without a human if all gates pass.
 
 ---
 
 ## R2
 
-Risque élevé.
+High risk.
 
-Exemples :
+Examples:
 
 ```text
 authentication
@@ -1094,13 +1094,13 @@ production permission changes
 
 ```
 
-MUST nécessiter une décision humaine avant merge ou production.
+MUST require a human decision before merge or production.
 
 ---
 
 # 36. Risk escalation
 
-Un changement initialement R0/R1 MUST être reclassifié si l’implémentation révèle :
+A change initially classified R0/R1 MUST be reclassified if the implementation reveals:
 
 ```text
 new trust boundary
@@ -1116,9 +1116,9 @@ data-loss possibility
 
 # 37. Human intervention contract
 
-L’orchestrateur SHOULD éviter d’interrompre l’humain pour les problèmes résolubles techniquement.
+The orchestrator SHOULD avoid interrupting the human for technically solvable problems.
 
-Escalade seulement pour :
+Escalate only for:
 
 ```text
 ambiguous product requirement
@@ -1136,24 +1136,24 @@ repeated agent failure
 
 # 38. Deterministic verification API
 
-Le repository SHOULD exposer une commande stable :
+The repository SHOULD expose a stable command:
 
 ```bash
 ./scripts/verify
 
 ```
 
-ou équivalent.
+or an equivalent.
 
-Cette commande constitue le contrat principal entre agents et CI.
+This command is the main contract between agents and CI.
 
-Elle SHOULD regrouper les vérifications adaptées au projet.
+It SHOULD group the checks suited to the project.
 
 ---
 
 # 39. Verification stages
 
-Baseline logique :
+Logical baseline:
 
 ```text
 format
@@ -1169,13 +1169,13 @@ e2e
 
 ```
 
-Tous les projets ne sont pas obligés d’avoir toutes les étapes.
+Not all projects are required to have all stages.
 
 ---
 
 # 40. Local vs CI checks
 
-Les checks sont divisés en :
+Checks are divided into:
 
 ```text
 FAST
@@ -1183,7 +1183,7 @@ FULL
 
 ```
 
-Exemple :
+Example:
 
 ```bash
 ./scripts/check
@@ -1191,7 +1191,7 @@ Exemple :
 
 ```
 
-`check` :
+`check`:
 
 ```text
 format
@@ -1201,7 +1201,7 @@ targeted tests
 
 ```
 
-`verify` :
+`verify`:
 
 ```text
 all checks
@@ -1216,11 +1216,11 @@ E2E
 
 # 41. Coverage policy
 
-Le projet MAY définir un seuil de couverture.
+The project MAY define a coverage threshold.
 
-Mais coverage seul MUST NOT être considéré comme une preuve de qualité.
+But coverage alone MUST NOT be considered proof of quality.
 
-Le test reviewer recherche également :
+The test reviewer also looks for:
 
 ```text
 meaningful assertions
@@ -1236,7 +1236,7 @@ excluded modules
 
 # 42. Characterization tests
 
-Avant une migration ou un refactor comportemental important :
+Before a migration or a significant behavioral refactor:
 
 ```text
 existing behavior
@@ -1246,13 +1246,13 @@ existing behavior
 
 ```
 
-Si le comportement existant est incorrect, la différence doit être explicitement liée à la specification.
+If the existing behavior is incorrect, the difference must be explicitly linked to the specification.
 
 ---
 
 # 43. Security architecture
 
-La sécurité est divisée en :
+Security is divided into:
 
 ```text
 static security
@@ -1267,7 +1267,7 @@ supply chain security
 
 # 44. Static security baseline
 
-Selon le stack :
+Depending on the stack:
 
 ```text
 SAST
@@ -1279,15 +1279,15 @@ IaC scan
 
 ```
 
-Les outils exacts restent stack-specific.
+The exact tools remain stack-specific.
 
 ---
 
 # 45. Agent security review
 
-Une security review est obligatoire lorsqu’un diff touche une frontière de confiance.
+A security review is mandatory when a diff touches a trust boundary.
 
-Le reviewer analyse notamment :
+The reviewer analyzes in particular:
 
 ```text
 authentication
@@ -1312,9 +1312,9 @@ privilege escalation
 
 # 46. Agent permission model
 
-Les personas SHOULD avoir des permissions différentes.
+Personas SHOULD have different permissions.
 
-Exemple :
+Example:
 
 ```text
 planner:
@@ -1337,13 +1337,13 @@ release:
 
 ```
 
-Un reviewer SHOULD être read-only.
+A reviewer SHOULD be read-only.
 
 ---
 
 # 47. Production credentials
 
-Les agents MUST NOT recevoir automatiquement :
+Agents MUST NOT automatically receive:
 
 ```text
 production database credentials
@@ -1353,20 +1353,20 @@ organization-wide tokens
 
 ```
 
-Les credentials sensibles MUST être séparés du contexte agentique.
+Sensitive credentials MUST be separated from the agentic context.
 
 ---
 
 # 48. Dependency evaluation workflow
 
-Tout ajout d’une dépendance significative déclenche :
+Any addition of a significant dependency triggers:
 
 ```text
 dependency-evaluation
 
 ```
 
-Output :
+Output:
 
 ```yaml
 package: example
@@ -1388,7 +1388,7 @@ decision: approved
 
 # 49. Dependency freshness requirements
 
-Avant introduction, l’agent SHOULD vérifier :
+Before introducing a dependency, the agent SHOULD verify:
 
 ```text
 latest stable version
@@ -1401,15 +1401,15 @@ license
 
 ```
 
-Il MUST NOT copier automatiquement un snippet utilisant une API obsolete simplement parce qu’il apparaît dans une ancienne documentation ou Stack Overflow.
+It MUST NOT automatically copy a snippet that uses an obsolete API simply because it appears in old documentation or on Stack Overflow.
 
 ---
 
 # 50. Dependency updates
 
-Renovate, Dependabot ou équivalent SHOULD assurer la détection automatique des mises à jour.
+Renovate, Dependabot, or an equivalent SHOULD provide automatic detection of updates.
 
-Policy indicative :
+Indicative policy:
 
 ```text
 patch
@@ -1429,7 +1429,7 @@ major
 
 # 51. Dependency migration workflow
 
-Une migration de dépendance suit :
+A dependency migration follows:
 
 ```text
 inventory
@@ -1454,13 +1454,13 @@ cleanup
 
 ```
 
-Un remplacement massif en un seul commit SHOULD être évité.
+A massive replacement in a single commit SHOULD be avoided.
 
 ---
 
 # 52. Database migration workflow
 
-Par défaut :
+By default:
 
 ```text
 EXPAND
@@ -1479,13 +1479,13 @@ CONTRACT
 
 ```
 
-Les migrations destructives simultanées à la suppression du code associé SHOULD être interdites pour les systèmes déployés progressivement.
+Destructive migrations performed at the same time as the removal of the associated code SHOULD be forbidden for progressively deployed systems.
 
 ---
 
 # 53. Documentation architecture
 
-Trois catégories principales :
+Three main categories:
 
 ```text
 product/domain
@@ -1494,13 +1494,13 @@ operations
 
 ```
 
-Le code ne doit pas devenir l’unique documentation de comportements complexes.
+Code must not become the sole documentation of complex behaviors.
 
 ---
 
 # 54. Documentation update detection
 
-Un changement SHOULD déclencher un docs review lorsqu’il modifie :
+A change SHOULD trigger a docs review when it modifies:
 
 ```text
 public API
@@ -1517,14 +1517,14 @@ operational procedure
 
 # 55. ADR contract
 
-Nom :
+Name:
 
 ```text
 docs/architecture/adr/NNNN-short-title.md
 
 ```
 
-Sections :
+Sections:
 
 ```text
 Status
@@ -1537,15 +1537,15 @@ References
 
 ```
 
-Un ADR accepté ne doit pas être réécrit pour masquer l’historique.
+An accepted ADR must not be rewritten to hide history.
 
-Il est remplacé par un nouvel ADR qui le `supersedes`.
+It is replaced by a new ADR that `supersedes` it.
 
 ---
 
 # 56. Spec reconciliation
 
-Avant validation :
+Before validation:
 
 ```text
 spec
@@ -1558,7 +1558,7 @@ documentation
 
 ```
 
-Le reconciliation agent produit :
+The reconciliation agent produces:
 
 ```text
 CONVERGED
@@ -1567,13 +1567,13 @@ FAILED
 
 ```
 
-Une feature n’est pas `validated` tant que la reconciliation n’est pas `CONVERGED`, sauf waiver explicite.
+A feature is not `validated` until the reconciliation is `CONVERGED`, unless there is an explicit waiver.
 
 ---
 
 # 57. CI architecture
 
-Workflow recommandé :
+Recommended workflow:
 
 ```text
 PR created
@@ -1601,23 +1601,23 @@ SPEC RECONCILIATION
 
 ```
 
-Les jobs SHOULD être parallélisés lorsque possible.
+Jobs SHOULD be parallelized where possible.
 
 ---
 
 # 58. Required checks
 
-Le repository MUST configurer ses branch/ruleset protections pour empêcher le merge si les checks obligatoires échouent.
+The repository MUST configure its branch/ruleset protections to prevent merging if the mandatory checks fail.
 
-Un agent ne doit pas pouvoir contourner cela via une simple modification du workflow dans sa PR.
+An agent must not be able to bypass this through a simple modification of the workflow in its PR.
 
-Les changements de CI critiques SHOULD être considérés au moins R1, souvent R2.
+Critical CI changes SHOULD be considered at least R1, often R2.
 
 ---
 
 # 59. PR contract
 
-Une PR générée par agent SHOULD contenir :
+An agent-generated PR SHOULD contain:
 
 ```text
 Summary
@@ -1644,9 +1644,9 @@ Known limitations
 
 # 60. Agent identity
 
-Lorsqu’un agent produit une modification, son rôle SHOULD être visible.
+When an agent produces a change, its role SHOULD be visible.
 
-Exemple :
+Example:
 
 ```text
 Implemented-by: codex/implementer
@@ -1655,7 +1655,7 @@ Security-reviewed-by: claude/security
 
 ```
 
-Cela peut vivre dans :
+This can live in:
 
 ```text
 PR body
@@ -1664,13 +1664,13 @@ automation metadata
 
 ```
 
-sans nécessairement polluer les commits.
+without necessarily polluting the commits.
 
 ---
 
 # 61. Fix loop
 
-Pipeline :
+Pipeline:
 
 ```text
 implementation
@@ -1689,9 +1689,9 @@ review
 
 ```
 
-La boucle MUST être bornée.
+The loop MUST be bounded.
 
-Après N échecs :
+After N failures:
 
 ```text
 upgrade model
@@ -1704,7 +1704,7 @@ human escalation
 
 # 62. Model routing interface
 
-Le routeur reçoit :
+The router receives:
 
 ```yaml
 role: planner
@@ -1715,7 +1715,7 @@ requires_tools: true
 
 ```
 
-Il retourne :
+It returns:
 
 ```yaml
 provider: anthropic
@@ -1724,13 +1724,13 @@ tier: strong
 
 ```
 
-Le provider concret n’est pas codé dans les specs.
+The concrete provider is not hard-coded in the specs.
 
 ---
 
 # 63. Model tiers
 
-Trois niveaux logiques :
+Three logical levels:
 
 ```text
 FAST
@@ -1739,7 +1739,7 @@ STRONG
 
 ```
 
-FAST :
+FAST:
 
 ```text
 classification
@@ -1750,7 +1750,7 @@ formatting
 
 ```
 
-STANDARD :
+STANDARD:
 
 ```text
 normal implementation
@@ -1759,7 +1759,7 @@ routine review
 
 ```
 
-STRONG :
+STRONG:
 
 ```text
 architecture
@@ -1775,7 +1775,7 @@ adversarial review
 
 # 64. Subscription-aware routing
 
-Le router SHOULD pouvoir déclarer :
+The router SHOULD be able to declare:
 
 ```yaml
 billing_mode:
@@ -1785,7 +1785,7 @@ billing_mode:
 
 ```
 
-Configuration exemple :
+Example configuration:
 
 ```yaml
 providers:
@@ -1799,35 +1799,35 @@ providers:
 
 ```
 
-Le mode par défaut SHOULD préférer `subscription` lorsque demandé par l’utilisateur.
+The default mode SHOULD prefer `subscription` when requested by the user.
 
 ---
 
 # 65. Paid API guard
 
-Une exécution API payante SHOULD être explicitement autorisable.
+A paid API execution SHOULD require explicit authorization.
 
-Exemple :
+Example:
 
 ```yaml
 allow_metered_api: false
 
 ```
 
-Si aucun runtime compatible n’est disponible :
+If no compatible runtime is available:
 
 ```text
 BLOCK
 
 ```
 
-plutôt que fallback silencieux vers une API facturée.
+rather than a silent fallback to a billed API.
 
 ---
 
 # 66. Orchestrator requirements
 
-L’orchestrateur retenu ou développé MUST fournir au minimum :
+The chosen or developed orchestrator MUST provide at a minimum:
 
 ```text
 dispatch agent
@@ -1842,7 +1842,7 @@ structured output
 
 ```
 
-Il SHOULD fournir :
+It SHOULD provide:
 
 ```text
 parallel runs
@@ -1857,7 +1857,7 @@ agent messaging
 
 # 67. Orchestrator non-requirements
 
-Il n’est pas nécessaire que l’orchestrateur :
+The orchestrator does not need to:
 
 ```text
 own the product backlog
@@ -1868,13 +1868,13 @@ provide its own editor
 
 ```
 
-Le projet doit éviter de créer un deuxième système de project management.
+The project must avoid creating a second project management system.
 
 ---
 
 # 68. Orchestration adapter
 
-Interface interne conceptuelle :
+Conceptual internal interface:
 
 ```python
 class AgentAdapter:
@@ -1886,7 +1886,7 @@ class AgentAdapter:
 
 ```
 
-Adapters possibles :
+Possible adapters:
 
 ```text
 ClaudeCodeAdapter
@@ -1900,7 +1900,7 @@ RemoteAgentAdapter
 
 # 69. Local orchestrator implementation
 
-Si une couche d’orchestration maison devient nécessaire, Python est le choix initial recommandé pour le prototype en raison de :
+If an in-house orchestration layer becomes necessary, Python is the recommended initial choice for the prototype because of:
 
 ```text
 subprocess management
@@ -1912,15 +1912,15 @@ existing user preference
 
 ```
 
-Ce choix n’est pas architecturalement obligatoire.
+This choice is not architecturally mandatory.
 
 ---
 
 # 70. Git worktree strategy
 
-Chaque implementer SHOULD travailler dans un worktree distinct.
+Each implementer SHOULD work in a separate worktree.
 
-Exemple :
+Example:
 
 ```text
 .worktrees/
@@ -1930,15 +1930,15 @@ Exemple :
 
 ```
 
-Deux agents ne SHOULD pas modifier simultanément le même worktree.
+Two agents SHOULD NOT modify the same worktree simultaneously.
 
 ---
 
 # 71. Parallelism policy
 
-Les tâches peuvent être parallélisées uniquement si leurs write sets sont suffisamment indépendants.
+Tasks can be parallelized only if their write sets are sufficiently independent.
 
-Safe :
+Safe:
 
 ```text
 backend implementation
@@ -1947,7 +1947,7 @@ read-only security review of another PR
 
 ```
 
-Potentially unsafe :
+Potentially unsafe:
 
 ```text
 two agents editing same migration
@@ -1955,13 +1955,13 @@ two agents modifying same API contract
 
 ```
 
-Le planner SHOULD identifier les possibilités de parallélisme.
+The planner SHOULD identify the opportunities for parallelism.
 
 ---
 
 # 72. Runtime validation
 
-Après merge ou avant production selon le projet :
+After merge or before production, depending on the project:
 
 ```text
 deploy staging
@@ -1982,7 +1982,7 @@ optional canary
 
 # 73. Rollback contract
 
-Toute feature R1/R2 SHOULD répondre avant déploiement :
+Every R1/R2 feature SHOULD answer before deployment:
 
 ```text
 How do we rollback code?
@@ -1999,7 +1999,7 @@ What happens to writes made after deployment?
 
 # 74. Production release
 
-Pipeline cible :
+Target pipeline:
 
 ```text
 validated PR
@@ -2026,7 +2026,7 @@ post-deploy verification
 
 # 75. Observability requirements
 
-Pour chaque nouveau chemin critique, le planner doit déterminer si sont nécessaires :
+For each new critical path, the planner must determine whether the following are needed:
 
 ```text
 logs
@@ -2038,13 +2038,13 @@ dashboard
 
 ```
 
-Une feature invisible en cas de panne n’est pas nécessairement production-ready.
+A feature that is invisible during an outage is not necessarily production-ready.
 
 ---
 
 # 76. Agent pipeline observability
 
-Le système lui-même doit produire :
+The system itself must produce:
 
 ```text
 run ID
@@ -2060,22 +2060,22 @@ fix cycle count
 
 ```
 
-Aucune chaîne de pensée privée n’est requise.
+No private chain of thought is required.
 
-Le système conserve uniquement les outputs opérationnels nécessaires.
+The system keeps only the necessary operational outputs.
 
 ---
 
 # 77. Audit artifact
 
-Chaque work item MAY produire :
+Each work item MAY produce:
 
 ```text
 .agent-runs/<work-id>/summary.json
 
 ```
 
-Exemple :
+Example:
 
 ```json
 {
@@ -2096,13 +2096,13 @@ Exemple :
 
 ```
 
-Ce fichier MAY être stocké hors Git si trop volatile.
+This file MAY be stored outside Git if it is too volatile.
 
 ---
 
 # 78. Token efficiency
 
-Le context builder ne charge que :
+The context builder loads only:
 
 ```text
 root instructions
@@ -2114,7 +2114,7 @@ relevant code
 
 ```
 
-Il SHOULD éviter :
+It SHOULD avoid:
 
 ```text
 entire docs tree
@@ -2129,7 +2129,7 @@ all previous agent transcripts
 
 # 79. Context retrieval
 
-Le contexte est obtenu en priorité par :
+Context is obtained primarily through:
 
 ```text
 explicit references
@@ -2140,23 +2140,23 @@ directory-scoped instructions
 
 ```
 
-et non par chargement complet du repository dans le prompt.
+and not by loading the entire repository into the prompt.
 
 ---
 
 # 80. Policy versioning
 
-Les policies sont versionnées avec le code.
+Policies are versioned with the code.
 
-Lorsqu’une policy change de manière importante, les specs `READY` SHOULD être réévaluées.
+When a policy changes significantly, `READY` specs SHOULD be re-evaluated.
 
-Les features déjà `VALIDATED` ne sont pas automatiquement invalidées.
+Features that are already `VALIDATED` are not automatically invalidated.
 
 ---
 
 # 81. Policy maintenance
 
-Un job périodique MAY analyser :
+A periodic job MAY analyze:
 
 ```text
 obsolete tool references
@@ -2168,7 +2168,7 @@ stale AGENTS instructions
 
 ```
 
-Résultat :
+Result:
 
 ```text
 maintenance PR
@@ -2179,7 +2179,7 @@ maintenance PR
 
 # 82. Definition of Ready
 
-Une feature est `READY` lorsque :
+A feature is `READY` when:
 
 ```text
 goal understood
@@ -2191,13 +2191,13 @@ initial risk assigned
 
 ```
 
-Elle n’a pas besoin d’avoir un implementation plan à ce stade.
+It does not need to have an implementation plan at this stage.
 
 ---
 
 # 83. Definition of Planned
 
-Une feature est `PLANNED` lorsque :
+A feature is `PLANNED` when:
 
 ```text
 repository inspected
@@ -2212,7 +2212,7 @@ plan independently reviewed
 
 # 84. Definition of Implemented
 
-Une feature est `IMPLEMENTED` lorsque :
+A feature is `IMPLEMENTED` when:
 
 ```text
 code complete
@@ -2223,13 +2223,13 @@ PR created
 
 ```
 
-Cela ne signifie pas `DONE`.
+This does not mean `DONE`.
 
 ---
 
 # 85. Definition of Validated
 
-Une feature est `VALIDATED` lorsque :
+A feature is `VALIDATED` when:
 
 ```text
 CI green
@@ -2243,7 +2243,7 @@ required runtime verification passes
 
 # 86. Definition of Done
 
-Une work item est `DONE` lorsque :
+A work item is `DONE` when:
 
 ```text
 validated
@@ -2258,7 +2258,7 @@ follow-up work explicitly tracked
 
 # 87. MVP v0.1
 
-La première implementation du standard couvre uniquement :
+The first implementation of the standard covers only:
 
 ```text
 repository structure
@@ -2281,7 +2281,7 @@ spec reconciliation
 
 ```
 
-Pas d’orchestration automatique obligatoire.
+No mandatory automatic orchestration.
 
 ---
 
@@ -2316,13 +2316,13 @@ human merge
 
 ```
 
-Cette phase sert à valider les contrats avant d’automatiser.
+This phase serves to validate the contracts before automating.
 
 ---
 
 # 89. v0.2 target
 
-Automatiser :
+Automate:
 
 ```text
 READY detection
@@ -2335,13 +2335,13 @@ GitHub status updates
 
 ```
 
-L’humain reste nécessaire pour tous les merges.
+A human remains necessary for all merges.
 
 ---
 
 # 90. v0.3 target
 
-Ajouter :
+Add:
 
 ```text
 R0 auto merge
@@ -2357,7 +2357,7 @@ subscription-aware routing
 
 # 91. v1.0 target
 
-Objectif :
+Goal:
 
 ```text
 product specification
@@ -2368,7 +2368,7 @@ production
 
 ```
 
-avec intervention humaine principalement pour :
+with human intervention mainly for:
 
 ```text
 product ambiguity
@@ -2382,9 +2382,9 @@ exception handling
 
 # 92. Reference implementation strategy
 
-Ne pas commencer par construire un gros orchestrateur.
+Do not start by building a large orchestrator.
 
-Ordre recommandé :
+Recommended order:
 
 ```text
 1. standardize artifacts
@@ -2401,7 +2401,7 @@ Ordre recommandé :
 
 # 93. Technology choices — initial defaults
 
-Ces choix sont des defaults, pas des hard dependencies.
+These choices are defaults, not hard dependencies.
 
 ```text
 Source control:
@@ -2440,7 +2440,7 @@ repository-specific
 
 # 94. Explicitly deferred choices
 
-Non décidé en v0.1 :
+Not decided in v0.1:
 
 ```text
 CAO
@@ -2451,13 +2451,13 @@ GitHub-native agent orchestration
 
 ```
 
-Aucun ne doit être requis pour adopter le standard.
+None of them must be required to adopt the standard.
 
 ---
 
 # 95. Compatibility requirement
 
-Le système MUST pouvoir fonctionner dans sa forme dégradée uniquement avec :
+The system MUST be able to operate in its degraded form with only:
 
 ```text
 Git
@@ -2469,27 +2469,27 @@ CI
 
 ```
 
-Toutes les autres briques améliorent l’automatisation mais ne doivent pas rendre le repository incompréhensible sans elles.
+All the other building blocks improve automation but must not make the repository incomprehensible without them.
 
 ---
 
 # 96. Failure philosophy
 
-Le système préfère :
+The system prefers:
 
 ```text
 blocked with explicit reason
 
 ```
 
-à :
+to:
 
 ```text
 silent assumption
 
 ```
 
-Exemples de conditions de blocage :
+Examples of blocking conditions:
 
 ```text
 unresolved product conflict
@@ -2505,7 +2505,7 @@ required infrastructure unavailable
 
 # 97. Non-goals v0.1
 
-Cette architecture ne cherche pas encore à :
+This architecture does not yet seek to:
 
 ```text
 replace GitHub
@@ -2523,28 +2523,28 @@ fully remove human responsibility
 
 # 98. Acceptance criteria for this technical design
 
-Le standard sera considéré techniquement viable lorsqu’un repository pilote démontre :
+The standard will be considered technically viable when a pilot repository demonstrates:
 
-1. une feature non triviale écrite en spec ;
-2. un plan généré par un agent ;
-3. une implementation par un autre agent ;
-4. des tests et quality gates automatiques ;
-5. une review indépendante ;
-6. une correction automatique d’au moins un finding ;
-7. une reconciliation spec/code ;
-8. une PR complète ;
-9. aucun contexte conversationnel indispensable perdu entre les étapes ;
-10. remplacement de l’implementer Claude ↔ Codex sans modifier la spec ou le workflow ;
-11. aucune consommation API payante lorsqu’un mode subscription-only est demandé ;
-12. possibilité de reprendre manuellement le travail dans Orca.
+1. a non-trivial feature written as a spec;
+2. a plan generated by an agent;
+3. an implementation by another agent;
+4. automatic tests and quality gates;
+5. an independent review;
+6. automatic correction of at least one finding;
+7. a spec/code reconciliation;
+8. a complete PR;
+9. no essential conversational context lost between steps;
+10. replacement of the implementer Claude ↔ Codex without modifying the spec or the workflow;
+11. no paid API consumption when a subscription-only mode is requested;
+12. the ability to manually resume the work in Orca.
 
 ---
 
 # 99. Recommended pilot
 
-LoreForge est un bon candidat pour valider le système.
+LoreForge is a good candidate to validate the system.
 
-Phase pilote recommandée :
+Recommended pilot phase:
 
 ```text
 existing LoreForge architecture
@@ -2569,15 +2569,15 @@ record friction points
 
 ```
 
-Ne pas automatiser davantage avant d’avoir exécuté plusieurs features de cette manière.
+Do not automate further before having run several features this way.
 
-Le résultat de cette expérimentation doit alimenter la Technical Specification v0.2.
+The result of this experiment must feed into Technical Specification v0.2.
 
 ---
 
 # 100. Core technical invariant
 
-Le cœur du système peut être résumé ainsi :
+The core of the system can be summarized as follows:
 
 ```text
 SPEC
@@ -2605,13 +2605,13 @@ DELIVERY
 
 ```
 
-Aucune étape ne doit dépendre exclusivement de la confiance dans la réponse de l’agent précédent.
+No step must depend exclusively on trust in the previous agent's response.
 
 ---
 
 # 101. Architectural north star
 
-À terme :
+Eventually:
 
 ```text
                        HUMAN
@@ -2651,10 +2651,10 @@ Aucune étape ne doit dépendre exclusivement de la confiance dans la réponse d
 
 ```
 
-L’orchestrateur est remplaçable.
+The orchestrator is replaceable.
 
-Les modèles sont remplaçables.
+The models are replaceable.
 
-Les IDE sont remplaçables.
+The IDEs are replaceable.
 
-Les artifacts, policies, preuves et contrats du repository constituent le système durable.
+The repository's artifacts, policies, evidence, and contracts constitute the durable system.

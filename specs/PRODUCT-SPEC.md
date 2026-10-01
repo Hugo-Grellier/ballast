@@ -6,43 +6,43 @@
 
 ## 1. Vision
 
-Créer un système réutilisable permettant de partir d’un dépôt vide et d’arriver à une application réellement production-ready, avec un minimum d’intervention humaine sur l’implémentation.
+Create a reusable system that makes it possible to start from an empty repository and end up with a truly production-ready application, with minimal human intervention on the implementation.
 
-Le développeur humain agit principalement comme :
+The human developer acts mainly as:
 
-- product owner ;
-- décideur fonctionnel ;
-- arbitre des choix difficiles ou irréversibles ;
-- validateur occasionnel des changements à haut risque.
+- product owner;
+- functional decision-maker;
+- arbiter of difficult or irreversible choices;
+- occasional validator of high-risk changes.
 
-Les agents prennent en charge autant que possible :
+The agents take over as much as possible of:
 
-- clarification de spécification ;
-- exploration du repository ;
-- planification technique ;
-- implémentation ;
-- tests ;
-- documentation ;
-- revue de code ;
-- revue architecture ;
-- revue sécurité ;
-- gestion des dépendances ;
-- migrations ;
-- corrections après CI/review ;
-- création et maintenance des PR ;
-- validation en staging ;
-- préparation des releases ;
-- maintenance continue.
+- specification clarification;
+- repository exploration;
+- technical planning;
+- implementation;
+- tests;
+- documentation;
+- code review;
+- architecture review;
+- security review;
+- dependency management;
+- migrations;
+- fixes after CI/review;
+- creation and maintenance of PRs;
+- staging validation;
+- release preparation;
+- ongoing maintenance.
 
-L’objectif n’est pas de créer un nouvel IDE ni d’enfermer le workflow dans un modèle particulier.
+The goal is not to create a new IDE or to lock the workflow into a particular model.
 
-Le repository lui-même doit contenir suffisamment de règles, de contexte, de procédures et de garde-fous pour permettre à différents agents de travailler dessus de manière fiable.
+The repository itself must contain enough rules, context, procedures and guardrails to allow different agents to work on it reliably.
 
 ---
 
-# 2. Objectif principal
+# 2. Main objective
 
-Permettre le workflow suivant :
+Enable the following workflow:
 
 ```text
 Human product intent
@@ -75,15 +75,15 @@ Production
 
 ```
 
-Avec intervention humaine uniquement lorsque celle-ci apporte une vraie valeur.
+With human intervention only when it brings real value.
 
 ---
 
-# 3. Principes fondamentaux
+# 3. Core principles
 
 ## 3.1 Human-driven, agent-built
 
-L’humain définit principalement :
+The human mainly defines:
 
 ```text
 WHAT
@@ -95,7 +95,7 @@ acceptable risk
 
 ```
 
-Les agents déterminent principalement :
+The agents mainly determine:
 
 ```text
 HOW
@@ -107,15 +107,15 @@ documentation updates
 
 ```
 
-Le système doit éviter de transformer l’humain en superviseur permanent des agents.
+The system must avoid turning the human into a permanent supervisor of the agents.
 
 ---
 
 ## 3.2 Repository as operating system
 
-Le repository doit être autonome.
+The repository must be self-contained.
 
-Un nouvel agent arrivant sur le projet doit pouvoir déterminer :
+A new agent arriving on the project must be able to determine:
 
 ```text
 How should I modify this project?
@@ -129,38 +129,38 @@ What constitutes "done"?
 
 ```
 
-sans dépendre d’une conversation historique.
+without depending on a conversation history.
 
 ---
 
 ## 3.3 Agents must remain replaceable
 
-Le système ne doit dépendre fondamentalement ni de :
+The system must not fundamentally depend on any of:
 
-- Claude Code ;
-- Codex ;
-- Open SWE ;
-- CAO ;
-- Copilot ;
-- Cursor ;
-- Kiro ;
+- Claude Code;
+- Codex;
+- Open SWE;
+- CAO;
+- Copilot;
+- Cursor;
+- Kiro;
 - Orca.
 
-Ces outils doivent être considérés comme des moteurs interchangeables autour d’un contrat commun défini dans le repository.
+These tools must be considered interchangeable engines around a common contract defined in the repository.
 
 ---
 
 ## 3.4 Deterministic verification over agent confidence
 
-Une réponse :
+A reply such as:
 
-> “The implementation looks correct.”
+> "The implementation looks correct."
 
-n’est pas une preuve.
+is not proof.
 
-Lorsque quelque chose peut être validé automatiquement, la validation automatique est prioritaire.
+When something can be validated automatically, automatic validation takes priority.
 
-Exemples :
+Examples:
 
 ```text
 formatter
@@ -181,15 +181,15 @@ runtime health checks
 
 ```
 
-Les agents interviennent surtout là où la vérification déterministe est insuffisante.
+Agents intervene mainly where deterministic verification is insufficient.
 
 ---
 
 ## 3.5 Independent review
 
-L’agent qui écrit une modification ne doit pas être son unique reviewer.
+The agent that writes a change must not be its only reviewer.
 
-Workflow minimal :
+Minimal workflow:
 
 ```text
 Implementer
@@ -200,7 +200,7 @@ independent reviewer
 
 ```
 
-Pour les changements sensibles :
+For sensitive changes:
 
 ```text
 Implementer
@@ -215,42 +215,42 @@ test reviewer
 
 ```
 
-Tous les reviewers ne doivent pas nécessairement être exécutés pour chaque changement.
+Not all reviewers necessarily have to run for every change.
 
 ---
 
-# 4. Contraintes économiques
+# 4. Economic constraints
 
-Le système doit autant que possible exploiter les abonnements déjà payés par l’utilisateur.
+The system must, as far as possible, make use of the subscriptions the user has already paid for.
 
-Exemple actuel :
+Current example:
 
 ```text
 Claude Code
-→ abonnement Claude
+→ Claude subscription
 
 Codex CLI
-→ abonnement ChatGPT/Codex
+→ ChatGPT/Codex subscription
 
 ```
 
-Le système doit éviter par défaut les workflows nécessitant des appels API facturés séparément.
+By default, the system must avoid workflows that require separately billed API calls.
 
-Conséquence importante :
+Important consequence:
 
-les orchestrateurs utilisant exclusivement des API provider ne doivent pas être une dépendance architecturale essentielle.
+orchestrators that rely exclusively on provider APIs must not be an essential architectural dependency.
 
-Ils peuvent rester optionnels.
+They may remain optional.
 
 ---
 
-# 5. Interface utilisateur principale
+# 5. Main user interface
 
 ## Orca IDE
 
-Orca reste l’environnement quotidien de l’utilisateur.
+Orca remains the user's daily environment.
 
-Il sert principalement à :
+It is mainly used for:
 
 ```text
 interactive agent sessions
@@ -264,15 +264,15 @@ Codex
 
 ```
 
-Orca n’a pas besoin de devenir l’orchestrateur global.
+Orca does not need to become the global orchestrator.
 
-Il représente le cockpit humain.
+It represents the human cockpit.
 
 ---
 
-# 6. GitHub comme bus de coordination
+# 6. GitHub as the coordination bus
 
-GitHub devient la couche de coordination partagée entre :
+GitHub becomes the shared coordination layer between:
 
 ```text
 Human
@@ -284,7 +284,7 @@ deployment
 
 ```
 
-GitHub contient principalement :
+GitHub mainly contains:
 
 ```text
 Issues
@@ -298,13 +298,13 @@ deployments
 
 ```
 
-L’orchestrateur doit pouvoir être remplacé sans changer cette couche.
+The orchestrator must be replaceable without changing this layer.
 
 ---
 
-# 7. Séparation entre état et artifacts
+# 7. Separation between state and artifacts
 
-Principe :
+Principle:
 
 ```text
 GitHub Issue
@@ -321,7 +321,7 @@ Code
 
 ```
 
-Exemple :
+Example:
 
 ```text
 Issue #423
@@ -346,31 +346,31 @@ specs/0423-project-sharing/tasks.md
 
 # 8. Specification-driven development
 
-Le système doit être spec-driven mais ne doit pas tomber dans le Big Design Up Front.
+The system must be spec-driven but must not fall into Big Design Up Front.
 
-La specification fonctionne en rolling wave.
+The specification works as a rolling wave.
 
-Trois horizons sont maintenus.
+Three horizons are maintained.
 
 ## NOW
 
-Une feature environ.
+About one feature.
 
-Complètement spécifiée et prête à être implémentée.
+Fully specified and ready to be implemented.
 
 ## NEXT
 
-Quelques features.
+A few features.
 
-Le comportement produit est connu mais certains détails restent volontairement ouverts.
+The product behavior is known but some details are deliberately left open.
 
 ## LATER
 
-Intentions, epics et directions produit.
+Intentions, epics and product directions.
 
-Pas de design technique détaillé.
+No detailed technical design.
 
-Exemple :
+Example:
 
 ```text
 A = IMPLEMENTING
@@ -380,17 +380,17 @@ D = IDEA
 
 ```
 
-Pendant l’implémentation de A, B peut être finalisée.
+While A is being implemented, B can be finalized.
 
-Il n’est pas nécessaire d’attendre la validation complète de A avant de réfléchir à B.
+There is no need to wait for A to be fully validated before thinking about B.
 
-En revanche, les détails techniques de C/D ne doivent pas être figés prématurément.
+However, the technical details of C/D must not be frozen prematurely.
 
 ---
 
-# 9. Hiérarchie des specifications
+# 9. Specification hierarchy
 
-Le produit doit distinguer clairement :
+The product must clearly distinguish:
 
 ```text
 Product vision
@@ -411,7 +411,7 @@ Implementation
 
 # 10. Specification vs implementation plan
 
-Une specification décrit :
+A specification describes:
 
 ```text
 WHAT must be true
@@ -422,7 +422,7 @@ acceptance criteria
 
 ```
 
-Elle ne doit normalement pas imposer :
+It should normally not impose:
 
 ```text
 class names
@@ -433,9 +433,9 @@ specific functions
 
 ```
 
-sauf lorsque ceux-ci constituent réellement une contrainte produit ou architecturale.
+unless these genuinely constitute a product or architectural constraint.
 
-Exemple correct :
+Correct example:
 
 ```text
 Users can create projects.
@@ -450,20 +450,20 @@ A failed creation must not leave partial persistent state.
 
 ```
 
-Le plan d’implémentation répond ensuite :
+The implementation plan then answers:
 
 ```text
 How should the current repository implement this requirement?
 
 ```
 
-Il est produit après inspection du code existant.
+It is produced after inspecting the existing code.
 
 ---
 
-# 11. Lifecycle d’une specification
+# 11. Specification lifecycle
 
-Une spec possède un statut explicite.
+A spec has an explicit status.
 
 ```text
 IDEA
@@ -484,15 +484,15 @@ SUPERSEDED
 
 ```
 
-Un agent ne doit normalement démarrer une implémentation automatique que depuis une specification `READY`.
+An agent should normally start an automatic implementation only from a `READY` specification.
 
 ---
 
-# 12. Reconciliation spec ↔ implementation
+# 12. Spec ↔ implementation reconciliation
 
-Toute implémentation doit finir par une phase de reconciliation.
+Every implementation must end with a reconciliation phase.
 
-Questions :
+Questions:
 
 ```text
 Did implementation satisfy every requirement?
@@ -509,7 +509,7 @@ Was a deliberate deviation introduced?
 
 ```
 
-Résultat possible :
+Possible outcomes:
 
 ```text
 implementation wrong
@@ -523,14 +523,14 @@ new knowledge
 
 ```
 
-Le pipeline ne doit pas considérer :
+The pipeline must not treat:
 
 ```text
 PR merged
 
 ```
 
-comme équivalent à :
+as equivalent to:
 
 ```text
 feature complete
@@ -539,20 +539,20 @@ feature complete
 
 ---
 
-# 13. Pas de corrections cachées dans les specs suivantes
+# 13. No hidden fixes in later specs
 
-Une nouvelle feature ne doit pas discrètement réparer une feature précédente.
+A new feature must not quietly repair a previous feature.
 
-Si A doit être corrigé avant C :
+If A must be fixed before C:
 
 ```text
 A2 correction
 
 ```
 
-doit être explicitement créée.
+must be explicitly created.
 
-Cela améliore :
+This improves:
 
 ```text
 traceability
@@ -564,15 +564,15 @@ change attribution
 
 ---
 
-# 14. Issue ou fichier pour la spec ?
+# 14. Issue or file for the spec?
 
-Les deux sont autorisés.
+Both are allowed.
 
-## Petite modification
+## Small change
 
-Toute la specification peut vivre dans l’issue.
+The whole specification can live in the issue.
 
-Exemple :
+Example:
 
 ```text
 Bug
@@ -582,9 +582,9 @@ Minor behavior adjustment
 
 ```
 
-## Feature significative
+## Significant feature
 
-L’issue contient principalement :
+The issue mainly contains:
 
 ```text
 goal
@@ -597,9 +597,9 @@ ownership
 
 ```
 
-La specification durable vit dans le repository.
+The durable specification lives in the repository.
 
-Par exemple :
+For example:
 
 ```text
 specs/
@@ -611,7 +611,7 @@ specs/
 
 ```
 
-Avantages :
+Advantages:
 
 ```text
 versioning
@@ -627,11 +627,11 @@ spec/code synchronization
 
 # 15. Instruction architecture
 
-Un énorme [`AGENTS.md`](http://AGENTS.md) ne doit pas être utilisé.
+A huge `AGENTS.md` must not be used.
 
-Le système doit reposer sur progressive disclosure.
+The system must rely on progressive disclosure.
 
-Architecture :
+Architecture:
 
 ```text
 AGENTS.md
@@ -646,18 +646,18 @@ stack-specific instructions
 
 ---
 
-# 16. Root [AGENTS.md](http://AGENTS.md)
+# 16. Root `AGENTS.md`
 
-Le fichier racine contient uniquement les règles invariantes.
+The root file contains only invariant rules.
 
-Taille cible :
+Target size:
 
 ```text
 ~150–250 lines
 
 ```
 
-Il définit notamment :
+It defines in particular:
 
 ```text
 engineering priorities
@@ -675,7 +675,7 @@ source-of-truth rules
 
 # 17. Engineering priority order
 
-Lorsqu’un compromis est nécessaire :
+When a trade-off is necessary:
 
 ```text
 1. Correctness
@@ -689,13 +689,13 @@ Lorsqu’un compromis est nécessaire :
 
 ```
 
-Sacrifier une priorité supérieure pour une priorité inférieure nécessite une justification explicite.
+Sacrificing a higher priority for a lower one requires an explicit justification.
 
 ---
 
 # 18. Forbidden agent behavior
 
-Les agents ne doivent jamais silencieusement :
+Agents must never silently:
 
 ```text
 disable failing tests
@@ -728,9 +728,9 @@ rewrite unrelated code without justification
 
 # 19. Contextual skills
 
-Les procédures détaillées vivent dans des skills dédiés.
+Detailed procedures live in dedicated skills.
 
-Structure indicative :
+Indicative structure:
 
 ```text
 .agents/
@@ -761,7 +761,7 @@ Structure indicative :
 
 # 20. Conditional skill triggering
 
-Exemple :
+Example:
 
 ```text
 Authentication changed
@@ -791,7 +791,7 @@ Externally visible behavior changed
 
 # 21. Documentation policy
 
-La documentation doit expliquer principalement :
+Documentation must mainly explain:
 
 ```text
 WHY
@@ -803,13 +803,13 @@ operational implications
 
 ```
 
-Elle ne doit pas simplement reformuler le code.
+It must not simply restate the code.
 
 ---
 
 # 22. Code comments
 
-Commentaires requis principalement pour :
+Comments are mainly required for:
 
 ```text
 non-obvious decisions
@@ -822,14 +822,14 @@ upstream bugs
 
 ```
 
-Mauvais commentaire :
+Bad comment:
 
 ```text
 Increment counter by one.
 
 ```
 
-Bon commentaire :
+Good comment:
 
 ```text
 Retry IDs must remain monotonic because downstream deduplication
@@ -841,7 +841,7 @@ uses them as an idempotency key.
 
 # 23. TODO / FIXME
 
-Un TODO ou FIXME doit expliquer :
+A TODO or FIXME must explain:
 
 ```text
 why the work remains
@@ -850,7 +850,7 @@ relevant issue/reference
 
 ```
 
-Un TODO ne peut pas être utilisé pour différer silencieusement :
+A TODO cannot be used to silently defer:
 
 ```text
 security
@@ -863,9 +863,9 @@ critical validation
 
 # 24. ADR
 
-Architecture Decision Record requis pour les décisions difficiles à inverser.
+An Architecture Decision Record is required for decisions that are hard to reverse.
 
-Exemples :
+Examples:
 
 ```text
 new persistence mechanism
@@ -882,9 +882,9 @@ runtime architecture
 
 # 25. Dependency policy
 
-Un agent ne doit pas choisir une dépendance uniquement parce qu’elle est populaire ou pratique.
+An agent must not choose a dependency solely because it is popular or convenient.
 
-Avant ajout :
+Before adding one:
 
 ```text
 Can existing dependencies solve it?
@@ -921,7 +921,7 @@ Replacement difficulty?
 
 # 26. Dependency freshness
 
-Le système doit empêcher autant que possible :
+The system must prevent as far as possible:
 
 ```text
 deprecated dependencies
@@ -932,13 +932,13 @@ old examples copied from outdated documentation
 
 ```
 
-Les agents doivent vérifier les versions actuellement supportées avant adoption.
+Agents must check the currently supported versions before adoption.
 
 ---
 
 # 27. Dependency automation
 
-Une solution telle que Renovate ou équivalent peut automatiquement :
+A solution such as Renovate or an equivalent can automatically:
 
 ```text
 detect upgrades
@@ -948,15 +948,15 @@ automerge low-risk upgrades
 
 ```
 
-Les upgrades importantes restent soumises aux mêmes reviews que du code normal.
+Major upgrades remain subject to the same reviews as normal code.
 
 ---
 
 # 28. Dependency migration
 
-Remplacer une dépendance constitue une migration.
+Replacing a dependency is a migration.
 
-Processus attendu :
+Expected process:
 
 ```text
 characterize current behavior
@@ -987,7 +987,7 @@ update documentation
 
 ```
 
-Pas de :
+Not:
 
 ```text
 uninstall old
@@ -1001,7 +1001,7 @@ hope CI catches it
 
 # 29. Database migrations
 
-Les changements destructifs doivent suivre autant que possible :
+Destructive changes must follow, as far as possible:
 
 ```text
 EXPAND
@@ -1020,20 +1020,20 @@ CONTRACT
 
 ```
 
-Exemple interdit dans un déploiement unique sans justification :
+Example that is forbidden in a single deployment without justification:
 
 ```sql
 DROP COLUMN
 
 ```
 
-si une version potentiellement active du logiciel peut encore l’utiliser.
+if a potentially active version of the software may still use it.
 
 ---
 
 # 30. Cybersecurity
 
-La sécurité ne doit pas être réduite à :
+Security must not be reduced to:
 
 ```text
 dependency scanner
@@ -1042,7 +1042,7 @@ SAST
 
 ```
 
-Elle comprend :
+It includes:
 
 ```text
 secure design
@@ -1063,7 +1063,7 @@ supply-chain security
 
 # 31. Security triggers
 
-Une revue sécurité spécialisée est déclenchée pour les changements touchant notamment :
+A specialized security review is triggered for changes touching in particular:
 
 ```text
 authentication
@@ -1090,9 +1090,9 @@ CI/CD permissions
 
 # 32. Security reviewer
 
-Le security reviewer doit recevoir un contexte indépendant.
+The security reviewer must receive an independent context.
 
-Il cherche notamment :
+It looks in particular for:
 
 ```text
 Where does untrusted data enter?
@@ -1121,17 +1121,17 @@ What happens during partial failure?
 
 # 33. Security baseline
 
-Un standard tel que OWASP ASVS peut servir de baseline externe plutôt qu’une checklist entièrement inventée localement.
+A standard such as OWASP ASVS can serve as an external baseline rather than a checklist entirely invented locally.
 
-Le projet doit définir le niveau approprié selon son contexte.
+The project must define the appropriate level according to its context.
 
 ---
 
 # 34. Agent isolation
 
-Les agents ne constituent pas une frontière de sécurité.
+Agents are not a security boundary.
 
-Les protections importantes doivent être externes :
+Important protections must be external:
 
 ```text
 sandboxing
@@ -1149,9 +1149,9 @@ branch protection
 
 # 35. Testing policy
 
-Les tests doivent vérifier du comportement utile, pas simplement augmenter un chiffre de coverage.
+Tests must verify useful behavior, not merely raise a coverage number.
 
-Les agents ne doivent pas pouvoir :
+Agents must not be able to:
 
 ```text
 add trivial tests
@@ -1162,13 +1162,13 @@ delete edge cases
 
 ```
 
-uniquement pour atteindre un seuil.
+solely to reach a threshold.
 
 ---
 
 # 36. Test hierarchy
 
-Selon le projet :
+Depending on the project:
 
 ```text
 unit
@@ -1181,13 +1181,13 @@ regression
 
 ```
 
-Le pipeline doit sélectionner les catégories pertinentes plutôt que toutes les imposer systématiquement.
+The pipeline must select the relevant categories rather than systematically imposing all of them.
 
 ---
 
 # 37. Characterization tests
 
-Avant un refactor ou une migration complexe, l’agent doit capturer le comportement existant lorsque celui-ci doit être conservé.
+Before a refactor or a complex migration, the agent must capture the existing behavior when that behavior has to be preserved.
 
 ```text
 existing behavior
@@ -1204,7 +1204,7 @@ behavior comparison
 
 # 38. Deterministic quality gates
 
-Chaque PR doit pouvoir déclencher selon le stack :
+Every PR must be able to trigger, depending on the stack:
 
 ```text
 format check
@@ -1223,17 +1223,17 @@ E2E
 
 ```
 
-Aucun agent ne peut contourner silencieusement ces gates.
+No agent may silently bypass these gates.
 
 ---
 
 # 39. Multi-persona review
 
-Le système doit disposer de reviewers spécialisés.
+The system must have specialized reviewers.
 
 ## Correctness reviewer
 
-Recherche :
+Looks for:
 
 ```text
 logic errors
@@ -1246,7 +1246,7 @@ invalid assumptions
 
 ## Architecture reviewer
 
-Recherche :
+Looks for:
 
 ```text
 unnecessary abstractions
@@ -1259,7 +1259,7 @@ architecture drift
 
 ## Test reviewer
 
-Recherche :
+Looks for:
 
 ```text
 missing scenarios
@@ -1272,21 +1272,21 @@ missing regressions
 
 ## Security reviewer
 
-Recherche vulnérabilités et nouvelles trust boundaries.
+Looks for vulnerabilities and new trust boundaries.
 
 ## Dependency reviewer
 
-Évalue nouveaux packages et migrations.
+Evaluates new packages and migrations.
 
 ---
 
 # 40. Review orchestration
 
-Toutes les personas ne sont pas lancées systématiquement.
+Not every persona is launched systematically.
 
-Un orchestrateur classifie le changement puis choisit les reviews nécessaires.
+An orchestrator classifies the change, then chooses the necessary reviews.
 
-Exemple :
+Example:
 
 ```text
 documentation-only
@@ -1310,11 +1310,11 @@ core architecture change
 
 # 41. Risk classification
 
-Trois niveaux initiaux.
+Three initial levels.
 
 ## R0 — Low Risk
 
-Exemples :
+Examples:
 
 ```text
 docs
@@ -1325,11 +1325,11 @@ simple isolated bug
 
 ```
 
-Peut être auto-mergé après checks/review.
+Can be auto-merged after checks/review.
 
 ## R1 — Normal Engineering Change
 
-Exemples :
+Examples:
 
 ```text
 feature
@@ -1340,7 +1340,7 @@ non-destructive schema extension
 
 ```
 
-Peut être automatiquement mergé après :
+Can be automatically merged after:
 
 ```text
 reviews
@@ -1351,7 +1351,7 @@ staging validation
 
 ## R2 — High Risk
 
-Exemples :
+Examples:
 
 ```text
 authentication
@@ -1367,13 +1367,13 @@ production access policy
 
 ```
 
-Nécessite approbation humaine explicite.
+Requires explicit human approval.
 
 ---
 
 # 42. Human escalation philosophy
 
-L’humain ne doit pas être sollicité parce que :
+The human must not be called upon because:
 
 ```text
 the agent is uncertain about a filename
@@ -1382,9 +1382,9 @@ a library API is unfamiliar
 
 ```
 
-Les agents doivent investiguer eux-mêmes.
+Agents must investigate on their own.
 
-Escalade pour :
+Escalate for:
 
 ```text
 ambiguous product behavior
@@ -1532,7 +1532,7 @@ data migrations
 
 Agents modifying production behavior must consider whether new observability is needed.
 
-Questions :
+Questions:
 
 ```text
 How will failure be detected?
@@ -1553,9 +1553,9 @@ Does a new critical path require metrics?
 
 # 47. Model routing
 
-Tous les travaux ne nécessitent pas le modèle le plus coûteux ou intelligent.
+Not all work requires the most expensive or most intelligent model.
 
-Le routeur peut utiliser des modèles plus petits pour :
+The router can use smaller models for:
 
 ```text
 classification
@@ -1568,7 +1568,7 @@ simple dependency investigation
 
 ```
 
-Modèles plus puissants pour :
+More powerful models for:
 
 ```text
 ambiguous specifications
@@ -1585,11 +1585,11 @@ final adversarial review
 
 # 48. Subscription-aware routing
 
-Lorsque Claude et Codex sont tous les deux disponibles via abonnement :
+When Claude and Codex are both available through a subscription:
 
-une stratégie asymétrique est préférable.
+an asymmetric strategy is preferable.
 
-Exemple :
+Example:
 
 ```text
 Codex
@@ -1608,7 +1608,7 @@ Claude
 
 ```
 
-Le routage réel doit rester configurable selon :
+The actual routing must remain configurable based on:
 
 ```text
 quota
@@ -1623,9 +1623,9 @@ user preference
 
 # 49. Token efficiency
 
-Les instructions doivent être conçues pour minimiser le contexte inutile.
+Instructions must be designed to minimize unnecessary context.
 
-Principes :
+Principles:
 
 ```text
 short root instructions
@@ -1638,7 +1638,7 @@ independent small review contexts
 
 ```
 
-Ne pas injecter systématiquement :
+Do not systematically inject:
 
 ```text
 all architecture docs
@@ -1652,9 +1652,9 @@ entire project history
 
 # 50. Persistent state
 
-Les décisions importantes ne doivent jamais exister uniquement dans la conversation d’un agent.
+Important decisions must never exist only in an agent's conversation.
 
-Elles doivent finir dans :
+They must end up in:
 
 ```text
 issue
@@ -1667,15 +1667,15 @@ PR
 
 ```
 
-Ainsi un agent peut être remplacé ou redémarré sans perdre l’état du projet.
+This way an agent can be replaced or restarted without losing the project state.
 
 ---
 
 # 51. Tool architecture
 
-Aucun orchestrateur n’est pour l’instant retenu comme obligatoire.
+No orchestrator is currently considered mandatory.
 
-Les solutions explorées comprennent notamment :
+The solutions explored include in particular:
 
 ```text
 Open SWE
@@ -1688,15 +1688,15 @@ local custom orchestration
 
 ```
 
-CAO a été identifié comme techniquement intéressant mais n’est pas considéré comme une décision produit acquise.
+CAO was identified as technically interesting but is not considered an established product decision.
 
 ---
 
 # 52. Orchestrator abstraction
 
-Le pipeline doit pouvoir fonctionner avec différents backends.
+The pipeline must be able to work with different backends.
 
-Conceptuellement :
+Conceptually:
 
 ```text
               Agent Runtime Interface
@@ -1707,13 +1707,13 @@ Conceptuellement :
 
 ```
 
-L’orchestration ne doit pas imposer aux specifications ou aux policies de connaître le runtime utilisé.
+The orchestration must not require specifications or policies to know which runtime is used.
 
 ---
 
 # 53. CLI-native execution preference
 
-Lorsque possible, préférer les CLI officielles :
+When possible, prefer the official CLIs:
 
 ```text
 claude
@@ -1721,9 +1721,9 @@ codex
 
 ```
 
-plutôt que d’extraire ou manipuler directement les tokens OAuth.
+rather than extracting or directly manipulating OAuth tokens.
 
-Cela :
+This:
 
 ```text
 preserves provider authentication
@@ -1737,7 +1737,7 @@ reduces implementation fragility
 
 # 54. Avoid hidden API costs
 
-Le système doit rendre explicitement visible lorsqu’une action :
+The system must make it explicitly visible when an action:
 
 ```text
 uses subscription quota
@@ -1746,7 +1746,7 @@ uses external cloud compute
 
 ```
 
-Le mode par défaut doit pouvoir fonctionner sans coût API additionnel.
+The default mode must be able to work without additional API cost.
 
 ---
 
@@ -1808,14 +1808,14 @@ repo/
 
 # 56. Stack overlays
 
-Le système doit séparer :
+The system must separate:
 
 ```text
 universal engineering rules
 
 ```
 
-de :
+from:
 
 ```text
 Python-specific rules
@@ -1827,7 +1827,7 @@ etc.
 
 ```
 
-Exemple :
+Example:
 
 ```text
 .agent-standard/
@@ -1841,13 +1841,13 @@ overlays/
 
 ```
 
-Cela doit permettre de composer un nouveau projet sans dupliquer toutes les instructions.
+This must make it possible to compose a new project without duplicating all the instructions.
 
 ---
 
 # 57. Greenfield bootstrap
 
-Pour un repository vide :
+For an empty repository:
 
 ```text
 product description
@@ -1868,7 +1868,7 @@ agent implementation
 
 ```
 
-Le bootstrap doit générer immédiatement les garde-fous essentiels plutôt que les ajouter après plusieurs semaines de développement.
+The bootstrap must immediately generate the essential safeguards rather than adding them after several weeks of development.
 
 ---
 
@@ -1876,7 +1876,7 @@ Le bootstrap doit générer immédiatement les garde-fous essentiels plutôt que
 
 ## GitHub Spec Kit
 
-Intéressant pour :
+Interesting for:
 
 ```text
 constitution
@@ -1890,15 +1890,15 @@ converge
 
 ```
 
-Le concept de convergence spec/code est particulièrement pertinent.
+The spec/code convergence concept is particularly relevant.
 
-Le produit ne doit cependant pas forcément dépendre directement de Spec Kit.
+However, the product does not necessarily have to depend directly on Spec Kit.
 
 ---
 
 ## Open SWE
 
-Intéressant pour :
+Interesting for:
 
 ```text
 issue → autonomous worker → PR
@@ -1909,13 +1909,13 @@ CI feedback loops
 
 ```
 
-Moins intéressant si son exécution exige une consommation API additionnelle.
+Less interesting if its execution requires additional API consumption.
 
 ---
 
 ## OpenHands
 
-Intéressant pour :
+Interesting for:
 
 ```text
 agent skills
@@ -1930,7 +1930,7 @@ progressive instructions
 
 ## Kiro
 
-Intéressant comme exemple intégré :
+Interesting as an integrated example:
 
 ```text
 requirements
@@ -1940,19 +1940,19 @@ implementation
 
 ```
 
-Mais trop couplé à une plateforme spécifique pour devenir le cœur du système.
+But too tightly coupled to a specific platform to become the core of the system.
 
 ---
 
 ## Orca
 
-Reste le cockpit humain privilégié.
+Remains the preferred human cockpit.
 
 ---
 
 # 59. Agent-first anti-patterns
 
-Le système doit explicitement éviter :
+The system must explicitly avoid:
 
 ```text
 one giant AGENTS.md
@@ -1991,7 +1991,7 @@ massive process before the project needs it
 
 # 60. Desired developer experience
 
-L’expérience cible doit être proche de :
+The target experience should be close to:
 
 ```text
 I describe what I want.
@@ -2031,7 +2031,7 @@ I am interrupted only if:
 
 # 61. Target human workflow
 
-Le quotidien de l’utilisateur doit idéalement être :
+The user's daily routine should ideally be:
 
 ```text
 Orca
@@ -2044,9 +2044,9 @@ PRs
 
 ```
 
-et non un ensemble de dashboards spécialisés.
+and not a set of specialized dashboards.
 
-L’utilisateur doit pouvoir :
+The user must be able to:
 
 ```text
 see current work
@@ -2063,7 +2063,7 @@ approve high-risk changes
 
 # 62. Definition of Done
 
-Une feature n’est `DONE` que lorsque :
+A feature is `DONE` only when:
 
 ```text
 spec satisfied
@@ -2078,7 +2078,7 @@ spec reconciliation completed
 
 ```
 
-Pour les features déployées :
+For deployed features:
 
 ```text
 deployment succeeded
@@ -2091,7 +2091,7 @@ rollback path exists
 
 # 63. Success metrics
 
-Le système sera considéré efficace si, à terme :
+The system will be considered effective if, in the long run:
 
 ```text
 most R0 changes require no human intervention
@@ -2112,7 +2112,7 @@ agent/model replacements do not require repository redesign
 
 ```
 
-Mesures possibles :
+Possible measures:
 
 ```text
 human interventions per PR
@@ -2133,9 +2133,9 @@ subscription/API usage
 
 # 64. MVP
 
-La première version ne doit pas chercher à construire toute la software factory.
+The first version must not try to build the whole software factory.
 
-MVP proposé :
+Proposed MVP:
 
 ```text
 AGENTS.md constitution
@@ -2170,13 +2170,13 @@ basic fix/review loop
 
 ```
 
-Le pipeline peut initialement être déclenché manuellement depuis Orca.
+The pipeline can initially be triggered manually from Orca.
 
 ---
 
 # 65. Phase suivante
 
-Après validation du modèle :
+After the model is validated:
 
 ```text
 automatic READY detection
@@ -2203,13 +2203,13 @@ continuous dependency maintenance
 
 ---
 
-# 66. Questions encore ouvertes
+# 66. Open questions
 
-Les choix suivants restent volontairement non figés.
+The following choices are deliberately left open.
 
 ### Orchestration engine
 
-Construire une fine couche maison ou adapter :
+Build a thin in-house layer or adapt:
 
 ```text
 CAO
@@ -2221,22 +2221,22 @@ GitHub-native workflows
 
 ### Specification engine
 
-Utiliser directement :
+Use directly:
 
 ```text
 Spec Kit
 
 ```
 
-ou seulement reprendre son modèle conceptuel.
+or only borrow its conceptual model.
 
 ### GitHub Projects
 
-Déterminer si GitHub Project constitue réellement la state machine principale ou seulement une vue.
+Determine whether the GitHub Project is really the main state machine or only a view.
 
 ### Local versus always-on execution
 
-Décider si l’orchestration tourne :
+Decide whether the orchestration runs:
 
 ```text
 on developer workstation
@@ -2249,24 +2249,24 @@ hybrid
 
 ### Auto-merge threshold
 
-Déterminer progressivement quels changements R1 peuvent réellement être auto-mergés.
+Progressively determine which R1 changes can actually be auto-merged.
 
 ### Product acceptance
 
-Déterminer quelles features nécessitent encore une validation visuelle/fonctionnelle humaine.
+Determine which features still require human visual/functional validation.
 
 ---
 
 # 67. Long-term product direction
 
-Le système peut éventuellement devenir un repository/template installable :
+The system may eventually become an installable repository/template:
 
 ```text
 agentic-repo-standard
 
 ```
 
-ou un CLI :
+or a CLI:
 
 ```text
 agentrepo init
@@ -2283,9 +2283,9 @@ agentrepo status
 
 ```
 
-Mais le CLI ne doit pas devenir obligatoire pour travailler avec le projet.
+But the CLI must not become mandatory to work with the project.
 
-Le format des artifacts doit rester simple :
+The artifact format must remain simple:
 
 ```text
 Markdown
@@ -2297,25 +2297,25 @@ standard CI
 
 ```
 
-afin que le système reste compréhensible et récupérable sans outil propriétaire.
+so that the system remains understandable and recoverable without proprietary tooling.
 
 ---
 
 # 68. Core product principle
 
-La finalité n’est pas :
+The goal is not:
 
-> faire coder Claude automatiquement.
+> to make Claude code automatically.
 
-Ni :
+Nor:
 
-> faire coder Codex automatiquement.
+> to make Codex code automatically.
 
-La finalité est :
+The goal is:
 
-> construire des repositories dans lesquels des agents interchangeables peuvent développer, tester, documenter, reviewer, maintenir et livrer du logiciel de manière fiable, avec l’humain concentré sur le produit et les décisions à fort impact.
+> to build repositories in which interchangeable agents can reliably develop, test, document, review, maintain and ship software, with the human focused on the product and on high-impact decisions.
 
-La qualité du système repose donc sur cinq piliers :
+The quality of the system therefore rests on five pillars:
 
 ```text
 SPECIFICATION
@@ -2330,13 +2330,13 @@ RISK-BASED HUMAN CONTROL
 
 ```
 
-et non sur la qualité d’un agent unique.
+and not on the quality of a single agent.
 
 ---
 
 # 69. North Star
 
-À terme, le fonctionnement idéal est :
+In the long run, the ideal operation is:
 
 ```text
                          HUMAN
@@ -2381,6 +2381,6 @@ et non sur la qualité d’un agent unique.
 
 ```
 
-Le produit doit tendre vers une software factory dans laquelle :
+The product must move toward a software factory in which:
 
-**l’humain gouverne, les agents exécutent, et les preuves automatiques contrôlent.**
+**the human governs, the agents execute, and automatic proof controls.**

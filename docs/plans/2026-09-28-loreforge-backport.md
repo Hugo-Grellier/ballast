@@ -138,7 +138,7 @@ The standard is public and merged once every LoreForge process asset is either i
 | `.specify/memory/constitution.md` | Project-owned; Spec Kit supplies the template |
 | `THIRD_PARTY_NOTICES.md` | Done: covers the upstream excerpts in `tools/spec-kit/*.patch` |
 | CI running the workflow tests | Done: `.github/workflows/ci.yml` (systemd, Codex sandbox and Spec Kit CLI tests skip there; run them locally before a release) |
-| `specs/PRODUCT-SPEC.md` and `specs/TECHNICAL-SPEC.md` in English (both were mostly French) | In progress |
+| `specs/PRODUCT-SPEC.md` and `specs/TECHNICAL-SPEC.md` in English (both were mostly French) | Done |
 | `.github/workflows/*`, `dependabot.yml`, `docs/agents/domain.md`, domain skills | Project-owned; not backported |
 
 ## LoreForge content that moves to `docs/policies/project/`

@@ -24,6 +24,7 @@ Notable changes to this project are recorded here. This draft has no release ver
 ### Changed
 
 - Workflow tools no longer require Python 3.14: exception tuples are parenthesized.
+- The product and technical specifications are in English.
 - The base headless-agent permission list keeps only project-neutral rules; project commands and paths are added per project.
 - Spec Kit templates, the workflow registry and the feature workflow are installed rather than committed in each project.
 
