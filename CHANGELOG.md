@@ -16,6 +16,7 @@ Notable changes to this project are recorded here. This draft has no release ver
 - `agentic-feature-intake` skill and its bounded `gh` helper for `Start/Fix/Investigate/Continue #N`, handing feature runs to `agentic-workflow`. Synced from LoreForge #105 and #113.
 - `templates/policies/spec-kit-workflow.md`, the workflow guide, with project specifics moved to `docs/policies/project/`.
 - `tools/setup` also installs the standard's skills, the intake helper and the policies, and ends by asking the operator to review and run `agentic-workflow trust`.
+- `tools/agentic-workflow`, the global command installed once per machine. `setup` fetches the standard version pinned in `agentic.toml` (`[standard] ref`) and runs its `tools/setup`; every other command runs that version's launcher from outside the checkout.
 
 ### Changed
 

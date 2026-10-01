@@ -258,11 +258,10 @@ complete them interactively and resume.
 
 **Trusted launcher.** A headless agent can rewrite any file in the checkout,
 including the launcher itself, so the operator entry point lives outside it.
-Install a reviewed copy once, and again whenever `launcher.py` changes on main:
-
-```bash
-install -m 0755 .agentic/spec_workflow/launcher.py ~/.local/bin/agentic-workflow
-```
+The global `agentic-workflow` command runs the launcher of the standard version
+pinned in `agentic.toml`, from the copy `agentic-workflow setup` fetched into
+`$XDG_DATA_HOME/agentic/standard/<ref>/`, never from the checkout. Install that
+command once per machine from a reviewed checkout of the standard.
 
 From the checkout root, after reviewing it (for example right after a pull, a
 dependency sync, or a `tools/setup` reinstall), record a baseline with
@@ -537,7 +536,7 @@ The bugfix and assess bundles are official, opt-in Spec Kit bundles. Community
 extensions are independently maintained and are not endorsed by Spec Kit;
 pin versions and inspect updates before upgrading.
 
-Run the standard's `tools/setup` in each fresh checkout before using these
+Run `agentic-workflow setup` in each fresh checkout before using these
 commands. Linked worktrees copy a matching primary checkout's installation.
 Other checkouts install the pinned upstream sources and apply the standard's
 task and skill patches. Every installed file is ignored; only the constitution,

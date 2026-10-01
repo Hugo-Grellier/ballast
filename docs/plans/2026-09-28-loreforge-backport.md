@@ -94,7 +94,7 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 2. **Dry-run on a scratch repo.** Run `tools/setup` on an empty repo, then run `specify workflow run agentic-feature` with the fake integration from the tests. This proves the standard works without LoreForge.
 3. **Clean up LoreForge (one PR, R2, because it changes the headless-agent permission source).**
    - Add `agentic.toml`, pinned to `v0.1.0`.
-   - Replace `scripts/setup-speckit` with a thin wrapper that calls the pinned `tools/setup`.
+   - Delete `scripts/setup-speckit` and `scripts/spec-kit/`; `agentic-workflow setup` replaces them, including as the Orca worktree setup script.
    - Delete the vendored files: the generic skills, policy bases, `spec_workflow/*`, `feature_intake.py` and its tests, patches, templates, and `agentic-profile.md`. Add them to `.gitignore`.
    - Turn the project-specific parts into `docs/policies/project/*.md` files: the security boundaries, the R2 list, the architecture areas in `spec-kit-workflow`, and the `claude-settings` extras.
    - Keep `constitution.md`, `acceptance.yml`, the domain skills and `specs/`.
@@ -108,7 +108,7 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 ## Decisions (resolved 2026-09-28)
 
 - **Distribution:** pinned tarball of the standard at a commit SHA or tag, installed into git-ignored paths. No submodule.
-- **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml` plus a thin wrapper script.
+- **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml`; the global `agentic-workflow setup` fetches the pinned version and runs its `tools/setup`.
 - **Project overrides:** go in `docs/policies/project/<name>.md` (committed). Generic bases are installed to `docs/policies/<name>.md` (ignored). A skill reads the base, then the project file if it exists.
 - **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
 - **Language:** full English. `specs/PRODUCT-SPEC.md` gets translated before `v0.1.0`.
@@ -128,5 +128,5 @@ The intake helper's retry-safe GitHub markers are now `<!-- agentic-intake: ... 
 - Artifact postconditions (#104) are the most valuable piece and the easiest to break while renaming. Move the tests first and keep them green on every rename step.
 - Some LoreForge worktrees have Spec Kit installed from the primary checkout (`_matching_primary`). After cleanup, the new fingerprint forces one reinstall per worktree.
 - Symlinks from `.claude/skills` to `.agents/skills` must be created by the installer, because they are ignored and no longer committed.
-- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may misjudge another project's inputs. **Proposed fix (not built):** the version-manager shim pattern (Gradle wrapper, rbenv, Volta). The operator installs each reviewed launcher version into a user-owned directory, keyed by standard version and outside every checkout. A thin global `agentic-workflow` reads the pinned version from `agentic.toml` and runs that launcher, refusing when it is not installed. `agentic.toml` is a trusted input, so an agent that changes the pin is refused by the launcher's baseline check.
+- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may misjudge another project's inputs. **Fixed (2026-10-01)** with the version-manager shim pattern (Gradle wrapper, rbenv, Volta): `tools/agentic-workflow` is installed once per machine. `setup` fetches the pinned version into `$XDG_DATA_HOME/agentic/standard/<ref>/`; every other command runs that version's launcher and refuses an unfetched one. The repository is fixed in the shim, so a project picks a version, never a source. `agentic.toml` is a trusted input, so an agent that changes the pin is refused by the launcher's baseline check.
 - `tools/setup` rewrites `.specify/` and `.agentic/`, so every real reinstall needs a fresh `agentic-workflow trust`. **Decided:** keep trust a manual, reviewed step; setup never trusts on its own. Setup ends by telling the operator to review and run `trust`, and the launcher's refusal names `trust` as the fix.

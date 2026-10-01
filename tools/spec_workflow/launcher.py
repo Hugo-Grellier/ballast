@@ -2,12 +2,10 @@
 """Trusted operator entry point for the agentic-feature workflow.
 
 A headless agent can rewrite anything in the checkout, including run.py and
-ledger.py, so they cannot check their own integrity. Install a reviewed copy
-of this file outside the checkout, where no agent can write:
-
-    install -m 0755 .agentic/spec_workflow/launcher.py ~/.local/bin/agentic-workflow
-
-Then, from the checkout root:
+ledger.py, so they cannot check their own integrity. The global
+`agentic-workflow` command (tools/agentic-workflow in the standard) runs this
+file from the pinned standard version, outside the checkout, where no agent
+can write. From the checkout root:
 
     agentic-workflow trust              # after reviewing the checkout
     agentic-workflow run start|resume ...
