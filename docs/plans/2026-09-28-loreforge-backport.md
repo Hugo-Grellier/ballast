@@ -113,8 +113,14 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 - **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
 - **Language:** full English. `specs/PRODUCT-SPEC.md` gets translated before `v0.1.0`.
 
+## Sync log
+
+- 2026-10-01: synced LoreForge #112 (agent run ledger) and #113 (headless guard, trusted launcher) at `9eb5849` into `tools/spec_workflow/` with the same renames. The ledger reads `docs/policies/model-routing.md`, so that policy moved forward into `templates/policies/`. LoreForge's `scripts/agent-metrics` wrapper is not ported; `agentic-workflow ledger report` covers it. The workflow guide (`docs/spec-kit-workflow.md`) is still pending; one doc-lint test waits for it. LoreForge keeps its own `specs/*/workflow-runs/` ignore line for run records written before #112; new projects never produce them.
+
 ## Risks
 
 - Artifact postconditions (#104) are the most valuable piece and the easiest to break while renaming. Move the tests first and keep them green on every rename step.
 - Some LoreForge worktrees have Spec Kit installed from the primary checkout (`_matching_primary`). After cleanup, the new fingerprint forces one reinstall per worktree.
 - Symlinks from `.claude/skills` to `.agents/skills` must be created by the installer, because they are ignored and no longer committed.
+- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may refuse or misjudge another project's inputs. Revisit if two projects diverge: name the installed launcher per version, or have `tools/setup` print the install command for its own copy.
+- `tools/setup` rewrites `.specify/` and `.agentic/`, so every reinstall needs a fresh `agentic-workflow trust`.

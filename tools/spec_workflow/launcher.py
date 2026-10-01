@@ -1,0 +1,253 @@
+#!/usr/bin/python3 -IS
+"""Trusted operator entry point for the agentic-feature workflow.
+
+A headless agent can rewrite anything in the checkout, including run.py and
+ledger.py, so they cannot check their own integrity. Install a reviewed copy
+of this file outside the checkout, where no agent can write:
+
+    install -m 0755 .agentic/spec_workflow/launcher.py ~/.local/bin/agentic-workflow
+
+Then, from the checkout root:
+
+    agentic-workflow trust              # after reviewing the checkout
+    agentic-workflow run start|resume ...
+    agentic-workflow ledger snapshot|check|record ...
+    agentic-workflow discard-runs       # after an unfinished agent step
+
+`trust` records digests of every executable workflow input in your state
+directory. `run` and `ledger` refuse unless those inputs still match, no
+tamper marker exists, and no agent step was left unfinished. This file uses
+only the standard library and imports nothing from the checkout; agent.py
+imports its digest helpers.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TAMPER_MARKER = "AGENTIC_TAMPERED"
+IN_PROGRESS = "in-progress"
+TRUSTED = "trusted.json"
+# Executable workflow inputs: the launcher's own tools, Spec Kit's engine
+# configuration, extensions and scripts, and the environment validators and
+# operator checks may run.
+BASES = ("agentic.toml", ".agentic/spec_workflow", ".specify", ".venv")
+# Written between steps by Spec Kit, the wrapper and validators, or holding no
+# executable content; the wrapper checks run state around every agent step.
+SKIPPED = (
+    ".specify/feature.json",
+    ".specify/extensions/.cache",
+    ".specify/workflows/.cache",
+    ".specify/workflows/runs",
+    ".specify/workflow-state",
+    ".specify/bugs",
+)
+# Agents run in a systemd user scope: a cgroup they cannot leave, because
+# Codex's sandbox denies writes to /sys/fs/cgroup. Killing the scope stops every
+# process the agent started, even after its wrapper was killed.
+SCOPE = re.compile(r"agentic-agent-[A-Za-z0-9_.-]{1,200}\.scope")
+SCOPE_SECONDS = 10.0
+# `systemctl is-active` exit status for a stopped unit (3) or a collected one
+# (4); a manager error exits 1 without a state.
+UNIT_NOT_ACTIVE = frozenset({3, 4})
+RUN_STATE = (".specify/workflows/runs", ".specify/workflow-state")
+EXIT_REFUSED = 2
+COMMANDS = {"run": ("-I", "run.py"), "ledger": ("-IS", "ledger.py")}
+
+
+def state_dir(root: Path) -> Path:
+    """Per-checkout operator state, outside every agent's write authority."""
+    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state"
+    key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    return Path(base) / "agentic" / key
+
+
+def digests(root: Path, bases: list[Path], skip: list[Path]) -> dict[str, str]:
+    """Hash every file and link under bases, never following a link."""
+    found: dict[str, str] = {}
+    for base in bases:
+        for path in sorted(base.rglob("*")) if base.is_dir() else [base]:
+            if any(path.is_relative_to(s) for s in skip):
+                continue
+            name = str(path.relative_to(root))
+            if path.is_symlink():
+                found[name] = "link:" + str(path.readlink())
+            elif path.is_file():
+                found[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return found
+
+
+def _systemctl(*args: str) -> subprocess.CompletedProcess[str] | None:
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        return None
+    return subprocess.run(  # noqa: S603 - fixed arguments
+        [systemctl, "--user", *args], capture_output=True, text=True, check=False
+    )
+
+
+def scope_available() -> bool:
+    """Whether a systemd user manager can hold agent scopes."""
+    result = _systemctl("show", "--property=Version")
+    return result is not None and result.returncode == 0
+
+
+def stop_scope(unit: str) -> bool:
+    """Kill every process in an agent scope; True once the scope is gone."""
+    if (
+        not SCOPE.fullmatch(unit)
+        or _systemctl("kill", "--signal=SIGKILL", unit) is None
+    ):
+        return False
+    deadline = time.monotonic() + SCOPE_SECONDS
+    while time.monotonic() < deadline:
+        result = _systemctl("is-active", unit)
+        # A manager error must not read as a stopped scope.
+        if (
+            result
+            and result.returncode in UNIT_NOT_ACTIVE
+            and result.stdout.strip() in {"inactive", "failed"}
+        ):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def input_bases(root: Path) -> list[Path]:
+    """BASES, plus a linked worktree's `.git` pointer file.
+
+    Workflow tools run Git as the operator; a redirected pointer could select a
+    forged repository whose configuration runs commands. A primary checkout's
+    `.git` directory changes with every Git command and is left to the agent
+    sandbox, which keeps it read-only.
+    """
+    git = root / ".git"
+    extra = [git] if git.is_symlink() or git.is_file() else []
+    return [root / base for base in BASES] + extra
+
+
+def trusted_inputs(root: Path) -> dict[str, str]:
+    """Digests of the executable inputs; bytecode is never read, so skip it."""
+    state = digests(root, input_bases(root), [root / s for s in SKIPPED])
+    return {name: v for name, v in state.items() if "__pycache__" not in name}
+
+
+def _refusal(root: Path) -> str | None:
+    state = state_dir(root)
+    if os.path.lexists(root / TAMPER_MARKER):
+        return f"{TAMPER_MARKER} exists: an agent changed protected files"
+    if os.path.lexists(state / IN_PROGRESS):
+        return "an agent step did not finish its protected-file check"
+    try:
+        trusted = json.loads((state / TRUSTED).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "no trusted baseline; review the checkout, then run `trust`"
+    current = trusted_inputs(root)
+    changed = sorted(
+        name
+        for name in trusted.keys() | current.keys()
+        if trusted.get(name) != current.get(name)
+    )
+    if changed:
+        shown = ", ".join(changed[:10]) + (" ..." if len(changed) > 10 else "")  # noqa: PLR2004
+        return f"workflow inputs changed since `trust`: {shown}"
+    return None
+
+
+def _remove_tree(root: Path, name: str) -> None:
+    """Delete root/name without following a link anywhere on its path.
+
+    An agent may have left processes behind or replaced a parent such as
+    `.specify/workflows` with a link to an operator directory. Each parent is
+    opened relative to the previous handle with O_NOFOLLOW, and rmtree with
+    dir_fd refuses a linked leaf and never follows links inside the tree.
+    """
+    *parents, leaf = Path(name).parts
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parents:
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        shutil.rmtree(leaf, dir_fd=fd)
+    except FileNotFoundError:
+        return
+    finally:
+        os.close(fd)
+
+
+def _discard(root: Path, state: Path) -> int:
+    """Stop a dead wrapper's agent, then drop the unverifiable saved runs."""
+    marker = state / IN_PROGRESS
+    if os.path.lexists(marker) and not stop_scope(marker.read_text().strip()):
+        sys.stderr.write(
+            "refusing to discard run state: the unfinished agent step's processes "
+            "could not be confirmed stopped; reboot, then retry\n"
+        )
+        return EXIT_REFUSED
+    try:
+        for name in RUN_STATE:
+            _remove_tree(root, name)
+    except OSError as error:
+        sys.stderr.write(
+            f"refusing to discard run state: {error}; a path component may be "
+            "a link, so inspect the checkout\n"
+        )
+        return EXIT_REFUSED
+    (state / IN_PROGRESS).unlink(missing_ok=True)
+    sys.stdout.write("discarded local run state; start a fresh run\n")
+    return 0
+
+
+def _trust(root: Path, state: Path) -> int:
+    """Record the reviewed checkout as the baseline for later commands."""
+    if os.path.lexists(root / TAMPER_MARKER):
+        sys.stderr.write(f"restore the checkout and delete {TAMPER_MARKER}\n")
+        return EXIT_REFUSED
+    if os.path.lexists(state / IN_PROGRESS):
+        # Saved run state is outside the baseline, so it cannot be vouched for.
+        sys.stderr.write(
+            "an agent step did not finish; review the checkout, then run "
+            "`discard-runs` before `trust`\n"
+        )
+        return EXIT_REFUSED
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    inputs = trusted_inputs(root)
+    (state / TRUSTED).write_text(json.dumps(inputs, indent=1), encoding="utf-8")
+    sys.stdout.write(f"trusted {len(inputs)} workflow inputs for {root}\n")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    """Verify the checkout, then run a workflow tool or record a baseline."""
+    root = Path.cwd()
+    if not (root / ".agentic/spec_workflow/run.py").is_file() or not argv:
+        sys.stderr.write(__doc__ or "")
+        return EXIT_REFUSED
+    if argv[0] in {"trust", "discard-runs"}:
+        state = state_dir(root)
+        return _trust(root, state) if argv[0] == "trust" else _discard(root, state)
+    if argv[0] not in COMMANDS:
+        sys.stderr.write(__doc__ or "")
+        return EXIT_REFUSED
+    reason = _refusal(root)
+    if reason:
+        sys.stderr.write(f"agentic-workflow: refusing: {reason}\n")
+        return EXIT_REFUSED
+    flags, script = COMMANDS[argv[0]]
+    tool = str(root / ".agentic/spec_workflow" / script)
+    os.execv(sys.executable, [sys.executable, flags, tool, *argv[1:]])  # noqa: S606
+    return EXIT_REFUSED  # unreachable
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

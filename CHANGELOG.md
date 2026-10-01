@@ -10,12 +10,17 @@ Notable changes to this project are recorded here. This draft has no release ver
 - Starter `AGENTS.md` template.
 - Spec Kit feature workflow with deterministic artifact postconditions, bounded headless agent wrapper and launcher (`tools/spec_workflow/`), with the Spec Kit spec/plan/tasks templates and regression tests. Imported from LoreForge (#104). The workflow id is `agentic-feature`, the tools install under `.agentic/spec_workflow/`, and shell steps use `python3`.
 - `tools/setup` installs pinned Spec Kit sources, its patches and the workflow tooling into a project's git-ignored paths, merges project permissions from `agentic.toml`, refuses to run until the installed paths are ignored, and copies an existing installation into a new worktree. Generalized from LoreForge's `setup-speckit`.
+- Agent run ledger and metrics (`ledger.py`, `ledger-schema.md`): append-only run events, acceptance checks bound to approved spec and manifest digests, and one-run and aggregate reports. Synced from LoreForge #112.
+- Trusted operator launcher (`launcher.py`), installed outside the checkout as `agentic-workflow`, with a trusted-input baseline, a tamper marker and per-agent systemd scopes. Synced from LoreForge #113.
+- `templates/policies/model-routing.md`, the quota-efficiency routing policy the ledger compares observed routes against. Installed projects read it from `docs/policies/model-routing.md`.
 
 ### Changed
 
 - Workflow tools no longer require Python 3.14: exception tuples are parenthesized.
 - The base headless-agent permission list keeps only project-neutral rules; project commands and paths are added per project.
 - Spec Kit templates, the workflow registry and the feature workflow are installed rather than committed in each project.
+
+- The agent wrapper hashes bytecode, the whole `.venv`, `.specify/` and `agentic.toml`, runs agents without writing bytecode, and kills every descendant before its final check. Validators run under `python3 -I -S`. Headless steps now require Linux with a systemd user session. Synced from LoreForge #113.
 
 ### Fixed
 
