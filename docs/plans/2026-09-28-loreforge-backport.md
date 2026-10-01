@@ -119,6 +119,28 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 
 - 2026-10-01: imported the workflow guide (`templates/policies/spec-kit-workflow.md`) and the intake skill and helper at `9eb5849`, including #113's launcher handoff. Standard skills carry an `agentic-` prefix; `tools/setup` installs skills, helper and policies.
 
+## Parity checklist (gate for the first merge)
+
+The standard is public and merged once every LoreForge process asset is either in the standard or deliberately left to the project. Checked against LoreForge `origin/main` @ `43dfcbe` (nothing process-related changed after `9eb5849`).
+
+| LoreForge asset | Status |
+| --- | --- |
+| `scripts/spec_workflow/*`, `.specify/workflows/loreforge-feature`, Spec Kit templates | Done (`tools/spec_workflow/`, `templates/spec-kit/`) |
+| `scripts/setup-speckit`, `scripts/spec-kit/*.patch` | Done (`tools/setup`, `tools/spec-kit/`, `tools/agentic-workflow`) |
+| `scripts/feature_intake.py`, `feature-intake` skill | Done (`agentic-feature-intake`) |
+| `docs/spec-kit-workflow.md`, `docs/engineering/model-routing.md` | Done (`templates/policies/`) |
+| `scripts/agent-metrics` | Covered by `agentic-workflow ledger report` |
+| 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | To do |
+| `docs/policies/*.md` (7) and `docs/engineering/workflow.md` (risk and review matrix) | To do; LoreForge specifics move to its `docs/policies/project/` |
+| `docs/agents/issue-tracker.md`, `triage-labels.md` | To do as policies; `docs/agents/domain.md` stays project-owned |
+| `.github/pull_request_template.md` | To do as a copy-once template (GitHub reads it from the default branch, so it cannot be ignored) |
+| `AGENTS.md` generic sections | To do in `templates/AGENTS.md` (copy-once; agents load it automatically, so it stays committed) |
+| `.specify/memory/constitution.md` | Project-owned; Spec Kit supplies the template |
+| `THIRD_PARTY_NOTICES.md` | To do: cover the upstream excerpts in `tools/spec-kit/*.patch` |
+| CI running the workflow tests | To do: this repository's own CI |
+| `specs/PRODUCT-SPEC.md` in English | To do |
+| `.github/workflows/*`, `dependabot.yml`, `docs/agents/domain.md`, domain skills | Project-owned; not backported |
+
 ## Intake markers on LoreForge issues
 
 The intake helper's retry-safe GitHub markers are now `<!-- agentic-intake: ... -->`. The helper no longer recognizes LoreForge's existing `<!-- loreforge-intake: ... -->` markers, so retrying a half-finished intake could create a duplicate child. Before migrating, finish any intake in progress; then either leave old markers (completed setups are never retried) or rewrite them on open issues.
