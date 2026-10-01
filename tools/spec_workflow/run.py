@@ -128,7 +128,9 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
         return 2
     specify = shutil.which("specify")
     if specify is None:
-        sys.stderr.write("specify CLI not found; see docs/policies/spec-kit-workflow.md\n")
+        sys.stderr.write(
+            "specify CLI not found; see docs/policies/spec-kit-workflow.md\n"
+        )
         return 2
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]

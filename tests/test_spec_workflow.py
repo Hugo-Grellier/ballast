@@ -972,9 +972,7 @@ class TrustedLauncherTests(unittest.TestCase):
         workflows = self.root / ".specify/workflows"
         shutil.rmtree(workflows)
         workflows.symlink_to(operator)
-        (state_root := Path(self.directory.name) / "state/agentic").mkdir(
-            parents=True
-        )
+        (state_root := Path(self.directory.name) / "state/agentic").mkdir(parents=True)
         result = self.launch("discard-runs")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual((operator / "runs/keep.txt").read_text(), "keep\n")

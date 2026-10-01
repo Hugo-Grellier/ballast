@@ -1,0 +1,17 @@
+# Lint and format configuration only; this repository ships no Python package.
+[tool.ruff]
+target-version = "py311"
+# Extension-less entry points are Python scripts too.
+extend-include = ["tools/setup", "tools/agentic-workflow"]
+namespace-packages = ["tests", "tools"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+# COM812 is redundant with Ruff's formatter; D203/D213 conflict with D211/D212.
+# CPY001 requires a copyright policy, which this repository does not set.
+ignore = ["COM812", "CPY001", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+# The test suite uses the standard-library unittest API, so pytest-style rules
+# do not apply; named test methods also do not need individual docstrings.
+"tests/**/*.py" = ["D102", "PT009", "PT027"]

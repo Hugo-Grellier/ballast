@@ -18,10 +18,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import urllib.request
 from pathlib import Path
-
-import tomllib
 
 STANDARD = Path(__file__).resolve().parent.parent
 PATCHES = STANDARD / "tools/spec-kit"
@@ -109,6 +108,7 @@ class Setup:
     """One installation of the standard into one project checkout."""
 
     def __init__(self, project: Path) -> None:
+        """Read the project's optional agentic.toml."""
         self.root = project
         self.stamp = project / ".agentic/.setup-version"
         config = project / "agentic.toml"
@@ -116,7 +116,7 @@ class Setup:
         self.config = tomllib.loads(self.config_bytes.decode())
 
     def fingerprint(self) -> str:
-        # Any change to the standard, its pins or the project config reinstalls.
+        """Digest of the standard and agentic.toml; any change reinstalls."""
         digest = hashlib.sha256(self.config_bytes)
         for base in (STANDARD / "tools", STANDARD / "templates"):
             for path in sorted(base.rglob("*")):
@@ -132,13 +132,15 @@ class Setup:
         return f"{VERSION} {digest.hexdigest()}"
 
     def run(self, *args: str, cwd: Path | None = None) -> None:
-        # Executable names and source locations are fixed by this script.
+        """Run a command whose executable and sources this script fixes."""
         subprocess.run(args, cwd=cwd or self.root, check=True)  # noqa: S603
 
     def specify(self, *args: str) -> None:
+        """Run the pinned Spec Kit CLI."""
         self.run("uvx", "--from", f"specify-cli=={VERSION}", "specify", *args)
 
     def check_ignored(self) -> None:
+        """Refuse unless the project ignores exactly the installed paths."""
         wrong = [
             path
             for path, ignored in IGNORE_PROBES
@@ -169,6 +171,7 @@ class Setup:
         ]
 
     def remove_installed(self) -> None:
+        """Delete the previous installation, keeping run state."""
         for path in self.installed(self.root):
             if path == self.root / ".specify/workflows" and path.is_dir():
                 # Keep run state so a reinstall never loses a paused run.
@@ -179,6 +182,7 @@ class Setup:
                 _remove(path)
 
     def matching_primary(self) -> Path | None:
+        """Return the primary checkout when it holds this exact installation."""
         common = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],  # noqa: S607
             cwd=self.root,
@@ -197,6 +201,7 @@ class Setup:
         return primary
 
     def copy_from_primary(self) -> bool:
+        """Copy a matching primary checkout's installation into this worktree."""
         primary = self.matching_primary()
         if primary is None:
             return False
@@ -216,6 +221,7 @@ class Setup:
         return True
 
     def install_spec_kit(self, temporary: Path) -> None:
+        """Install the pinned Spec Kit sources and apply the patches."""
         for executable in ("uvx", "patch"):
             if shutil.which(executable) is None:
                 message = f"Required setup tool is missing: {executable}"
@@ -263,6 +269,7 @@ class Setup:
         )
 
     def complete_claude_extension_skills(self) -> None:
+        """Add the extension skills Spec Kit installs only for Codex."""
         # Spec Kit 1.0.11 installs extension skills only for the default integration.
         # Claude skills use slash command names, except intent, which keeps
         # Codex's `$speckit-` names.
@@ -277,6 +284,7 @@ class Setup:
             target.write_text(content)
 
     def install_standard(self) -> None:
+        """Install the standard's tools, skills, policies and workflow."""
         agentic = self.root / ".agentic"
         shutil.copytree(
             STANDARD / "tools/spec_workflow",
@@ -314,6 +322,7 @@ class Setup:
         )
 
     def main(self) -> None:
+        """Install unless this checkout already holds the same installation."""
         if (
             self.stamp.is_file()
             and self.stamp.read_text().strip() == self.fingerprint()

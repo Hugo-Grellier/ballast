@@ -26,10 +26,9 @@ import re
 import sys
 import tarfile
 import tempfile
+import tomllib
 import urllib.request
 from pathlib import Path
-
-import tomllib
 
 REPOSITORY = "Hugo-Grellier/agentic-repo-standard"
 ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
@@ -38,10 +37,12 @@ PYTHON = "/usr/bin/python3"
 
 
 def fail(message: str) -> None:
+    """Exit with an error message naming this command."""
     sys.exit(f"agentic-workflow: {message}")
 
 
 def pinned_ref(root: Path) -> str:
+    """Return the validated `[standard] ref` from the project's agentic.toml."""
     try:
         config = tomllib.loads((root / "agentic.toml").read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -53,6 +54,7 @@ def pinned_ref(root: Path) -> str:
 
 
 def standard_dir(ref: str) -> Path:
+    """Return where the given standard version is (or will be) extracted."""
     base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share"
     return Path(base) / "agentic/standard" / ref
 
@@ -72,6 +74,7 @@ def fetch(ref: str, target: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
     if not argv:
         fail("usage: agentic-workflow setup | trust | run ... | ledger ...")
     root = Path.cwd()

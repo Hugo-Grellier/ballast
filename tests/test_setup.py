@@ -10,6 +10,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 _loader = SourceFileLoader("setup_tool", str(ROOT / "tools/setup"))
@@ -59,7 +60,7 @@ class LinkTests(unittest.TestCase):
     """Relative links in installed documents resolve in a project."""
 
     # Installed path prefix -> source in this repository.
-    LAYOUT = {
+    LAYOUT: ClassVar[dict[str, str]] = {
         "docs/policies/": "templates/policies/",
         ".agents/skills/": "templates/skills/",
         ".agentic/spec_workflow/": "tools/spec_workflow/",
@@ -84,7 +85,9 @@ class LinkTests(unittest.TestCase):
             relative = relative.replace("templates/AGENTS.md", "AGENTS.md")
             for prefix, origin in self.LAYOUT.items():
                 relative = relative.replace(origin, prefix, 1)
-            for target in re.findall(r"\]\(([^)#:]+)(?:#[^)]*)?\)", document.read_text()):
+            for target in re.findall(
+                r"\]\(([^)#:]+)(?:#[^)]*)?\)", document.read_text()
+            ):
                 installed = posixpath.normpath(
                     posixpath.join(posixpath.dirname(relative), target)
                 )
