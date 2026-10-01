@@ -158,7 +158,10 @@ def _refusal(root: Path) -> str | None:
     )
     if changed:
         shown = ", ".join(changed[:10]) + (" ..." if len(changed) > 10 else "")  # noqa: PLR2004
-        return f"workflow inputs changed since `trust`: {shown}"
+        return (
+            f"workflow inputs changed since `trust`: {shown}; "
+            "review them, then run `trust`"
+        )
     return None
 
 
