@@ -115,12 +115,18 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 
 ## Sync log
 
-- 2026-10-01: synced LoreForge #112 (agent run ledger) and #113 (headless guard, trusted launcher) at `9eb5849` into `tools/spec_workflow/` with the same renames. The ledger reads `docs/policies/model-routing.md`, so that policy moved forward into `templates/policies/`. LoreForge's `scripts/agent-metrics` wrapper is not ported; `agentic-workflow ledger report` covers it. The workflow guide (`docs/spec-kit-workflow.md`) is still pending; one doc-lint test waits for it. LoreForge keeps its own `specs/*/workflow-runs/` ignore line for run records written before #112; new projects never produce them.
+- 2026-10-01: synced LoreForge #112 (agent run ledger) and #113 (headless guard, trusted launcher) at `9eb5849` into `tools/spec_workflow/` with the same renames. The ledger reads `docs/policies/model-routing.md`, so that policy moved forward into `templates/policies/`. LoreForge's `scripts/agent-metrics` wrapper is not ported; `agentic-workflow ledger report` covers it.  LoreForge keeps its own `specs/*/workflow-runs/` ignore line for run records written before #112; new projects never produce them.
+
+- 2026-10-01: imported the workflow guide (`templates/policies/spec-kit-workflow.md`) and the intake skill and helper at `9eb5849`, including #113's launcher handoff. Standard skills carry an `agentic-` prefix; `tools/setup` installs skills, helper and policies.
+
+## Intake markers on LoreForge issues
+
+The intake helper's retry-safe GitHub markers are now `<!-- agentic-intake: ... -->`. The helper no longer recognizes LoreForge's existing `<!-- loreforge-intake: ... -->` markers, so retrying a half-finished intake could create a duplicate child. Before migrating, finish any intake in progress; then either leave old markers (completed setups are never retried) or rewrite them on open issues.
 
 ## Risks
 
 - Artifact postconditions (#104) are the most valuable piece and the easiest to break while renaming. Move the tests first and keep them green on every rename step.
 - Some LoreForge worktrees have Spec Kit installed from the primary checkout (`_matching_primary`). After cleanup, the new fingerprint forces one reinstall per worktree.
 - Symlinks from `.claude/skills` to `.agents/skills` must be created by the installer, because they are ignored and no longer committed.
-- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may refuse or misjudge another project's inputs. Revisit if two projects diverge: name the installed launcher per version, or have `tools/setup` print the install command for its own copy.
-- `tools/setup` rewrites `.specify/` and `.agentic/`, so every reinstall needs a fresh `agentic-workflow trust`.
+- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may misjudge another project's inputs. **Proposed fix (not built):** the version-manager shim pattern (Gradle wrapper, rbenv, Volta). The operator installs each reviewed launcher version into a user-owned directory, keyed by standard version and outside every checkout. A thin global `agentic-workflow` reads the pinned version from `agentic.toml` and runs that launcher, refusing when it is not installed. `agentic.toml` is a trusted input, so an agent that changes the pin is refused by the launcher's baseline check.
+- `tools/setup` rewrites `.specify/` and `.agentic/`, so every real reinstall needs a fresh `agentic-workflow trust`. **Decided:** keep trust a manual, reviewed step; setup never trusts on its own. Setup ends by telling the operator to review and run `trust`, and the launcher's refusal names `trust` as the fix.
