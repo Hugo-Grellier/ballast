@@ -35,7 +35,7 @@ inputs:
 # no later gate or command is reachable. Checks are cumulative and re-verify
 # upstream artifacts. Shell steps receive only the engine-validated run ID,
 # never raw inputs; the validator reads and validates feature_directory itself.
-# Start and resume with .agentic/spec_workflow/run.py (docs/spec-kit-workflow.md).
+# Start and resume with agentic-workflow run (docs/policies/spec-kit-workflow.md).
 
 steps:
   - id: preflight
@@ -51,7 +51,7 @@ steps:
       If it is an Epic, stop this run, keep the parent for
       coordination, create dependent child feature Issues, and run this workflow
       for a child. Task count alone is not a reason to split. See
-      docs/spec-kit-workflow.md#scope-and-decomposition-gate.
+      docs/policies/spec-kit-workflow.md#scope-and-decomposition-gate.
     options: [approve, reject]
     on_reject: abort
 

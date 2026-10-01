@@ -1082,9 +1082,8 @@ class WorkflowOrderTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        docs = ROOT / "templates/docs/spec-kit-workflow.md"
-        if docs.is_file():  # The workflow guide is not backported yet.
-            self.assertNotIn("python3 .agentic/spec_workflow/ledger.py", docs.read_text())
+        docs = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
+        self.assertNotIn("python3 .agentic/spec_workflow/ledger.py", docs)
 
     def test_validators_run_without_checkout_startup_code(self) -> None:
         for step in _steps():

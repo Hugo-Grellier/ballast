@@ -6,7 +6,7 @@
     agentic-workflow run resume RUN_ID [-i integration=claude|codex]
 
 `agentic-workflow` is the installed copy of launcher.py, which verifies the
-checkout before executing this file; see docs/spec-kit-workflow.md.
+checkout before executing this file; see docs/policies/spec-kit-workflow.md.
 
 Routes Spec Kit's Claude/Codex dispatch through `bin/` (see agent.py), assigns
 the run ID up front so agent logs land in `.specify/workflow-state/<run>/`, and
@@ -128,7 +128,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
         return 2
     specify = shutil.which("specify")
     if specify is None:
-        sys.stderr.write("specify CLI not found; see docs/spec-kit-workflow.md\n")
+        sys.stderr.write("specify CLI not found; see docs/policies/spec-kit-workflow.md\n")
         return 2
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]
