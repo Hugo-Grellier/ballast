@@ -49,6 +49,10 @@ agentic-workflow ledger snapshot|check|report ...
 
 Only `setup` downloads; the other commands refuse a version that is not fetched yet. The repository is fixed in `agentic-workflow`, so `agentic.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `agentic.toml`, `.agentic/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `AGENTIC_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `AGENTIC_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/agentic/`.
 
+## Releases
+
+Release Please opens a release PR from Conventional Commit titles on `main`; merging it tags `vX.Y.Z`, updates `CHANGELOG.md` and `version.txt`, and publishes the GitHub release. Projects pin those tags in `agentic.toml`. The workflow needs a `RELEASE_PLEASE_TOKEN` repository secret (a fine-grained token with contents and pull-request write access) so its release PR runs CI.
+
 ## Status
 
 Draft, backported from LoreForge. The [backport plan](docs/plans/2026-09-28-loreforge-backport.md) tracks parity before the first release; profiles are not yet defined.

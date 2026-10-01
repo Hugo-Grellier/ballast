@@ -112,6 +112,7 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 - **Project overrides:** go in `docs/policies/project/<name>.md` (committed). Generic bases are installed to `docs/policies/<name>.md` (ignored). A skill reads the base, then the project file if it exists.
 - **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
 - **Language:** full English. Both specs get translated before `v0.1.0`.
+- **Releases:** Release Please (`simple` type, `v` tags, LoreForge's changelog sections) creates the tags projects pin. The first release is `v0.1.0`: the manifest starts at `0.0.0` and `bump-minor-pre-major` turns the `feat` commits into a minor bump. Merge the backport PR with a merge commit or rebase, not squash, so the first changelog lists each change. Before merging, add the `RELEASE_PLEASE_TOKEN` secret.
 
 ## Sync log
 
