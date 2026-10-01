@@ -130,9 +130,9 @@ The standard is public and merged once every LoreForge process asset is either i
 | `scripts/feature_intake.py`, `feature-intake` skill | Done (`agentic-feature-intake`) |
 | `docs/spec-kit-workflow.md`, `docs/engineering/model-routing.md` | Done (`templates/policies/`) |
 | `scripts/agent-metrics` | Covered by `agentic-workflow ledger report` |
-| 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | To do |
-| `docs/policies/*.md` (7) and `docs/engineering/workflow.md` (risk and review matrix) | To do; LoreForge specifics move to its `docs/policies/project/` |
-| `docs/agents/issue-tracker.md`, `triage-labels.md` | To do as policies; `docs/agents/domain.md` stays project-owned |
+| 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | Done (`agentic-*`) |
+| `docs/policies/*.md` (7) and `docs/engineering/workflow.md` (risk and review matrix) | Done (`templates/policies/`); LoreForge specifics move to its `docs/policies/project/` (see below) |
+| `docs/agents/issue-tracker.md`, `triage-labels.md` | Done as policies; `docs/agents/domain.md` stays project-owned |
 | `.github/pull_request_template.md` | To do as a copy-once template (GitHub reads it from the default branch, so it cannot be ignored) |
 | `AGENTS.md` generic sections | To do in `templates/AGENTS.md` (copy-once; agents load it automatically, so it stays committed) |
 | `.specify/memory/constitution.md` | Project-owned; Spec Kit supplies the template |
@@ -140,6 +140,19 @@ The standard is public and merged once every LoreForge process asset is either i
 | CI running the workflow tests | To do: this repository's own CI |
 | `specs/PRODUCT-SPEC.md` in English | To do |
 | `.github/workflows/*`, `dependabot.yml`, `docs/agents/domain.md`, domain skills | Project-owned; not backported |
+
+## LoreForge content that moves to `docs/policies/project/`
+
+The generic policies dropped these LoreForge specifics; the cleanup PR writes them to LoreForge's `docs/policies/project/`:
+
+- `security.md`: campaign membership and GM/player permissions as the confidentiality boundary; Visibility fail-closed rules; vault paths; editor commands as JSON argument arrays; Foundry, Discord recording consent and MCP bounds.
+- `testing.md`: the critical-evidence list (GM-only inference, cross-campaign access, grant/Visibility revocation, resource IDs across renames, unsafe paths, unchanged campaign sources, failed migrations), PostgreSQL and browser/API seams, Foundry qualification, `./scripts/check` and `./scripts/verify`, generated API check.
+- `dependencies.md`: `uv.lock` and the two pnpm lockfiles, Dependabot groups, the `@hey-api/openapi-ts` prerelease exception and its audit findings (#91).
+- `migrations.md` and `observability.md`: PostgreSQL/Alembic, the release-process migration gate, campaign IDs.
+- `workflow.md`: the R2 list (Visibility, player/GM boundary, Foundry writes, Discord recording/consent), `uv sync`/`pnpm` install commands, the `check`/`verify` gates and CI behavior.
+- `engineering.md`, `documentation.md`: `CONTEXT.md` and `docs/v1-architecture.md` as the domain and architecture references.
+- `spec-kit-workflow.md`: the architecture areas (core/domain, Foundry, Discord, CLI/TUI, web/API, AI providers, retrieval and vault, transcription, translation, persistence, infrastructure) and that M1, M2, ... are Epics.
+- Skills: `security-review` and `database-migration` lose their Visibility, campaign and Alembic specifics; the project files above restore them.
 
 ## Intake markers on LoreForge issues
 

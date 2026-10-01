@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import posixpath
+import re
 import subprocess
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -51,6 +53,45 @@ class PermissionTests(unittest.TestCase):
         config = {"agents": {"permissions": {"extra_deny": "Edit(./x)"}}}
         with self.assertRaises(ValueError):
             setup.merge_permissions({"permissions": {"allow": [], "deny": []}}, config)
+
+
+class LinkTests(unittest.TestCase):
+    """Relative links in installed documents resolve in a project."""
+
+    # Installed path prefix -> source in this repository.
+    LAYOUT = {
+        "docs/policies/": "templates/policies/",
+        ".agents/skills/": "templates/skills/",
+        ".agentic/spec_workflow/": "tools/spec_workflow/",
+    }
+    # Owned by the project, so absent here.
+    PROJECT_OWNED = ("docs/policies/project/", ".specify/memory/constitution.md")
+
+    def source(self, installed: str) -> Path | None:
+        for prefix, origin in self.LAYOUT.items():
+            if installed.startswith(prefix):
+                return ROOT / origin / installed.removeprefix(prefix)
+        return None
+
+    def test_links_resolve(self) -> None:
+        documents = [
+            *(ROOT / "templates/policies").glob("*.md"),
+            *(ROOT / "templates/skills").glob("*/SKILL.md"),
+        ]
+        for document in documents:
+            relative = document.relative_to(ROOT).as_posix()
+            for prefix, origin in self.LAYOUT.items():
+                relative = relative.replace(origin, prefix, 1)
+            for target in re.findall(r"\]\(([^)#:]+)(?:#[^)]*)?\)", document.read_text()):
+                installed = posixpath.normpath(
+                    posixpath.join(posixpath.dirname(relative), target)
+                )
+                if installed.startswith(self.PROJECT_OWNED):
+                    continue
+                source = self.source(installed)
+                with self.subTest(document=relative, link=target):
+                    self.assertIsNotNone(source, installed)
+                    self.assertTrue(source.exists(), installed)
 
 
 if __name__ == "__main__":

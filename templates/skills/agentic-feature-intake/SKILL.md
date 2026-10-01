@@ -5,7 +5,7 @@ description: Start, fix, investigate, or continue a GitHub issue from agent chat
 
 # Feature intake
 
-Use this skill for `Start #N`, `Fix #N`, `Investigate #N`, `Continue #N`, or an equivalent request in this repository. GitHub is the work tracker; accepted documents and feature artifacts own intent. Read `AGENTS.md`, the issue and all its comments, and the relevant sections of `docs/policies/spec-kit-workflow.md` and `docs/agents/issue-tracker.md`. Use `gh api` for parent, sub-issue and dependency relationships when the installed `gh issue view --json` lacks those fields. Inspect only relevant accepted roadmap/spec/ADR context and existing `specs/<number>-<slug>/` artifacts. If inspection fails, stop without mutation.
+Use this skill for `Start #N`, `Fix #N`, `Investigate #N`, `Continue #N`, or an equivalent request in this repository. GitHub is the work tracker; accepted documents and feature artifacts own intent. Read `AGENTS.md`, the issue and all its comments, and the relevant sections of `docs/policies/spec-kit-workflow.md` and `docs/policies/issue-tracker.md`. Use `gh api` for parent, sub-issue and dependency relationships when the installed `gh issue view --json` lacks those fields. Inspect only relevant accepted roadmap/spec/ADR context and existing `specs/<number>-<slug>/` artifacts. If inspection fails, stop without mutation.
 
 ## Route
 

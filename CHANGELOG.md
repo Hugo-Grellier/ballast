@@ -17,6 +17,7 @@ Notable changes to this project are recorded here. This draft has no release ver
 - `templates/policies/spec-kit-workflow.md`, the workflow guide, with project specifics moved to `docs/policies/project/`.
 - `tools/setup` also installs the standard's skills, the intake helper and the policies, and ends by asking the operator to review and run `agentic-workflow trust`.
 - `tools/agentic-workflow`, the global command installed once per machine. `setup` fetches the standard version pinned in `agentic.toml` (`[standard] ref`) and runs its `tools/setup`; every other command runs that version's launcher from outside the checkout.
+- Review and routing skills (`agentic-engineering-review`, `-test-review`, `-documentation-review`, `-security-review`, `-spec-reconciliation`, `-dependency-evaluation`, `-dependency-migration`, `-database-migration`, `-model-routing`) and their base policies (engineering, documentation, testing, dependencies, migrations, observability, security, the risk and review `workflow`, issue tracker and triage labels). Each policy defers to a project's `docs/policies/project/<name>.md`. Generalized from LoreForge.
 
 ### Changed
 

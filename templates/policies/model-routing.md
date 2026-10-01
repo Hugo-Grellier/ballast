@@ -119,7 +119,7 @@ Feature review reports already record the reviewer model. Significant PRs should
 
 After the pilot, review the project's actual outcomes. Only build automatic dispatch or a learned router if repeated ambiguous routing or measurable quota waste justifies it. Until then, this document plus the existing risk/workflow signals is the routing system.
 
-The local [agent-run ledger](../spec-kit-workflow.md#local-agent-run-evidence)
+The local [agent-run ledger](spec-kit-workflow.md#local-agent-run-evidence)
 records these observations for explicitly instrumented runs. A route record
 names the exact `Work` row above and the actual profile and effort. The report
 compares that row with the observed route; a route above its default without a
