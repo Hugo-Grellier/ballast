@@ -17,5 +17,3 @@
 ### Documentation
 
 * add initial specs, AGENTS template and LoreForge backport plan ([b45492c](https://github.com/Hugo-Grellier/ballast/commit/b45492c8eaef3ea9ff4822e279c1af82527fa2f7))
-
-## Changelog
