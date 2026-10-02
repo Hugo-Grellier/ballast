@@ -54,6 +54,8 @@ GITIGNORE = """\
 docs/policies/*.md
 .specify/*
 !.specify/memory/
+!.specify/bugs/
+!.specify/assessments/
 .specify/memory/.constitution-template.json
 """
 # Representative paths for GITIGNORE: (path, must be ignored).
@@ -70,6 +72,8 @@ IGNORE_PROBES = (
     (".specify/workflows/workflow-registry.json", True),
     (".specify/memory/.constitution-template.json", True),
     (".specify/memory/constitution.md", False),
+    (".specify/bugs/demo/assessment.md", False),
+    (".specify/assessments/demo.md", False),
 )
 # Project-owned files that `specify init --force` would overwrite.
 PRESERVED = (".specify/memory/constitution.md",)
