@@ -157,6 +157,12 @@ The generic policies dropped these LoreForge specifics; the cleanup PR writes th
 - `spec-kit-workflow.md`: the architecture areas (core/domain, Foundry, Discord, CLI/TUI, web/API, AI providers, retrieval and vault, transcription, translation, persistence, infrastructure) and that M1, M2, ... are Epics.
 - Skills: `security-review` and `database-migration` lose their Visibility, campaign and Alembic specifics; the project files above restore them.
 
+## Status (2026-10-02)
+
+- Ballast `v0.1.0` released and public; the repository dogfoods itself (#7).
+- LoreForge adoption: draft Hugo-Grellier/LoreForge#124, CI green. Before merge: release Ballast with #8 and pin `v0.1.1`; finish the in-progress M2/03 `loreforge-feature` run (`0cea9240`), which cannot resume after the switch.
+- Known inherited bug: `ledger report` imports `yaml` under `python3 -I -S` (#9).
+
 ## Intake markers on LoreForge issues
 
 The intake helper's retry-safe GitHub markers are now `<!-- ballast-intake: ... -->`. The helper no longer recognizes LoreForge's existing `<!-- loreforge-intake: ... -->` markers, so retrying a half-finished intake could create a duplicate child. Before migrating, finish any intake in progress; then either leave old markers (completed setups are never retried) or rewrite them on open issues.
