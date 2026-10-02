@@ -1,0 +1,227 @@
+schema_version: "1.0"
+
+workflow:
+  id: agentic-feature
+  name: Agentic Feature Workflow
+  version: 1.1.0
+  author: Agentic Repo Standard
+  description: >-
+    Interactive feature lifecycle with human approval gates, deterministic
+    artifact postconditions, intent reconciliation, and convergence.
+
+requires:
+  speckit_version: ">=1.0.11"
+  integrations:
+    any: [claude, codex]
+
+inputs:
+  idea:
+    type: string
+    required: true
+    prompt: "Link the scoped feature Issue and summarize its outcome"
+  feature_directory:
+    type: string
+    required: true
+    prompt: "Use specs/<issue-number>-<slug> for the scoped feature Issue"
+  integration:
+    type: string
+    default: auto
+    enum: [auto, claude, codex]
+    prompt: "Agent integration to use"
+
+# A command step's exit code 0 only means the agent process ended. Every
+# producer is followed by a `validate-*` shell step (.agentic/spec_workflow/
+# artifacts.py) that checks its artifact; a failed contract fails the run, so
+# no later gate or command is reachable. Checks are cumulative and re-verify
+# upstream artifacts. Shell steps receive only the engine-validated run ID,
+# never raw inputs; the validator reads and validates feature_directory itself.
+# Start and resume with agentic-workflow run (docs/policies/spec-kit-workflow.md).
+
+steps:
+  - id: preflight
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py preflight --run {{ context.run_id }}
+
+  - id: scope-gate
+    type: gate
+    message: >-
+      Before specifying, confirm the linked GitHub Issue has one independently
+      specifiable outcome, cohesive acceptance criteria and design, and a clear
+      in/out boundary. Confirm feature_directory uses that Issue's number.
+      If it is an Epic, stop this run, keep the parent for
+      coordination, create dependent child feature Issues, and run this workflow
+      for a child. Task count alone is not a reason to split. See
+      docs/policies/spec-kit-workflow.md#scope-and-decomposition-gate.
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: specify
+    command: speckit.specify
+    integration: "{{ inputs.integration }}"
+    input:
+      args: >-
+        {{ inputs.idea }}. Set
+        SPECIFY_FEATURE_DIRECTORY={{ inputs.feature_directory }} before creating
+        spec.md; keep this path for the feature's later artifacts.
+
+  - id: validate-spec
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py spec --run {{ context.run_id }}
+
+  - id: clarify
+    command: speckit.clarify
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-clarified-spec
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py clarified-spec --run {{ context.run_id }}
+
+  - id: approve-intent
+    type: gate
+    message: >-
+      Review the feature spec shown below (the full file is
+      {{ inputs.feature_directory }}/spec.md; the display stops at 200 lines).
+      Approve only if its outcome, constraints, non-goals, and acceptance
+      criteria are the intended feature. Approval makes the next step write
+      intent.md bound to this exact spec version; a later spec change makes
+      that approval stale. If clarification exposed independent outcomes,
+      reject, stop this run, and decompose into child Issues. On rejection,
+      revise the spec (rerun speckit-clarify interactively if needed), then
+      resume to review this gate again. For an instrumented run, record the
+      revised spec snapshot, clarified-spec check, and manual recovery before
+      reapproval; the runner records intent validation afterward.
+    show_file: "{{ inputs.feature_directory }}/spec.md"
+    options: [approve, reject]
+    on_reject: retry
+
+  - id: record-intent
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py record-intent --run {{ context.run_id }}
+
+  - id: validate-intent
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py intent --run {{ context.run_id }}
+
+  - id: plan
+    command: speckit.plan
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-plan
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py plan --run {{ context.run_id }}
+
+  - id: review-plan
+    type: gate
+    message: >-
+      The workflow does not run a peer review. Before approving, have a
+      different model review spec.md, intent.md, plan.md (shown below), and
+      the relevant architecture documents, and save material findings under
+      the feature's reviews/ directory. Approve only after material findings
+      are resolved and you accept the plan. If separate plans are needed,
+      reject, stop, and decompose. On rejection, revise the plan and obtain a
+      fresh peer review manually before resuming this gate. For an instrumented
+      run, record the review and any manual recovery in the local ledger.
+    show_file: "{{ inputs.feature_directory }}/plan.md"
+    options: [approve, reject]
+    on_reject: retry
+
+  - id: tasks
+    command: speckit.tasks
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-tasks
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py tasks --run {{ context.run_id }}
+
+  - id: analyze
+    command: speckit.analyze
+    integration: "{{ inputs.integration }}"
+
+  - id: review-tasks
+    type: gate
+    message: >-
+      Review tasks.md (shown below) and the analyze report printed above
+      (also saved under .specify/workflow-state/<run>/agents/). Check that
+      every acceptance criterion has test evidence and that execution waves
+      respect task dependencies (task IDs and dependency references were
+      already validated). If the feature legitimately needs no repository
+      change outside its spec directory, tasks.md must say so with
+      <!-- workflow: no-code-change -->. If tasks expose independent outcomes,
+      reject and decompose. After rejection, revise tasks.md and rerun
+      speckit-analyze manually before resuming this gate. For an instrumented
+      run, record the revised tasks snapshot, analyze check, and manual recovery
+      in the local ledger.
+    show_file: "{{ inputs.feature_directory }}/tasks.md"
+    options: [approve, reject]
+    on_reject: retry
+
+  - id: implementation-baseline
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py implementation-baseline --run {{ context.run_id }}
+
+  - id: implement
+    command: speckit.intent.implement
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-implementation
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py implementation --run {{ context.run_id }}
+
+  - id: review-implementation
+    type: gate
+    message: >-
+      The workflow does not run a peer review. Every task is checked and the
+      repository changed since the pre-implementation baseline; that is not a
+      review. Have a different model review the implementation against
+      intent.md, spec.md, plan.md, tasks.md, and the diff, and save its report
+      under reviews/. On rejection, correct the implementation, run the
+      affected checks, and obtain a fresh peer review manually before resuming
+      this gate. Do not change the spec to excuse implementation drift. For an
+      instrumented run, record the snapshot, checks, review, and recovery in
+      the local ledger before approval.
+    options: [approve, reject]
+    on_reject: retry
+
+  - id: reconcile-intent
+    command: speckit.intent.decisions
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-decisions
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py decisions --run {{ context.run_id }}
+
+  - id: converge
+    command: speckit.converge
+    integration: "{{ inputs.integration }}"
+
+  - id: spec-reconciliation
+    type: gate
+    message: >-
+      The workflow does not run spec reconciliation. If converge appended
+      tasks, implement them interactively first. Then have a different model
+      run the spec-reconciliation review and record its result in
+      reviews/convergence.md as a line "- Verdict: CONVERGED", "PARTIAL", or
+      "FAILED". Approve once the verdict is recorded; the next step verifies it
+      together with task completion and decision resolution. On rejection,
+      complete the loop manually and resume this gate. For an instrumented run,
+      record the fresh convergence evidence in the local ledger.
+    options: [approve, reject]
+    on_reject: retry
+
+  - id: validate-convergence
+    type: shell
+    run: python3 -I -S .agentic/spec_workflow/artifacts.py convergence --run {{ context.run_id }}
+
+  - id: final-acceptance
+    type: gate
+    message: >-
+      Convergence is validated (report shown below). Confirm accepted decisions
+      are applied, every acceptance criterion has test evidence, required
+      checks pass (or unavailable checks are recorded), and reviews are
+      resolved. Approve for final acceptance. On rejection, correct the
+      implementation and rerun affected checks, decision reconciliation, peer
+      review, and convergence manually before resuming this gate. For an
+      instrumented run, inspect the local ledger report before approval.
+    show_file: "{{ inputs.feature_directory }}/reviews/convergence.md"
+    options: [approve, reject]
+    on_reject: retry

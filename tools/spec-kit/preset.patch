@@ -1,0 +1,39 @@
+--- a/commands/speckit.tasks.md
++++ b/commands/speckit.tasks.md
+@@ -3 +3 @@
+-handoffs: 
++handoffs:
+@@ -54 +54 @@
+-    
++
+@@ -138 +138 @@
+-**Tests are OPTIONAL**: Only generate test tasks if explicitly requested in the feature specification or if user requests TDD approach.
++**Acceptance evidence is required**: Generate a test or explicit verification task for every behavior acceptance criterion. Cite its stable `AC-NNN` ID in the task. Do not omit tests merely because the spec did not ask for them. If no automated test seam is appropriate, record the manual evidence and reason.
+--- a/templates/tasks-template.md
++++ b/templates/tasks-template.md
+@@ -11 +11 @@
+-**Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
++**Acceptance evidence**: Each behavior acceptance criterion needs a test or other explicit verification task. Do not omit tests merely because the spec did not ask for them; if no automated test seam is appropriate, record the manual evidence and reason.
+@@ -20,0 +21 @@
++- Test and verification tasks must cite the acceptance criterion ID(s) they prove, e.g. `[AC-001]`.
+@@ -29 +30 @@
+-<!-- 
++<!--
+@@ -32 +33 @@
+-  
++
+@@ -38 +39 @@
+-  
++
+@@ -43 +44 @@
+-  
++
+@@ -83 +84 @@
+-### Tests for User Story 1 (OPTIONAL - only if tests requested) ⚠️
++### Acceptance tests for User Story 1
+@@ -109 +110 @@
+-### Tests for User Story 2 (OPTIONAL - only if tests requested) ⚠️
++### Acceptance tests for User Story 2
+@@ -131 +132 @@
+-### Tests for User Story 3 (OPTIONAL - only if tests requested) ⚠️
++### Acceptance tests for User Story 3

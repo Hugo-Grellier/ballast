@@ -1,0 +1,103 @@
+#!/usr/bin/python3 -IS
+"""Run the standard version a project pins, from outside its checkout.
+
+Install once per machine, from a reviewed copy of this repository:
+
+    install -m 0755 tools/agentic-workflow ~/.local/bin/agentic-workflow
+
+Then, from a project root whose agentic.toml has `[standard] ref = "..."`:
+
+    agentic-workflow setup              # fetch that version, run its tools/setup
+    agentic-workflow trust              # after reviewing the checkout
+    agentic-workflow run start|resume ...
+    agentic-workflow ledger ...
+
+Each version is extracted once into $XDG_DATA_HOME/agentic/standard/<ref>/.
+Only `setup` downloads; every other command runs the launcher
+of an already fetched version. The repository is fixed here, so a project can
+choose a version but never a source. Set AGENTIC_STANDARD_DIR to a local
+checkout of this repository to develop the standard itself.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+import tarfile
+import tempfile
+import tomllib
+import urllib.request
+from pathlib import Path
+
+REPOSITORY = "Hugo-Grellier/agentic-repo-standard"
+ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
+REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+PYTHON = "/usr/bin/python3"
+
+
+def fail(message: str) -> None:
+    """Exit with an error message naming this command."""
+    sys.exit(f"agentic-workflow: {message}")
+
+
+def pinned_ref(root: Path) -> str:
+    """Return the validated `[standard] ref` from the project's agentic.toml."""
+    try:
+        config = tomllib.loads((root / "agentic.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        fail(f"cannot read agentic.toml: {error}")
+    ref = config.get("standard", {}).get("ref")
+    if not isinstance(ref, str) or not REF.fullmatch(ref) or ".." in ref:
+        fail("agentic.toml needs [standard] ref, a tag or commit of the standard")
+    return ref
+
+
+def standard_dir(ref: str) -> Path:
+    """Return where the given standard version is (or will be) extracted."""
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share"
+    return Path(base) / "agentic/standard" / ref
+
+
+def fetch(ref: str, target: Path) -> None:
+    """Download and extract one version."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=target.parent) as directory:
+        archive = Path(directory) / "standard.tar.gz"
+        url = ARCHIVE.format(repository=REPOSITORY, ref=ref)
+        urllib.request.urlretrieve(url, archive)  # noqa: S310 - fixed https URL
+        extracted = Path(directory) / "extracted"
+        with tarfile.open(archive, "r:gz") as contents:
+            contents.extractall(extracted, filter="data")
+        (top,) = extracted.iterdir()
+        top.rename(target)
+
+
+def main(argv: list[str]) -> int:
+    """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
+    if not argv:
+        fail("usage: agentic-workflow setup | trust | run ... | ledger ...")
+    root = Path.cwd()
+    local = os.environ.get("AGENTIC_STANDARD_DIR")
+    if local:
+        standard = Path(local).resolve()
+        sys.stderr.write(f"agentic-workflow: using local standard {standard}\n")
+    else:
+        ref = pinned_ref(root)
+        standard = standard_dir(ref)
+        if not standard.is_dir():
+            if argv[0] != "setup":
+                fail(f"standard {ref} is not fetched; run `agentic-workflow setup`")
+            fetch(ref, standard)
+    if argv[0] == "setup":
+        tool = standard / "tools/setup"
+        os.execv(PYTHON, [PYTHON, str(tool), "--project", str(root), *argv[1:]])  # noqa: S606
+    launcher = standard / "tools/spec_workflow/launcher.py"
+    if not launcher.is_file():
+        fail(f"{standard} has no launcher")
+    os.execv(PYTHON, [PYTHON, "-IS", str(launcher), *argv])  # noqa: S606
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

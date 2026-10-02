@@ -94,23 +94,77 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 2. **Dry-run on a scratch repo.** Run `tools/setup` on an empty repo, then run `specify workflow run agentic-feature` with the fake integration from the tests. This proves the standard works without LoreForge.
 3. **Clean up LoreForge (one PR, R2, because it changes the headless-agent permission source).**
    - Add `agentic.toml`, pinned to `v0.1.0`.
-   - Replace `scripts/setup-speckit` with a thin wrapper that calls the pinned `tools/setup`.
+   - Delete `scripts/setup-speckit` and `scripts/spec-kit/`; `agentic-workflow setup` replaces them, including as the Orca worktree setup script.
    - Delete the vendored files: the generic skills, policy bases, `spec_workflow/*`, `feature_intake.py` and its tests, patches, templates, and `agentic-profile.md`. Add them to `.gitignore`.
    - Turn the project-specific parts into `docs/policies/project/*.md` files: the security boundaries, the R2 list, the architecture areas in `spec-kit-workflow`, and the `claude-settings` extras.
    - Keep `constitution.md`, `acceptance.yml`, the domain skills and `specs/`.
    - Check: `./scripts/check`. Then check that `python3 tools/spec_workflow/artifacts.py convergence --feature specs/103-...` still passes on existing specs. Then do one fresh `run.py start` to the intent gate.
-   - Backward compatibility: the running workflow id `loreforge-feature` changes. Keep `[project] workflow_id = "loreforge-feature"` so in-flight local runs still resume.
+   - Backward compatibility: the workflow id becomes `agentic-feature` and the launcher variable becomes `AGENTIC_SPEC_WORKFLOW`. No compatibility alias: finish or restart any local `loreforge-feature` run before migrating.
+   - Restore LoreForge's project permissions through `agentic.toml` `extra_allow`/`extra_deny`, since the base list no longer has them: `./scripts/check`, `./scripts/generate-api`, `uv run --locked ruff *`, `uv run --locked ty check*`, `uv run --locked python -m unittest *`, `pnpm --dir web run lint|typecheck|test*`, and deny `Read`/`Edit(./campaigns/**)`.
+   - LoreForge's `.gitignore` Spec Kit lines are replaced by the block `tools/setup` prints. `.specify/.gitignore`, `.specify/templates/*` and `.specify/workflows/workflow-registry.json` become untracked; only `.specify/memory/constitution.md` stays committed.
+   - Report upstream in LoreForge: its `skills.patch` garbles `speckit-intent-decisions` ("preserve .specify/extensions/intent/intent/spec/plan").
 4. **Upgrade path.** Bumping `ref` in `agentic.toml` changes the fingerprint, so `setup` reinstalls. Document this in the standard's README.
 
 ## Decisions (resolved 2026-09-28)
 
 - **Distribution:** pinned tarball of the standard at a commit SHA or tag, installed into git-ignored paths. No submodule.
-- **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml` plus a thin wrapper script.
+- **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml`; the global `agentic-workflow setup` fetches the pinned version and runs its `tools/setup`.
 - **Project overrides:** go in `docs/policies/project/<name>.md` (committed). Generic bases are installed to `docs/policies/<name>.md` (ignored). A skill reads the base, then the project file if it exists.
-- **Language:** full English. `specs/PRODUCT-SPEC.md` gets translated before `v0.1.0`.
+- **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
+- **Language:** full English. Both specs get translated before `v0.1.0`.
+- **Releases:** Release Please (`simple` type, `v` tags, LoreForge's changelog sections) creates the tags projects pin. The first release is `v0.1.0`: the manifest starts at `0.0.0` and `bump-minor-pre-major` turns the `feat` commits into a minor bump. Merge the backport PR with a merge commit or rebase, not squash, so the first changelog lists each change. Before merging, add the `RELEASE_PLEASE_TOKEN` secret.
+
+## Sync log
+
+- 2026-10-01: synced LoreForge #112 (agent run ledger) and #113 (headless guard, trusted launcher) at `9eb5849` into `tools/spec_workflow/` with the same renames. The ledger reads `docs/policies/model-routing.md`, so that policy moved forward into `templates/policies/`. LoreForge's `scripts/agent-metrics` wrapper is not ported; `agentic-workflow ledger report` covers it.  LoreForge keeps its own `specs/*/workflow-runs/` ignore line for run records written before #112; new projects never produce them.
+
+- 2026-10-01: imported the workflow guide (`templates/policies/spec-kit-workflow.md`) and the intake skill and helper at `9eb5849`, including #113's launcher handoff. Standard skills carry an `agentic-` prefix; `tools/setup` installs skills, helper and policies.
+
+## Parity checklist (gate for the first merge)
+
+The standard is public and merged once every LoreForge process asset is either in the standard or deliberately left to the project. Checked against LoreForge `origin/main` @ `43dfcbe` (nothing process-related changed after `9eb5849`).
+
+| LoreForge asset | Status |
+| --- | --- |
+| `scripts/spec_workflow/*`, `.specify/workflows/loreforge-feature`, Spec Kit templates | Done (`tools/spec_workflow/`, `templates/spec-kit/`) |
+| `scripts/setup-speckit`, `scripts/spec-kit/*.patch` | Done (`tools/setup`, `tools/spec-kit/`, `tools/agentic-workflow`) |
+| `scripts/feature_intake.py`, `feature-intake` skill | Done (`agentic-feature-intake`) |
+| `docs/spec-kit-workflow.md`, `docs/engineering/model-routing.md` | Done (`templates/policies/`) |
+| `scripts/agent-metrics` | Covered by `agentic-workflow ledger report` |
+| 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | Done (`agentic-*`) |
+| `docs/policies/*.md` (7) and `docs/engineering/workflow.md` (risk and review matrix) | Done (`templates/policies/`); LoreForge specifics move to its `docs/policies/project/` (see below) |
+| `docs/agents/issue-tracker.md`, `triage-labels.md` | Done as policies; `docs/agents/domain.md` stays project-owned |
+| `.github/pull_request_template.md` | Done as a copy-once template (GitHub reads it from the default branch, so it cannot be ignored) |
+| `AGENTS.md` generic sections | Done in `templates/AGENTS.md` (copy-once; agents load it automatically, so it stays committed) |
+| `.specify/memory/constitution.md` | Project-owned; Spec Kit supplies the template |
+| `THIRD_PARTY_NOTICES.md` | Done: covers the upstream excerpts in `tools/spec-kit/*.patch` |
+| CI running the workflow tests | Done: `.github/workflows/ci.yml` (systemd, Codex sandbox and Spec Kit CLI tests skip there; run them locally before a release) |
+| `specs/PRODUCT-SPEC.md` and `specs/TECHNICAL-SPEC.md` in English (both were mostly French) | Done |
+| `dependabot.yml` (patch grouping), `ci.yml` PR-title job | Done as copy-once templates (`templates/github/`); this repository uses both |
+| Ruff `ALL` configuration | Done for this repository (`pyproject.toml`) |
+| `ci.yml` check job, `acceptance.yml`, Release Please, Docker release, `docs/agents/domain.md`, domain skills | Project-owned (stack- or product-specific); not backported |
+
+## LoreForge content that moves to `docs/policies/project/`
+
+The generic policies dropped these LoreForge specifics; the cleanup PR writes them to LoreForge's `docs/policies/project/`:
+
+- `security.md`: campaign membership and GM/player permissions as the confidentiality boundary; Visibility fail-closed rules; vault paths; editor commands as JSON argument arrays; Foundry, Discord recording consent and MCP bounds.
+- `testing.md`: the critical-evidence list (GM-only inference, cross-campaign access, grant/Visibility revocation, resource IDs across renames, unsafe paths, unchanged campaign sources, failed migrations), PostgreSQL and browser/API seams, Foundry qualification, `./scripts/check` and `./scripts/verify`, generated API check.
+- `dependencies.md`: `uv.lock` and the two pnpm lockfiles, Dependabot groups, the `@hey-api/openapi-ts` prerelease exception and its audit findings (#91).
+- `migrations.md` and `observability.md`: PostgreSQL/Alembic, the release-process migration gate, campaign IDs.
+- `workflow.md`: the R2 list (Visibility, player/GM boundary, Foundry writes, Discord recording/consent), `uv sync`/`pnpm` install commands, the `check`/`verify` gates and CI behavior.
+- `engineering.md`, `documentation.md`: `CONTEXT.md` and `docs/v1-architecture.md` as the domain and architecture references.
+- `spec-kit-workflow.md`: the architecture areas (core/domain, Foundry, Discord, CLI/TUI, web/API, AI providers, retrieval and vault, transcription, translation, persistence, infrastructure) and that M1, M2, ... are Epics.
+- Skills: `security-review` and `database-migration` lose their Visibility, campaign and Alembic specifics; the project files above restore them.
+
+## Intake markers on LoreForge issues
+
+The intake helper's retry-safe GitHub markers are now `<!-- agentic-intake: ... -->`. The helper no longer recognizes LoreForge's existing `<!-- loreforge-intake: ... -->` markers, so retrying a half-finished intake could create a duplicate child. Before migrating, finish any intake in progress; then either leave old markers (completed setups are never retried) or rewrite them on open issues.
 
 ## Risks
 
 - Artifact postconditions (#104) are the most valuable piece and the easiest to break while renaming. Move the tests first and keep them green on every rename step.
 - Some LoreForge worktrees have Spec Kit installed from the primary checkout (`_matching_primary`). After cleanup, the new fingerprint forces one reinstall per worktree.
 - Symlinks from `.claude/skills` to `.agents/skills` must be created by the installer, because they are ignored and no longer committed.
+- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may misjudge another project's inputs. **Fixed (2026-10-01)** with the version-manager shim pattern (Gradle wrapper, rbenv, Volta): `tools/agentic-workflow` is installed once per machine. `setup` fetches the pinned version into `$XDG_DATA_HOME/agentic/standard/<ref>/`; every other command runs that version's launcher and refuses an unfetched one. The repository is fixed in the shim, so a project picks a version, never a source. `agentic.toml` is a trusted input, so an agent that changes the pin is refused by the launcher's baseline check.
+- `tools/setup` rewrites `.specify/` and `.agentic/`, so every real reinstall needs a fresh `agentic-workflow trust`. **Decided:** keep trust a manual, reviewed step; setup never trusts on its own. Setup ends by telling the operator to review and run `trust`, and the launcher's refusal names `trust` as the fix.

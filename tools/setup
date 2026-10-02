@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""Install Spec Kit and this standard into a project's git-ignored paths.
+
+Usage: tools/setup [--project DIR]
+
+The project commits `agentic.toml` and its own overrides only. Everything this
+script writes is rebuildable and must be ignored; see GITIGNORE below.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import tomllib
+import urllib.request
+from pathlib import Path
+
+STANDARD = Path(__file__).resolve().parent.parent
+PATCHES = STANDARD / "tools/spec-kit"
+VERSION = "1.0.11"
+SOURCES = {
+    "core": ("github/spec-kit", "8147943512404afb9d99c6252cb9bf84369fd0b0"),
+    "multi-model-review": (
+        "formin/multi-model-review",
+        "9762e3e8c6af1d5d0d24d1dfae34132f3bc8f2e0",
+    ),
+    "status-report": (
+        "Open-Agent-Tools/spec-kit-status",
+        "fc66e82d717660376f0c6ed6f1be962951033414",
+    ),
+    "intent": (
+        "SuhaibAslam/spec-kit-reconcile",
+        "0805a683e5d7e5cc39f0ca60a4d528a84ab7b2e5",
+    ),
+    "preset": (
+        "Quratulain-bilal/spec-kit-preset-explicit-task-dependencies",
+        "83421f58e0e6768e5701e839b05ecb5bb57eff8c",
+    ),
+}
+GITIGNORE = """\
+# Installed by agentic-repo-standard tools/setup
+.agentic/
+.agents/skills/agentic-*
+.claude/skills/agentic-*
+.agents/skills/speckit-*
+.claude/skills/speckit-*
+docs/policies/*.md
+.specify/*
+!.specify/memory/
+.specify/memory/.constitution-template.json
+"""
+# Representative paths for GITIGNORE: (path, must be ignored).
+IGNORE_PROBES = (
+    (".agentic/spec_workflow/run.py", True),
+    (".agents/skills/agentic-feature-intake/SKILL.md", True),
+    (".claude/skills/agentic-feature-intake", True),
+    ("docs/policies/model-routing.md", True),
+    ("docs/policies/project/security.md", False),
+    (".agents/skills/speckit-tasks/SKILL.md", True),
+    (".claude/skills/speckit-tasks/SKILL.md", True),
+    (".specify/scripts/python/common.py", True),
+    (".specify/templates/plan-template.md", True),
+    (".specify/workflows/workflow-registry.json", True),
+    (".specify/memory/.constitution-template.json", True),
+    (".specify/memory/constitution.md", False),
+)
+# Project-owned files that `specify init --force` would overwrite.
+PRESERVED = (".specify/memory/constitution.md",)
+WORKFLOW = "agentic-feature"
+INSTALLED = (
+    ".agentic",
+    ".specify/scripts",
+    ".specify/integrations",
+    ".specify/extensions",
+    ".specify/presets",
+    ".specify/workflows",
+    ".specify/templates",
+    ".specify/integration.json",
+    ".specify/init-options.json",
+    ".specify/bundle-records.json",
+    ".specify/extensions.yml",
+    ".specify/.gitignore",
+    ".specify/memory/.constitution-template.json",
+)
+# Installed skill directories, by prefix.
+SKILLS = tuple(
+    f"{integration}/skills/{prefix}-*"
+    for integration in (".agents", ".claude")
+    for prefix in ("agentic", "speckit")
+)
+# Local state a worktree must not copy from its primary checkout.
+LOCAL_STATE = (
+    ".specify/workflows/runs",
+    ".specify/workflows/.cache",
+    ".specify/extensions/.cache",
+    ".specify/extensions/.backup",
+)
+
+
+class Setup:
+    """One installation of the standard into one project checkout."""
+
+    def __init__(self, project: Path) -> None:
+        """Read the project's optional agentic.toml."""
+        self.root = project
+        self.stamp = project / ".agentic/.setup-version"
+        config = project / "agentic.toml"
+        self.config_bytes = config.read_bytes() if config.is_file() else b""
+        self.config = tomllib.loads(self.config_bytes.decode())
+
+    def fingerprint(self) -> str:
+        """Digest of the standard and agentic.toml; any change reinstalls."""
+        digest = hashlib.sha256(self.config_bytes)
+        for base in (STANDARD / "tools", STANDARD / "templates"):
+            for path in sorted(base.rglob("*")):
+                if "__pycache__" in path.parts or path.is_dir():
+                    continue
+                content = (
+                    str(path.readlink()).encode()
+                    if path.is_symlink()
+                    else path.read_bytes()
+                )
+                name = str(path.relative_to(STANDARD)).encode()
+                digest.update(name + b"\0" + content + b"\0")
+        return f"{VERSION} {digest.hexdigest()}"
+
+    def run(self, *args: str, cwd: Path | None = None) -> None:
+        """Run a command whose executable and sources this script fixes."""
+        subprocess.run(args, cwd=cwd or self.root, check=True)  # noqa: S603
+
+    def specify(self, *args: str) -> None:
+        """Run the pinned Spec Kit CLI."""
+        self.run("uvx", "--from", f"specify-cli=={VERSION}", "specify", *args)
+
+    def check_ignored(self) -> None:
+        """Refuse unless the project ignores exactly the installed paths."""
+        wrong = [
+            path
+            for path, ignored in IGNORE_PROBES
+            if ignored
+            != (
+                subprocess.run(  # noqa: S603
+                    ["git", "check-ignore", "-q", "--no-index", path],  # noqa: S607
+                    cwd=self.root,
+                    check=False,
+                ).returncode
+                == 0
+            )
+        ]
+        if wrong:
+            message = (
+                f"Installed paths are not ignored correctly ({', '.join(wrong)}). "
+                f"Add this block to {self.root / '.gitignore'}:\n\n{GITIGNORE}"
+            )
+            raise RuntimeError(message)
+
+    def installed(self, root: Path) -> list[Path]:
+        """Every path setup owns in a checkout, existing or not."""
+        policies = (STANDARD / "templates/policies").glob("*.md")
+        return [
+            *(path for pattern in SKILLS for path in root.glob(pattern)),
+            *(root / "docs/policies" / policy.name for policy in policies),
+            *(root / name for name in INSTALLED),
+        ]
+
+    def remove_installed(self) -> None:
+        """Delete the previous installation, keeping run state."""
+        for path in self.installed(self.root):
+            if path == self.root / ".specify/workflows" and path.is_dir():
+                # Keep run state so a reinstall never loses a paused run.
+                for child in path.iterdir():
+                    if child.name != "runs":
+                        _remove(child)
+            else:
+                _remove(path)
+
+    def matching_primary(self) -> Path | None:
+        """Return the primary checkout when it holds this exact installation."""
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],  # noqa: S607
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        primary = Path(common).resolve().parent
+        stamp = primary / self.stamp.relative_to(self.root)
+        if (
+            primary == self.root.resolve()
+            or not stamp.is_file()
+            or stamp.read_text().strip() != self.fingerprint()
+        ):
+            return None
+        return primary
+
+    def copy_from_primary(self) -> bool:
+        """Copy a matching primary checkout's installation into this worktree."""
+        primary = self.matching_primary()
+        if primary is None:
+            return False
+        ignore = shutil.ignore_patterns(*(Path(p).name for p in LOCAL_STATE))
+        for source in self.installed(primary):
+            if not os.path.lexists(source):
+                continue
+            target = self.root / source.relative_to(primary)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_symlink():
+                target.symlink_to(source.readlink())
+            elif source.is_dir():
+                shutil.copytree(source, target, symlinks=True, ignore=ignore)
+            else:
+                shutil.copy2(source, target)
+        sys.stdout.write("Copied the installation from the primary checkout\n")
+        return True
+
+    def install_spec_kit(self, temporary: Path) -> None:
+        """Install the pinned Spec Kit sources and apply the patches."""
+        for executable in ("uvx", "patch"):
+            if shutil.which(executable) is None:
+                message = f"Required setup tool is missing: {executable}"
+                raise RuntimeError(message)
+        sources = {name: _fetch_source(name, temporary) for name in SOURCES}
+        preserved = {
+            path: (self.root / path).read_bytes()
+            for path in PRESERVED
+            if (self.root / path).is_file()
+        }
+        try:
+            self.specify(
+                "init",
+                "--here",
+                "--force",
+                "--non-interactive",
+                "--ignore-agent-tools",
+                "--integration",
+                "codex",
+                "--integration-options=--skills",
+                "--script",
+                "py",
+            )
+        finally:
+            for path, content in preserved.items():
+                (self.root / path).write_bytes(content)
+        self.specify("integration", "install", "claude", "--script", "py")
+        for bundle in ("bugfix", "assess"):
+            self.specify("bundle", "install", str(sources["core"] / "bundles" / bundle))
+        for extension in ("multi-model-review", "status-report", "intent"):
+            self.specify("extension", "add", str(sources[extension]), "--dev")
+        self.specify("preset", "add", "--dev", str(sources["preset"]))
+        self.run(
+            "patch", "-p1", "--batch", "--forward", "-i", str(PATCHES / "skills.patch")
+        )
+        self.complete_claude_extension_skills()
+        self.run(
+            "patch",
+            "-p1",
+            "--batch",
+            "--forward",
+            "-i",
+            str(PATCHES / "preset.patch"),
+            cwd=self.root / ".specify/presets/explicit-task-dependencies",
+        )
+
+    def complete_claude_extension_skills(self) -> None:
+        """Add the extension skills Spec Kit installs only for Codex."""
+        # Spec Kit 1.0.11 installs extension skills only for the default integration.
+        # Claude skills use slash command names, except intent, which keeps
+        # Codex's `$speckit-` names.
+        for source in (self.root / ".agents/skills").glob("speckit-*/SKILL.md"):
+            target = self.root / ".claude/skills" / source.parent.name / "SKILL.md"
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = source.read_text()
+            if not source.parent.name.startswith("speckit-intent-"):
+                content = content.replace("$speckit-", "/speckit-")
+            target.write_text(content)
+
+    def install_standard(self) -> None:
+        """Install the standard's tools, skills, policies and workflow."""
+        agentic = self.root / ".agentic"
+        shutil.copytree(
+            STANDARD / "tools/spec_workflow",
+            agentic / "spec_workflow",
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        settings = agentic / "spec_workflow/claude-settings.json"
+        settings.write_text(
+            json.dumps(
+                merge_permissions(json.loads(settings.read_text()), self.config),
+                indent=2,
+            )
+            + "\n"
+        )
+        shutil.copy2(
+            STANDARD / "tools/feature_intake.py", agentic / "feature_intake.py"
+        )
+        policies = self.root / "docs/policies"
+        policies.mkdir(parents=True, exist_ok=True)
+        for policy in (STANDARD / "templates/policies").glob("*.md"):
+            shutil.copy2(policy, policies / policy.name)
+        for skill in sorted((STANDARD / "templates/skills").glob("*/")):
+            shutil.copytree(skill, self.root / ".agents/skills" / skill.name)
+            link = self.root / ".claude/skills" / skill.name
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(Path("../../.agents/skills") / skill.name)
+        for template in (STANDARD / "templates/spec-kit/templates").glob("*.md"):
+            shutil.copy2(template, self.root / ".specify/templates" / template.name)
+        self.specify(
+            "workflow",
+            "add",
+            "--dev",
+            str(STANDARD / "templates/spec-kit/workflows/feature"),
+        )
+
+    def main(self) -> None:
+        """Install unless this checkout already holds the same installation."""
+        if (
+            self.stamp.is_file()
+            and self.stamp.read_text().strip() == self.fingerprint()
+        ):
+            sys.stdout.write("The standard is already set up in this checkout\n")
+            return
+        self.check_ignored()
+        self.remove_installed()
+        if not self.copy_from_primary():
+            with tempfile.TemporaryDirectory(prefix="agentic-setup-") as directory:
+                self.install_spec_kit(Path(directory))
+            self.install_standard()
+        self.stamp.parent.mkdir(exist_ok=True)
+        self.stamp.write_text(self.fingerprint() + "\n")
+        sys.stdout.write(
+            f"Spec Kit {VERSION} and the standard are set up.\n"
+            "Review the installed changes, then run `agentic-workflow trust` "
+            "before the next workflow run.\n"
+        )
+
+
+def merge_permissions(settings: dict, config: dict) -> dict:
+    """Append the project's extra allow/deny rules to the base settings."""
+    extra = config.get("agents", {}).get("permissions", {})
+    permissions = settings["permissions"]
+    for key in ("allow", "deny"):
+        rules = extra.get(f"extra_{key}", [])
+        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+            message = f"agents.permissions.extra_{key} must be a list of strings"
+            raise ValueError(message)
+        permissions[key] = list(dict.fromkeys([*permissions[key], *rules]))
+    return settings
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _fetch_source(name: str, temporary: Path) -> Path:
+    repository, commit = SOURCES[name]
+    archive = temporary / f"{name}.tar.gz"
+    urllib.request.urlretrieve(
+        f"https://github.com/{repository}/archive/{commit}.tar.gz", archive
+    )
+    destination = temporary / name
+    destination.mkdir()
+    with tarfile.open(archive, "r:gz") as contents:
+        contents.extractall(destination, filter="data")
+    children = list(destination.iterdir())
+    if len(children) != 1 or not children[0].is_dir():
+        message = f"Unexpected archive layout for {repository}@{commit}"
+        raise RuntimeError(message)
+    return children[0]
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    try:
+        Setup(parser.parse_args().project.resolve()).main()
+    except (RuntimeError, ValueError) as error:
+        sys.exit(f"setup: {error}")
