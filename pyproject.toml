@@ -2,7 +2,7 @@
 [tool.ruff]
 target-version = "py311"
 # Extension-less entry points are Python scripts too.
-extend-include = ["tools/setup", "tools/agentic-workflow"]
+extend-include = ["tools/setup", "tools/ballast"]
 namespace-packages = ["tests", "tools"]
 
 [tool.ruff.lint]

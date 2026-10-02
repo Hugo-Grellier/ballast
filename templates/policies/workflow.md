@@ -26,7 +26,7 @@ Classify the change in its issue/PR before implementation. Raise risk if the act
 
 ## Model routing
 
-When the operator can choose the Claude Code or Codex model, follow the [model routing policy](model-routing.md). Route from workflow stage, risk and boundary triggers first; use the cheapest sufficient capability profile and reasoning effort. Only ambiguous free-form work needs the [model-routing classifier skill](../../.agents/skills/agentic-model-routing/SKILL.md). Model strength never replaces R2 human approval, deterministic verification or required specialist review.
+When the operator can choose the Claude Code or Codex model, follow the [model routing policy](model-routing.md). Route from workflow stage, risk and boundary triggers first; use the cheapest sufficient capability profile and reasoning effort. Only ambiguous free-form work needs the [model-routing classifier skill](../../.agents/skills/ballast-model-routing/SKILL.md). Model strength never replaces R2 human approval, deterministic verification or required specialist review.
 
 For significant work, prefer the other provider for independent plan/code/convergence review when practical and record the actual author/reviewer model, routing profile, effort and any escalation in the PR during the initial routing pilot. Subscription-authenticated clients are the default; do not introduce paid API calls merely to automate routing.
 
@@ -36,13 +36,13 @@ Use independent reviewers where possible. A reviewer reports concrete findings w
 
 | Change | Required reviews |
 | --- | --- |
-| Normal feature | [Engineering/correctness](../../.agents/skills/agentic-engineering-review/SKILL.md) + [test](../../.agents/skills/agentic-test-review/SKILL.md) |
-| Authentication, authorization, access rules, user-facing search/retrieval, secrets, agent authority | Engineering + test + [security](../../.agents/skills/agentic-security-review/SKILL.md) |
+| Normal feature | [Engineering/correctness](../../.agents/skills/ballast-engineering-review/SKILL.md) + [test](../../.agents/skills/ballast-test-review/SKILL.md) |
+| Authentication, authorization, access rules, user-facing search/retrieval, secrets, agent authority | Engineering + test + [security](../../.agents/skills/ballast-security-review/SKILL.md) |
 | Resource identity or architecture boundary | Engineering + test + architecture review against the relevant ADR or architecture section; add security if disclosure changes |
-| Significant dependency or lockfile change | [Dependency evaluation](../../.agents/skills/agentic-dependency-evaluation/SKILL.md); [migration](../../.agents/skills/agentic-dependency-migration/SKILL.md) for foundational replacement |
-| Database migration | [Database migration](../../.agents/skills/agentic-database-migration/SKILL.md) + test; add security for permissions or access rules |
-| User, configuration or API behavior | [Documentation](../../.agents/skills/agentic-documentation-review/SKILL.md) |
-| Significant feature before PR | Spec Kit converge + [spec reconciliation](../../.agents/skills/agentic-spec-reconciliation/SKILL.md) |
+| Significant dependency or lockfile change | [Dependency evaluation](../../.agents/skills/ballast-dependency-evaluation/SKILL.md); [migration](../../.agents/skills/ballast-dependency-migration/SKILL.md) for foundational replacement |
+| Database migration | [Database migration](../../.agents/skills/ballast-database-migration/SKILL.md) + test; add security for permissions or access rules |
+| User, configuration or API behavior | [Documentation](../../.agents/skills/ballast-documentation-review/SKILL.md) |
+| Significant feature before PR | Spec Kit converge + [spec reconciliation](../../.agents/skills/ballast-spec-reconciliation/SKILL.md) |
 
 ## Deterministic gates
 

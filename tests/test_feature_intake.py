@@ -246,7 +246,7 @@ class FeatureIntakeTests(unittest.TestCase):
                 self.assertEqual(state["issues"]["89"]["labels"], [{"name": "epic"}])
 
     def test_conflicting_child_and_scope_are_not_overwritten(self) -> None:
-        marker = "<!-- agentic-intake: parent=#89; slug=text-import -->"
+        marker = "<!-- ballast-intake: parent=#89; slug=text-import -->"
         self.state["issues"]["200"] = issue(200, body=marker)
         self.state["issues"]["200"]["title"] = "Import text"
         self.state["issues"]["201"] = issue(201, body=marker)

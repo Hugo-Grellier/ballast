@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless agent wrapper for the agentic-feature workflow.
+"""Headless agent wrapper for the ballast-feature workflow.
 
 Spec Kit 1.0.11 runs `claude -p ...` or `codex exec ...` for command steps and
 only records the exit code. The launcher points SPECKIT_INTEGRATION_<KEY>_
@@ -267,7 +267,7 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
     """Run the real agent CLI with bounded permissions and persistent logs."""
     integration = Path(sys.argv[0]).name
     if integration not in {"claude", "codex"}:
-        sys.stderr.write("invoke through .agentic/spec_workflow/bin/{claude,codex}\n")
+        sys.stderr.write("invoke through .ballast/spec_workflow/bin/{claude,codex}\n")
         return EXIT_USAGE
     try:
         argv = [
@@ -298,7 +298,7 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
     # before the check below, the trusted launcher still refuses to continue.
     in_progress = state_dir(root) / IN_PROGRESS
     in_progress.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    unit = f"agentic-agent-{key}-{log_dir.name}.scope"
+    unit = f"ballast-agent-{key}-{log_dir.name}.scope"
     if not SCOPE.fullmatch(unit):
         message = f"invalid agent scope name {unit!r}"
         raise ValueError(message)

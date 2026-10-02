@@ -1,5 +1,5 @@
 ---
-name: agentic-database-migration
+name: ballast-database-migration
 description: Review or plan a database schema or data migration, especially changes to identity, ownership, access rules, or grants.
 ---
 

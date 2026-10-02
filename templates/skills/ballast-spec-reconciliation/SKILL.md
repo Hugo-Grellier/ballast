@@ -1,5 +1,5 @@
 ---
-name: agentic-spec-reconciliation
+name: ballast-spec-reconciliation
 description: Independently compare a significant feature's spec, implementation, tests, and documentation before its PR; classify convergence and actionable gaps.
 ---
 

@@ -1,16 +1,16 @@
 #!/usr/bin/python3 -IS
-"""Trusted operator entry point for the agentic-feature workflow.
+"""Trusted operator entry point for the ballast-feature workflow.
 
 A headless agent can rewrite anything in the checkout, including run.py and
 ledger.py, so they cannot check their own integrity. The global
-`agentic-workflow` command (tools/agentic-workflow in the standard) runs this
+`ballast` command (tools/ballast in the standard) runs this
 file from the pinned standard version, outside the checkout, where no agent
 can write. From the checkout root:
 
-    agentic-workflow trust              # after reviewing the checkout
-    agentic-workflow run start|resume ...
-    agentic-workflow ledger snapshot|check|record ...
-    agentic-workflow discard-runs       # after an unfinished agent step
+    ballast trust              # after reviewing the checkout
+    ballast run start|resume ...
+    ballast ledger snapshot|check|record ...
+    ballast discard-runs       # after an unfinished agent step
 
 `trust` records digests of every executable workflow input in your state
 directory. `run` and `ledger` refuse unless those inputs still match, no
@@ -31,13 +31,13 @@ import sys
 import time
 from pathlib import Path
 
-TAMPER_MARKER = "AGENTIC_TAMPERED"
+TAMPER_MARKER = "BALLAST_TAMPERED"
 IN_PROGRESS = "in-progress"
 TRUSTED = "trusted.json"
 # Executable workflow inputs: the launcher's own tools, Spec Kit's engine
 # configuration, extensions and scripts, and the environment validators and
 # operator checks may run.
-BASES = ("agentic.toml", ".agentic/spec_workflow", ".specify", ".venv")
+BASES = ("ballast.toml", ".ballast/spec_workflow", ".specify", ".venv")
 # Written between steps by Spec Kit, the wrapper and validators, or holding no
 # executable content; the wrapper checks run state around every agent step.
 SKIPPED = (
@@ -51,7 +51,7 @@ SKIPPED = (
 # Agents run in a systemd user scope: a cgroup they cannot leave, because
 # Codex's sandbox denies writes to /sys/fs/cgroup. Killing the scope stops every
 # process the agent started, even after its wrapper was killed.
-SCOPE = re.compile(r"agentic-agent-[A-Za-z0-9_.-]{1,200}\.scope")
+SCOPE = re.compile(r"ballast-agent-[A-Za-z0-9_.-]{1,200}\.scope")
 SCOPE_SECONDS = 10.0
 # `systemctl is-active` exit status for a stopped unit (3) or a collected one
 # (4); a manager error exits 1 without a state.
@@ -65,7 +65,7 @@ def state_dir(root: Path) -> Path:
     """Per-checkout operator state, outside every agent's write authority."""
     base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state"
     key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
-    return Path(base) / "agentic" / key
+    return Path(base) / "ballast" / key
 
 
 def digests(root: Path, bases: list[Path], skip: list[Path]) -> dict[str, str]:
@@ -231,7 +231,7 @@ def _trust(root: Path, state: Path) -> int:
 def main(argv: list[str]) -> int:
     """Verify the checkout, then run a workflow tool or record a baseline."""
     root = Path.cwd()
-    if not (root / ".agentic/spec_workflow/run.py").is_file() or not argv:
+    if not (root / ".ballast/spec_workflow/run.py").is_file() or not argv:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
     if argv[0] in {"trust", "discard-runs"}:
@@ -242,10 +242,10 @@ def main(argv: list[str]) -> int:
         return EXIT_REFUSED
     reason = _refusal(root)
     if reason:
-        sys.stderr.write(f"agentic-workflow: refusing: {reason}\n")
+        sys.stderr.write(f"ballast: refusing: {reason}\n")
         return EXIT_REFUSED
     flags, script = COMMANDS[argv[0]]
-    tool = str(root / ".agentic/spec_workflow" / script)
+    tool = str(root / ".ballast/spec_workflow" / script)
     os.execv(sys.executable, [sys.executable, flags, tool, *argv[1:]])  # noqa: S606
     return EXIT_REFUSED  # unreachable
 

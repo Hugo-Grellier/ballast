@@ -86,9 +86,9 @@ If a parent draft was already written, mark it superseded and preserve its Git
 history; active requirements move to child specs, while the parent Issue stays
 the coordination record.
 
-The [feature-intake skill](../../.agents/skills/agentic-feature-intake/SKILL.md) applies
+The [feature-intake skill](../../.agents/skills/ballast-feature-intake/SKILL.md) applies
 this gate before the existing workflow. It uses
-`.agentic/feature_intake.py --repo OWNER/REPO preflight N` as a read-only leaf
+`.ballast/feature_intake.py --repo OWNER/REPO preflight N` as a read-only leaf
 check before feature handoff. The helper rejects explicit Epic signals, closed
 or blocked issues, and missing acceptance criteria. Scope judgment still
 requires the issue and its accepted context; a mechanical check cannot decide
@@ -107,7 +107,7 @@ Project membership. `gh` authentication is required for live GitHub writes.
 
 | Work | Path |
 |---|---|
-| New feature or meaningful behavior change | Full `agentic-feature` lifecycle below. |
+| New feature or meaningful behavior change | Full `ballast-feature` lifecycle below. |
 | Small bug with a narrow fix | Official `bugfix` bundle: assess the report, review its proposed fix at a human gate, then fix and verify. Keep the Issue as the tracker and avoid creating a full feature spec. Promote to a feature if intent, contract, scope, or architecture changes. |
 | Investigation, spike, or architectural research | Official `assess` bundle for intake, research, shaping, and a human verdict. If findings should persist, write a focused note under `docs/research/`. A `go` verdict is a request to start a feature spec, not approval to implement. |
 
@@ -209,7 +209,7 @@ PR → Issue update → human merge review
    migration/security impact, and limitations. Human review and merge remain
    required at every risk level.
 
-The native `.specify/workflows/agentic-feature/workflow.yml` makes these
+The native `.specify/workflows/ballast-feature/workflow.yml` makes these
 stages repeatable and pauses at intent, plan, task-readiness, implementation
 review, spec-reconciliation, and final-acceptance gates. With
 `on_reject: retry`, rejection pauses at the **same gate**; resuming does not
@@ -229,7 +229,7 @@ always supported.
 
 A command step's exit code 0 only means the agent process ended. A phase
 succeeds only when its artifact contract holds: every producer is followed by a
-`validate-*` shell step running `.agentic/spec_workflow/artifacts.py`, and a
+`validate-*` shell step running `.ballast/spec_workflow/artifacts.py`, and a
 failed contract fails the run, so no later gate or command is reachable. Checks
 are cumulative: each re-verifies the upstream artifacts it relies on. The
 validator reads `feature_directory` from the run's inputs, requires
@@ -251,32 +251,32 @@ gates show the artifact they approve (Spec Kit truncates the display at 200
 lines; open the file for the rest). Peer reviews and spec reconciliation are
 **manual**: the gates say so and the workflow does not claim they ran.
 Approving an intent change outside the gate means reviewing `spec.md` and
-running `.agentic/spec_workflow/artifacts.py record-intent --feature <dir>`.
+running `.ballast/spec_workflow/artifacts.py record-intent --feature <dir>`.
 Human-only steps a headless agent cannot finish—clarification questions,
 decision resolutions, convergence verdicts—surface as a failed validation;
 complete them interactively and resume.
 
 **Trusted launcher.** A headless agent can rewrite any file in the checkout,
 including the launcher itself, so the operator entry point lives outside it.
-The global `agentic-workflow` command runs the launcher of the standard version
-pinned in `agentic.toml`, from the copy `agentic-workflow setup` fetched into
-`$XDG_DATA_HOME/agentic/standard/<ref>/`, never from the checkout. Install that
+The global `ballast` command runs the launcher of the standard version
+pinned in `ballast.toml`, from the copy `ballast setup` fetched into
+`$XDG_DATA_HOME/ballast/standard/<ref>/`, never from the checkout. Install that
 command once per machine from a reviewed checkout of the standard.
 
 From the checkout root, after reviewing it (for example right after a pull, a
 dependency sync, or a `tools/setup` reinstall), record a baseline with
-`agentic-workflow trust`. It stores the digests of `agentic.toml`,
-`.agentic/spec_workflow/`, `.specify/` (except run state, logs,
+`ballast trust`. It stores the digests of `ballast.toml`,
+`.ballast/spec_workflow/`, `.specify/` (except run state, logs,
 `feature.json`, bug reports and caches), `.venv` and, in a linked worktree, the
 `.git` pointer file (a redirected pointer could make the operator's Git run a
 forged repository's configuration) under
-`$XDG_STATE_HOME/agentic/` (default `~/.local/state`), where no agent can
-write. `agentic-workflow run ...` and `agentic-workflow ledger ...` then
+`$XDG_STATE_HOME/ballast/` (default `~/.local/state`), where no agent can
+write. `ballast run ...` and `ballast ledger ...` then
 refuse, before executing any checkout code, if those inputs changed since
-`trust`, if `AGENTIC_TAMPERED` exists, or if an agent step never finished its
+`trust`, if `BALLAST_TAMPERED` exists, or if an agent step never finished its
 check (for example because the agent killed the wrapper). Saved run state is
 not in the baseline, so after an unfinished step `trust` also refuses: review
-the checkout, run `agentic-workflow discard-runs`, then `trust` and start a
+the checkout, run `ballast discard-runs`, then `trust` and start a
 fresh run. `discard-runs` first kills the unfinished step's agent scope (see
 below) and refuses unless systemd confirms it is gone, so no surviving agent
 process can rewrite state afterwards; only then does it delete the local run
@@ -287,18 +287,18 @@ under the launcher's own `/usr/bin/python3 -I` and `ledger.py` under `-I -S`.
 Bytecode is excluded from the baseline because no workflow tool reads it.
 
 **Headless permissions.** Start and resume runs only with
-`agentic-workflow run`; a `preflight` step fails otherwise. It routes
-Spec Kit's dispatch through `.agentic/spec_workflow/agent.py`, which refuses
+`ballast run`; a `preflight` step fails otherwise. It routes
+Spec Kit's dispatch through `.ballast/spec_workflow/agent.py`, which refuses
 any `dangerously`/`bypassPermissions`/`danger-full-access` flag, including
 from `SPECKIT_INTEGRATION_*_EXTRA_ARGS`:
 
 - **Claude** runs `claude -p` with `--permission-mode acceptEdits`,
   `--permission-prompts none` (anything not allowed is denied, never
   prompted), `--setting-sources project`, `--strict-mcp-config`, and
-  `.agentic/spec_workflow/claude-settings.json`. User settings, plugins, hooks,
+  `.ballast/spec_workflow/claude-settings.json`. User settings, plugins, hooks,
   and MCP servers are not loaded. File edits are accepted inside the checkout
-  except `.env`/`*.local.md`, CI and agent configuration, `agentic.toml`, the
-  workflow machinery itself, and paths the project denies in `agentic.toml`;
+  except `.env`/`*.local.md`, CI and agent configuration, `ballast.toml`, the
+  workflow machinery itself, and paths the project denies in `ballast.toml`;
   Bash is limited to the Spec Kit scripts, read-only Git, and the commands the
   project allows there.
 - **Codex** runs `codex exec --sandbox workspace-write`: writes are confined to
@@ -308,7 +308,7 @@ from `SPECKIT_INTEGRATION_*_EXTRA_ARGS`:
   override its sandbox. Codex cannot express Claude's per-path denials, so the
   wrapper hashes the run state, `.specify/workflow-state/<run>/`, the installed
   Spec Kit configuration, extensions, scripts and workflows under `.specify/`
-  (except `feature.json`, other runs and caches), `.agentic/spec_workflow/`
+  (except `feature.json`, other runs and caches), `.ballast/spec_workflow/`
   including its bytecode, and the whole `.venv` before and after every agent
   call and fails the step if any of them changed. Still review the diff for CI
   changes.
@@ -331,14 +331,14 @@ site-packages `.pth` code cannot run, whereas `-I -B` alone still runs it and
 still reads existing bytecode. The launcher and ledger never read checkout
 bytecode (`sys.pycache_prefix` is `os.devnull`).
 
-A protected change leaves an untracked `AGENTIC_TAMPERED` file at the
+A protected change leaves an untracked `BALLAST_TAMPERED` file at the
 checkout root, listing the changed paths, and the trusted launcher refuses to
 continue. `run.py` and `ledger.py` also check it before importing other checkout
 modules, but only the installed launcher is outside agent reach. A planted
 `.pth` runs in anything started from `.venv`, so after this failure run nothing
 from the checkout: inspect the listed files and `git status`, restore them with
 Git, remove `__pycache__` directories, delete and recreate `.venv` with the
-project's locked dependency install, delete the marker, and `agentic-workflow
+project's locked dependency install, delete the marker, and `ballast
 trust` again. Run one headless workflow per
 checkout at a time: the check covers every run's saved state, so a concurrent
 run would fail as tampered.
@@ -354,7 +354,7 @@ use Codex, whose sandbox confines writes and disables network.
 Editing source, tests, docs, and spec artifacts inside that worktree is normal
 R1-capable implementation, not R2 agent write authority.
 
-**Resume and integration switching.** `agentic-workflow run resume <run> -i
+**Resume and integration switching.** `ballast run resume <run> -i
 integration=claude|codex` may change only the integration. Spec Kit re-executes
 only the paused or failed step and does not replay earlier validations; the
 cumulative checks at every later boundary re-verify existing artifacts before
@@ -383,14 +383,14 @@ Claude and Codex integrations; and an untruncated or paged `show_file`.
 **Restarting a corrupted run.** Treat a run that completed steps without
 their artifacts (such as one from before this contract) as invalid evidence.
 Do not edit its `state.json`. Inspect the feature directory, remove or fix
-untrusted artifacts, and start a fresh run with `agentic-workflow run start`.
+untrusted artifacts, and start a fresh run with `ballast run start`.
 
 ## Local agent-run evidence
 
 The pilot ledger lives in the clone's Git common directory at
 `speckit-runs/<run-id>/events.jsonl`. It is outside worktrees and Git tracking;
 removing a worktree preserves the ledger, while deleting the clone removes it.
-`.agentic/spec_workflow/run.py` archives and imports runner events after each
+`.ballast/spec_workflow/run.py` archives and imports runner events after each
 start or resume. Import failures are reported with the original workflow exit
 code. A skipped import cannot reconstruct an earlier gate choice from a later
 state snapshot. Each import records the runner's end-of-invocation artifact
@@ -407,14 +407,14 @@ version; earlier mapped checks become stale. Suite-wide check commands do not
 by themselves prove a particular AC. Examples:
 
 ```bash
-agentic-workflow ledger snapshot RUN_ID
-agentic-workflow ledger check RUN_ID AC-001 tests.test_agent_run_ledger.LedgerTests.test_append_is_ordered_idempotent_and_outside_worktree
-agentic-workflow ledger report --run RUN_ID
-agentic-workflow ledger report --all --json
+ballast ledger snapshot RUN_ID
+ballast ledger check RUN_ID AC-001 tests.test_agent_run_ledger.LedgerTests.test_append_is_ordered_idempotent_and_outside_worktree
+ballast ledger report --run RUN_ID
+ballast ledger report --all --json
 ```
 
-Use `agentic-workflow ledger record RUN_ID KIND --source SOURCE --data JSON` for observations
-the runner cannot see. The [schema](../../.agentic/spec_workflow/ledger-schema.md)
+Use `ballast ledger record RUN_ID KIND --source SOURCE --data JSON` for observations
+the runner cannot see. The [schema](../../.ballast/spec_workflow/ledger-schema.md)
 lists the allowed fields and provenance limits. Record actual author and
 reviewer identities, review verdicts and findings, route choices, human
 recovery, and reliable client-exposed usage when available. Operator-attested
@@ -536,14 +536,14 @@ The bugfix and assess bundles are official, opt-in Spec Kit bundles. Community
 extensions are independently maintained and are not endorsed by Spec Kit;
 pin versions and inspect updates before upgrading.
 
-Run `agentic-workflow setup` in each fresh checkout before using these
+Run `ballast setup` in each fresh checkout before using these
 commands. Linked worktrees copy a matching primary checkout's installation.
 Other checkouts install the pinned upstream sources and apply the standard's
 task and skill patches. Every installed file is ignored; only the constitution,
-`agentic.toml` and `docs/policies/project/` remain in Git. A worktree manager
+`ballast.toml` and `docs/policies/project/` remain in Git. A worktree manager
 such as Orca can run the same command as its worktree setup script. To upgrade,
-change the pinned standard version in `agentic.toml` and rerun setup; it
-reinstalls whenever the standard or `agentic.toml` changes. Do not run `specify
+change the pinned standard version in `ballast.toml` and rerun setup; it
+reinstalls whenever the standard or `ballast.toml` changes. Do not run `specify
 integration upgrade --force`: it discards the standard's patches, which
 `specify integration status` reports as intentionally modified managed files.
 
@@ -553,12 +553,12 @@ Create a candidate Issue, classify it using the scope gate above, then start
 the native workflow only for a feature Issue:
 
 ```bash
-agentic-workflow trust   # after reviewing the checkout
-agentic-workflow run start \
+ballast trust   # after reviewing the checkout
+ballast run start \
   -i idea="Issue #NNN: import a transcript as reviewable session evidence" \
   -i feature_directory=specs/NNN-session-text-import \
   -i integration=claude
-agentic-workflow run resume <run-id> -i integration=claude
+ballast run resume <run-id> -i integration=claude
 ```
 
 At each gate, review the artifacts and record the result before resuming. To

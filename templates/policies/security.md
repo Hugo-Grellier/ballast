@@ -1,6 +1,6 @@
 # Security policy
 
-Read for authentication, authorization, data visibility, search/retrieval, user-facing data, file paths, integrations, secrets, or agent tools. The [security review skill](../../.agents/skills/agentic-security-review/SKILL.md) applies when the [review matrix](workflow.md#review-triggers) calls for it. Project-specific rules live in [`project/security.md`](project/security.md) when the project provides one; they extend this policy and win on conflict. The project file names its confidentiality boundary and trusted integrations.
+Read for authentication, authorization, data visibility, search/retrieval, user-facing data, file paths, integrations, secrets, or agent tools. The [security review skill](../../.agents/skills/ballast-security-review/SKILL.md) applies when the [review matrix](workflow.md#review-triggers) calls for it. Project-specific rules live in [`project/security.md`](project/security.md) when the project provides one; they extend this policy and win on conflict. The project file names its confidentiality boundary and trusted integrations.
 
 ## Confidentiality boundary
 

@@ -1,5 +1,5 @@
 ---
-name: agentic-security-review
+name: ballast-security-review
 description: Review changes that affect authentication, authorization, data visibility, search, paths, secrets, external integrations, or agent authority.
 ---
 

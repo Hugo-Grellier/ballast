@@ -1,5 +1,5 @@
 ---
-name: agentic-model-routing
+name: ballast-model-routing
 description: Classify an ambiguous engineering request into a capability profile and reasoning effort without choosing a provider or bypassing workflow gates.
 ---
 

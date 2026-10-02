@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Start or resume agentic-feature with bounded headless agents.
+"""Start or resume ballast-feature with bounded headless agents.
 
-    agentic-workflow run start -i idea="Issue #N: ..." \
+    ballast run start -i idea="Issue #N: ..." \
         -i feature_directory=specs/N-slug [-i integration=claude|codex]
-    agentic-workflow run resume RUN_ID [-i integration=claude|codex]
+    ballast run resume RUN_ID [-i integration=claude|codex]
 
-`agentic-workflow` is the installed copy of launcher.py, which verifies the
+`ballast` is the installed copy of launcher.py, which verifies the
 checkout before executing this file; see docs/policies/spec-kit-workflow.md.
 
 Routes Spec Kit's Claude/Codex dispatch through `bin/` (see agent.py), assigns
@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # Same name as agent.TAMPER_MARKER. Checked before importing any other checkout
 # module, which a failed protected check means an agent may have rewritten.
-TAMPER_MARKER = "AGENTIC_TAMPERED"
+TAMPER_MARKER = "BALLAST_TAMPERED"
 TAMPER_MESSAGE = (
     f"{TAMPER_MARKER} exists: an agent changed protected workflow files. "
     "Restore them and recreate .venv, then delete the marker.\n"
@@ -48,9 +48,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
-BIN = ROOT / ".agentic/spec_workflow/bin"
+BIN = ROOT / ".ballast/spec_workflow/bin"
 EXIT_INTERRUPTED = 130
-WORKFLOW = "agentic-feature"
+WORKFLOW = "ballast-feature"
 RESUMABLE_INPUTS = {"integration"}
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -140,7 +140,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
         command = [specify, "workflow", "resume", *options]
     env = {
         **os.environ,
-        "AGENTIC_SPEC_WORKFLOW": "1",
+        "BALLAST_SPEC_WORKFLOW": "1",
         "SPECKIT_WORKFLOW_RUN_ID": run_id,
         "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(BIN / "claude"),
         "SPECKIT_INTEGRATION_CODEX_EXECUTABLE": str(BIN / "codex"),
