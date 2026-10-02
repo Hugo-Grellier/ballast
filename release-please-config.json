@@ -19,5 +19,5 @@
     { "type": "build", "section": "Build System", "hidden": true },
     { "type": "ci", "section": "Continuous Integration", "hidden": true }
   ],
-  "packages": { ".": {} }
+  "packages": { ".": { "initial-version": "0.1.0" } }
 }
