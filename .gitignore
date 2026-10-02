@@ -9,4 +9,6 @@ __pycache__/
 docs/policies/*.md
 .specify/*
 !.specify/memory/
+!.specify/bugs/
+!.specify/assessments/
 .specify/memory/.constitution-template.json
