@@ -1,5 +1,5 @@
 ---
-name: agentic-engineering-review
+name: ballast-engineering-review
 description: Review a feature diff for requirement coverage, architecture, failure behavior, data integrity, and unnecessary complexity; use for correctness or architecture review before a PR.
 ---
 

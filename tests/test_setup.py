@@ -38,7 +38,7 @@ class GitignoreTests(unittest.TestCase):
 
     def test_ignoring_the_constitution_fails(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "constitution.md"):
-            self.check(".agentic/\n.agents/\n.claude/\n.specify/\n")
+            self.check(".ballast/\n.agents/\n.claude/\n.specify/\n")
 
 
 class PermissionTests(unittest.TestCase):
@@ -63,7 +63,7 @@ class LinkTests(unittest.TestCase):
     LAYOUT: ClassVar[dict[str, str]] = {
         "docs/policies/": "templates/policies/",
         ".agents/skills/": "templates/skills/",
-        ".agentic/spec_workflow/": "tools/spec_workflow/",
+        ".ballast/spec_workflow/": "tools/spec_workflow/",
     }
     # Owned by the project, so absent here.
     PROJECT_OWNED = ("docs/policies/project/", ".specify/memory/constitution.md")

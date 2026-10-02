@@ -1,5 +1,5 @@
 ---
-name: agentic-dependency-migration
+name: ballast-dependency-migration
 description: Plan or review replacement of a foundational dependency such as an ORM, framework, transport, or provider SDK.
 ---
 

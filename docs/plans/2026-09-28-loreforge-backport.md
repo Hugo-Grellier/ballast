@@ -34,7 +34,7 @@ Coupling comes from grepping for `loreforge|campaign|foundry|vault|LF-|M1|.venv|
 | `docs/policies/{security,testing,dependencies,migrations,observability}.md` | 5–17 | Generic skeleton plus project boundary lists | `templates/policies/` as the base; the project keeps only `docs/policies/project/<name>.md` |
 | `docs/engineering/workflow.md` (risk R0–R2, review matrix, gates) | 55 | The matrix and procedure are generic. The R2 examples and the `scripts/check`/`verify` commands are project-specific | Generic `templates/policies/workflow.md`; the project's R2 boundary list and gate commands come from config and `docs/policies/project/workflow.md` |
 | `docs/spec-kit-workflow.md` | 527 | ~80 % generic (scope gate, lifecycle, runner contract) | `templates/docs/spec-kit-workflow.md`; the LoreForge architecture areas move to `docs/policies/project/spec-kit-workflow.md` |
-| `.specify/workflows/loreforge-feature/workflow.yml` | 144 | Generic apart from its id | `templates/spec-kit/workflows/feature/workflow.yml` (id `agentic-feature`, or set in config) |
+| `.specify/workflows/loreforge-feature/workflow.yml` | 144 | Generic apart from its id | `templates/spec-kit/workflows/feature/workflow.yml` (id `ballast-feature`, or set in config) |
 | `.specify/templates/{spec,plan,tasks}-template.md` | 469 | Generic (the preset output plus patches) | `templates/spec-kit/templates/` |
 | `.specify/memory/constitution.md` | 20 | **Project-specific** (LF-INV-00x) | Stays in LoreForge. The standard ships `templates/spec-kit/constitution.template.md` |
 | `scripts/spec_workflow/{artifacts,agent,run}.py`, `bin/*`, tests (703) | 908 | Generic. Names, the `LOREFORGE_SPEC_WORKFLOW` env var, `.venv/bin/python` and the temp prefix vary | `tools/spec_workflow/`; the name, env var and python command come from config |
@@ -55,7 +55,7 @@ templates/                      # copied or rendered into the target repo (git-i
   spec-kit/{templates,workflows/feature,patches,constitution.template.md}
   github/pull_request_template.md
 tools/
-  setup                         # replaces LoreForge's setup-speckit; reads agentic.toml
+  setup                         # replaces LoreForge's setup-speckit; reads ballast.toml
   spec_workflow/                # artifacts.py, agent.py, run.py (stdlib only)
   feature_intake.py
 tests/                          # the #104/#105 tests, moved over and de-LoreForged
@@ -63,11 +63,11 @@ tests/                          # the #104/#105 tests, moved over and de-LoreFor
 
 ### Per-project config (committed in the target repo)
 
-The config lives in `agentic.toml` at the repository root.
+The config lives in `ballast.toml` at the repository root.
 
 ```toml
 [standard]
-repo = "Hugo-Grellier/agentic-repo-standard"
+repo = "Hugo-Grellier/ballast"
 ref  = "<sha>"                 # pinned the same way the Spec Kit sources are
 
 [project]
@@ -90,35 +90,35 @@ A generic policy or skill reads `docs/policies/<name>.md` from the standard, whi
 
 ## Phases
 
-1. **Seed the standard (this repo).** Import the generic files from the inventory as-is. Replace `LoreForge`/`loreforge` with config lookups, rename the workflow to `agentic-feature`, and parameterize the env var, marker, python command and permissions. Move the tests with them: 703 + 377 lines, including the fake Spec Kit PTY run. Add `tools/setup`, generalized from `setup-speckit`. Translate `PRODUCT-SPEC.md` to English. Update `README.md`, `TECHNICAL-SPEC.md` §55 and `CHANGELOG.md`. Make a first commit, then tag `v0.1.0`.
-2. **Dry-run on a scratch repo.** Run `tools/setup` on an empty repo, then run `specify workflow run agentic-feature` with the fake integration from the tests. This proves the standard works without LoreForge.
+1. **Seed the standard (this repo).** Import the generic files from the inventory as-is. Replace `LoreForge`/`loreforge` with config lookups, rename the workflow to `ballast-feature`, and parameterize the env var, marker, python command and permissions. Move the tests with them: 703 + 377 lines, including the fake Spec Kit PTY run. Add `tools/setup`, generalized from `setup-speckit`. Translate `PRODUCT-SPEC.md` to English. Update `README.md`, `TECHNICAL-SPEC.md` §55 and `CHANGELOG.md`. Make a first commit, then tag `v0.1.0`.
+2. **Dry-run on a scratch repo.** Run `tools/setup` on an empty repo, then run `specify workflow run ballast-feature` with the fake integration from the tests. This proves the standard works without LoreForge.
 3. **Clean up LoreForge (one PR, R2, because it changes the headless-agent permission source).**
-   - Add `agentic.toml`, pinned to `v0.1.0`.
-   - Delete `scripts/setup-speckit` and `scripts/spec-kit/`; `agentic-workflow setup` replaces them, including as the Orca worktree setup script.
+   - Add `ballast.toml`, pinned to `v0.1.0`.
+   - Delete `scripts/setup-speckit` and `scripts/spec-kit/`; `ballast setup` replaces them, including as the Orca worktree setup script.
    - Delete the vendored files: the generic skills, policy bases, `spec_workflow/*`, `feature_intake.py` and its tests, patches, templates, and `agentic-profile.md`. Add them to `.gitignore`.
    - Turn the project-specific parts into `docs/policies/project/*.md` files: the security boundaries, the R2 list, the architecture areas in `spec-kit-workflow`, and the `claude-settings` extras.
    - Keep `constitution.md`, `acceptance.yml`, the domain skills and `specs/`.
    - Check: `./scripts/check`. Then check that `python3 tools/spec_workflow/artifacts.py convergence --feature specs/103-...` still passes on existing specs. Then do one fresh `run.py start` to the intent gate.
-   - Backward compatibility: the workflow id becomes `agentic-feature` and the launcher variable becomes `AGENTIC_SPEC_WORKFLOW`. No compatibility alias: finish or restart any local `loreforge-feature` run before migrating.
-   - Restore LoreForge's project permissions through `agentic.toml` `extra_allow`/`extra_deny`, since the base list no longer has them: `./scripts/check`, `./scripts/generate-api`, `uv run --locked ruff *`, `uv run --locked ty check*`, `uv run --locked python -m unittest *`, `pnpm --dir web run lint|typecheck|test*`, and deny `Read`/`Edit(./campaigns/**)`.
+   - Backward compatibility: the workflow id becomes `ballast-feature` and the launcher variable becomes `BALLAST_SPEC_WORKFLOW`. No compatibility alias: finish or restart any local `loreforge-feature` run before migrating.
+   - Restore LoreForge's project permissions through `ballast.toml` `extra_allow`/`extra_deny`, since the base list no longer has them: `./scripts/check`, `./scripts/generate-api`, `uv run --locked ruff *`, `uv run --locked ty check*`, `uv run --locked python -m unittest *`, `pnpm --dir web run lint|typecheck|test*`, and deny `Read`/`Edit(./campaigns/**)`.
    - LoreForge's `.gitignore` Spec Kit lines are replaced by the block `tools/setup` prints. `.specify/.gitignore`, `.specify/templates/*` and `.specify/workflows/workflow-registry.json` become untracked; only `.specify/memory/constitution.md` stays committed.
    - Report upstream in LoreForge: its `skills.patch` garbles `speckit-intent-decisions` ("preserve .specify/extensions/intent/intent/spec/plan").
-4. **Upgrade path.** Bumping `ref` in `agentic.toml` changes the fingerprint, so `setup` reinstalls. Document this in the standard's README.
+4. **Upgrade path.** Bumping `ref` in `ballast.toml` changes the fingerprint, so `setup` reinstalls. Document this in the standard's README.
 
 ## Decisions (resolved 2026-09-28)
 
 - **Distribution:** pinned tarball of the standard at a commit SHA or tag, installed into git-ignored paths. No submodule.
-- **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `agentic.toml`; the global `agentic-workflow setup` fetches the pinned version and runs its `tools/setup`.
+- **Spec Kit ownership:** `setup-speckit`, its pins and its patches move into the standard as part of `tools/setup`. Projects keep only `ballast.toml`; the global `ballast setup` fetches the pinned version and runs its `tools/setup`.
 - **Project overrides:** go in `docs/policies/project/<name>.md` (committed). Generic bases are installed to `docs/policies/<name>.md` (ignored). A skill reads the base, then the project file if it exists.
-- **Install location:** everything the installer adds to a project lives under git-ignored `.agentic/` (tools at `.agentic/spec_workflow/`). Agents may not edit it.
+- **Install location:** everything the installer adds to a project lives under git-ignored `.ballast/` (tools at `.ballast/spec_workflow/`). Agents may not edit it.
 - **Language:** full English. Both specs get translated before `v0.1.0`.
 - **Releases:** Release Please (`simple` type, `v` tags, LoreForge's changelog sections) creates the tags projects pin. The first release is `v0.1.0`: the manifest starts at `0.0.0` and `bump-minor-pre-major` turns the `feat` commits into a minor bump. Merge the backport PR with a merge commit or rebase, not squash, so the first changelog lists each change. Before merging, add the `RELEASE_PLEASE_TOKEN` secret.
 
 ## Sync log
 
-- 2026-10-01: synced LoreForge #112 (agent run ledger) and #113 (headless guard, trusted launcher) at `9eb5849` into `tools/spec_workflow/` with the same renames. The ledger reads `docs/policies/model-routing.md`, so that policy moved forward into `templates/policies/`. LoreForge's `scripts/agent-metrics` wrapper is not ported; `agentic-workflow ledger report` covers it.  LoreForge keeps its own `specs/*/workflow-runs/` ignore line for run records written before #112; new projects never produce them.
+- 2026-10-01: synced LoreForge #112 (agent run ledger) and #113 (headless guard, trusted launcher) at `9eb5849` into `tools/spec_workflow/` with the same renames. The ledger reads `docs/policies/model-routing.md`, so that policy moved forward into `templates/policies/`. LoreForge's `scripts/agent-metrics` wrapper is not ported; `ballast ledger report` covers it.  LoreForge keeps its own `specs/*/workflow-runs/` ignore line for run records written before #112; new projects never produce them.
 
-- 2026-10-01: imported the workflow guide (`templates/policies/spec-kit-workflow.md`) and the intake skill and helper at `9eb5849`, including #113's launcher handoff. Standard skills carry an `agentic-` prefix; `tools/setup` installs skills, helper and policies.
+- 2026-10-01: imported the workflow guide (`templates/policies/spec-kit-workflow.md`) and the intake skill and helper at `9eb5849`, including #113's launcher handoff. Standard skills carry an `ballast-` prefix; `tools/setup` installs skills, helper and policies.
 
 ## Parity checklist (gate for the first merge)
 
@@ -127,11 +127,11 @@ The standard is public and merged once every LoreForge process asset is either i
 | LoreForge asset | Status |
 | --- | --- |
 | `scripts/spec_workflow/*`, `.specify/workflows/loreforge-feature`, Spec Kit templates | Done (`tools/spec_workflow/`, `templates/spec-kit/`) |
-| `scripts/setup-speckit`, `scripts/spec-kit/*.patch` | Done (`tools/setup`, `tools/spec-kit/`, `tools/agentic-workflow`) |
-| `scripts/feature_intake.py`, `feature-intake` skill | Done (`agentic-feature-intake`) |
+| `scripts/setup-speckit`, `scripts/spec-kit/*.patch` | Done (`tools/setup`, `tools/spec-kit/`, `tools/ballast`) |
+| `scripts/feature_intake.py`, `feature-intake` skill | Done (`ballast-feature-intake`) |
 | `docs/spec-kit-workflow.md`, `docs/engineering/model-routing.md` | Done (`templates/policies/`) |
-| `scripts/agent-metrics` | Covered by `agentic-workflow ledger report` |
-| 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | Done (`agentic-*`) |
+| `scripts/agent-metrics` | Covered by `ballast ledger report` |
+| 9 review/routing skills (engineering, test, documentation, security, spec-reconciliation, dependency-evaluation, dependency-migration, database-migration, model-routing) | Done (`ballast-*`) |
 | `docs/policies/*.md` (7) and `docs/engineering/workflow.md` (risk and review matrix) | Done (`templates/policies/`); LoreForge specifics move to its `docs/policies/project/` (see below) |
 | `docs/agents/issue-tracker.md`, `triage-labels.md` | Done as policies; `docs/agents/domain.md` stays project-owned |
 | `.github/pull_request_template.md` | Done as a copy-once template (GitHub reads it from the default branch, so it cannot be ignored) |
@@ -159,12 +159,12 @@ The generic policies dropped these LoreForge specifics; the cleanup PR writes th
 
 ## Intake markers on LoreForge issues
 
-The intake helper's retry-safe GitHub markers are now `<!-- agentic-intake: ... -->`. The helper no longer recognizes LoreForge's existing `<!-- loreforge-intake: ... -->` markers, so retrying a half-finished intake could create a duplicate child. Before migrating, finish any intake in progress; then either leave old markers (completed setups are never retried) or rewrite them on open issues.
+The intake helper's retry-safe GitHub markers are now `<!-- ballast-intake: ... -->`. The helper no longer recognizes LoreForge's existing `<!-- loreforge-intake: ... -->` markers, so retrying a half-finished intake could create a duplicate child. Before migrating, finish any intake in progress; then either leave old markers (completed setups are never retried) or rewrite them on open issues.
 
 ## Risks
 
 - Artifact postconditions (#104) are the most valuable piece and the easiest to break while renaming. Move the tests first and keep them green on every rename step.
 - Some LoreForge worktrees have Spec Kit installed from the primary checkout (`_matching_primary`). After cleanup, the new fingerprint forces one reinstall per worktree.
 - Symlinks from `.claude/skills` to `.agents/skills` must be created by the installer, because they are ignored and no longer committed.
-- One `agentic-workflow` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may misjudge another project's inputs. **Fixed (2026-10-01)** with the version-manager shim pattern (Gradle wrapper, rbenv, Volta): `tools/agentic-workflow` is installed once per machine. `setup` fetches the pinned version into `$XDG_DATA_HOME/agentic/standard/<ref>/`; every other command runs that version's launcher and refuses an unfetched one. The repository is fixed in the shim, so a project picks a version, never a source. `agentic.toml` is a trusted input, so an agent that changes the pin is refused by the launcher's baseline check.
-- `tools/setup` rewrites `.specify/` and `.agentic/`, so every real reinstall needs a fresh `agentic-workflow trust`. **Decided:** keep trust a manual, reviewed step; setup never trusts on its own. Setup ends by telling the operator to review and run `trust`, and the launcher's refusal names `trust` as the fix.
+- One `ballast` launcher is installed per machine, but projects may pin different standard versions. A launcher from one version may misjudge another project's inputs. **Fixed (2026-10-01)** with the version-manager shim pattern (Gradle wrapper, rbenv, Volta): `tools/ballast` is installed once per machine. `setup` fetches the pinned version into `$XDG_DATA_HOME/ballast/standard/<ref>/`; every other command runs that version's launcher and refuses an unfetched one. The repository is fixed in the shim, so a project picks a version, never a source. `ballast.toml` is a trusted input, so an agent that changes the pin is refused by the launcher's baseline check.
+- `tools/setup` rewrites `.specify/` and `.ballast/`, so every real reinstall needs a fresh `ballast trust`. **Decided:** keep trust a manual, reviewed step; setup never trusts on its own. Setup ends by telling the operator to review and run `trust`, and the launcher's refusal names `trust` as the fix.

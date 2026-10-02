@@ -26,7 +26,7 @@ Read the [constitution](.specify/memory/constitution.md) when planning a signifi
 
 GitHub Issues track status, discussion, dependencies and implementation progress; they do not replace accepted product or feature intent. Read the issue and comments. Before `speckit.specify`, apply the [scope gate](docs/policies/spec-kit-workflow.md#scope-and-decomposition-gate): dispatch only an actionable leaf Issue, never an unresolved Epic. Use the full Spec Kit workflow for new features and meaningful behavior changes, the bugfix workflow for a small bounded fix, and the assess workflow for research or a spike. Before changing a feature, read its `intent.md`, `spec.md`, `plan.md`, `tasks.md`, review reports and unresolved `decisions.md` as applicable. The human approves intent, material plan changes and final acceptance. Tasks use explicit dependencies and execution waves, and each acceptance criterion has test or other verification evidence.
 
-For `Start #N`, `Fix #N`, `Investigate #N`, or `Continue #N`, use the [feature-intake skill](.agents/skills/agentic-feature-intake/SKILL.md). It inspects the Issue, applies the scope gate, reconciles approved GitHub setup, and hands off to the existing workflow. Start and resume feature runs only through `agentic-workflow run`; if it refuses, stop and report why. Only the operator runs `agentic-workflow trust`.
+For `Start #N`, `Fix #N`, `Investigate #N`, or `Continue #N`, use the [feature-intake skill](.agents/skills/ballast-feature-intake/SKILL.md). It inspects the Issue, applies the scope gate, reconciles approved GitHub setup, and hands off to the existing workflow. Start and resume feature runs only through `ballast run`; if it refuses, stop and report why. Only the operator runs `ballast trust`.
 
 Spec Kit artifacts and accepted product/technical documents are authoritative for intent. When implementation evidence conflicts with approved intent, stop at the conflict and record a feature-local proposal in `decisions.md`; agents may fix defects and clarify wording without a proposal, but every other discovery needs a human resolution, and product behavior, scope, data authority, security boundaries or accepted architecture changes require human approval. Update the spec, plan and tasks after approval before continuing. Reviews label findings as spec violation, implementation bug, architecture issue, missing test, spec ambiguity or proposed product change. Model roles are interchangeable; do not configure a permanent author/reviewer pairing. See the [Spec Kit workflow](docs/policies/spec-kit-workflow.md), the [risk and review matrix](docs/policies/workflow.md) and the [issue guidance](docs/policies/issue-tracker.md). Do not retrofit completed work.
 
@@ -36,14 +36,14 @@ Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2
 
 | When changing | Read and use |
 | --- | --- |
-| Any implementation | [Engineering policy](docs/policies/engineering.md); [engineering review](.agents/skills/agentic-engineering-review/SKILL.md) for feature review |
-| Auth, access rules, search/retrieval, user-facing access, secrets, agent tools | [Security policy](docs/policies/security.md) and [security review](.agents/skills/agentic-security-review/SKILL.md) |
-| Behavior or acceptance evidence | [Testing policy](docs/policies/testing.md) and [test review](.agents/skills/agentic-test-review/SKILL.md) |
-| Dependency or provider | [Dependency policy](docs/policies/dependencies.md) and [evaluation](.agents/skills/agentic-dependency-evaluation/SKILL.md); [migration](.agents/skills/agentic-dependency-migration/SKILL.md) for foundational replacement |
-| Schema/data migration | [Migration policy](docs/policies/migrations.md) and [database migration](.agents/skills/agentic-database-migration/SKILL.md) |
-| Public behavior, config, API, ADR | [Documentation policy](docs/policies/documentation.md) and [documentation review](.agents/skills/agentic-documentation-review/SKILL.md) |
+| Any implementation | [Engineering policy](docs/policies/engineering.md); [engineering review](.agents/skills/ballast-engineering-review/SKILL.md) for feature review |
+| Auth, access rules, search/retrieval, user-facing access, secrets, agent tools | [Security policy](docs/policies/security.md) and [security review](.agents/skills/ballast-security-review/SKILL.md) |
+| Behavior or acceptance evidence | [Testing policy](docs/policies/testing.md) and [test review](.agents/skills/ballast-test-review/SKILL.md) |
+| Dependency or provider | [Dependency policy](docs/policies/dependencies.md) and [evaluation](.agents/skills/ballast-dependency-evaluation/SKILL.md); [migration](.agents/skills/ballast-dependency-migration/SKILL.md) for foundational replacement |
+| Schema/data migration | [Migration policy](docs/policies/migrations.md) and [database migration](.agents/skills/ballast-database-migration/SKILL.md) |
+| Public behavior, config, API, ADR | [Documentation policy](docs/policies/documentation.md) and [documentation review](.agents/skills/ballast-documentation-review/SKILL.md) |
 | Jobs, retries, provider failures | [Observability policy](docs/policies/observability.md) |
-| Significant spec completion | Resolve feature decisions, run Spec Kit converge and [spec reconciliation](.agents/skills/agentic-spec-reconciliation/SKILL.md) |
+| Significant spec completion | Resolve feature decisions, run Spec Kit converge and [spec reconciliation](.agents/skills/ballast-spec-reconciliation/SKILL.md) |
 
 Each policy also reads `docs/policies/project/<name>.md` when it exists.
 
@@ -51,7 +51,7 @@ Never silently weaken a failing test, validation, authorization, lint/type rule 
 
 ## Model routing
 
-When model choice is under operator control, follow [model routing](docs/policies/model-routing.md): use deterministic workflow/risk rules before classification, choose the lowest sufficient `economy`/`standard`/`senior` profile, and escalate from evidence rather than by default. Use the [routing classifier](.agents/skills/agentic-model-routing/SKILL.md) only for ambiguous work. Prefer cross-provider independent review for significant features when practical. Do not switch to a paid API or store account/quota details in the repository.
+When model choice is under operator control, follow [model routing](docs/policies/model-routing.md): use deterministic workflow/risk rules before classification, choose the lowest sufficient `economy`/`standard`/`senior` profile, and escalate from evidence rather than by default. Use the [routing classifier](.agents/skills/ballast-model-routing/SKILL.md) only for ambiguous work. Prefer cross-provider independent review for significant features when practical. Do not switch to a paid API or store account/quota details in the repository.
 
 ## PRs and local environment
 

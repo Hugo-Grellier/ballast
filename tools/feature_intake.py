@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
-MARKER = "<!-- agentic-intake: parent=#{parent}; slug={slug} -->"
-SCOPE_MARKER = "<!-- agentic-intake: issue=#{issue}; scope={scope} -->"
+MARKER = "<!-- ballast-intake: parent=#{parent}; slug={slug} -->"
+SCOPE_MARKER = "<!-- ballast-intake: issue=#{issue}; scope={scope} -->"
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 BLOCKED_TEXT = re.compile(r"(?im)^\s*Blocked by:\s*#([1-9]\d*)\b")
 ACCEPTANCE = re.compile(r"(?im)^#{1,4}\s+Acceptance (?:criteria|outcomes)\b")
@@ -244,7 +244,7 @@ def ensure_scope(gh: GitHub, number: int, scope: str, text: str) -> bool:
     matches = [
         item
         for item in gh.comments(number)
-        if "<!-- agentic-intake: issue=#" in (item.get("body") or "")
+        if "<!-- ballast-intake: issue=#" in (item.get("body") or "")
     ]
     if matches:
         if len(matches) != 1 or marker not in (matches[0].get("body") or ""):

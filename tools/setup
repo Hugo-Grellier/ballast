@@ -3,7 +3,7 @@
 
 Usage: tools/setup [--project DIR]
 
-The project commits `agentic.toml` and its own overrides only. Everything this
+The project commits `ballast.toml` and its own overrides only. Everything this
 script writes is rebuildable and must be ignored; see GITIGNORE below.
 """
 
@@ -45,10 +45,10 @@ SOURCES = {
     ),
 }
 GITIGNORE = """\
-# Installed by agentic-repo-standard tools/setup
-.agentic/
-.agents/skills/agentic-*
-.claude/skills/agentic-*
+# Installed by Ballast (tools/setup)
+.ballast/
+.agents/skills/ballast-*
+.claude/skills/ballast-*
 .agents/skills/speckit-*
 .claude/skills/speckit-*
 docs/policies/*.md
@@ -58,9 +58,9 @@ docs/policies/*.md
 """
 # Representative paths for GITIGNORE: (path, must be ignored).
 IGNORE_PROBES = (
-    (".agentic/spec_workflow/run.py", True),
-    (".agents/skills/agentic-feature-intake/SKILL.md", True),
-    (".claude/skills/agentic-feature-intake", True),
+    (".ballast/spec_workflow/run.py", True),
+    (".agents/skills/ballast-feature-intake/SKILL.md", True),
+    (".claude/skills/ballast-feature-intake", True),
     ("docs/policies/model-routing.md", True),
     ("docs/policies/project/security.md", False),
     (".agents/skills/speckit-tasks/SKILL.md", True),
@@ -73,9 +73,9 @@ IGNORE_PROBES = (
 )
 # Project-owned files that `specify init --force` would overwrite.
 PRESERVED = (".specify/memory/constitution.md",)
-WORKFLOW = "agentic-feature"
+WORKFLOW = "ballast-feature"
 INSTALLED = (
-    ".agentic",
+    ".ballast",
     ".specify/scripts",
     ".specify/integrations",
     ".specify/extensions",
@@ -93,7 +93,7 @@ INSTALLED = (
 SKILLS = tuple(
     f"{integration}/skills/{prefix}-*"
     for integration in (".agents", ".claude")
-    for prefix in ("agentic", "speckit")
+    for prefix in ("ballast", "speckit")
 )
 # Local state a worktree must not copy from its primary checkout.
 LOCAL_STATE = (
@@ -108,15 +108,15 @@ class Setup:
     """One installation of the standard into one project checkout."""
 
     def __init__(self, project: Path) -> None:
-        """Read the project's optional agentic.toml."""
+        """Read the project's optional ballast.toml."""
         self.root = project
-        self.stamp = project / ".agentic/.setup-version"
-        config = project / "agentic.toml"
+        self.stamp = project / ".ballast/.setup-version"
+        config = project / "ballast.toml"
         self.config_bytes = config.read_bytes() if config.is_file() else b""
         self.config = tomllib.loads(self.config_bytes.decode())
 
     def fingerprint(self) -> str:
-        """Digest of the standard and agentic.toml; any change reinstalls."""
+        """Digest of the standard and ballast.toml; any change reinstalls."""
         digest = hashlib.sha256(self.config_bytes)
         for base in (STANDARD / "tools", STANDARD / "templates"):
             for path in sorted(base.rglob("*")):
@@ -285,14 +285,14 @@ class Setup:
 
     def install_standard(self) -> None:
         """Install the standard's tools, skills, policies and workflow."""
-        agentic = self.root / ".agentic"
+        ballast = self.root / ".ballast"
         shutil.copytree(
             STANDARD / "tools/spec_workflow",
-            agentic / "spec_workflow",
+            ballast / "spec_workflow",
             symlinks=True,
             ignore=shutil.ignore_patterns("__pycache__"),
         )
-        settings = agentic / "spec_workflow/claude-settings.json"
+        settings = ballast / "spec_workflow/claude-settings.json"
         settings.write_text(
             json.dumps(
                 merge_permissions(json.loads(settings.read_text()), self.config),
@@ -301,7 +301,7 @@ class Setup:
             + "\n"
         )
         shutil.copy2(
-            STANDARD / "tools/feature_intake.py", agentic / "feature_intake.py"
+            STANDARD / "tools/feature_intake.py", ballast / "feature_intake.py"
         )
         policies = self.root / "docs/policies"
         policies.mkdir(parents=True, exist_ok=True)
@@ -332,14 +332,14 @@ class Setup:
         self.check_ignored()
         self.remove_installed()
         if not self.copy_from_primary():
-            with tempfile.TemporaryDirectory(prefix="agentic-setup-") as directory:
+            with tempfile.TemporaryDirectory(prefix="ballast-setup-") as directory:
                 self.install_spec_kit(Path(directory))
             self.install_standard()
         self.stamp.parent.mkdir(exist_ok=True)
         self.stamp.write_text(self.fingerprint() + "\n")
         sys.stdout.write(
             f"Spec Kit {VERSION} and the standard are set up.\n"
-            "Review the installed changes, then run `agentic-workflow trust` "
+            "Review the installed changes, then run `ballast trust` "
             "before the next workflow run.\n"
         )
 

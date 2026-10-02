@@ -1,5 +1,5 @@
 ---
-name: agentic-documentation-review
+name: ballast-documentation-review
 description: Review documentation when user behavior, configuration, API, operations, or an architecture decision changes.
 ---
 

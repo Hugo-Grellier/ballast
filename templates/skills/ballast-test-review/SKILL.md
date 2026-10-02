@@ -1,5 +1,5 @@
 ---
-name: agentic-test-review
+name: ballast-test-review
 description: Review tests and acceptance evidence for a behavior change, including negative cases, failure paths, integration seams, and regressions.
 ---
 

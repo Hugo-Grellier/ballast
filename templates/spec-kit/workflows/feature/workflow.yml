@@ -1,10 +1,10 @@
 schema_version: "1.0"
 
 workflow:
-  id: agentic-feature
-  name: Agentic Feature Workflow
+  id: ballast-feature
+  name: Ballast Feature Workflow
   version: 1.1.0
-  author: Agentic Repo Standard
+  author: Ballast
   description: >-
     Interactive feature lifecycle with human approval gates, deterministic
     artifact postconditions, intent reconciliation, and convergence.
@@ -30,17 +30,17 @@ inputs:
     prompt: "Agent integration to use"
 
 # A command step's exit code 0 only means the agent process ended. Every
-# producer is followed by a `validate-*` shell step (.agentic/spec_workflow/
+# producer is followed by a `validate-*` shell step (.ballast/spec_workflow/
 # artifacts.py) that checks its artifact; a failed contract fails the run, so
 # no later gate or command is reachable. Checks are cumulative and re-verify
 # upstream artifacts. Shell steps receive only the engine-validated run ID,
 # never raw inputs; the validator reads and validates feature_directory itself.
-# Start and resume with agentic-workflow run (docs/policies/spec-kit-workflow.md).
+# Start and resume with ballast run (docs/policies/spec-kit-workflow.md).
 
 steps:
   - id: preflight
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py preflight --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py preflight --run {{ context.run_id }}
 
   - id: scope-gate
     type: gate
@@ -66,7 +66,7 @@ steps:
 
   - id: validate-spec
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py spec --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py spec --run {{ context.run_id }}
 
   - id: clarify
     command: speckit.clarify
@@ -74,7 +74,7 @@ steps:
 
   - id: validate-clarified-spec
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py clarified-spec --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py clarified-spec --run {{ context.run_id }}
 
   - id: approve-intent
     type: gate
@@ -96,11 +96,11 @@ steps:
 
   - id: record-intent
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py record-intent --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-intent --run {{ context.run_id }}
 
   - id: validate-intent
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py intent --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py intent --run {{ context.run_id }}
 
   - id: plan
     command: speckit.plan
@@ -108,7 +108,7 @@ steps:
 
   - id: validate-plan
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py plan --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py plan --run {{ context.run_id }}
 
   - id: review-plan
     type: gate
@@ -131,7 +131,7 @@ steps:
 
   - id: validate-tasks
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py tasks --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py tasks --run {{ context.run_id }}
 
   - id: analyze
     command: speckit.analyze
@@ -157,7 +157,7 @@ steps:
 
   - id: implementation-baseline
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py implementation-baseline --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py implementation-baseline --run {{ context.run_id }}
 
   - id: implement
     command: speckit.intent.implement
@@ -165,7 +165,7 @@ steps:
 
   - id: validate-implementation
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py implementation --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py implementation --run {{ context.run_id }}
 
   - id: review-implementation
     type: gate
@@ -188,7 +188,7 @@ steps:
 
   - id: validate-decisions
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py decisions --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py decisions --run {{ context.run_id }}
 
   - id: converge
     command: speckit.converge
@@ -210,7 +210,7 @@ steps:
 
   - id: validate-convergence
     type: shell
-    run: python3 -I -S .agentic/spec_workflow/artifacts.py convergence --run {{ context.run_id }}
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py convergence --run {{ context.run_id }}
 
   - id: final-acceptance
     type: gate

@@ -207,7 +207,7 @@ class LedgerTests(unittest.TestCase):
             json.dumps({"inputs": {"feature_directory": FEATURE}})
         )
         (run / "workflow.yml").write_text(
-            "workflow:\n  id: agentic-feature\n  version: 1.1.0\n"
+            "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
             "steps:\n  - id: scope-gate\n    type: gate\n"
             "  - id: implement\n    command: speckit.intent.implement\n"
             "  - id: validate-implement\n    type: shell\n"
@@ -216,7 +216,7 @@ class LedgerTests(unittest.TestCase):
         (run / "state.json").write_text(
             json.dumps(
                 {
-                    "workflow_id": "agentic-feature",
+                    "workflow_id": "ballast-feature",
                     "step_results": {
                         "scope-gate": {"type": "gate", "output": {"choice": choice}}
                     },
@@ -253,7 +253,7 @@ class LedgerTests(unittest.TestCase):
         self.write_run([], None)
         run = self.root / ".specify/workflows/runs/run_1"
         (run / "workflow.yml").write_text(
-            "schema_version: '1.0'\nworkflow:\n  id: agentic-feature\n"
+            "schema_version: '1.0'\nworkflow:\n  id: ballast-feature\n"
             "  version: 1.1.0\nsteps:\n- id: scope-gate\n  type: gate\n"
             "- id: implement\n  command: speckit.intent.implement\n"
         )
@@ -502,7 +502,7 @@ class LedgerTests(unittest.TestCase):
         self.write_run(entries)
         run = self.root / ".specify/workflows/runs/run_1"
         (run / "workflow.yml").write_text(
-            "workflow:\n  id: agentic-feature\n  version: 1.1.0\n"
+            "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
             "steps:\n  - id: review-plan\n    type: gate\n"
         )
         state = json.loads((run / "state.json").read_text())
@@ -810,7 +810,7 @@ class LedgerTests(unittest.TestCase):
         )
         run = self.root / ".specify/workflows/runs/run_1"
         (run / "workflow.yml").write_text(
-            "workflow:\n  id: agentic-feature\n  version: 1.1.0\n"
+            "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
             "steps:\n  - id: implement\n    type: command\n"
             "  - id: review-implementation\n    type: gate\n"
             "  - id: final-acceptance\n    type: gate\n"
@@ -1239,7 +1239,7 @@ class LedgerTests(unittest.TestCase):
         self.write_run(entries)
         run = self.root / ".specify/workflows/runs/run_1"
         (run / "workflow.yml").write_text(
-            "workflow:\n  id: agentic-feature\n  version: 1.1.0\n"
+            "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
             "steps:\n  - id: converge\n    type: command\n"
             "  - id: spec-reconciliation\n    type: gate\n"
             "  - id: validate-convergence\n    type: shell\n"
@@ -1797,7 +1797,7 @@ class LedgerTests(unittest.TestCase):
                 },
             )
         self.assertEqual(ledger.ledger_path(self.root, "run_1").read_bytes(), before)
-        with patch.dict(os.environ, {"AGENTIC_SPEC_WORKFLOW": "1"}):
+        with patch.dict(os.environ, {"BALLAST_SPEC_WORKFLOW": "1"}):
             with self.assertRaisesRegex(ledger.LedgerError, "agent step"):
                 ledger._check(  # noqa: SLF001 - Operator boundary regression.
                     self.root, "run_1", "AC-001", "tests.test_demo.DemoTests.test_one"
@@ -1909,7 +1909,7 @@ class LedgerTests(unittest.TestCase):
         )
         run = self.root / ".specify/workflows/runs/run_1"
         (run / "workflow.yml").write_text(
-            "workflow:\n  id: agentic-feature\n  version: 1.1.0\n"
+            "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
             "steps:\n  - id: approve-intent\n    type: gate\n"
         )
         state = json.loads((run / "state.json").read_text())

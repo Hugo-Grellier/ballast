@@ -6,4 +6,4 @@ Keep every lockfile committed and install from it in CI. Prefer the repository's
 
 Prerelease, nightly and `next` versions need a documented reason, qualification evidence and a tracked upgrade or replacement plan. Do not force an audit fix that changes generated output without comparing it.
 
-Patch updates may get automated PRs and normal checks. Minor updates need review of changed behavior; major or foundational updates follow the [dependency migration skill](../../.agents/skills/agentic-dependency-migration/SKILL.md). Security advisories can raise urgency regardless of version class.
+Patch updates may get automated PRs and normal checks. Minor updates need review of changed behavior; major or foundational updates follow the [dependency migration skill](../../.agents/skills/ballast-dependency-migration/SKILL.md). Security advisories can raise urgency regardless of version class.

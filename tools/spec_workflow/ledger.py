@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 # Same name as agent.TAMPER_MARKER. Checked before importing any other checkout
 # module, which a failed protected check means an agent may have rewritten.
-TAMPER_MARKER = "AGENTIC_TAMPERED"
+TAMPER_MARKER = "BALLAST_TAMPERED"
 if __name__ == "__main__" and os.path.lexists(
     Path(__file__).resolve().parents[2] / TAMPER_MARKER
 ):
@@ -2138,7 +2138,7 @@ def _feature_for_run(root: Path, run_id: str) -> str:
 
 def _operator_step_guard() -> None:
     """Catch accidental operator attestations from a normal agent step."""
-    if os.environ.get("AGENTIC_SPEC_WORKFLOW") or os.environ.get(
+    if os.environ.get("BALLAST_SPEC_WORKFLOW") or os.environ.get(
         "SPECKIT_WORKFLOW_RUN_ID"
     ):
         fail("operator attestation is unavailable inside an agent step")

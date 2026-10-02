@@ -1,4 +1,4 @@
-"""Regression tests for agentic-feature workflow postconditions.
+"""Regression tests for ballast-feature workflow postconditions.
 
 No test calls a real model: validators run as subprocesses against temporary
 repositories, the agent wrapper runs a fake CLI, and the optional engine test
@@ -348,13 +348,13 @@ class FeaturePathTests(unittest.TestCase):
         env = {
             key: value
             for key, value in os.environ.items()
-            if key != "AGENTIC_SPEC_WORKFLOW"
+            if key != "BALLAST_SPEC_WORKFLOW"
         }
         self.assertIn(
-            ".agentic/spec_workflow/run", self.repo.check("preflight", env=env).stderr
+            ".ballast/spec_workflow/run", self.repo.check("preflight", env=env).stderr
         )
         passing = self.repo.check(
-            "preflight", env={**env, "AGENTIC_SPEC_WORKFLOW": "1"}
+            "preflight", env={**env, "BALLAST_SPEC_WORKFLOW": "1"}
         )
         self.assertEqual(passing.returncode, 0)
 
@@ -547,17 +547,17 @@ class AgentWrapperTests(unittest.TestCase):
         untouched = self.run_wrapper("claude", "-p", "/speckit-plan")
         self.assertEqual(untouched.returncode, 0, untouched.stderr)
 
-    def test_editing_agentic_config_fails_the_step(self) -> None:
-        config = self.root / "agentic.toml"
+    def test_editing_ballast_config_fails_the_step(self) -> None:
+        config = self.root / "ballast.toml"
         config.write_text("[agents.permissions]\n")
         result = self.run_wrapper(
             "codex", "exec", "/speckit-plan", FAKE_TAMPER=str(config)
         )
         self.assertEqual(result.returncode, 4)
-        self.assertIn("agentic.toml", result.stderr)
+        self.assertIn("ballast.toml", result.stderr)
 
     def test_planted_bytecode_fails_the_step(self) -> None:
-        cache = self.root / ".agentic/spec_workflow/__pycache__"
+        cache = self.root / ".ballast/spec_workflow/__pycache__"
         cache.mkdir(parents=True)
         result = self.run_wrapper(
             "codex",
@@ -567,7 +567,7 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn("__pycache__/artifacts.cpython-314.pyc", result.stderr)
-        marker = self.root / "AGENTIC_TAMPERED"
+        marker = self.root / "BALLAST_TAMPERED"
         self.assertIn("artifacts.cpython-314.pyc", marker.read_text())
 
     def test_worktree_git_pointer_is_protected(self) -> None:
@@ -597,7 +597,7 @@ class AgentWrapperTests(unittest.TestCase):
         (self.root / ".venv").mkdir()
         outside = self.root / "outside.txt"
         outside.write_text("keep\n")
-        (self.root / "AGENTIC_TAMPERED").symlink_to(outside)
+        (self.root / "BALLAST_TAMPERED").symlink_to(outside)
         result = self.run_wrapper(
             "codex",
             "exec",
@@ -611,8 +611,8 @@ class AgentWrapperTests(unittest.TestCase):
         result = self.run_wrapper("claude", "-p", "/speckit-plan")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = (self.root / "systemctl.log").read_text()
-        self.assertIn("--user kill --signal=SIGKILL agentic-agent-run42-", calls)
-        self.assertIn("--user is-active agentic-agent-run42-", calls)
+        self.assertIn("--user kill --signal=SIGKILL ballast-agent-run42-", calls)
+        self.assertIn("--user is-active ballast-agent-run42-", calls)
 
     def test_unconfirmed_scope_stop_fails_the_step(self) -> None:
         result = self.run_wrapper(
@@ -640,7 +640,7 @@ class AgentWrapperTests(unittest.TestCase):
             "codex", "exec", "$speckit-plan", FAKE_KILL_WRAPPER="1"
         )
         self.assertEqual(result.returncode, -signal.SIGKILL)
-        (state,) = (self.root / "operator-state/agentic").iterdir()
+        (state,) = (self.root / "operator-state/ballast").iterdir()
         self.assertTrue((state / "in-progress").exists())
         clean = self.run_wrapper("codex", "exec", "$speckit-plan")
         self.assertEqual(clean.returncode, 0, clean.stderr)
@@ -691,7 +691,7 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn(".specify/extensions.yml", result.stderr)
-        (self.root / "AGENTIC_TAMPERED").unlink()
+        (self.root / "BALLAST_TAMPERED").unlink()
         feature = self.run_wrapper(
             "codex",
             "exec",
@@ -710,7 +710,7 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertIn("site-packages/hook.pth", result.stderr)
 
     def test_agent_python_caches_stay_out_of_the_checkout(self) -> None:
-        modules = self.root / ".agentic/spec_workflow"
+        modules = self.root / ".ballast/spec_workflow"
         modules.mkdir(parents=True)
         (modules / "fake_module.py").write_text("VALUE = 1\n")
         result = self.run_wrapper(
@@ -775,8 +775,8 @@ class ScopeContainmentTests(unittest.TestCase):
         fake.mkdir()
         (fake / "claude").write_text(FAKE_CLI)
         (fake / "claude").chmod(0o755)
-        (self.root / ".agentic/spec_workflow").mkdir(parents=True)
-        (self.root / ".agentic/spec_workflow/run.py").write_text("")
+        (self.root / ".ballast/spec_workflow").mkdir(parents=True)
+        (self.root / ".ballast/spec_workflow/run.py").write_text("")
         self.pid_file = self.root / "survivor.pid"
         self.env = {
             **os.environ,
@@ -839,7 +839,7 @@ class CodexSandboxTests(unittest.TestCase):
     """
 
     def test_workspace_write_sandbox_cannot_start_a_unit(self) -> None:
-        unit = f"agentic-escape-probe-{os.getpid()}"
+        unit = f"ballast-escape-probe-{os.getpid()}"
         with TemporaryDirectory() as directory:
             result = subprocess.run(  # noqa: S603
                 [
@@ -884,7 +884,7 @@ class TrustedLauncherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = TemporaryDirectory()
         self.root = Path(self.directory.name) / "checkout"
-        self.tools = self.root / ".agentic/spec_workflow"
+        self.tools = self.root / ".ballast/spec_workflow"
         self.tools.mkdir(parents=True)
         self.ran = self.root / "ran"
         for name in ("run.py", "ledger.py"):
@@ -972,7 +972,7 @@ class TrustedLauncherTests(unittest.TestCase):
         workflows = self.root / ".specify/workflows"
         shutil.rmtree(workflows)
         workflows.symlink_to(operator)
-        (state_root := Path(self.directory.name) / "state/agentic").mkdir(parents=True)
+        (state_root := Path(self.directory.name) / "state/ballast").mkdir(parents=True)
         result = self.launch("discard-runs")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual((operator / "runs/keep.txt").read_text(), "keep\n")
@@ -980,12 +980,12 @@ class TrustedLauncherTests(unittest.TestCase):
 
     def test_tamper_marker_and_unfinished_step_are_refused(self) -> None:
         self.assertEqual(self.launch("trust").returncode, 0)
-        (self.root / "AGENTIC_TAMPERED").write_text("x\n")
-        self.assert_refused("AGENTIC_TAMPERED")
+        (self.root / "BALLAST_TAMPERED").write_text("x\n")
+        self.assert_refused("BALLAST_TAMPERED")
         self.assertEqual(self.launch("trust").returncode, 2)
-        (self.root / "AGENTIC_TAMPERED").unlink()
-        (state,) = (Path(self.directory.name) / "state/agentic").iterdir()
-        (state / "in-progress").write_text("agentic-agent-r1-step.scope\n")
+        (self.root / "BALLAST_TAMPERED").unlink()
+        (state,) = (Path(self.directory.name) / "state/ballast").iterdir()
+        (state / "in-progress").write_text("ballast-agent-r1-step.scope\n")
         self.assert_refused("did not finish")
         # Saved runs are outside the baseline: trust alone must not clear this.
         self.assertEqual(self.launch("trust").returncode, 2)
@@ -1081,7 +1081,7 @@ class WorkflowOrderTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         docs = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
-        self.assertNotIn("python3 .agentic/spec_workflow/ledger.py", docs)
+        self.assertNotIn("python3 .ballast/spec_workflow/ledger.py", docs)
 
     def test_validators_run_without_checkout_startup_code(self) -> None:
         for step in _steps():
@@ -1141,15 +1141,15 @@ class EngineRunTests(unittest.TestCase):
         root = self.repo.root
         shutil.rmtree(root / FEATURE)
         # Lay the standard out the way the installer places it in a project.
-        (root / ".agentic").mkdir()
-        (root / ".agentic/spec_workflow").symlink_to(ROOT / "tools/spec_workflow")
+        (root / ".ballast").mkdir()
+        (root / ".ballast/spec_workflow").symlink_to(ROOT / "tools/spec_workflow")
         agent = root / "fake-agent"
         agent.write_text(FAKE_INTEGRATION)
         agent.chmod(0o755)
         (root / "spec-fixture.md").write_text(SPEC)
         self.env = {
             **os.environ,
-            "AGENTIC_SPEC_WORKFLOW": "1",
+            "BALLAST_SPEC_WORKFLOW": "1",
             "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(agent),
         }
 
@@ -1241,7 +1241,7 @@ class RunHistoryTests(unittest.TestCase):
         (run_dir / "state.json").write_text(
             json.dumps(
                 {
-                    "workflow_id": "agentic-feature",
+                    "workflow_id": "ballast-feature",
                     "status": "paused",
                     "workflow_dir": str(self.repo.root / "secret-path"),
                     "step_results": {
@@ -1262,7 +1262,7 @@ class RunHistoryTests(unittest.TestCase):
     def _make_importable_run(self) -> None:
         run_dir = self.repo.root / ".specify/workflows/runs/run42"
         (run_dir / "workflow.yml").write_text(
-            "workflow:\n  id: agentic-feature\n  version: 1.1.0\n"
+            "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
             "steps:\n  - id: scope-gate\n    type: gate\n"
         )
         (run_dir / "log.jsonl").write_text(
@@ -1310,7 +1310,7 @@ class RunHistoryTests(unittest.TestCase):
             import run  # noqa: PLC0415
         finally:
             sys.path.pop(0)
-        (self.repo.root / "AGENTIC_TAMPERED").write_text("x\n")
+        (self.repo.root / "BALLAST_TAMPERED").write_text("x\n")
         with (
             patch.object(run, "ROOT", self.repo.root),
             patch.object(run.subprocess, "run") as specify,
@@ -1320,14 +1320,14 @@ class RunHistoryTests(unittest.TestCase):
         specify.assert_not_called()
 
     def test_entry_points_stop_before_importing_checkout_code(self) -> None:
-        tools = self.repo.root / ".agentic/spec_workflow"
+        tools = self.repo.root / ".ballast/spec_workflow"
         tools.mkdir(parents=True)
         for name in ("run.py", "ledger.py"):
             shutil.copy(ROOT / "tools/spec_workflow" / name, tools)
         ran = self.repo.root / "ran"
         for name in ("agent.py", "artifacts.py"):
             (tools / name).write_text(f"open({str(ran)!r}, 'w').close()\n")
-        (self.repo.root / "AGENTIC_TAMPERED").write_text("x\n")
+        (self.repo.root / "BALLAST_TAMPERED").write_text("x\n")
         for script, args in (
             ("run.py", ["resume", "run42"]),
             ("ledger.py", ["check", "run42", "AC-001", "tests.x"]),
@@ -1339,7 +1339,7 @@ class RunHistoryTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 2, result.stderr)
-            self.assertIn("AGENTIC_TAMPERED", result.stderr)
+            self.assertIn("BALLAST_TAMPERED", result.stderr)
         self.assertFalse(ran.exists())
 
     def test_marker_name_matches_across_entry_points(self) -> None:
@@ -1352,7 +1352,7 @@ class RunHistoryTests(unittest.TestCase):
             sys.path.pop(0)
         self.assertEqual(
             {agent.TAMPER_MARKER, ledger.TAMPER_MARKER, run.TAMPER_MARKER},
-            {"AGENTIC_TAMPERED"},
+            {"BALLAST_TAMPERED"},
         )
 
     def test_launcher_freezes_policy_before_start(self) -> None:
