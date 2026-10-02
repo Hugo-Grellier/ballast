@@ -1,0 +1,11 @@
+# Ballast installs itself here. Contributors developing the standard can set
+# BALLAST_STANDARD_DIR to this checkout to run their working copy instead.
+[standard]
+ref = "v0.1.0"
+
+[agents.permissions]
+extra_allow = [
+  "Bash(uvx ruff check*)",
+  "Bash(uvx ruff format*)",
+  "Bash(uv run --no-project --python 3.13 --with pyyaml python -m unittest *)",
+]
