@@ -49,6 +49,10 @@ ballast ledger snapshot|check|report ...
 
 Only `setup` downloads; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
+## Dogfooding
+
+This repository installs Ballast like any project: `ballast.toml` pins a released version, `AGENTS.md` comes from the template, and Ballast-specific rules live in `docs/policies/project/` and `.specify/memory/constitution.md`. CI installs the working copy into the repository on every PR and fails if the install leaves any file that is not ignored.
+
 ## Releases
 
 Release Please opens a release PR from Conventional Commit titles on `main`; merging it tags `vX.Y.Z`, updates `CHANGELOG.md` and `version.txt`, and publishes the GitHub release. Projects pin those tags in `ballast.toml`. The workflow needs a `RELEASE_PLEASE_TOKEN` repository secret (a fine-grained token with contents and pull-request write access) so its release PR runs CI.

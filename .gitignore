@@ -1,1 +1,12 @@
 __pycache__/
+
+# Installed by Ballast (tools/setup)
+.ballast/
+.agents/skills/ballast-*
+.claude/skills/ballast-*
+.agents/skills/speckit-*
+.claude/skills/speckit-*
+docs/policies/*.md
+.specify/*
+!.specify/memory/
+.specify/memory/.constitution-template.json
