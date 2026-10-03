@@ -227,6 +227,19 @@ class LedgerTests(unittest.TestCase):
             "".join(json.dumps(item) + "\n" for item in entries)
         )
 
+    def isolated_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
+        cli_dir = self.root / "tools/spec_workflow"
+        cli_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("ledger.py", "artifacts.py"):
+            shutil.copy2(ROOT / "tools/spec_workflow" / name, cli_dir / name)
+        return subprocess.run(  # noqa: S603
+            [sys.executable, "-I", "-S", str(cli_dir / "ledger.py"), *args],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_skipped_import_does_not_invent_old_gate_rejection(self) -> None:
         entries = [
             {"event": "step_started", "step_id": "scope-gate", "type": "gate"},
@@ -254,14 +267,118 @@ class LedgerTests(unittest.TestCase):
         run = self.root / ".specify/workflows/runs/run_1"
         (run / "workflow.yml").write_text(
             "schema_version: '1.0'\nworkflow:\n  id: ballast-feature\n"
-            "  version: 1.1.0\nsteps:\n- id: scope-gate\n  type: gate\n"
-            "- id: implement\n  command: speckit.intent.implement\n"
+            "  version: 1.1.0\n  description: A wrapped workflow description\n"
+            "    from an archived engine run.\nrequires:\n  integrations:\n"
+            "    any:\n    - claude\n    - codex\nsteps:\n"
+            "- id: scope-gate\n  type: gate\n  message: A wrapped gate message\n"
+            "    from an archived engine run.\n  options:\n  - approve\n"
+            "  - reject\n- id: implement\n  command: speckit.intent.implement\n"
+            "  input:\n    args: '{{ inputs.idea }}'\n"
         )
         self.assertGreater(ledger.import_run(self.root, "run_1"), 0)
         report = ledger.report(self.root, "run_1")
         self.assertNotEqual(report["status"], "invalid")
         self.assertEqual(
             report["workflow"]["missing_steps"], ["scope-gate", "implement"]
+        )
+
+    def test_isolated_cli_reports_archived_run(self) -> None:
+        self.write_run([], None)
+        run = self.root / ".specify/workflows/runs/run_1"
+        (run / "workflow.yml").write_text(
+            "schema_version: '1.0'\nworkflow:\n  id: ballast-feature\n"
+            "  version: 1.1.0\nsteps:\n- id: scope-gate\n  type: gate\n"
+            "  options:\n  - approve\n  - reject\n- id: implement\n"
+            "  command: speckit.intent.implement\n"
+        )
+        ledger.import_run(self.root, "run_1")
+        shutil.copytree(run, ledger.archive_dir(self.root, "run_1") / "run")
+        shutil.rmtree(run)
+        for args in (("report", "--all", "--json"), ("report", "--run", "run_1")):
+            with self.subTest(args=args):
+                result = self.isolated_cli(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("ModuleNotFoundError", result.stderr)
+                if "--all" in args:
+                    self.assertEqual(json.loads(result.stdout)["instrumented_runs"], 1)
+                else:
+                    self.assertIn("run_1", result.stdout)
+
+    def test_isolated_cli_imports_run(self) -> None:
+        self.write_run([], None)
+        result = self.isolated_cli("import", "run_1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("imported 1 event", result.stdout)
+
+    def test_isolated_cli_rejects_unsupported_workflow_yaml(self) -> None:
+        self.write_run([], None)
+        run = self.root / ".specify/workflows/runs/run_1"
+        (run / "workflow.yml").write_text(
+            "workflow: {id: ballast-feature, version: 1.1.0}\nsteps: []\n"
+        )
+        result = self.isolated_cli("import", "run_1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("agent ledger: archived workflow YAML is invalid", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_workflow_reader_rejects_ambiguous_identity_and_steps(self) -> None:
+        self.write_run([], None)
+        run = self.root / ".specify/workflows/runs/run_1"
+        for raw in (
+            "workflow: {id: ballast-feature, version: 1.1.0}\nsteps: []\n",
+            (
+                "workflow:\n  id: &name ballast-feature\n  version: 1.1.0\n"
+                "steps:\n- id: scope-gate\n"
+            ),
+            (
+                "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
+                "steps:\n- id: scope-gate\n  id: implement\n"
+            ),
+            (
+                "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
+                "steps:\n- id: scope-gate\nsteps:\n- id: implement\n"
+            ),
+            (
+                "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
+                "steps:\n- id: scope-gate\n id: implement\n"
+            ),
+            (
+                "workflow:\n  id: ballast-feature\n  version: 1.1.0\n"
+                "steps:\n- id: scope-gate\n  type: gate\n    id: hidden\n"
+            ),
+            (
+                "workflow:\n  id: ballast-feature\n  version: 1\n"
+                "steps:\n- id: scope-gate\n"
+            ),
+            "workflow:\n  id: 2026-10-02\n  version: 1.1.0\nsteps:\n- id: scope-gate\n",
+        ):
+            with self.subTest(raw=raw):
+                (run / "workflow.yml").write_text(raw)
+                with self.assertRaisesRegex(ledger.LedgerError, "workflow YAML"):
+                    ledger._workflow_document(run)  # noqa: SLF001
+
+    def test_workflow_digest_check_remains_enforced(self) -> None:
+        self.write_run([], None)
+        ledger.import_run(self.root, "run_1")
+        run = self.root / ".specify/workflows/runs/run_1"
+        workflow = run / "workflow.yml"
+        original = workflow.read_text()
+        workflow.write_text(original + "name: changed\n")
+        self.assertIn(
+            "workflow definition digest mismatch",
+            ledger.report(self.root, "run_1")["problems"],
+        )
+
+    def test_workflow_identity_check_remains_enforced(self) -> None:
+        self.write_run([], None)
+        run = self.root / ".specify/workflows/runs/run_1"
+        state = json.loads((run / "state.json").read_text())
+        state["workflow_id"] = "different-workflow"
+        (run / "state.json").write_text(json.dumps(state))
+        ledger.import_run(self.root, "run_1")
+        self.assertIn(
+            "archived workflow identity mismatch",
+            ledger.report(self.root, "run_1")["problems"],
         )
 
     def test_imports_engine_failed_completion_followed_by_step_failed(self) -> None:
