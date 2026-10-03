@@ -954,18 +954,109 @@ def _workflow_identity(run: Path) -> tuple[str, str]:
     return identity, version
 
 
-def _workflow_document(run: Path) -> dict[str, Any]:
-    """Load the engine's normalized YAML without depending on indentation."""
-    import yaml  # noqa: PLC0415 - operator checks start under `python3 -I -S`
+def _workflow_document(  # noqa: C901, PLR0912, PLR0915 - Strict YAML projection.
+    run: Path,
+) -> dict[str, Any]:
+    """Read identity and steps from the engine's block-style safe_dump output."""
+    workflow: dict[str, str] = {}
+    steps: list[dict[str, str]] = []
+    section = None
+    step_indent = None
+    nested = False
+    seen: set[str] = set()
+    for line in (run / "workflow.yml").read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" ") and not line.startswith("-"):
+            match = re.fullmatch(r"([a-z_][a-z_0-9]*):(?: (.*))?", line)
+            if match is None:
+                fail("archived workflow YAML is invalid")
+            key, value = match.groups()
+            if key in {"workflow", "steps"}:
+                if key in seen or value is not None:
+                    fail("archived workflow YAML is invalid")
+                seen.add(key)
+            section = key
+            continue
+        if section == "workflow":
+            if line.startswith("  ") and not line.startswith("   "):
+                match = re.fullmatch(r"  ([a-z_][a-z_0-9]*):(?: (.*))?", line)
+                if match is None:
+                    fail("archived workflow YAML is invalid")
+                key, value = match.groups()
+                if key in {"id", "version"}:
+                    if key in workflow:
+                        fail("archived workflow YAML is invalid")
+                    workflow[key] = _workflow_scalar(value)
+            elif not line.startswith("    "):
+                fail("archived workflow YAML is invalid")
+        elif section == "steps":
+            match = re.fullmatch(r"( *)- ([a-z_][a-z_0-9]*):(?: (.*))?", line)
+            if match is not None:
+                indent, key, value = match.groups()
+                if len(indent) not in {0, 2} or (
+                    step_indent is not None and len(indent) != step_indent
+                ):
+                    fail("archived workflow YAML is invalid")
+                step_indent = len(indent)
+                steps.append({})
+                nested = False
+            else:
+                if step_indent is None:
+                    fail("archived workflow YAML is invalid")
+                indent = step_indent + 2
+                if nested and line.startswith(" " * indent + "- "):
+                    continue
+                if line.startswith(" " * indent) and not line.startswith(
+                    " " * (indent + 1)
+                ):
+                    match = re.fullmatch(
+                        rf" {{{indent}}}([a-z_][a-z_0-9]*):(?: (.*))?", line
+                    )
+                    if match is None:
+                        fail("archived workflow YAML is invalid")
+                    key, value = match.groups()
+                elif line.startswith(" " * (indent + 2)):
+                    if not nested and re.match(
+                        r"(?:- |[A-Za-z_][A-Za-z_0-9-]*:)", line.lstrip()
+                    ):
+                        fail("archived workflow YAML is invalid")
+                    continue
+                else:
+                    fail("archived workflow YAML is invalid")
+            nested = value is None
+            if key in {"id", "type"}:
+                if key in steps[-1]:
+                    fail("archived workflow YAML is invalid")
+                steps[-1][key] = _workflow_scalar(value)
+        elif not line.startswith(" "):
+            fail("archived workflow YAML is invalid")
+    if "workflow" not in seen or "steps" not in seen:
+        fail("archived workflow YAML is invalid")
+    return {"workflow": workflow, "steps": steps}
 
-    try:
-        document = yaml.safe_load((run / "workflow.yml").read_text(encoding="utf-8"))
-    except yaml.YAMLError as error:
-        message = "archived workflow YAML is invalid"
-        raise LedgerError(message) from error
-    if not isinstance(document, dict):
-        fail("archived workflow definition is invalid")
-    return document
+
+def _workflow_scalar(value: str | None) -> str:
+    """Accept only unambiguous strings emitted for workflow identity fields."""
+    if value is None:
+        fail("archived workflow YAML is invalid")
+    if re.fullmatch(r"'(?:[^']|'')*'", value):
+        return value[1:-1].replace("''", "'")
+    if value.startswith('"'):
+        try:
+            decoded = json.loads(value)
+        except ValueError as error:
+            message = "archived workflow YAML is invalid"
+            raise LedgerError(message) from error
+        if isinstance(decoded, str):
+            return decoded
+    elif re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/+-]*", value) and not (
+        value.lower() in {"true", "false", "yes", "no", "on", "off", "null"}
+        or re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value)
+        or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)
+    ):
+        return value
+    fail("archived workflow YAML is invalid")
 
 
 def _availability(value: object = None, reason: str | None = None) -> dict[str, object]:
