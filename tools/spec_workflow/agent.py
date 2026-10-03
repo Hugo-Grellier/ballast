@@ -216,14 +216,27 @@ def _children() -> list[int]:
     return found
 
 
-def _containment() -> str:
-    """Prepare both process guards; return the systemd-run path."""
+def _containment() -> tuple[str, list[str]]:
+    """Prepare both process guards; return the systemd-run path and options.
+
+    systemd 254 expands `$VAR` in the command line by default, which blanks a
+    Codex prompt such as `$speckit-plan`. Turn that off where the option
+    exists; an older or unreadable systemd-run keeps the scope, without it.
+    """
     _become_subreaper()
     systemd_run = shutil.which("systemd-run")
     if systemd_run is None or not scope_available():
         message = "process containment needs a systemd user manager"
         raise OSError(message)
-    return systemd_run
+    try:
+        usage = subprocess.run(  # noqa: S603 - resolved CLI, argument list
+            [systemd_run, "--help"], capture_output=True, timeout=5, check=False
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        usage = b""
+    if b"--expand-environment" in usage:
+        return systemd_run, ["--expand-environment=no"]
+    return systemd_run, []
 
 
 def _stop_descendants() -> tuple[int, bool]:
@@ -274,7 +287,7 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
             _real_executable(integration),
             *permission_args(integration, sys.argv[1:]),
         ]
-        systemd_run = _containment()
+        systemd_run, scope_options = _containment()
     except (ValueError, OSError) as error:
         sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
         return EXIT_USAGE
@@ -310,6 +323,7 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
         "--quiet",
         "--collect",
         f"--unit={unit.removesuffix('.scope')}",
+        *scope_options,
         "--",
         *argv,
     ]

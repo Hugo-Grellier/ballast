@@ -414,9 +414,19 @@ print("progress", file=sys.stderr)
 
 
 FAKE_SYSTEMD_RUN = """#!/usr/bin/env python3
+# systemd >= 254 by default; FAKE_SYSTEMD_PRE_254 models an older one.
 import os, sys
+old = os.environ.get("FAKE_SYSTEMD_PRE_254")
 args = sys.argv[1:]
+if args == ["--help"]:
+    print("--scope" if old else "--scope\\n--expand-environment=BOOL")
+    sys.exit(0)
+options = args[: args.index("--")]
 command = args[args.index("--") + 1 :]
+if old and any(o.startswith("--expand-environment") for o in options):
+    sys.exit("systemd-run: unrecognized option")
+if not old and "--expand-environment=no" not in options:
+    command = ["" if "$" in word else word for word in command]
 os.execvp(command[0], command)
 """
 FAKE_SYSTEMCTL = """#!/usr/bin/env python3
@@ -524,6 +534,13 @@ class AgentWrapperTests(unittest.TestCase):
                 "$speckit-tasks",
             ],
         )
+
+    def test_dollar_prompt_survives_systemd_without_expand_option(self) -> None:
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-tasks", FAKE_SYSTEMD_PRE_254="1"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.argv()[-1], "$speckit-tasks")
 
     def test_blocking_status_fails_the_step(self) -> None:
         result = self.run_wrapper(
@@ -766,15 +783,16 @@ class AgentWrapperTests(unittest.TestCase):
 
 @unittest.skipUnless(_user_systemd(), "needs a systemd user manager")
 class ScopeContainmentTests(unittest.TestCase):
-    """With real systemd, recovery stops processes a killed wrapper left behind."""
+    """With real systemd, agents get their arguments and recovery stops leftovers."""
 
     def setUp(self) -> None:
         self.directory = TemporaryDirectory()
         self.root = Path(self.directory.name)
         fake = self.root / "fake-bin"
         fake.mkdir()
-        (fake / "claude").write_text(FAKE_CLI)
-        (fake / "claude").chmod(0o755)
+        for name in ("claude", "codex"):
+            (fake / name).write_text(FAKE_CLI)
+            (fake / name).chmod(0o755)
         (self.root / ".ballast/spec_workflow").mkdir(parents=True)
         (self.root / ".ballast/spec_workflow/run.py").write_text("")
         self.pid_file = self.root / "survivor.pid"
@@ -826,6 +844,19 @@ class ScopeContainmentTests(unittest.TestCase):
         while Path(f"/proc/{survivor}").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertFalse(Path(f"/proc/{survivor}").exists())
+
+    def test_real_scope_passes_a_dollar_prompt_unchanged(self) -> None:
+        wrapper = subprocess.run(  # noqa: S603
+            [str(ROOT / "tools/spec_workflow/bin/codex"), "exec", "$speckit-plan"],
+            cwd=self.root,
+            env={**self.env, "FAKE_SURVIVOR": "", "FAKE_KILL_WRAPPER": ""},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(wrapper.returncode, 0, wrapper.stderr)
+        argv = json.loads((self.root / "argv.json").read_text())
+        self.assertEqual(argv[-1], "$speckit-plan")
 
 
 @unittest.skipUnless(
