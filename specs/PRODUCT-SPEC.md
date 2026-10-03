@@ -1325,7 +1325,7 @@ simple isolated bug
 
 ```
 
-Can be auto-merged after checks/review.
+Can reach human merge review after checks and proportionate review.
 
 ## R1 — Normal Engineering Change
 
@@ -1467,13 +1467,11 @@ fundamental architecture tradeoff
                   SPEC RECONCILIATION
                          │
                          ▼
-                     RISK GATE
-                       /     \
-                    R0/R1     R2
-                      │        │
-                 auto merge   human
-                      │        │
-                      └────┬───┘
+                  RISK ASSESSMENT
+                           │
+                           ▼
+                    HUMAN MERGE
+                           │
                            ▼
                       PRODUCTION
 
@@ -2193,7 +2191,7 @@ staging deployment
 
 spec convergence
 
-risk-based auto merge
+risk-based review before human merge
 
 production validation
 
@@ -2247,9 +2245,9 @@ hybrid
 
 ```
 
-### Auto-merge threshold
+### Merge review threshold
 
-Progressively determine which R1 changes can actually be auto-merged.
+Determine which evidence a human needs to merge R1 changes confidently, without weakening required checks or review.
 
 ### Product acceptance
 

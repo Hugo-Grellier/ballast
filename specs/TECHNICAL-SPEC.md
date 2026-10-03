@@ -1051,7 +1051,7 @@ minor isolated internal fix
 
 ```
 
-May be auto-merged.
+May reach human merge review after proportionate checks and review.
 
 ---
 
@@ -1414,7 +1414,7 @@ Indicative policy:
 ```text
 patch
 → auto PR
-→ auto merge if safe
+→ required checks + human merge
 
 minor
 → auto PR
@@ -2343,12 +2343,11 @@ A human remains necessary for all merges.
 Add:
 
 ```text
-R0 auto merge
-selected R1 auto merge
-staging automation
-runtime validation
-risk-based human gates
-subscription-aware routing
+issue-linked Draft PR lifecycle
+safe branch synchronization on start and resume
+worktree and update reliability
+operator-facing evidence and recovery paths
+human merge review for every feature PR
 
 ```
 
@@ -2356,24 +2355,44 @@ subscription-aware routing
 
 # 91. v1.0 target
 
-Goal:
+**Scope decision, 2026-10-03:** Ballast 1.0 takes a feature from a request in an adopted repository to a verified GitHub PR ready for a **human merge decision**. It does not promise staging deployment or production release. The broader product vision in `PRODUCT-SPEC.md` remains a later target.
+
+The qualified 1.0 environment is GitHub on Linux with a systemd user session. A blank repository and an established repository must both be supported. The required operator modes are Chat and Autonomous; Guided and Supervised may follow later.
+
+The complete path is:
 
 ```text
-product specification
+one-command Ballast installation and project-adapted init
       ↓
-mostly autonomous engineering factory
+request discovery and traceable feature specification
       ↓
-production
+Chat or Autonomous workflow
+      ↓
+implementation, deterministic checks, independent review, correction
+      ↓
+safe branch synchronization and one reusable GitHub Draft PR
+      ↓
+acceptance evidence and an on-demand UI demo when requested
+      ↓
+PR ready for human merge decision
 
 ```
 
-with human intervention mainly for:
+Autonomous makes intermediate intent, plan and implementation decisions provisionally and records their basis. For an eligible feature, it requests no human approval until merge. Chat keeps the operator in the conversation while using the same trusted preflight and evidence contracts. Technical failures, conflicts, exhausted limits and unavailable authority may still block a run. No mode silently approves its own PR or merges it.
+
+One compatible zero-cost execution backend must be qualified as an opt-in fallback when the existing Claude/Codex route is unavailable or its quota is exhausted. Free-only and privacy/permission constraints apply before selection; fallback attempts are bounded and recorded. Paid overflow and broad provider support are later work.
+
+A UI demo video is captured **on request** from a project-supplied reproducible scenario and linked to the existing PR with its commit and scenario. Routine UI PRs do not require automatic capture. The PR also carries concise, source-linked acceptance evidence, checks and unresolved decisions.
+
+The 1.0 release gate and phased implementation map are in [`docs/plans/2026-10-02-product-roadmap.md`](../docs/plans/2026-10-02-product-roadmap.md). The current workflow's required human approvals must be deliberately reconciled with Autonomous's provisional-decision model before that mode ships; selecting a CLI mode does not itself weaken the trust boundary.
+
+Later releases may add:
 
 ```text
-product ambiguity
-R2 decisions
-acceptance of major behavior
-exception handling
+staging and production validation
+additional forges and host platforms
+paid overflow and more providers
+automatic demo capture and richer review interfaces
 
 ```
 
