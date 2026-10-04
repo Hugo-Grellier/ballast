@@ -11,7 +11,7 @@ import subprocess
 import sys
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -183,6 +183,167 @@ class LedgerTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(ledger.ledger_path(self.root, "run_1").read_bytes(), before)
+
+    def test_pull_request_events_accept_every_outcome_and_reason(self) -> None:
+        pr = {"pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}
+        for outcome, reasons in ledger.PR_REASONS.items():
+            needs_pr = outcome in {"created", "reused"}
+            for reason in sorted(reasons) or [None]:
+                data: dict[str, object] = {"outcome": outcome, "issue": 17}
+                if reason:
+                    data["reason"] = reason
+                if needs_pr:
+                    data.update(pr)
+                if outcome.startswith("blocked-") and reason != "no-issue-number":
+                    data["matches"] = 1
+                with self.subTest(outcome=outcome, reason=reason):
+                    self.assertEqual(
+                        ledger.new_event(
+                            "run_1", FEATURE, "pull_request", "runner", data
+                        )["data"],
+                        data,
+                    )
+
+    def test_pull_request_events_reject_values_outside_the_schema(self) -> None:
+        pr = {"pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}
+        cases = {
+            "unknown outcome": {"outcome": "merged", "reason": "closed"},
+            "unknown reason": {"outcome": "pending", "reason": "later"},
+            "reason of another outcome": {"outcome": "pending", "reason": "merged"},
+            "created without url": {"outcome": "created", "pr_number": 7},
+            "reused without number": {"outcome": "reused", "pr_url": pr["pr_url"]},
+            "pending without reason": {"outcome": "pending", "issue": 17},
+            "created with reason": {"outcome": "created", "reason": "closed", **pr},
+            "non-GitHub url": {
+                "outcome": "created",
+                "pr_number": 7,
+                "pr_url": "https://example.com/o/r/pull/7",
+            },
+            "issue url": {
+                "outcome": "created",
+                "pr_number": 7,
+                "pr_url": "https://github.com/o/r/issues/7",
+            },
+            "free text": {"outcome": "pending", "reason": "no-branch", "note": "x"},
+        }
+        for name, data in cases.items():
+            with (
+                self.subTest(name=name),
+                self.assertRaises(ledger.LedgerError),
+            ):
+                ledger.new_event("run_1", FEATURE, "pull_request", "runner", data)
+        with self.assertRaisesRegex(ledger.LedgerError, "requires runner"):
+            ledger.new_event(
+                "run_1",
+                FEATURE,
+                "pull_request",
+                "operator-attested",
+                {"outcome": "pending", "reason": "no-branch"},
+            )
+
+    def test_pull_request_is_runner_only_and_may_follow_any_event(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            self.assertRaises(SystemExit),
+        ):
+            ledger.main(
+                [
+                    "record",
+                    "run_1",
+                    "pull_request",
+                    "--source",
+                    "agent-reported",
+                    "--data",
+                    '{"outcome": "pending", "reason": "no-branch"}',
+                ]
+            )
+        self.assertIn("invalid choice", output.getvalue())
+        with self.assertRaisesRegex(ledger.LedgerError, "runner or snapshot"):
+            ledger._record(  # noqa: SLF001
+                self.root,
+                "run_1",
+                FEATURE,
+                "pull_request",
+                "agent-reported",
+                {"outcome": "pending", "reason": "no-branch"},
+            )
+        ledger.append(
+            self.root,
+            self.event("pull_request", {"outcome": "pending", "reason": "no-branch"}),
+        )
+        ledger.append(self.root, self.event("run", {"action": "started"}, "e2"))
+        ledger.append(
+            self.root,
+            self.event("run", {"action": "ended", "status": "completed"}, "e3"),
+        )
+        ledger.append(
+            self.root,
+            self.event(
+                "pull_request",
+                {
+                    "outcome": "created",
+                    "pr_number": 7,
+                    "pr_url": "https://github.com/o/r/pull/7",
+                },
+                "e4",
+            ),
+        )
+        self.assertEqual(ledger.read(self.root, "run_1")[1], [])
+
+    def test_report_shows_latest_pull_request_or_its_absence(self) -> None:
+        self.write_run([], None)
+        ledger.import_run(self.root, "run_1")
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(
+            report["pull_request"],
+            {"available": False, "reason": "no checkpoint recorded"},
+        )
+        for event_id, data in (
+            ("pr1", {"outcome": "pending", "reason": "not-published", "issue": 93}),
+            (
+                "pr2",
+                {
+                    "outcome": "created",
+                    "issue": 93,
+                    "pr_number": 7,
+                    "pr_url": "https://github.com/o/r/pull/7",
+                },
+            ),
+        ):
+            ledger.append(self.root, self.event("pull_request", data, event_id))
+        events, _ = ledger.read(self.root, "run_1")
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(
+            report["pull_request"],
+            {**events[-1]["data"], "observed_at": events[-1]["observed_at"]},
+        )
+        text = ledger._text_report(report)  # noqa: SLF001
+        self.assertEqual(
+            [line for line in text.splitlines() if line.startswith("pull_request:")],
+            [f"pull_request: {json.dumps(report['pull_request'], sort_keys=True)}"],
+        )
+        self.assertNotIn("pull_request", ledger.aggregate(self.root))
+
+    def test_checkout_local_git_is_never_executed(self) -> None:
+        sentinel = self.root / "git-ran"
+        local = self.root / "bin"
+        local.mkdir()
+        fake = local / "git"
+        fake.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 1\n")
+        fake.chmod(0o755)
+        system = os.environ.get("PATH", "")
+        with patch.dict(os.environ, {"PATH": f"{local}{os.pathsep}{system}"}):
+            ledger.append(self.root, self.event("run", {"action": "started"}))
+            self.assertTrue(ledger.common_dir(self.root).is_dir())
+        self.assertFalse(sentinel.exists())
+        with (
+            patch.dict(os.environ, {"PATH": str(local)}),
+            self.assertRaisesRegex(ledger.LedgerError, "git not found outside"),
+        ):
+            ledger.common_dir(self.root)
+        self.assertFalse(sentinel.exists())
 
     def test_unsupported_version_and_source_are_rejected(self) -> None:
         event = self.event("run", {"action": "started"})
