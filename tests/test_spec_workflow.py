@@ -1737,7 +1737,11 @@ class AutonomousWorkflowDefinitionTests(unittest.TestCase):
             else:
                 args = (step.get("input") or {}).get("args")
                 found.append(
-                    (step["id"], step["command"], args if "ballast" in step["command"] else None)
+                    (
+                        step["id"],
+                        step["command"],
+                        args if "ballast" in step["command"] else None,
+                    )
                 )
         self.assertEqual(tuple(found), AUTONOMOUS_STEPS)
 
@@ -1794,9 +1798,7 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
 
     def test_no_command_step(self) -> None:
         self.assertEqual(self.doc["workflow"]["id"], "ballast-continue")
-        self.assertEqual(
-            {step.get("type") for step in self.steps}, {"shell", "gate"}
-        )
+        self.assertEqual({step.get("type") for step in self.steps}, {"shell", "gate"})
         self.assertFalse(any("command" in step for step in self.steps))
 
     def test_steps_match_the_contract(self) -> None:
@@ -1828,9 +1830,7 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
         )
 
     def test_gates_equal_ballast_feature(self) -> None:
-        feature = {
-            step["id"]: step for step in _steps() if step.get("type") == "gate"
-        }
+        feature = {step["id"]: step for step in _steps() if step.get("type") == "gate"}
         for step in self.steps:
             if step["type"] == "gate":
                 self.assertEqual(step, feature[step["id"]], step["id"])
@@ -1843,7 +1843,7 @@ from test_autonomy import AutonomyCase, _bwrap_works, autonomy  # noqa: E402
 sys.path.pop(0)
 sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
 try:
-    import run as run_module  # noqa: E402
+    import run as run_module
 finally:
     sys.path.pop(0)
 
@@ -1887,7 +1887,7 @@ def _review(point: str, kind: str, findings: list | None = None) -> dict[str, st
 
 
 def _autonomous_plan() -> dict[str, dict[str, str]]:
-    """What each fake agent step writes, keyed by the fake agent's directory."""
+    """Return what each fake agent step writes, keyed by its plan directory."""
     feature, drafts = AUTO_FEATURE, f"{AUTO_FEATURE}/autonomous/drafts"
     spec, plan = f"{feature}/spec.md", f"{feature}/plan.md"
 
@@ -1916,7 +1916,11 @@ def _autonomous_plan() -> dict[str, dict[str, str]]:
         "speckit-ballast-review-spec-reconciliation": _review(
             "spec-reconciliation", "spec-reconciliation"
         )
-        | {f"{feature}/reviews/convergence.md": "# Convergence\n\n- Verdict: CONVERGED\n"},
+        | {
+            f"{feature}/reviews/convergence.md": (
+                "# Convergence\n\n- Verdict: CONVERGED\n"
+            )
+        },
         "speckit-ballast-decide-final-acceptance": decide(
             "final-acceptance", f"{feature}/tasks.md"
         ),
@@ -1959,8 +1963,10 @@ def _block_draft(category: str, condition: str) -> dict[str, str]:
     "needs Spec Kit, a systemd user manager and a working bwrap",
 )
 class AutonomousEngineCase(AutonomyCase):
-    """ballast-autonomous through run.py, Spec Kit, the confined agent wrapper
-    and the trusted recorders, with a fake agent, a fake gh and a bare origin.
+    """Drive ballast-autonomous through run.py, Spec Kit and the agent wrapper.
+
+    Real confinement and trusted recorders, with a fake agent, a fake gh and a
+    bare origin.
 
     Shared by the engine test classes below; it has no tests of its own.
     """
@@ -1969,7 +1975,9 @@ class AutonomousEngineCase(AutonomyCase):
         super().setUp()
         # The ignore rules tools/setup installs, and the standard laid out the
         # way it places it in a project.
-        (self.root / ".gitignore").write_text(".ballast/\n.specify/*\n!.specify/memory/\n")
+        (self.root / ".gitignore").write_text(
+            ".ballast/\n.specify/*\n!.specify/memory/\n"
+        )
         shutil.copytree(
             ROOT / "tools/spec_workflow",
             self.root / ".ballast/spec_workflow",
@@ -2040,7 +2048,9 @@ class AutonomousEngineCase(AutonomyCase):
         runs = autonomy.state_dir(self.root) / "runs"
         return sorted(p.name for p in runs.iterdir()) if runs.is_dir() else []
 
-    def start(self, *extra: str, integration: str = "claude") -> tuple[int, str, str, str]:
+    def start(
+        self, *extra: str, integration: str = "claude"
+    ) -> tuple[int, str, str, str]:
         """Run `ballast run start --mode autonomous`; return code, out, err, run."""
         code, out, err = self.main(
             "start",
@@ -2064,14 +2074,16 @@ class AutonomousEngineCase(AutonomyCase):
         return json.loads(path.read_text())
 
     def agent_commands(self, run_id: str) -> list[str]:
-        """The agent steps that ran, as `<command> <first arg>`."""
+        """Return the commands of the agent steps that ran, in order."""
         return [
             step["command"].lstrip("/$")
             for step in autonomy.read_steps(self.root, run_id)
             if step.get("ran")
         ]
 
-    def stopped(self, *extra: str, integration: str = "claude") -> tuple[str, dict, str]:
+    def stopped(
+        self, *extra: str, integration: str = "claude"
+    ) -> tuple[str, dict, str]:
         """Start a run that must stop on a block; return run ID, block, output."""
         code, out, err, run_id = self.start(*extra, integration=integration)
         self.assertEqual(code, 1, out + err)
@@ -2149,7 +2161,9 @@ class AutonomousContinueEngineTests(AutonomousEngineCase):
         self.assertEqual(state["workflow_id"], "ballast-continue", out + err)
         results = state["step_results"]
         self.assertEqual(results["preflight"]["status"], "completed", out + err)
-        self.assertEqual(results["validate-clarified-spec"]["status"], "completed", out + err)
+        self.assertEqual(
+            results["validate-clarified-spec"]["status"], "completed", out + err
+        )
         # The first gate is the first thing that waits for a human.
         self.assertEqual(state["status"], "paused")
         self.assertEqual(state["current_step_id"], "approve-intent")
@@ -2169,9 +2183,11 @@ class AutonomousContinueEngineTests(AutonomousEngineCase):
 
 
 class AutonomousBlockEngineTests(AutonomousEngineCase):
-    """T046, T046a [SC-004, AC-011, AC-012, AC-013, AC-024, FR-021]: each block
-    category stops the run before the next agent step, with its reason and
-    recovery command."""
+    """T046, T046a [SC-004, AC-011, AC-012, AC-013, AC-024, FR-021]: blocks.
+
+    Each block category stops the run before the next agent step, with its reason and
+    recovery command.
+    """
 
     def blocked_at(self, step: str, files: dict[str, str]) -> None:
         plan = _autonomous_plan()
@@ -2249,7 +2265,9 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
         self.assertEqual(len(self.agent_commands(run_id)), 3)
         refused = autonomy.read_steps(self.root, run_id)[-1]
         self.assertEqual((refused["ran"], refused["exit_code"]), (False, 5))
-        self.assertTrue((self.root / ".specify/workflow-state" / run_id / "agents").is_dir())
+        self.assertTrue(
+            (self.root / ".specify/workflow-state" / run_id / "agents").is_dir()
+        )
 
     def test_tamper(self) -> None:
         self.unconfined()
@@ -2268,7 +2286,9 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
         self.assertEqual(block["command"], "ballast discard-runs")
         # The killed step recorded nothing; nothing ran after it.
         self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-clarify")
-        self.assertNotIn("intent", [e["point"] for e in autonomy.read_decisions(self.root, run_id)])
+        self.assertNotIn(
+            "intent", [e["point"] for e in autonomy.read_decisions(self.root, run_id)]
+        )
 
     def test_postcondition(self) -> None:
         plan = _autonomous_plan()
@@ -2310,7 +2330,9 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
     def test_interrupted(self) -> None:
         self.unconfined()
         os.environ["FAKE_INTERRUPT_PID"] = str(os.getpid())
-        self.blocked_at("speckit-plan", {f"{AUTO_FEATURE}/plan.md": PLAN, "interrupt": ""})
+        self.blocked_at(
+            "speckit-plan", {f"{AUTO_FEATURE}/plan.md": PLAN, "interrupt": ""}
+        )
         code, out, err, run_id = self.start()
         self.assertEqual(code, 130, out + err)
         # The wrapper outlives the killed engine briefly; let its check finish.
@@ -2349,7 +2371,15 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
             err = io.StringIO()
             with redirect_stderr(err):
                 code = launcher.main(
-                    ["run", "continue", run_id, "--reason", "block-resolved", "--ref", "x"]
+                    [
+                        "run",
+                        "continue",
+                        run_id,
+                        "--reason",
+                        "block-resolved",
+                        "--ref",
+                        "x",
+                    ]
                 )
         finally:
             os.chdir(previous)
@@ -2361,8 +2391,11 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
 
 
 class AutonomousConfinementEngineTests(AutonomousEngineCase):
-    """T048 [AC-016, SC-005, FR-003]: agent writes cannot change the mode,
-    eligibility, limits, the decision log or the committed projections."""
+    """T048 [AC-016, SC-005, FR-003]: agent writes change no operator state.
+
+    Neither the mode, eligibility, limits, the decision log nor the committed
+    projections change.
+    """
 
     ATTEMPTS = (
         ("toml", "echo 'risk = [\"R3\"]' >> ballast.toml"),
@@ -2370,11 +2403,13 @@ class AutonomousConfinementEngineTests(AutonomousEngineCase):
         ("log", "echo '{}' >> \"$RUN_DIR/decisions.jsonl\""),
         (
             "ballast",
-            "python3 -I -S .ballast/spec_workflow/run.py start --mode autonomous "
-            "-i issue=27 -i idea=x -i feature_directory=specs/27-demo-run "
-            "-i integration=claude",
+            (
+                "python3 -I -S .ballast/spec_workflow/run.py start --mode autonomous "
+                "-i issue=27 -i idea=x -i feature_directory=specs/27-demo-run "
+                "-i integration=claude"
+            ),
         ),
-        ("publish", "python3 -I -S .ballast/spec_workflow/run.py publish \"$RUN_ID\""),
+        ("publish", 'python3 -I -S .ballast/spec_workflow/run.py publish "$RUN_ID"'),
     )
 
     def attempt_script(self) -> str:
@@ -2388,9 +2423,7 @@ class AutonomousConfinementEngineTests(AutonomousEngineCase):
         agents = self.root / ".specify/workflow-state" / run_id / "agents"
         log = min(p for p in agents.iterdir() if f"-{command}-" in p.name)
         text = (log / "stdout.log").read_text()
-        found = dict(
-            line.split("=", 1) for line in text.splitlines() if "=" in line
-        )
+        found = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
         return {name: found.get(name, "missing") for name, _ in self.ATTEMPTS}
 
     def test_agent_writes_change_nothing_operator_side(self) -> None:

@@ -210,7 +210,9 @@ class AutonomousInstallTests(unittest.TestCase):
         )
         for name in ("autonomous", "continue"):
             self.assertTrue(
-                (ROOT / "templates/spec-kit/workflows" / name / "workflow.yml").is_file()
+                (
+                    ROOT / "templates/spec-kit/workflows" / name / "workflow.yml"
+                ).is_file()
             )
 
     def test_installs_the_ballast_extension_before_claude_skills(self) -> None:

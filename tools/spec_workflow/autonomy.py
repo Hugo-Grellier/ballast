@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Operator records and trusted actions for Autonomous runs.
 
 An Autonomous run replaces every human gate of ballast-feature with an agent
@@ -210,7 +209,7 @@ class AutonomyError(Exception):
 
 
 def now() -> str:
-    """Current UTC time, to the second."""
+    """Return the current UTC time, to the second."""
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
@@ -264,7 +263,7 @@ def _write_bytes(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        Path(temporary).replace(path)
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
@@ -440,7 +439,7 @@ def read_run(root: Path, run_id: str) -> dict:
 
 
 def find_run(root: Path, run_id: str) -> dict | None:
-    """The run record when one exists; a broken one is still a refusal."""
+    """Return the run record when one exists; a broken one is still a refusal."""
     if not RUN_ID.fullmatch(run_id or ""):
         return None
     if not os.path.lexists(run_file(root, run_id)):
@@ -449,7 +448,7 @@ def find_run(root: Path, run_id: str) -> dict | None:
 
 
 def effective_mode(record: dict) -> str:
-    """The mode of the last change."""
+    """Return the mode of the last change."""
     return record["mode_history"][-1]["mode"]
 
 
@@ -572,7 +571,7 @@ def current_decisions(entries: list[dict]) -> list[dict]:
 
 
 def current(entries: list[dict], point: str) -> list[dict]:
-    """Current decisions for one point."""
+    """Return the current decisions for one point."""
     return [e for e in current_decisions(entries) if e.get("point") == point]
 
 
@@ -696,7 +695,7 @@ PUBLISH_RETRY = ("forge", "permission")
 
 
 def recovery_command(run_id: str, category: str) -> str:
-    """The one command that recovers from a block of this category."""
+    """Return the one command that recovers from a block of this category."""
     if category in PUBLISH_RETRY:
         return f"ballast run publish {run_id}"
     if category in {"tamper", "unfinished-step"}:
@@ -860,7 +859,7 @@ def record_block(root: Path, run_id: str, block: dict) -> dict:
 
 
 def read_block(root: Path, run_id: str) -> dict | None:
-    """The run's current block, if any."""
+    """Return the run's current block, if any."""
     path = run_dir(root, run_id) / "block.json"
     if not os.path.lexists(path):
         return None
@@ -919,9 +918,11 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
         if not isinstance(values, list):
             message = "[autonomous] risk must be a list"
             raise AutonomyError(message, "ineligible")
-        for value in values:
-            if value not in RISKS:
-                warnings.append(WIDENING.format(key=f"risk {value!r}"))
+        warnings.extend(
+            WIDENING.format(key=f"risk {value!r}")
+            for value in values
+            if value not in RISKS
+        )
         risk = [level for level in RISKS if level in values]
     authorized = []
     for action in _strings(table.get("authorized_privileged_actions", []), "actions"):
@@ -951,7 +952,7 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
 
 
 def parse_checks(config: dict) -> dict:
-    """The trusted `[checks]` commands an Autonomous run must pass."""
+    """Return the trusted `[checks]` commands an Autonomous run must pass."""
     table = config.get("checks")
     commands = table.get("commands") if isinstance(table, dict) else None
     if (
@@ -1035,7 +1036,7 @@ def git(
 
 
 def git_path(root: Path, *args: str) -> Path:
-    """An absolute path reported by `git rev-parse`."""
+    """Return an absolute path reported by `git rev-parse`."""
     out = git(root, "rev-parse", "--path-format=absolute", *args).stdout.strip()
     return Path(out)
 
@@ -1309,7 +1310,7 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
-def confined_argv(  # noqa: PLR0913 - every input is explicit
+def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     root: Path,
     command: list[str],
     *,
@@ -1575,7 +1576,7 @@ def _scope_problems(issue: dict, children: list, blockers: list) -> list[str]:
 
 
 def unauthorized_actions(actions: list[str], policy: dict) -> list[str]:
-    """Declared privileged actions the narrowed policy does not authorize."""
+    """Return declared privileged actions the narrowed policy does not authorize."""
     allowed = set(policy.get("authorized_privileged_actions", []))
     return sorted({a for a in actions if a in NEVER_AUTHORIZED or a not in allowed})
 
@@ -1623,7 +1624,11 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
         if SCOPE_COMMENT.format(issue=issue) in (c.get("body") or "")
     ]
     scope = {"risk": None, "privileged_actions": None, "boundaries": []}
-    if "ready-for-agent" not in _label_names(data) or len(comments) != 1 or comments[0].get("author_association") not in SCOPE_AUTHORS:
+    if (
+        "ready-for-agent" not in _label_names(data)
+        or len(comments) != 1
+        or comments[0].get("author_association") not in SCOPE_AUTHORS
+    ):
         reasons.append(f"{REFUSAL}issue has no recorded scope gate")
     else:
         scope = parse_scope(comments[0].get("body") or "")
@@ -1646,7 +1651,7 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
             f"{REFUSAL}feature directory {feature} is not for issue #{issue}"
         )
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
-    if not branch or branch == "HEAD" or branch == default_branch:
+    if not branch or branch in {"HEAD", default_branch}:
         reasons.append(f"{REFUSAL}{BRANCH_REFUSAL}")
     else:
         prs = _gh("pr", "list", "--head", branch, "--state", "open", "--json", "number")
@@ -1684,7 +1689,10 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
 
 
 def raise_risk(record: dict, level: str | None, boundaries: list[str], pd: str) -> bool:
-    """Raise the recorded risk (never lower it); True when eligibility must be rechecked."""
+    """Raise the recorded risk, never lower it.
+
+    Return True when eligibility must be checked again.
+    """
     risk = record["risk"]
     merged = sorted(set(risk.get("boundaries", [])) | set(boundaries))
     grew = merged != risk.get("boundaries", [])
@@ -1710,7 +1718,9 @@ def neutralize(text: str) -> str:
 
 def _quote_block(text: str) -> list[str]:
     lines = str(text).replace("\r\n", "\n").split("\n")
-    return ["> " + MENTION.sub("@\u200b", html.escape(line, quote=False)) for line in lines]
+    return [
+        "> " + MENTION.sub("@\u200b", html.escape(line, quote=False)) for line in lines
+    ]
 
 
 def _code(value: str) -> str:
@@ -1765,8 +1775,10 @@ def _r2_lines(run: dict, decisions: list[dict]) -> list[str]:
     lines = [
         "## R2 notice",
         "",
-        "This is an R2 change. It was made without any prior human approval; the "
-        f"pre-change approval was agent-provisional ({_intent_pd(decisions)}).",
+        (
+            "This is an R2 change. It was made without any prior human approval; "
+            f"the pre-change approval was agent-provisional ({_intent_pd(decisions)})."
+        ),
         "",
         "R2 boundaries touched:",
         "",
@@ -1795,8 +1807,10 @@ def _decision_rows(decisions: list[dict], link: object, *, short: bool) -> list[
         ]
         return lines
     lines = [
-        "| ID | Point | Decision | Summary | Decided by | Artifact | Evidence "
-        "| Superseded by |",
+        (
+            "| ID | Point | Decision | Summary | Decided by | Artifact | Evidence "
+            "| Superseded by |"
+        ),
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for entry in decisions:
@@ -1931,10 +1945,13 @@ def render_record(run: dict, decisions: list[dict], checks: list[dict] | None) -
     lines = [
         "# Autonomous run record",
         "",
-        f"Run {_code(run['run_id'])} for #{run['issue']} ({_code(run['feature'])}). "
-        "Generated from the operator records; every check re-renders it, so an "
-        "edit fails the next check. Every decision below is agent-provisional; "
-        "merging the PR that contains this record is the only human approval.",
+        (
+            f"Run {_code(run['run_id'])} for #{run['issue']} "
+            f"({_code(run['feature'])}). Generated from the operator records; every "
+            "check re-renders it, so an edit fails the next check. Every decision "
+            "below is agent-provisional; merging the PR that contains this record "
+            "is the only human approval."
+        ),
         "",
         *_sections(run, decisions, checks, _relative_link(record_dir)),
     ]
@@ -1950,7 +1967,7 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
     repo: str,
     branch: str,
 ) -> str:
-    """The Draft PR body; falls back to short decision rows over 60,000 chars."""
+    """Render the Draft PR body; short decision rows over 60,000 characters."""
 
     def link(path: str) -> str:
         if not path:
@@ -1960,9 +1977,11 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
         return f"[{neutralize(path)}](https://github.com/{repo}/blob/{branch}/{path})"
 
     header = [
-        f"Autonomous run {run['run_id']} for #{run['issue']} — all intermediate "
-        "decisions are agent-provisional. Merging this PR is the only human "
-        "approval.",
+        (
+            f"Autonomous run {run['run_id']} for #{run['issue']} — all intermediate "
+            "decisions are agent-provisional. Merging this PR is the only human "
+            "approval."
+        ),
         "",
     ]
     footer = [

@@ -286,7 +286,7 @@ def _mark_tampered(root: Path, reasons: list[str]) -> None:
             marker.write("\n".join(reasons) + "\n")
 
 
-class Refusal(Exception):
+class Refusal(Exception):  # noqa: N818 - a refusal, not an error
     """An Autonomous agent step refused before the agent started."""
 
     def __init__(self, code: int, message: str) -> None:
@@ -304,7 +304,7 @@ def _workflow_id(root: Path, key: str) -> str | None:
 
 
 def _autonomous_run(root: Path, key: str) -> dict | None:
-    """The active Autonomous run record for this step, or None if human-gated.
+    """Return the active Autonomous run record for this step, or None if human-gated.
 
     Refuses (before any agent starts) an Autonomous run without a record, one
     that is not active, an exhausted limit, and a failed confinement

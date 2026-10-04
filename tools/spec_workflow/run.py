@@ -259,7 +259,9 @@ def _inputs(options: list[str]) -> dict[str, str] | str:
         if flag not in {"-i", "--input"} or not equals:
             return "inputs must be given as -i NAME=VALUE"
         if name not in AUTONOMOUS_INPUTS:
-            return f"autonomous runs accept only -i {', '.join(sorted(AUTONOMOUS_INPUTS))}"
+            return (
+                f"autonomous runs accept only -i {', '.join(sorted(AUTONOMOUS_INPUTS))}"
+            )
         if name in inputs:
             return f"input {name} given twice"
         inputs[name] = value
@@ -267,7 +269,7 @@ def _inputs(options: list[str]) -> dict[str, str] | str:
 
 
 def _integrations(requested: str) -> tuple[str, str] | str:
-    """(authoring, reviewing) integration; review on the other provider if any."""
+    """Return (authoring, reviewing) integrations; review on the other provider."""
     if requested == "auto":
         found = [name for name in autonomy.INTEGRATIONS if shutil.which(name)]
         if not found:
@@ -391,12 +393,12 @@ def _engine_state(run_id: str) -> dict:
 
 
 def _agent_block(run_id: str, record: dict, step: dict) -> dict:
-    """The block an agent asked for (exit 3), from its operator draft copy."""
+    """Return the block an agent asked for (exit 3), from its operator draft copy."""
     name = "block.json"
     try:
         if (step.get("drafts") or {}).get(name) in {None, "invalid"}:
             message = "the agent reported a blocked decision without a block draft"
-            raise autonomy.AutonomyError(message)
+            raise autonomy.AutonomyError(message)  # noqa: TRY301 - one fallback below
         copy = autonomy.snapshot_draft(ROOT, run_id, step["step"], name)
         draft = autonomy.validate_block_draft(json.loads(copy.read_bytes()))
     except (autonomy.AutonomyError, OSError, ValueError, KeyError) as error:
@@ -422,7 +424,7 @@ def _agent_block(run_id: str, record: dict, step: dict) -> dict:
     )
 
 
-def _stop_block(run_id: str, record: dict, status: int) -> dict:
+def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: PLR0911
     """Categorize why an Autonomous run ended without completing (R-10)."""
     current = autonomy.read_block(ROOT, run_id)
     if current is not None:
@@ -519,7 +521,9 @@ def _publish(run_id: str) -> int:
     """Open the Draft PR as the operator; a failure is a retryable block."""
     result = autonomy.publish(ROOT, run_id)
     if not result["ok"]:
-        block = autonomy.make_block(result["category"], result["message"], run_id=run_id)
+        block = autonomy.make_block(
+            result["category"], result["message"], run_id=run_id
+        )
         return _stop(run_id, block)
     record = autonomy.read_run(ROOT, run_id)
     autonomy.set_status(record, "published")
@@ -555,8 +559,10 @@ def _publish_command(options: list[str]) -> int:
         block = autonomy.read_block(ROOT, run_id)
     except autonomy.AutonomyError as error:
         return _refuse(str(error))
-    retryable = record["status"] == "stopped" and block is not None and (
-        block["category"] in autonomy.PUBLISH_RETRY
+    retryable = (
+        record["status"] == "stopped"
+        and block is not None
+        and (block["category"] in autonomy.PUBLISH_RETRY)
     )
     if record["status"] != "completed" and not retryable:
         return _refuse(
@@ -572,7 +578,7 @@ def _publish_command(options: list[str]) -> int:
         _archive_operator(run_id)
 
 
-def _continue_command(options: list[str], specify: str) -> int:  # noqa: PLR0911
+def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, PLR0911
     """`ballast run continue`: record the human decision, lower, run gates."""
     if not options or options[0].startswith("-"):
         return _refuse("continue needs a RUN_ID")
@@ -727,9 +733,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
         if mode not in autonomy.MODES:
             return _refuse("--mode must be human-gated or autonomous")
         if mode != "autonomous" and len(flags) > ("--mode" in flags):
-            return _refuse(
-                "--wall-time and --max-agent-steps need --mode autonomous"
-            )
+            return _refuse("--wall-time and --max-agent-steps need --mode autonomous")
     if argv[0] == "resume":
         rest = options[1:]
         if not options or not RUN_ID.fullmatch(options[0]):

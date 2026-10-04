@@ -525,7 +525,7 @@ FINDINGS_HEADING = re.compile(r"(?im)^#{1,6}\s+.*\bfindings?\b")
 SEVERITY = "(?:critical|high|medium|low)"
 SEVERITY_TAG = re.compile(
     rf"(?im)(\[\s*{SEVERITY}\s*\]|\*\*\s*{SEVERITY}\s*\*\*|\bseverity\s*[:=]\s*\**\s*"
-    rf"{SEVERITY}\b|^\s*(?:[-*]\s+)?\(?{SEVERITY}\)?\s*[:—–-]\s)"
+    rf"{SEVERITY}\b|^\s*(?:[-*]\s+)?\(?{SEVERITY}\)?\s*[:\u2014\u2013-]\s)"
 )
 PD_REF = re.compile(r"\bPD-\d{4}\b")
 MODEL = re.compile(r"[A-Za-z0-9._:/@+-]{1,100}")
@@ -636,7 +636,8 @@ def _block(feature: Feature, category: str, condition: str, **fields: object) ->
     run = _require_run(feature)
     block = autonomy.make_block(category, condition, run_id=run["run_id"], **fields)
     autonomy.record_block(feature.root, run["run_id"], block)
-    raise BlockedError(f"{category} block: {condition}")
+    message = f"{category} block: {condition}"
+    raise BlockedError(message)
 
 
 def _rendered(feature: Feature) -> str:
@@ -758,7 +759,7 @@ def _provisional_resolutions(feature: Feature, text: str) -> set[str]:
 
 
 def _repo_path(feature: Feature, value: object, name: str) -> str:
-    """A repository-relative path that exists, inside the checkout, no links."""
+    """Return a repository-relative path that exists, inside the checkout, no links."""
     if (
         not isinstance(value, str)
         or not value
@@ -823,7 +824,9 @@ def _string_list(value: object, name: str, limit: int = 20) -> list[str]:
     return sorted({" ".join(v.lower().split()) for v in value})
 
 
-def _validate_review(feature: Feature, review: object, point: str, step: dict) -> dict:
+def _validate_review(  # noqa: C901, PLR0912 - one field per rule
+    feature: Feature, review: object, point: str, step: dict
+) -> dict:
     run = _require_run(feature)
     if not isinstance(review, dict):
         message = f"{point} draft needs a review entry"
@@ -896,7 +899,7 @@ def _validate_review(feature: Feature, review: object, point: str, step: dict) -
     return entry
 
 
-def _validate_draft(  # noqa: C901, PLR0912
+def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
     feature: Feature, data: object, point: str, step: dict
 ) -> dict:
     """Check one decision draft against the draft contract."""
@@ -1031,7 +1034,7 @@ def _draft_point(name: str, points: list[str]) -> str | None:
     return None
 
 
-def _collect_drafts(
+def _collect_drafts(  # noqa: C901 - every draft source is checked
     feature: Feature, points: list[str]
 ) -> tuple[list[tuple[str, str, object, dict]], list[dict]]:
     """Drafts of the qualifying steps, read from their operator copies."""
@@ -1263,7 +1266,10 @@ def _final_check(feature: Feature, entry: dict) -> None:
         if not artifact.get("path"):
             continue
         if not path.is_file() or path.is_symlink():
-            note = f"{current['id']} {current['point']}: {artifact['path']} no longer exists"
+            note = (
+                f"{current['id']} {current['point']}: {artifact['path']} "
+                "no longer exists"
+            )
         elif autonomy.sha256_file(path) != artifact.get("sha256"):
             note = (
                 f"{current['id']} {current['point']}: {artifact['path']} changed after "
@@ -1345,7 +1351,9 @@ def _expected_drafts(point: str, drafts: list[tuple]) -> None:
         raise ContractError(message)
 
 
-def record_decision(feature: Feature, point: str) -> None:  # noqa: C901, PLR0912
+def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
+    feature: Feature, point: str
+) -> None:
     """Validate the preceding step's drafts and append provisional decisions."""
     run = _require_run(feature)
     points = (
@@ -1600,7 +1608,8 @@ def run_checks(feature: Feature) -> None:
             "postcondition",
             "check commands failed: "
             + ", ".join(
-                f"{r['command']!r} ({'timed out' if r['timed_out'] else 'exit ' + str(r['exit'])})"
+                f"{r['command']!r} "
+                f"({'timed out' if r['timed_out'] else 'exit ' + str(r['exit'])})"
                 for r in failed
             ),
         )

@@ -214,7 +214,7 @@ class AutonomyCase(unittest.TestCase):
 
 
 def fixed_run(*, risk: str = "R1", cross: bool = True) -> dict:
-    """A run record with fixed timestamps, for golden rendering."""
+    """Return a run record with fixed timestamps, for golden rendering."""
     at = "2026-10-03T12:00:00+00:00"
     return {
         "version": 1,
@@ -266,7 +266,7 @@ def fixed_run(*, risk: str = "R1", cross: bool = True) -> dict:
     }
 
 
-def fixed_decision(  # noqa: PLR0913 - fixture knobs
+def fixed_decision(  # noqa: PLR0913, D103 - fixture knobs
     number: int,
     point: str,
     *,
@@ -303,6 +303,7 @@ def fixed_decision(  # noqa: PLR0913 - fixture knobs
 
 
 def review(kind: str, *, cross: bool = True, findings: list | None = None) -> dict:
+    """Return a review entry as the recorder writes it."""
     return {
         "kind": kind,
         "verdict": "approved",
@@ -314,6 +315,7 @@ def review(kind: str, *, cross: bool = True, findings: list | None = None) -> di
 
 
 def golden_decisions(*, cross: bool = True) -> list[dict]:
+    """Return the decision log the golden files render."""
     reviewer = "codex" if cross else "claude"
     return [
         fixed_decision(1, "scope"),
@@ -587,7 +589,8 @@ class PolicyTests(AutonomyCase):
             "[autonomous]\n"
             'risk = ["R0", "R1", "R3"]\n'
             'excluded_boundaries = ["Agent Authority"]\n'
-            'authorized_privileged_actions = ["secret provisioning", "deploy", "merge"]\n'
+            "authorized_privileged_actions = "
+            '["secret provisioning", "deploy", "merge"]\n'
             "allow_epics = true\n"
         )
         self.assertEqual(policy["risk"], ["R0", "R1"])
@@ -681,7 +684,9 @@ class GitHelperTests(AutonomyCase):
         digest = autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",))
         self.assertNotEqual(digest, before)
         (self.root / ".ballast/spec_workflow/run.py").write_text("y")
-        self.assertEqual(autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",)), digest)
+        self.assertEqual(
+            autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",)), digest
+        )
 
     def test_hooks_never_run(self) -> None:
         marker = self.base / "hook-ran"
@@ -897,10 +902,13 @@ class RealConfinementTests(AutonomyCase):
             "home = os.path.expanduser('~')\n"
             "out = {}\n"
             "runtime = os.environ.get('XDG_RUNTIME_DIR')\n"
-            "out['runtime'] = os.listdir(runtime) if runtime and os.path.isdir(runtime) else []\n"
+            "out['runtime'] = (\n"
+            "    os.listdir(runtime) if runtime and os.path.isdir(runtime) else []\n"
+            ")\n"
             f"out['environ'] = os.path.exists('/proc/{os.getpid()}/environ')\n"
             "readable = []\n"
-            "for name in ('.git-credentials', '.netrc', '.ssh', '.config/gh/hosts.yml'):\n"
+            "names = ('.git-credentials', '.netrc', '.ssh', '.config/gh/hosts.yml')\n"
+            "for name in names:\n"
             "    path = os.path.join(home, name)\n"
             "    try:\n"
             "        if os.path.isdir(path):\n"
@@ -908,7 +916,9 @@ class RealConfinementTests(AutonomyCase):
             "        elif open(path).read(): readable.append(name)\n"
             "    except OSError: pass\n"
             "out['readable'] = readable\n"
-            "out['secrets'] = sorted(k for k in os.environ if 'TOKEN' in k or 'SECRET' in k)\n"
+            "out['secrets'] = sorted(\n"
+            "    k for k in os.environ if 'TOKEN' in k or 'SECRET' in k\n"
+            ")\n"
             "print(json.dumps(out))\n"
         )
         result = self.confined("python3", "-I", "-S", "-c", code)
@@ -935,7 +945,7 @@ class RealConfinementTests(AutonomyCase):
 
 
 class EligibilityTests(AutonomyCase):
-    """AC-018 – AC-021, FR-005, FR-006, FR-008: refusals before any agent step."""
+    """AC-018 to AC-021, FR-005, FR-006, FR-008: refusals before any agent step."""
 
     def check(self, table: str = "", **kwargs: object) -> dict:
         policy, _, warnings = self.policy(table)
@@ -963,8 +973,8 @@ class EligibilityTests(AutonomyCase):
 
     def test_scope_gate_refusals(self) -> None:
         cases = {
-            "epic": dict(labels=("ready-for-agent", "epic")),
-            "closed": dict(state="closed"),
+            "epic": {"labels": ("ready-for-agent", "epic")},
+            "closed": {"state": "closed"},
         }
         for name, kwargs in cases.items():
             with self.subTest(name=name):
@@ -989,7 +999,7 @@ class EligibilityTests(AutonomyCase):
         self.assertTrue(any("blocked by #12" in r for r in self.reasons()))
 
     def test_missing_scope_record(self) -> None:
-        for kwargs in (dict(labels=()), dict(author="NONE")):
+        for kwargs in ({"labels": ()}, {"author": "NONE"}):
             with self.subTest(kwargs=kwargs):
                 self.eligible_issue(**kwargs)
                 self.assertIn(
@@ -1197,7 +1207,7 @@ class RecordRenderTests(unittest.TestCase):
         self.assertLessEqual(len(body), autonomy.MAX_BODY)
         self.assertIn("Full decision rows:", body)
         self.assertEqual(
-            len([l for l in body.splitlines() if l.startswith("| PD-")]), 119
+            len([row for row in body.splitlines() if row.startswith("| PD-")]), 119
         )
 
 

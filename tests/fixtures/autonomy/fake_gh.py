@@ -5,8 +5,8 @@
 the first are empty); `repo view` reads `repo.json`; `pr list` reads
 `pr-list.json` (default `[]`); `pr create` copies the body to `pr-body.md` and
 prints a PR URL; `auth status` succeeds only when `auth.ok` exists. A missing
-file is an HTTP 404. `FAIL_<word>` files make the matching subcommand fail, printing their
-content (or `simulated failure`).
+file is an HTTP 404. `FAIL_<word>` files make the matching subcommand fail,
+printing their content (or `simulated failure`).
 """
 
 import json
@@ -17,11 +17,12 @@ from pathlib import Path
 
 data = Path(os.environ["FAKE_GH_DIR"])
 args = sys.argv[1:]
-with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as log:
+with Path(os.environ["FAKE_GH_LOG"]).open("a", encoding="utf-8") as log:
     log.write(json.dumps(args) + "\n")
 
 
 def serve(name: str, default: str | None = None) -> None:
+    """Print a canned response, or fail like a GitHub 404."""
     path = data / name
     if path.is_file():
         sys.stdout.write(path.read_text(encoding="utf-8"))

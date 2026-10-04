@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -78,6 +79,8 @@ if os.environ.get("FAKE_SLEEP"):
 print(os.environ.get("FAKE_STDOUT", "done"))
 """
 
+EXIT_LIMIT = 5  # agent.EXIT_LIMIT
+
 
 def _write(path: Path, text: str) -> None:
     path.write_text(text)
@@ -107,9 +110,9 @@ class WrapperCase(AutonomyCase):
             }
         )
 
-    def wrapper(self, name: str = "claude", prompt: str = "/speckit-plan", **env: str):
-        import subprocess  # noqa: PLC0415
-
+    def wrapper(
+        self, name: str = "claude", prompt: str = "/speckit-plan", **env: str
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(  # noqa: S603
             [str(ROOT / "tools/spec_workflow/bin" / name), "-p", prompt],
             cwd=self.root,
@@ -340,7 +343,7 @@ class RunCase(WrapperCase):
         return sorted(p.name for p in runs.iterdir()) if runs.is_dir() else []
 
     def publishable(self, run_id: str) -> None:
-        """What preflight and run-checks leave behind, plus a change."""
+        """Leave what preflight and run-checks leave behind, plus a change."""
         record = autonomy.read_run(self.root, run_id)
         record["head"] = self.git("rev-parse", "HEAD").strip()
         autonomy.write_json(
@@ -365,7 +368,7 @@ class RunStartTests(RunCase):
         self.engine["scenario"] = self.publishable
         code, out, err = self.start("--wall-time", "60", "--max-agent-steps", "12")
         self.assertEqual(code, 0, err)
-        (command, run_id), = self.launched
+        ((command, run_id),) = self.launched
         self.assertEqual(command[1:4], ["workflow", "run", "ballast-autonomous"])
         inputs = [command[i + 1] for i, a in enumerate(command) if a == "-i"]
         self.assertEqual(
@@ -378,7 +381,10 @@ class RunStartTests(RunCase):
         self.assertEqual(autonomy.effective_mode(record), "autonomous")
         self.assertEqual(record["risk"]["level"], "R1")
         self.assertEqual(
-            (record["limits"]["wall_time_minutes"], record["limits"]["max_agent_steps"]),
+            (
+                record["limits"]["wall_time_minutes"],
+                record["limits"]["max_agent_steps"],
+            ),
             (60, 12),
         )
         self.assertEqual(record["limits"]["source"], "operator")
@@ -391,7 +397,9 @@ class RunStartTests(RunCase):
         which = run.shutil.which
         self.engine["scenario"] = self.publishable
         with patch.object(
-            run.shutil, "which", side_effect=lambda n: None if n == "codex" else which(n)
+            run.shutil,
+            "which",
+            side_effect=lambda n: None if n == "codex" else which(n),
         ):
             code, out, _ = self.start()
         self.assertEqual(code, 0)
@@ -417,7 +425,12 @@ class RunStartTests(RunCase):
             with self.subTest(extra=extra):
                 self.launched.clear()
                 code, _, _ = self.main(
-                    "start", *extra, "-i", "idea=x", "-i", f"feature_directory={FEATURE}"
+                    "start",
+                    *extra,
+                    "-i",
+                    "idea=x",
+                    "-i",
+                    f"feature_directory={FEATURE}",
                 )
                 self.assertEqual(code, 0)
                 ((command, _),) = self.launched
@@ -444,7 +457,9 @@ class RunStartTests(RunCase):
         for word in ("mode", "wall", "steps", "risk", "eligib", "issue="):
             self.assertNotIn(word, joined)
         self.assertTrue(autonomy.run_file(self.root, run_id).is_file())
-        self.assertFalse((self.root / ".specify/workflows/runs" / run_id / "run.json").exists())
+        self.assertFalse(
+            (self.root / ".specify/workflows/runs" / run_id / "run.json").exists()
+        )
 
     def test_unknown_mode_and_input_refused(self) -> None:
         code, _, err = self.main("start", "--mode", "supervised")
@@ -497,7 +512,9 @@ class RunBlockTests(RunCase):
         self.out = out
         return run_id
 
-    def agent_step(self, run_id: str, code: int, drafts: dict | None = None, **extra: object) -> None:
+    def agent_step(
+        self, run_id: str, code: int, drafts: dict | None = None, **extra: object
+    ) -> None:
         listed = {}
         for name, data in (drafts or {}).items():
             raw = json.dumps(data).encode()
@@ -511,7 +528,13 @@ class RunBlockTests(RunCase):
         autonomy.append_step(
             self.root,
             run_id,
-            {"step": "step01", "ran": True, "drafts": listed, "exit_code": code, **extra},
+            {
+                "step": "step01",
+                "ran": True,
+                "drafts": listed,
+                "exit_code": code,
+                **extra,
+            },
         )
 
     def block_draft(self, **changes: object) -> dict:
@@ -544,13 +567,22 @@ class RunBlockTests(RunCase):
             f"ballast run continue {run_id} --reason block-resolved --ref TEXT",
         )
         self.assertEqual(autonomy.read_decisions(self.root, run_id), [])
-        self.assertFalse((autonomy.drafts_dir(self.root, FEATURE) / "block.json").exists())
+        self.assertFalse(
+            (autonomy.drafts_dir(self.root, FEATURE) / "block.json").exists()
+        )
         self.assertIn("option: Keep -> More storage", self.out)
         self.assertIn("Next: ballast run continue", self.out)
 
     def test_invalid_or_missing_draft_still_blocks_as_decision(self) -> None:
         for name, drafts in (
-            ("one option", {"block.json": self.block_draft(options=[{"option": "a", "consequence": "b"}])}),
+            (
+                "one option",
+                {
+                    "block.json": self.block_draft(
+                        options=[{"option": "a", "consequence": "b"}]
+                    )
+                },
+            ),
             ("no reason", {"block.json": self.block_draft(no_safe_default=None)}),
             ("missing", None),
         ):
@@ -569,7 +601,9 @@ class RunBlockTests(RunCase):
                 self.launched.clear()
                 self.engine.update(status="failed", code=1, step="plan")
                 self.engine["scenario"] = lambda r, c=code: self.agent_step(
-                    r, c, reason="wall-time limit exhausted" if c == 5 else None
+                    r,
+                    c,
+                    reason="wall-time limit exhausted" if c == EXIT_LIMIT else None,
                 )
                 run_id = self.started()
                 block = autonomy.read_block(self.root, run_id)
@@ -597,13 +631,17 @@ class RunBlockTests(RunCase):
             autonomy.record_block(
                 self.root,
                 run_id,
-                autonomy.make_block("review-finding", "plan F-001 (high)", run_id=run_id),
+                autonomy.make_block(
+                    "review-finding", "plan F-001 (high)", run_id=run_id
+                ),
             )
 
         self.engine.update(status="failed", code=1, step="record-plan-review")
         self.engine["scenario"] = recorder
         run_id = self.started()
-        self.assertEqual(autonomy.read_block(self.root, run_id)["category"], "review-finding")
+        self.assertEqual(
+            autonomy.read_block(self.root, run_id)["category"], "review-finding"
+        )
         self.assertIn("plan F-001 (high)", self.out)
 
     def test_failed_validator_without_block_is_postcondition(self) -> None:
@@ -631,14 +669,18 @@ class RunBlockTests(RunCase):
         code, _, _ = self.start()
         self.assertEqual(code, 130)
         run_id = self.launched[0][1]
-        self.assertEqual(autonomy.read_block(self.root, run_id)["category"], "interrupted")
+        self.assertEqual(
+            autonomy.read_block(self.root, run_id)["category"], "interrupted"
+        )
 
     def test_publisher_permission_failure(self) -> None:
         self.engine["scenario"] = self.publishable
         with patch.object(
             autonomy,
             "_create_pr",
-            side_effect=autonomy.AutonomyError("gh pr create failed: auth", "permission"),
+            side_effect=autonomy.AutonomyError(
+                "gh pr create failed: auth", "permission"
+            ),
         ):
             code, _, _ = self.start()
         self.assertEqual(code, 1)
@@ -663,7 +705,9 @@ class RunBlockTests(RunCase):
         code, _, _ = self.main("resume", "abc123")
         self.assertEqual(code, 0)
         ((command, run_id),) = self.launched
-        self.assertEqual((command[1:], run_id), (["workflow", "resume", "abc123"], "abc123"))
+        self.assertEqual(
+            (command[1:], run_id), (["workflow", "resume", "abc123"], "abc123")
+        )
 
 
 class RunContinueTests(RunCase):
@@ -678,7 +722,12 @@ class RunContinueTests(RunCase):
                 "basis": "One outcome",
                 "evidence": ["README.md"],
                 "artifact": {"path": "README.md", "sha256": "0" * 64},
-                "agent": {"provider": "claude", "model": "m", "role": "author", "step_id": "s"},
+                "agent": {
+                    "provider": "claude",
+                    "model": "m",
+                    "role": "author",
+                    "step_id": "s",
+                },
                 "material": False,
                 "supersedes": None,
                 "privileged_actions": [],
@@ -694,7 +743,9 @@ class RunContinueTests(RunCase):
         self.engine["scenario"] = scenario
         code, _, _ = self.start()
         self.assertEqual(code, 1)
-        self.engine.update(status="paused", code=0, step="approve-intent", scenario=None)
+        self.engine.update(
+            status="paused", code=0, step="approve-intent", scenario=None
+        )
         return self.launched[0][1]
 
     def test_continue_records_human_decision_and_lowers(self) -> None:
@@ -712,7 +763,10 @@ class RunContinueTests(RunCase):
         )
         self.assertTrue(lower["at"])
         (hd,) = autonomy.read_human_decisions(self.root, run_id)
-        self.assertEqual((hd["kind"], hd["ref"], hd["resolves"]), ("block-resolution", "chose Keep", "block"))
+        self.assertEqual(
+            (hd["kind"], hd["ref"], hd["resolves"]),
+            ("block-resolution", "chose Keep", "block"),
+        )
         command, new_id = self.launched[-1]
         self.assertEqual(command[1:4], ["workflow", "run", "ballast-continue"])
         new = autonomy.read_run(self.root, new_id)
@@ -720,7 +774,12 @@ class RunContinueTests(RunCase):
             (new["workflow"], new["continues"], autonomy.effective_mode(new)),
             ("ballast-continue", run_id, "human-gated"),
         )
-        copied = self.root / ".specify/workflow-state" / new_id / "implementation-baseline.json"
+        copied = (
+            self.root
+            / ".specify/workflow-state"
+            / new_id
+            / "implementation-baseline.json"
+        )
         self.assertTrue(copied.is_file())
         record = (self.root / FEATURE / "autonomous/record.md").read_text()
         self.assertIn("| PD-0001 | scope | accept (agent-provisional)", record)
@@ -734,7 +793,12 @@ class RunContinueTests(RunCase):
         run_id = self.launched[0][1]
         self.engine.update(status="paused", scenario=None)
         code, _, err = self.main(
-            "continue", run_id, "--reason", "changes-requested", "--ref", "https://github.com/acme/demo/pull/7#r1"
+            "continue",
+            run_id,
+            "--reason",
+            "changes-requested",
+            "--ref",
+            "https://github.com/acme/demo/pull/7#r1",
         )
         self.assertEqual(code, 0, err)
         (hd,) = autonomy.read_human_decisions(self.root, run_id)
@@ -743,11 +807,26 @@ class RunContinueTests(RunCase):
     def test_continue_refusals(self) -> None:
         run_id = self.stopped_run()
         for argv, text in (
-            (("continue", run_id, "--reason", "block-resolved", "--ref", "x", "--mode", "autonomous"), "never raised"),
+            (
+                (
+                    "continue",
+                    run_id,
+                    "--reason",
+                    "block-resolved",
+                    "--ref",
+                    "x",
+                    "--mode",
+                    "autonomous",
+                ),
+                "never raised",
+            ),
             (("continue", run_id, "--mode", "autonomous"), "never raised"),
             (("continue", run_id, "--reason", "because", "--ref", "x"), "--reason"),
             (("continue", run_id, "--reason", "block-resolved"), "--reason"),
-            (("continue", "missing", "--reason", "block-resolved", "--ref", "x"), "not an autonomous run"),
+            (
+                ("continue", "missing", "--reason", "block-resolved", "--ref", "x"),
+                "not an autonomous run",
+            ),
         ):
             with self.subTest(argv=argv):
                 code, _, err = self.main(*argv)
@@ -755,7 +834,9 @@ class RunContinueTests(RunCase):
                 self.assertIn(text, err)
         self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "stopped")
         self.main("continue", run_id, "--reason", "block-resolved", "--ref", "x")
-        code, _, err = self.main("continue", run_id, "--reason", "block-resolved", "--ref", "x")
+        code, _, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
         self.assertEqual(code, 2)
         self.assertIn("continued", err)
         code, _, err = self.main("resume", run_id)
@@ -788,7 +869,9 @@ class RunContinueTests(RunCase):
         self.engine["scenario"] = self.publishable
         self.start()
         self.assertEqual(autonomy.run_file(self.root, "human1").read_bytes(), before)
-        code, _, _ = self.main("continue", "human1", "--reason", "block-resolved", "--ref", "x")
+        code, _, _ = self.main(
+            "continue", "human1", "--reason", "block-resolved", "--ref", "x"
+        )
         self.assertEqual(code, 2)
 
 
@@ -813,7 +896,9 @@ class RunRefusalTests(RunCase):
 
     def test_privileged_action_and_narrowed_risk(self) -> None:
         self.eligible_issue(actions="deploy")
-        self.refused("not eligible for autonomous: privileged action deploy before merge")
+        self.refused(
+            "not eligible for autonomous: privileged action deploy before merge"
+        )
         self.eligible_issue(risk="R2")
         (self.root / "ballast.toml").write_text(
             '[autonomous]\nrisk = ["R0", "R1"]\nallow_epics = true\n'
@@ -830,7 +915,9 @@ class RunRefusalTests(RunCase):
             "repos_acme_demo_issues_27_comments.json",
             [
                 {
-                    "body": "Risk: R1\n<!-- ballast-intake: issue=#27; scope=feature -->",
+                    "body": (
+                        "Risk: R1\n<!-- ballast-intake: issue=#27; scope=feature -->"
+                    ),
                     "author_association": "OWNER",
                 }
             ],
@@ -857,19 +944,35 @@ class RunRefusalTests(RunCase):
 
     def test_issue_must_match_feature(self) -> None:
         code, _, err = self.main(
-            "start", "--mode", "autonomous", "-i", "issue=28", "-i", "idea=x",
-            "-i", f"feature_directory={FEATURE}",
+            "start",
+            "--mode",
+            "autonomous",
+            "-i",
+            "issue=28",
+            "-i",
+            "idea=x",
+            "-i",
+            f"feature_directory={FEATURE}",
         )
         self.assertEqual(code, 2)
         self.assertIn("is not for issue #28", err)
         code, _, err = self.main(
-            "start", "--mode", "autonomous", "-i", "idea=x", "-i", f"feature_directory={FEATURE}"
+            "start",
+            "--mode",
+            "autonomous",
+            "-i",
+            "idea=x",
+            "-i",
+            f"feature_directory={FEATURE}",
         )
         self.assertEqual(code, 2)
         self.assertIn("-i issue", err)
 
     def test_out_of_range_limit(self) -> None:
-        self.refused("--wall-time must be an integer from 1 to 1440", extra=("--wall-time", "2000"))
+        self.refused(
+            "--wall-time must be an integer from 1 to 1440",
+            extra=("--wall-time", "2000"),
+        )
 
     def test_eligible_r0_starts_with_its_risk(self) -> None:
         self.eligible_issue(risk="R0")

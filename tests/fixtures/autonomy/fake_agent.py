@@ -61,4 +61,4 @@ if step.is_dir():
             sys.stdout.write(f"tamper-refused={error.errno}\n")
     if (step / "stdout.txt").is_file():
         sys.stdout.write((step / "stdout.txt").read_text())
-print(f"fake agent ran {command}")
+sys.stdout.write(f"fake agent ran {command}\n")
