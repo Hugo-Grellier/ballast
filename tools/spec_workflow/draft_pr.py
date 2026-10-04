@@ -368,8 +368,16 @@ def _outcome(state: str, reason: str | None = None, **values: Any) -> Outcome:  
     """Build an outcome with its fixed remedy, formatted from validated values."""
     fill = values.pop("fill", {})
     template = REMEDIES.get((state, reason))
-    # Names come from agent-writable Git state; a remedy may be pasted.
-    quoted = {key: shlex.quote(str(value)) for key, value in fill.items()}
+    # Names come from agent-writable Git state and a remedy may be pasted:
+    # never an option, a control character or an unquoted shell word.
+    quoted = {
+        key: shlex.quote(
+            text
+            if (text := str(value)).isprintable() and not text.startswith("-")
+            else f"<{key}>"
+        )
+        for key, value in fill.items()
+    }
     remedy = template.format(**quoted) if template else None
     return Outcome(state, reason, remedy=remedy, **values)
 

