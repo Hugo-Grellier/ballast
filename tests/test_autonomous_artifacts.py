@@ -419,7 +419,12 @@ class ProvisionalIntentTests(RecorderCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no single workflow approval record", result.stderr)
 
-    def test_renew_supersedes_only_after_a_spec_change(self) -> None:
+    def test_renew_blocks_stale_intent_after_a_spec_change(self) -> None:
+        """Review F4, FR-010, FR-012: no runner-attributed intent decision.
+
+        A spec changed by a resolution needs a new intent decision by a
+        deciding agent or a human, so the run stops as stale intent.
+        """
         self.intent()
         self.ok(self.check("record-provisional-intent", "--renew"))
         self.assertEqual(len(self.decisions()), 1)
@@ -431,22 +436,18 @@ class ProvisionalIntentTests(RecorderCase):
         self.ok(self.record("decision-resolution"))
         (self.feature / "spec.md").write_text(SPEC + "\nResolved.\n")
         self.failed(self.check("intent"), "stale")
-        self.ok(self.check("record-provisional-intent", "--renew"))
-        renewed = self.decisions()[-1]
+        self.failed(
+            self.check("record-provisional-intent", "--renew"), "postcondition block"
+        )
+        block = self.block()
+        self.assertEqual(block["category"], "postcondition")
+        self.assertIn("PD-0002", block["condition"])
+        self.assertIn("new intent decision", block["condition"])
         self.assertEqual(
-            (renewed["point"], renewed["supersedes"], renewed["material"]),
-            ("intent", "PD-0001", True),
+            [e["point"] for e in self.decisions()], ["intent", "decision-resolution"]
         )
-        self.assertEqual(renewed["agent"]["provider"], "runner")
-        self.assertIn("PD-0002", renewed["basis"])
-        self.assertIn(
-            "not re-reviewed",
-            renewed["summary"].replace("without re-review", "not re-reviewed"),
-        )
-        self.ok(self.check("intent"))
-        self.assertIn(
-            "- **Decision**: PD-0003", (self.feature / "intent.md").read_text()
-        )
+        self.assertNotIn("runner", {e["agent"]["provider"] for e in self.decisions()})
+        self.failed(self.check("intent"), "stale")
 
     def test_plain_human_gated_record_intent_keeps_a_provisional_block(self) -> None:
         """Only a continuation replaces the provisional block (SC-007)."""

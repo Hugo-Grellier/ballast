@@ -1468,7 +1468,12 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
 
 
 def renew_intent(feature: Feature) -> None:
-    """Supersede a stale provisional intent after a spec-changing resolution."""
+    """Stop the run when a resolution changed the spec after the intent decision.
+
+    A changed spec needs a new intent decision by a deciding agent or a human
+    (FR-010, FR-012); the runner never decides one, so the run blocks as stale
+    intent and continues human-gated, where `approve-intent` decides it.
+    """
     run = _require_run(feature)
     spec = check_clarified_spec(feature)
     decisions = autonomy.read_decisions(feature.root, run["run_id"])
@@ -1477,8 +1482,7 @@ def renew_intent(feature: Feature) -> None:
         message = "no single current intent decision to renew"
         raise ContractError(message)
     old = current[0]
-    digest = spec_digest(spec)
-    if old.get("spec_digest") == digest:
+    if old.get("spec_digest") == spec_digest(spec):
         return
     number = int(old["id"].split("-")[1])
     resolutions = [
@@ -1487,49 +1491,19 @@ def renew_intent(feature: Feature) -> None:
         if entry["point"] == "decision-resolution"
         and int(entry["id"].split("-")[1]) > number
     ]
-    spec_path = f"{feature.relative}/spec.md"
-    entry = {
-        "point": "intent",
-        "decision": "accept",
-        "summary": "Spec changed after the provisional intent; renewed by the runner "
-        "without re-review",
-        "basis": (
-            f"spec.md changed after {old['id']}"
-            + (f" through {', '.join(resolutions)}" if resolutions else "")
-            + ". The runner rebinds the provisional intent to the changed spec; no "
-            "agent re-reviewed the renewed spec. The merge reviewer must review it."
-        ),
-        "evidence": [spec_path],
-        "artifact": {
-            "path": spec_path,
-            "sha256": autonomy.sha256_file(feature.root / spec_path),
-        },
-        "agent": {
-            "provider": "runner",
-            "model": "none",
-            "role": "runner",
-            "step_id": "renew-intent",
-        },
-        "material": True,
-        "supersedes": old["id"],
-        "privileged_actions": [],
-        "spec_digest": digest,
-        "at": autonomy.now(),
-    }
-    stored = autonomy.append_decision(feature.root, run["run_id"], entry)
-    _write_intent_block(
+    _block(
         feature,
-        spec,
-        _intent_block(feature, stored),
-        PROVISIONAL_START,
-        PROVISIONAL_END,
+        "postcondition",
+        f"stale intent: {feature.relative}/spec.md changed after {old['id']}"
+        + (f" through {', '.join(resolutions)}" if resolutions else "")
+        + "; the changed spec needs a new intent decision by a deciding agent "
+        "or a human (FR-010, FR-012)",
+        evidence=[f"{feature.relative}/spec.md"],
     )
-    write_record(feature)
-    check_intent(feature)
 
 
 def record_provisional_intent(feature: Feature, *, renew: bool = False) -> None:
-    """Record the intent decision, or renew it (`--renew`) after a spec change."""
+    """Record the intent decision, or (`--renew`) block when the spec changed."""
     if renew:
         renew_intent(feature)
     else:
