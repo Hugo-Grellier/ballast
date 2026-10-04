@@ -433,13 +433,6 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:
         return autonomy.make_block(
             "interrupted", "the run was interrupted", run_id=run_id, step_id=step_id
         )
-    if (autonomy.state_dir(ROOT) / "in-progress").exists():
-        return autonomy.make_block(
-            "unfinished-step",
-            "an agent step did not finish; its changes were not checked",
-            run_id=run_id,
-            step_id=step_id,
-        )
     steps = autonomy.read_steps(ROOT, run_id)
     results = state.get("step_results") or {}
     failed = (results.get(step_id) or {}).get("status") == "failed"
@@ -464,6 +457,15 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:
             return autonomy.make_block(
                 "ineligible", str(last["reason"]), run_id=run_id, step_id=step_id
             )
+    # After the wrapper's own exit codes: a tampering step also keeps the
+    # marker, on purpose; a wrapper killed mid-step recorded no step at all.
+    if (autonomy.state_dir(ROOT) / "in-progress").exists():
+        return autonomy.make_block(
+            "unfinished-step",
+            "an agent step did not finish; its changes were not checked",
+            run_id=run_id,
+            step_id=step_id,
+        )
     error = (results.get(step_id) or {}).get("error") or state.get("status")
     return autonomy.make_block(
         "postcondition",

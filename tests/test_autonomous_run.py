@@ -579,6 +579,19 @@ class RunBlockTests(RunCase):
                 if category == "tamper":
                     self.assertEqual(block["command"], "ballast discard-runs")
 
+    def test_tamper_keeps_its_category_despite_the_kept_marker(self) -> None:
+        """The wrapper keeps the in-progress marker after tampering on purpose."""
+
+        def tampered(run_id: str) -> None:
+            self.agent_step(run_id, 4)
+            marker = autonomy.state_dir(self.root) / "in-progress"
+            marker.write_text("ballast-agent-x-step.scope\n")
+
+        self.engine.update(status="failed", code=1, step="plan")
+        self.engine["scenario"] = tampered
+        run_id = self.started()
+        self.assertEqual(autonomy.read_block(self.root, run_id)["category"], "tamper")
+
     def test_recorder_block_is_kept(self) -> None:
         def recorder(run_id: str) -> None:
             autonomy.record_block(
