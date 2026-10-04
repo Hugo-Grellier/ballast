@@ -1188,9 +1188,15 @@ def required_kinds(feature: Feature, reviews: list[dict]) -> set[str]:
     return required
 
 
-def _frozen_check(feature: Feature) -> None:
+def _frozen_check(feature: Feature, *, required: bool = False) -> None:
     run = _require_run(feature)
     frozen = run.get("frozen_tree")
+    if required and not frozen:
+        _block(
+            feature,
+            "postcondition",
+            "no tree was frozen after implementation review",
+        )
     if frozen and autonomy.tree_digest(feature.root, (feature.relative,)) != frozen:
         _block(
             feature,
@@ -1553,6 +1559,10 @@ def run_checks(feature: Feature) -> None:
     except autonomy.AutonomyError as error:
         _block(feature, "postcondition", str(error))
     env = autonomy.confined_env(dict(os.environ), None)
+    # The review freeze holds across the checks: the reviewed code is what
+    # runs, and no check may change it (or anything else) on the way.
+    _frozen_check(feature, required=True)
+    checked = autonomy.checked_digest(feature.root, feature.relative)
     before = _protected_digests(feature.root)
     results = []
     with tempfile.TemporaryDirectory(prefix="ballast-checks-") as private:
@@ -1607,6 +1617,13 @@ def run_checks(feature: Feature) -> None:
             "tamper",
             "a check command changed protected inputs: " + ", ".join(changed[:10]),
         )
+    if autonomy.checked_digest(feature.root, feature.relative) != checked:
+        _block(
+            feature,
+            "postcondition",
+            "a check command changed the working tree; checks must leave the "
+            "reviewed tree as it is (only git-ignored outputs may change)",
+        )
     write_record(feature)
     failed = [r for r in results if r["exit"] != 0]
     if failed:
@@ -1620,7 +1637,7 @@ def run_checks(feature: Feature) -> None:
                 for r in failed
             ),
         )
-    run["checked_tree"] = autonomy.checked_digest(feature.root, feature.relative)
+    run["checked_tree"] = checked
     autonomy.write_run(feature.root, run)
 
 

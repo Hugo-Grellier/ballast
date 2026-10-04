@@ -816,8 +816,33 @@ class PreflightTests(RecorderCase):
 class RunChecksTests(RecorderCase):
     """FR-015: trusted checks, confined, with runner provenance."""
 
+    def setUp(self) -> None:
+        super().setUp()
+        record = autonomy.read_run(self.root, "run42")
+        record["frozen_tree"] = autonomy.tree_digest(self.root, (FEATURE,))
+        autonomy.write_run(self.root, record)
+
     def set_checks(self, commands: str) -> None:
         (self.root / "ballast.toml").write_text(f"[checks]\ncommands = {commands}\n")
+
+    def test_check_that_changes_reviewed_code_blocks(self) -> None:
+        """Review F3: a check may not change the tree that passed review."""
+        self.set_checks('["echo changed by a check >> README.md"]')
+        self.failed(self.check("run-checks"), "changed the working tree")
+        self.assertEqual(self.block()["category"], "postcondition")
+        self.assertNotIn("checked_tree", autonomy.read_run(self.root, "run42"))
+
+    def test_code_changed_after_review_blocks_before_checks(self) -> None:
+        marker = self.base / "check-ran"
+        self.set_checks(f'["touch {marker}"]')
+        (self.root / "README.md").write_text("changed after review\n")
+        self.failed(self.check("run-checks"), "after implementation review")
+        self.assertFalse(marker.exists())
+        record = autonomy.read_run(self.root, "run42")
+        del record["frozen_tree"]
+        autonomy.write_run(self.root, record)
+        self.failed(self.check("run-checks"), "after implementation review")
+        self.assertFalse(marker.exists())
 
     def test_passing_checks_record_results_and_tree(self) -> None:
         self.set_checks('["true", "echo checked"]')
