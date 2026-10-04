@@ -1,6 +1,6 @@
 # ADR-0004: Autonomous runs record agent-provisional decisions outside agent reach
 
-- Status: accepted (2026-10-04, with the plan of [feature 27](../../specs/27-autonomous-core/plan.md), decisions D-1, D-3, D-6 and D-7, after R2 review rounds 1–3 and the live pilot; accepted by the agent under the operator's standing authority for Epic #11 children, confirmed by the operator's merge of the feature PR)
+- Status: accepted (2026-10-04, with the plan of [feature 27](../../specs/27-autonomous-core/plan.md), decisions D-1, D-3, D-6 and D-7, after R2 review rounds 1–3 and the live pilot; accepted by the agent under the operator's standing authority for Epic #11 children, provisional until the operator merges the feature PR)
 - Feature: [27-autonomous-core](../../specs/27-autonomous-core/spec.md), FR-001 to FR-030
 - Numbering: the plan named this ADR `0001`; `0003` went to feature 17's ADR, which merged first, so this is `0004`; see [DEC-0001](../../specs/27-autonomous-core/decisions.md)
 

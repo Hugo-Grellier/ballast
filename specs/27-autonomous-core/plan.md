@@ -142,14 +142,14 @@ Changed files:
 - `templates/AGENTS.md`, `templates/github/pull_request_template.md`.
 - Repository-owned files: `AGENTS.md`, `CLAUDE.md`, `docs/policies/project/workflow.md`, `.specify/memory/constitution.md`, `specs/TECHNICAL-SPEC.md` (§37, §91) and `specs/PRODUCT-SPEC.md` (only R2 timing text).
 - `README.md`: the operator commands.
-- `tests/test_spec_workflow.py`: new cases only; existing cases stay unmodified.
+- `tests/test_spec_workflow.py`: new cases, plus fixture-only changes where trusted program resolution (T069o) moved fake `systemd-run` into `trusted_directory()` (`AgentWrapperTests`, `ScopeContainmentTests`, `TrustedLauncherTests`) and #17's checkpoint line changed the `stopped` helper (DEC-0007); no assertion of an existing case was weakened.
 
 Unchanged:
 
 - `templates/spec-kit/workflows/feature/workflow.yml`.
 - `tools/ballast`.
 - `claude-settings.json`.
-- `ledger.py` and the ledger schema. The ledger keeps importing Spec Kit runs, and for Autonomous runs it sees `ballast-autonomous` as the workflow ID.
+- The ledger schema. The ledger keeps importing Spec Kit runs, and for Autonomous runs it sees `ballast-autonomous` as the workflow ID. (`ledger.py` itself changes in T069b: its operator-side `git` empties configured filter drivers via `autonomy.filter_flags`.)
 
 ## Verification Strategy
 
