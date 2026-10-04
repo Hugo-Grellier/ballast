@@ -19,7 +19,7 @@ def checkpoint(root: Path, run_id: str) -> Outcome
 
 - `run.py` builds the workflow engine's environment from `os.environ` **without** `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN`, so no agent step receives them.
 - The checkpoint runs in `run.py`'s own process and passes `os.environ` (tokens included) plus `GH_PROMPT_DISABLED=1`, `GH_NO_UPDATE_NOTIFIER=1`, `GH_PAGER=cat`, `NO_COLOR=1` to its own commands, with these changes (DEC-0004):
-  - `PATH` keeps only the absolute entries outside every Git working tree, the checkout included, because `gh` runs `git` itself;
+  - `PATH` keeps only the absolute entries outside every Git working tree, the checkout included, and outside the agent-writable temp roots `/tmp`, `/var/tmp`, `/dev/shm` and `$TMPDIR` (DEC-0011), because `gh` runs `git` itself; programs are resolved by the same rule;
   - `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_INDEX_FILE` are dropped;
   - `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` set `core.fsmonitor=false` and `core.hooksPath=/dev/null`, and `GIT_CEILING_DIRECTORIES` is the parent of the working directory.
 - Every `gh` call starts in a fresh empty temporary directory, never in the checkout, and names `--repo` (or an `api` path with the repository) explicitly. The checkout's `.git/config` is agent-writable; `gh` must never read it.
@@ -41,14 +41,14 @@ All run with a list argv, `shell=False`, `cwd=root`, a 30 s timeout and the envi
 | Purpose | Command |
 | --- | --- |
 | Local branch | `<git> symbolic-ref --quiet --short HEAD` |
-| Branch pin | written by `run.py` at `ballast run start`, before the engine: `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch` and `published` (the upstream's name, or the branch's own); every checkpoint requires both to match → `blocked-unlinked/branch-unpinned` or `branch-mismatch` before any `gh` call (DEC-0006) |
+| Branch pin | written by `run.py` at `ballast run start`, before the engine: `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch`; every checkpoint requires the local branch and its published name to both equal it → `blocked-unlinked/branch-unpinned` or `branch-mismatch` before any `gh` call (DEC-0006, DEC-0010) |
 | Upstream | `<git> for-each-ref --format=%(upstream:remotename)%00%(upstream:remoteref) refs/heads/<branch>` |
 | Remote URL | `<git> remote get-url <remote>` |
 | Repository and base | `<gh> api repos/<owner>/<repo>` |
 | Issue | `<gh> api repos/<owner>/<repo>/issues/<issue>` |
 | Intake scope comment | `<gh> api --paginate --slurp "repos/<owner>/<repo>/issues/<issue>/comments?per_page=100"` ; selects the newest comment containing `<!-- ballast-intake:` whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR` |
 | PRs for the head | `<gh> api --paginate --slurp "repos/<owner>/<repo>/pulls?head=<owner>:<published>&state=all&per_page=100"`; fields read: `number`, `state`, `draft`, `merged_at`, `base.ref`, `head.ref`, `head.repo.owner.login`, `html_url`, `body` |
-| Diff | `<gh> api --paginate --slurp "repos/<owner>/<repo>/compare/<base>...<published>?per_page=100"` (every page, up to GitHub's 3000 files; DEC-0008) |
+| Diff | `<gh> api repos/<owner>/<repo>/compare/<base>...<published>` (one response: GitHub lists at most 300 files, on the first page only; 300 or more → never concluded, `pending/diff-unclassified`; DEC-0008) |
 | Template | `<gh> api "repos/<owner>/<repo>/contents/.github/pull_request_template.md?ref=<base>"`; 404 = no template |
 | Create | `<gh> pr create --repo <owner>/<repo> --draft --base <base> --head <published> --title <title> --body-file -` (body on stdin) |
 | Verify creation | the PR list command again |

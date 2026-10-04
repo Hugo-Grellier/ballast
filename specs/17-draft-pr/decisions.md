@@ -87,6 +87,7 @@
 ## DEC-0008 — Resolution
 
 - Accepted by the operator (2026-10-04). The compare is read with `--paginate --slurp` and `per_page=100`; `pending/diff-unclassified` remains only at GitHub's own 3000-file limit (T042).
+- Superseded (2026-10-04): The R2 round-2 review showed pagination was wrong: GitHub's compare lists changed files only on its first page, at most 300; later pages list commits. Paginating could report `pending/no-meaningful-change` while an implementation file sat past the cap. Reverted to one response and the original rule: 300 or more listed files is never concluded (`pending/diff-unclassified`, remedy "open the PR by hand; Ballast will adopt it"). FR-003 holds for every diff GitHub can fully list. Provisional decision under the operator's standing authority for Epic #11 children; confirm at merge.
 
 ## DEC-0009 — Proposal
 
@@ -98,3 +99,21 @@
 ## DEC-0009 — Resolution
 
 - Accepted by the operator (2026-10-04): fix in its own bugfix PR, not in #17. No change on this branch.
+
+## DEC-0010 — Proposal
+
+- Source: R2 round-2 review (security, high, partial). The DEC-0006 pin read the upstream's name from `.git/config` at `ballast run start`; an earlier run's agent may already have written it, steering the checkpoint to another branch of the pinned repository.
+- Classification: architecture issue (security boundary; R2).
+
+## DEC-0010 — Resolution
+
+- Provisional, under the operator's standing authority; confirm at merge): pin only the branch; the checkpoint requires the local branch and its published name to both equal it. An upstream under another name is refused as `blocked-unlinked/branch-mismatch` (narrows research R4, which followed a renamed upstream). Implemented in T043.
+
+## DEC-0011 — Proposal
+
+- Source: R2 round-2 review (security, high if an agent-writable directory is on `PATH`). Program and `PATH` filtering rejected Git working trees only. Agents can also write `/tmp` and `$TMPDIR` (Codex `workspace-write`); a `gh` or `git` planted there and reachable through `PATH` would run with the operator's token variables.
+- Classification: architecture issue (security boundary; R2).
+
+## DEC-0011 — Resolution
+
+- Provisional, under the operator's standing authority; confirm at merge): `ledger.agent_temp_roots()` (`/tmp`, `/var/tmp`, `/dev/shm`, `$TMPDIR`) are excluded like working trees when `draft_pr` resolves programs and builds the child `PATH`, and when the ledger resolves its own `git`. `ballast doctor` keeps its working-tree rule. Implemented in T043.

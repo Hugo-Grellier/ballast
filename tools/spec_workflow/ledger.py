@@ -353,6 +353,19 @@ def resolve_program(
     return None, shadowed or any(_executable(Path(e) / name) for e in dropped)
 
 
+TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")  # noqa: S108 - Refused, never used.
+
+
+def agent_temp_roots() -> tuple[Path, ...]:
+    """Directories an agent may write outside the checkout.
+
+    Codex's workspace-write sandbox allows /tmp and $TMPDIR; a program found
+    there is as untrusted as one in a working tree.
+    """
+    names = {*TEMP_ROOTS, os.environ.get("TMPDIR", "")} - {""}
+    return tuple(Path(name).resolve() for name in sorted(names))
+
+
 def trusted_entries(entries: list[str], excluded: tuple[Path, ...] = ()) -> list[str]:
     """Return the absolute PATH entries that lie outside every Git working tree."""
     return [
@@ -371,7 +384,9 @@ def _executable(path: Path) -> Path | None:
 def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     # Never a bare `git`: a checkout-local one could be agent-written.
     git, _ = resolve_program(
-        "git", os.environ.get("PATH", "").split(os.pathsep), (root.resolve(),)
+        "git",
+        os.environ.get("PATH", "").split(os.pathsep),
+        (root.resolve(), *agent_temp_roots()),
     )
     if git is None:
         fail("git not found outside working trees")

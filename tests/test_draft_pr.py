@@ -77,6 +77,9 @@ def url(number: int) -> str:
     return f"https://github.com/o/r/pull/{number}"
 
 
+REAL_TEMP_ROOTS = ledger.agent_temp_roots
+
+
 def pull(  # noqa: PLR0913
     number: int,
     *,
@@ -263,7 +266,7 @@ class FakeGitHub:
 
     def serve(self, argv: list[str], stdin: str | None) -> draft_pr.Result:  # noqa: C901, PLR0911, PLR0912
         stage = self.stage(argv)
-        if stage in {"pulls", "comments", "compare"}:
+        if stage in {"pulls", "comments"}:
             assert argv[1:4] == ["api", "--paginate", "--slurp"], argv  # noqa: S101
         if stage in self.failures:
             return self.failures[stage]
@@ -287,11 +290,8 @@ class FakeGitHub:
         if stage == "compare":
             if self.files is None:
                 return http(404)
-            pages = [
-                {"files": self.files[i : i + 100]}
-                for i in range(0, max(len(self.files), 1), 100)
-            ]
-            return self.ok(pages)
+            # GitHub lists at most 300 files, on the first page only.
+            return self.ok({"files": self.files[:300]})
         if stage == "template":
             if self.template is None:
                 return http(404)
@@ -361,6 +361,7 @@ class CheckpointCase(unittest.TestCase):
             patch.object(draft_pr, "_path_entries", lambda: list(self.entries)),
             patch.object(draft_pr, "_now", lambda: FIXED),
             patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state")}),
+            patch.object(ledger, "agent_temp_roots", tuple),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -490,21 +491,13 @@ class IdentityTests(CheckpointCase):
             {"outcome": "pending", "reason": "not-published", "issue": 17},
         )
 
-    def test_upstream_under_another_name_is_followed(self) -> None:
-        # The operator configures the upstream before `ballast run start` pins it.
+    def test_upstream_under_another_name_is_refused(self) -> None:
+        # DEC-0010: the upstream name lives in agent-writable .git/config even
+        # at start, so the branch must be published under its own name.
         git(self.repo.root, "config", "branch.feat-x.merge", "refs/heads/other-name")
         draft_pr.pin_branch(self.repo.root, RUN)
-        self.fake.on_create = None
-        self.assertOutcome(self.check(), "created")
-        pulls = self.fake.gh_calls("pulls")[0][-1]
-        self.assertIn("head=o:other-name&", pulls)
-        self.assertTrue(
-            self.fake.gh_calls("compare")[0][-1].endswith(
-                "main...other-name?per_page=100"
-            )
-        )
-        create = self.fake.gh_calls("create")[0]
-        self.assertEqual(create[create.index("--head") + 1], "other-name")
+        self.assertOutcome(self.check(), "blocked-unlinked", "branch-mismatch")
+        self.assertEqual(self.fake.gh_calls(), [])
 
     def test_run_without_a_branch_pin_is_unlinked(self) -> None:
         # DEC-0006: a run started before the pin existed, or whose pin failed.
@@ -531,9 +524,7 @@ class IdentityTests(CheckpointCase):
     def test_branch_pin_lives_outside_the_checkout(self) -> None:
         path = draft_pr._pin_path(self.repo.root, RUN)  # noqa: SLF001
         self.assertFalse(path.resolve().is_relative_to(self.repo.root))
-        self.assertEqual(
-            json.loads(path.read_text()), {"branch": "feat-x", "published": "feat-x"}
-        )
+        self.assertEqual(json.loads(path.read_text()), {"branch": "feat-x"})
 
     def test_non_github_remote_is_unlinked(self) -> None:
         git(self.repo.root, "remote", "set-url", "origin", "https://gitlab.com/o/r.git")
@@ -713,16 +704,14 @@ class PendingTests(CheckpointCase):
                 self.assertOutcome(self.check(), "created")
 
     def test_capped_spec_only_list_is_unclassified(self) -> None:
-        # GitHub's compare lists at most 3000 files.
-        self.fake.files = [{"filename": f"{FEATURE}/f{i}.md"} for i in range(3000)]
-        self.assertOutcome(self.check(), "pending", "diff-unclassified")
-        self.assertNoWrite()
-
-    def test_change_beyond_the_first_page_is_meaningful(self) -> None:
-        # DEC-0008: every page is read, not only the first 300 files.
+        # DEC-0008 superseded: GitHub's compare lists at most 300 files, on its
+        # first page only; a later file can never be seen, so never conclude.
         self.fake.files = [{"filename": f"{FEATURE}/f{i}.md"} for i in range(450)]
         self.fake.files.append({"filename": "src/late.py"})
-        self.assertOutcome(self.check(), "created")
+        self.assertOutcome(self.check(), "pending", "diff-unclassified")
+        self.assertNoWrite()
+        compare = self.fake.gh_calls("compare")[0]
+        self.assertNotIn("--paginate", compare)
 
 
 class BodyTests(CheckpointCase):
@@ -1192,6 +1181,12 @@ class LeakageTests(CheckpointCase):
 class CommandSeamTests(unittest.TestCase):
     """The real seam: list argv, no shell, the operator's tokens, gh settings."""
 
+    def setUp(self) -> None:
+        # Test directories live under /tmp; the temp-root rule has its own tests.
+        patcher = patch.object(ledger, "agent_temp_roots", tuple)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_command_passes_tokens_and_gh_settings_without_shell(self) -> None:
         tokens = {name: "secret-" + name for name in draft_pr.TOKEN_VARIABLES}
         captured: dict[str, Any] = {}
@@ -1259,6 +1254,31 @@ class CommandSeamTests(unittest.TestCase):
         }
         self.assertEqual(overrides["core.fsmonitor"], "false")
         self.assertEqual(overrides["core.hooksPath"], os.devnull)
+
+    def test_path_entries_in_agent_writable_temp_roots_are_dropped(self) -> None:
+        # R2 round 2: Codex's workspace-write sandbox can write /tmp and
+        # $TMPDIR, so a gh or git planted there must never be trusted.
+        with TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            planted = base / "planted"
+            executable(planted / "gh", "#!/bin/sh\nexit 0\n")
+            (base / "repo").mkdir()
+            with (
+                patch.object(ledger, "agent_temp_roots", lambda: (base,)),
+                patch.object(draft_pr, "_path_entries", lambda: [str(planted)]),
+            ):
+                found, shadowed = draft_pr._resolve("gh", base / "repo")  # noqa: SLF001
+                kept = draft_pr._child_path(base / "repo")  # noqa: SLF001
+            self.assertIsNone(found)
+            self.assertTrue(shadowed)
+            self.assertNotIn(str(planted), kept.split(os.pathsep))
+
+    def test_default_temp_roots_cover_tmp_and_tmpdir(self) -> None:
+        roots = REAL_TEMP_ROOTS()
+        for path in ("/tmp", "/var/tmp", "/dev/shm"):  # noqa: S108
+            self.assertIn(Path(path).resolve(), roots)
+        with patch.dict(os.environ, {"TMPDIR": "/srv/agent-tmp"}):
+            self.assertIn(Path("/srv/agent-tmp").resolve(), REAL_TEMP_ROOTS())
 
     def test_gh_never_reads_the_checkouts_git_config(self) -> None:
         # Security review of DEC-0004: gh runs git itself, and .git/config is

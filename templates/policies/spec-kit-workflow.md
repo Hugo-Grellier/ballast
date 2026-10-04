@@ -583,7 +583,8 @@ and records nothing.
 
 Authority: the checkpoint is trusted launcher code, outside the agent sandbox.
 It uses your authenticated GitHub CLI, `gh` 2.48 or later, and `git`, each
-resolved from absolute `PATH` entries outside every Git working tree and run by
+resolved from absolute `PATH` entries outside every Git working tree and
+outside `/tmp`, `/var/tmp`, `/dev/shm` and `$TMPDIR`, and run by
 absolute path without a shell. `gh` starts outside the checkout, and the
 repository it targets is the `[github] repository` you pin in `ballast.toml`,
 never one read from Git configuration an agent can change. Agents stay denied `git push` and `gh`, and the

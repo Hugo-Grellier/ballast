@@ -345,6 +345,19 @@ class LedgerTests(unittest.TestCase):
             ledger.common_dir(self.root)
         self.assertFalse(sentinel.exists())
 
+    def test_git_in_an_agent_writable_temp_root_is_never_executed(self) -> None:
+        # Codex's workspace-write sandbox can write /tmp and $TMPDIR.
+        with TemporaryDirectory() as temp:
+            planted = Path(temp)
+            sentinel = planted / "git-ran"
+            fake = planted / "git"
+            fake.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 1\n")
+            fake.chmod(0o755)
+            system = os.environ.get("PATH", "")
+            with patch.dict(os.environ, {"PATH": f"{planted}{os.pathsep}{system}"}):
+                self.assertTrue(ledger.common_dir(self.root).is_dir())
+            self.assertFalse(sentinel.exists())
+
     def test_unsupported_version_and_source_are_rejected(self) -> None:
         event = self.event("run", {"action": "started"})
         event["schema_version"] = True

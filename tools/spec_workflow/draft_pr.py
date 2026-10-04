@@ -62,7 +62,7 @@ TITLE_LIMIT = 256
 SCOPE_LIMIT = 500
 SCOPE_FIELDS = ("Main outcome:", "Risk:", "Scope gate:")
 SCOPE_AUTHORS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-COMPARE_FILE_CAP = 3000  # GitHub's own limit for a compare's file list.
+COMPARE_FILE_CAP = 300  # GitHub lists at most 300 files, on the first page only.
 NAME = re.compile(r"[A-Za-z0-9._-]{1,100}")
 ISSUE = re.compile(r"specs/([1-9][0-9]{0,8})-")
 HTTP_STATUS = re.compile(r"HTTP ([0-9]{3})")
@@ -271,7 +271,8 @@ def _path_entries() -> list[str]:
 
 def _child_path(root: Path) -> str:
     """PATH for gh and git: gh runs git itself, so drop checkout entries too."""
-    return os.pathsep.join(ledger.trusted_entries(_path_entries(), (root.resolve(),)))
+    excluded = (root.resolve(), *ledger.agent_temp_roots())
+    return os.pathsep.join(ledger.trusted_entries(_path_entries(), excluded))
 
 
 def _pin_path(root: Path, run_id: str) -> Path:
@@ -279,11 +280,10 @@ def _pin_path(root: Path, run_id: str) -> Path:
 
 
 def pin_branch(root: Path, run_id: str) -> None:
-    """Record the run's branch and upstream when the operator starts it.
+    """Record the run's branch when the operator starts it.
 
-    HEAD and the upstream live in agent-writable `.git/config`; every later
-    checkpoint must still see this branch. Without an upstream yet, the branch
-    is expected to be published under its own name.
+    HEAD lives in agent-writable Git state; every later checkpoint must still
+    be on this branch, published under the same name (DEC-0006, DEC-0010).
     """
     if not RUN_ID_PATTERN.fullmatch(run_id):
         return
@@ -294,33 +294,18 @@ def pin_branch(root: Path, run_id: str) -> None:
     branch = head.stdout.strip()
     if head.returncode or not branch or branch.startswith("-"):
         return
-    upstream = _command(
-        [git, "for-each-ref", "--format=%(upstream:remoteref)", f"refs/heads/{branch}"],
-        cwd=root,
-    )
-    ref = upstream.stdout.strip()
-    published = ref.removeprefix("refs/heads/") if ref.startswith("refs/heads/") else ""
     path = _pin_path(root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_text(
-        json.dumps({"branch": branch, "published": published or branch}),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps({"branch": branch}), encoding="utf-8")
 
 
-def _branch_pin(root: Path, run_id: str) -> tuple[str, str] | None:
+def _branch_pin(root: Path, run_id: str) -> str | None:
     try:
         pin = json.loads(_pin_path(root, run_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(pin, dict):
-        return None
-    branch, published = pin.get("branch"), pin.get("published")
-    if not (
-        isinstance(branch, str) and branch and isinstance(published, str) and published
-    ):
-        return None
-    return branch, published
+    branch = pin.get("branch") if isinstance(pin, dict) else None
+    return branch if isinstance(branch, str) and branch else None
 
 
 def _pinned_repository(root: Path) -> tuple[str, str] | None:
@@ -358,7 +343,8 @@ def _untrusted_marker(root: Path) -> str | None:
 
 
 def _resolve(name: str, root: Path) -> tuple[str | None, bool]:
-    return ledger.resolve_program(name, _path_entries(), (root.resolve(),))
+    excluded = (root.resolve(), *ledger.agent_temp_roots())
+    return ledger.resolve_program(name, _path_entries(), excluded)
 
 
 def _outcome(state: str, reason: str | None = None, **values: Any) -> Outcome:  # noqa: ANN401
@@ -584,8 +570,8 @@ class _Checkpoint:
         pin = _branch_pin(self.run.root, self.run.run_id)
         if pin is None:
             self.stop("blocked-unlinked", "branch-unpinned")
-        if (branch, published) != pin:
-            self.stop("blocked-unlinked", "branch-mismatch", fill={"branch": pin[0]})
+        if branch != pin or published != pin:
+            self.stop("blocked-unlinked", "branch-mismatch", fill={"branch": pin})
 
     def pinned(self, owner: str, repo: str) -> tuple[str, str]:
         """Accept the upstream only when it is the repository pinned in ballast.toml."""
@@ -728,8 +714,7 @@ class _Checkpoint:
         run = self.run
         result = self.api(
             f"repos/{run.owner}/{run.repo}/compare/"
-            f"{_quote(run.base)}...{_quote(run.published)}?per_page=100",
-            paginate=True,
+            f"{_quote(run.base)}...{_quote(run.published)}"
         )
         if result.returncode:
             if _status(result) == 404:  # noqa: PLR2004
@@ -739,12 +724,9 @@ class _Checkpoint:
                     fill={"remote": run.remote, "branch": run.published},
                 )
             self.failed(result)
-        files = [
-            item
-            for page in _pages(_json(result))
-            for item in page.get("files") or []
-            if isinstance(item, dict)
-        ]
+        data = _json(result)
+        files = data.get("files") if isinstance(data, dict) else None
+        files = [item for item in files or [] if isinstance(item, dict)]
         prefix = f"{run.feature}/"
         for item in files:
             for key in ("filename", "previous_filename"):
