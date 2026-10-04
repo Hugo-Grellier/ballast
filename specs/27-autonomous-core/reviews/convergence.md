@@ -9,7 +9,7 @@ Scope: `spec.md` (AC-001..AC-025, FR-001..FR-030, SC-001..SC-007), `plan.md`, `t
 Evidence checked by this review (2026-10-04, worktree `feat-autonomous-core`, HEAD `0f18900`):
 
 - `uvx ruff check && uvx ruff format --check`: pass (157 files).
-- `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py`: GATE_RESULT
+- `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py`: `Ran 540 tests in 398.507s`, `OK`, exit 0 (the engine-driven, real-`bwrap` and systemd cases ran on this host; no skip reported in the summary line).
 - Every test method and class cited in `tasks.md` and `decisions.md` exists in `tests/` (78 methods, 32 classes checked by script; none missing).
 - `templates/spec-kit/workflows/feature/workflow.yml`, `claude-settings.json` and `tools/ballast` are byte-identical to `origin/main` (SC-007).
 - `ballast-autonomous` has 39 steps and no `gate`; the step ids match the contract table including `renew-intent` and `run-checks`. `ballast-continue` has the 15 steps of the contract and no `command` step.
