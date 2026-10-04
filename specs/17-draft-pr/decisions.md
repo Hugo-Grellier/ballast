@@ -54,3 +54,31 @@
 ## DEC-0005 — Resolution
 
 - Accepted by the operator (2026-10-04), option (c): `[github] repository = "OWNER/NAME"` in `ballast.toml`. The upstream remote must match it case-insensitively, else `blocked-unlinked/repository-mismatch`; missing or invalid → `blocked-unlinked/no-repository`; both before any `gh` call. Contract, data model, research, quickstart (step 7), ADR-0003, policy and README updated (T041).
+
+## DEC-0006 — Proposal
+
+- Source: R2 implementation review (`reviews/implementation-review-codex-1.md`, security, high). The published branch comes from `symbolic-ref HEAD` and its upstream in agent-writable `.git/config`. The repository pin (DEC-0005) stops redirection to another repository, but an agent can point the run at any other branch of the pinned repository; the checkpoint then creates a Draft PR from that branch or rewrites the Ballast section of its open PR.
+- Classification: architecture issue (security boundary; R2).
+- Proposal: record the feature branch in operator state (`state_dir`, outside the checkout) when the operator runs `ballast run start`, and stop as `blocked-unlinked/branch-mismatch` when the checked-out branch or its published name differs on any later checkpoint. Alternative: derive the branch from the feature directory name; rejected in research R4 because projects name branches freely.
+- Not implemented: it adds operator state and a new outcome, so it waits for human resolution.
+
+## DEC-0007 — Proposal
+
+- Source: R2 implementation review (engineering, high). `reuse()` builds the new body from the earlier pulls listing and submits the whole body with `gh pr edit --body-file -`. A human edit made between the listing and the edit is overwritten outside the Ballast section, against FR-007. GitHub's REST API offers no conditional (If-Match) update for a PR body, so the window cannot be closed completely.
+- Classification: spec violation (FR-007) with a platform limit.
+- Proposal: immediately before an edit, re-read that one PR (`gh api repos/{repo}/pulls/{n}`) and edit only when its body still equals the body the replacement was built from; otherwise record `reused/section-unmanaged`-style `reused/body-changed` and leave the PR alone until the next run. Document the remaining sub-second window in the policy. Alternative: never edit an existing body (drop section refresh), a product change.
+- Not implemented: it adds an outcome reason and accepts a residual race, so it waits for human resolution.
+
+## DEC-0008 — Proposal
+
+- Source: R2 implementation review (engineering, medium). `compare()` reads one page of at most 300 files. When those are all under `specs/<feature>/`, the result is `pending/diff-unclassified` even if a later file is outside it, so a meaningful change can stay pending (FR-003). The approved plan chose this cap with the remedy "open the PR by hand; Ballast will adopt it".
+- Classification: spec ambiguity (approved limit vs FR-003).
+- Proposal: paginate the compare's files (`gh api --paginate`, GitHub serves up to 3000) and stop at the first file outside the spec directory; keep `pending/diff-unclassified` only beyond GitHub's own 3000-file limit. Alternative: keep the 300 cap and state it in FR-003 as accepted.
+- Not implemented: it changes an approved data source and the call budget, so it waits for human resolution.
+
+## DEC-0009 — Proposal
+
+- Source: R2 implementation review (architecture, medium). The launcher starts `run.py` with `-I` (`launcher.py`, `COMMANDS`), not `-I -S` as the constitution requires of workflow tools, and `run.py` now holds the operator's GitHub credentials. `-I` already ignores `PYTHON*` variables, the user site directory and the script directory, so no checkout path is imported; only root-owned system site-packages load. `run.py` and everything it imports are standard-library-only.
+- Classification: architecture issue (pre-existing; launcher trust model, R2).
+- Proposal: change `COMMANDS["run"]` to `("-IS", "run.py")` and add a test that `run.py` starts with `sys.flags.no_site`. It changes what the launcher executes for every run, so it belongs in its own bugfix PR rather than #17.
+- Not implemented: launcher change outside this feature's scope; waits for human resolution.
