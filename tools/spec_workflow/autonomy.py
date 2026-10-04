@@ -31,6 +31,10 @@ import tempfile
 import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
@@ -132,6 +136,7 @@ HUMAN_DECISION_KINDS = ("mode-change", "block-resolution", "merge-feedback")
 REFUSAL = "not eligible for autonomous: "
 CANNOT_CHECK = "cannot check autonomous eligibility: "
 BRANCH_REFUSAL = "autonomous needs a feature branch without an open PR"
+ORIGIN_REFUSAL = "origin is not the GitHub repository pinned in ballast.toml"
 RESUME_REFUSAL = (
     "autonomous resume is not supported until safe resume (#18); continue "
     "human-gated: ballast run continue {run_id} --reason block-resolved --ref TEXT"
@@ -1020,10 +1025,14 @@ def git(
     env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run git as the operator with hooks, fsmonitor and filters disabled."""
-    executable = shutil.which("git")
+    """Run git as the operator with hooks, fsmonitor and filters disabled.
+
+    Never a bare `git`: like draft_pr, only one found outside every working
+    tree and agent temp root (DEC-0007).
+    """
+    executable, _ = _trusted()._resolve("git", root)  # noqa: SLF001
     if executable is None:
-        message = "git is required"
+        message = "git not found outside working trees"
         raise AutonomyError(message)
     overrides = [] if args[:1] == ("config",) else filter_overrides(root, env)
     result = subprocess.run(  # noqa: S603 - resolved executable, argument list
@@ -1573,34 +1582,51 @@ def codex_sandbox_nests(root: Path, *, env: dict[str, str] | None = None) -> boo
 # --- Eligibility ----------------------------------------------------------
 
 
-def _gh(*args: str) -> object:
-    executable = shutil.which("gh")
-    if executable is None:
-        message = CANNOT_CHECK + "gh CLI not found"
-        raise AutonomyError(message, "ineligible")
-    try:
-        result = subprocess.run(  # noqa: S603 - resolved executable, argument list
-            [executable, *args], capture_output=True, text=True, timeout=60, check=False
+def _gh(
+    root: Path, *args: str, stdin: str | None = None, category: str = "ineligible"
+) -> object:
+    """Run the operator's gh as draft_pr does (DEC-0007); return its JSON.
+
+    gh is found outside every working tree and agent temp root and starts in
+    an empty directory, so it never reads the agent-writable `.git/config`;
+    every caller names the repository pinned in ballast.toml. A failure raises
+    `category`; at publication an authentication failure is `permission`.
+    """
+    prefix = CANNOT_CHECK if category == "ineligible" else ""
+    draft_pr = _trusted()
+    gh, _ = draft_pr._resolve("gh", root)  # noqa: SLF001
+    if gh is None:
+        message = f"{prefix}gh not found outside working trees"
+        raise AutonomyError(message, category if prefix else "permission")
+    with tempfile.TemporaryDirectory(prefix="ballast-gh-") as away:
+        result = draft_pr._command(  # noqa: SLF001
+            [gh, *args], stdin=stdin, cwd=Path(away), root=root
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        message = f"{CANNOT_CHECK}{error}"
-        raise AutonomyError(message, "ineligible") from error
     if result.returncode != 0:
-        cause = (result.stderr.strip().splitlines() or ["gh failed"])[0]
-        message = f"{CANNOT_CHECK}gh {' '.join(args[:2])}: {cause}"
-        raise AutonomyError(message, "ineligible")
+        cause = draft_pr._classify(result)  # noqa: SLF001
+        detail = (result.stderr.strip().splitlines() or [cause])[0][:500]
+        message = f"{prefix}gh {' '.join(args[:2])} failed: {detail}"
+        # draft_pr's causes, plus #27's earlier rule for a gh login prompt.
+        if not prefix and (
+            cause in {"gh-unauthenticated", "gh-forbidden"}
+            or "auth" in result.stderr.lower()
+        ):
+            category = "permission"
+        raise AutonomyError(message, category)
+    if args[:2] == ("pr", "create"):
+        return result.stdout
     try:
         return json.loads(result.stdout or "null")
     except ValueError as error:
-        message = f"{CANNOT_CHECK}gh returned invalid JSON"
-        raise AutonomyError(message, "ineligible") from error
+        message = f"{prefix}gh returned invalid JSON"
+        raise AutonomyError(message, category) from error
 
 
-def _gh_list(path: str) -> list[dict]:
+def _gh_list(root: Path, path: str) -> list[dict]:
     items: list[dict] = []
     for page in range(1, 11):
         separator = "&" if "?" in path else "?"
-        result = _gh("api", f"{path}{separator}per_page=100&page={page}")
+        result = _gh(root, "api", f"{path}{separator}per_page=100&page={page}")
         if not isinstance(result, list):
             message = f"{CANNOT_CHECK}GitHub returned a non-list page"
             raise AutonomyError(message, "ineligible")
@@ -1611,18 +1637,35 @@ def _gh_list(path: str) -> list[dict]:
     raise AutonomyError(message, "ineligible")
 
 
-def repository() -> tuple[str, str]:
-    """(OWNER/REPO, default branch) of the current checkout's GitHub repository."""
-    data = _gh("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
-    if not isinstance(data, dict):
-        message = f"{CANNOT_CHECK}gh repo view returned no repository"
-        raise AutonomyError(message, "ineligible")
-    name = data.get("nameWithOwner")
+def repository(root: Path, category: str = "ineligible") -> tuple[str, str]:
+    """(OWNER/NAME, default branch) of the repository pinned in ballast.toml.
+
+    Never the agent-writable remote (#17 DEC-0005, DEC-0007 here).
+    """
+    prefix = CANNOT_CHECK if category == "ineligible" else ""
+    pinned = _trusted()._pinned_repository(root)  # noqa: SLF001
+    if pinned is None:
+        message = (
+            f'{prefix}declare [github] repository = "OWNER/NAME" in ballast.toml, '
+            "then run ballast trust"
+        )
+        raise AutonomyError(message, category)
+    repo = "/".join(pinned)
+    data = _gh(
+        root,
+        "repo",
+        "view",
+        repo,
+        "--json",
+        "nameWithOwner,defaultBranchRef",
+        category=category,
+    )
+    name = data.get("nameWithOwner") if isinstance(data, dict) else None
+    if not isinstance(name, str) or name.lower() != repo.lower():
+        message = f"{prefix}gh repo view did not return {repo}"
+        raise AutonomyError(message, category)
     branch = (data.get("defaultBranchRef") or {}).get("name")
-    if not isinstance(name, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", name):
-        message = f"{CANNOT_CHECK}gh repo view returned no repository name"
-        raise AutonomyError(message, "ineligible")
-    return name, branch if isinstance(branch, str) else ""
+    return repo, branch if isinstance(branch, str) else ""
 
 
 def _label_names(issue: dict) -> set[str]:
@@ -1698,18 +1741,18 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
     failure raises (fails closed).
     """
     reasons: list[str] = []
-    repo, default_branch = repository()
+    repo, default_branch = repository(root)
     base = f"repos/{repo}"
-    data = _gh("api", f"{base}/issues/{issue}")
+    data = _gh(root, "api", f"{base}/issues/{issue}")
     if not isinstance(data, dict) or data.get("number") != issue:
         message = f"{CANNOT_CHECK}issue #{issue} could not be read"
         raise AutonomyError(message, "ineligible")
-    children = _gh_list(f"{base}/issues/{issue}/sub_issues")
-    blockers = _gh_list(f"{base}/issues/{issue}/dependencies/blocked_by")
+    children = _gh_list(root, f"{base}/issues/{issue}/sub_issues")
+    blockers = _gh_list(root, f"{base}/issues/{issue}/dependencies/blocked_by")
     reasons += _scope_problems(data, children, blockers)
     comments = [
         c
-        for c in _gh_list(f"{base}/issues/{issue}/comments")
+        for c in _gh_list(root, f"{base}/issues/{issue}/comments")
         if SCOPE_COMMENT.format(issue=issue) in (c.get("body") or "")
     ]
     scope = {"risk": None, "privileged_actions": None, "boundaries": []}
@@ -1743,7 +1786,19 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
     if not branch or branch in {"HEAD", default_branch}:
         reasons.append(f"{REFUSAL}{BRANCH_REFUSAL}")
     else:
-        prs = _gh("pr", "list", "--head", branch, "--state", "open", "--json", "number")
+        prs = _gh(
+            root,
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--head",
+            branch,
+            "--state",
+            "open",
+            "--json",
+            "number",
+        )
         if prs:
             reasons.append(f"{REFUSAL}{BRANCH_REFUSAL}")
     reasons += [
@@ -2133,20 +2188,28 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         reasons = risk_reasons(run["risk"]["level"], run["risk"]["boundaries"], policy)
         if reasons:
             return refuse("ineligible", reasons[0])
-        try:
-            repo, default_branch = repository()
-        except AutonomyError as error:
-            return refuse("forge", str(error))
+        repo, default_branch = repository(root, "forge")
         branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         if branch in {"", "HEAD", default_branch}:
             return refuse("postcondition", BRANCH_REFUSAL)
-        try:
-            prs = _gh(
-                "pr", "list", "--head", branch, "--state", "open", "--json", "url"
-            )
-        except AutonomyError as error:
-            return refuse("forge", str(error))
-        if prs:
+        if not _origin_is(root, repo):
+            return refuse("postcondition", ORIGIN_REFUSAL)
+        prs = _gh(
+            root,
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--head",
+            branch,
+            "--state",
+            "open",
+            "--json",
+            "number,url,body",
+            category="forge",
+        )
+        adopted = _adoptable(prs, run["feature"])
+        if prs and adopted is None:
             return refuse("postcondition", f"{BRANCH_REFUSAL}; reuse is #17")
         checked = run.get("checked_tree")
         if not checked or checked_digest(root, run["feature"]) != checked:
@@ -2215,11 +2278,13 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
             branch=branch,
         )
         _guard_body(body)
-        with tempfile.TemporaryDirectory(prefix="ballast-pr-") as directory:
-            body_file = Path(directory) / "body.md"
-            body_file.write_text(body, encoding="utf-8")
-            title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
-            url = _create_pr(title, body_file)
+        title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
+        if adopted is not None:
+            url = _adopt_pr(root, repo, adopted, body)
+        else:
+            url = _create_pr(
+                root, repo, base=default_branch, head=branch, title=title, body=body
+            )
     except AutonomyError as error:
         return refuse(error.category, str(error))
     return {"ok": True, "category": None, "message": "published", "url": url}
@@ -2231,30 +2296,72 @@ def _guard_body(body: str) -> None:
         raise AutonomyError(message)
 
 
-def _create_pr(title: str, body_file: Path) -> str:
-    executable = shutil.which("gh")
-    if executable is None:
-        message = "gh CLI not found"
-        raise AutonomyError(message, "permission")
-    argv = [
-        executable,
-        "pr",
-        "create",
-        "--draft",
-        "--title",
-        title,
-        "--body-file",
-        str(body_file),
-    ]
-    result = subprocess.run(  # noqa: S603 - resolved executable, argument list
-        argv, capture_output=True, text=True, timeout=120, check=False
+def _trusted() -> ModuleType:
+    """draft_pr, imported late: it imports ledger, which imports this module."""
+    import draft_pr  # noqa: PLC0415
+
+    return draft_pr
+
+
+def _origin_is(root: Path, repo: str) -> bool:
+    """Whether `origin` is the pinned GitHub repository; it receives the push."""
+    url = git(root, "remote", "get-url", "origin", check=False).stdout.strip()
+    match = _trusted().GITHUB_REMOTE.fullmatch(url)
+    return match is not None and "/".join(match.group("owner", "repo")).lower() == (
+        repo.lower()
     )
-    if result.returncode != 0:
-        cause = result.stderr.strip()[:500]
-        category = "permission" if "auth" in cause.lower() else "forge"
-        message = f"gh pr create failed: {cause}"
-        raise AutonomyError(message, category)
-    return (result.stdout.strip().splitlines() or [""])[-1]
+
+
+def _adoptable(prs: object, feature: str) -> tuple[int, str, str] | None:
+    """Return the one open PR the #17 checkpoint opened for this feature.
+
+    That is (number, url, managed section), or None: any other open PR, or
+    more than one, is refused.
+    """
+    draft_pr = _trusted()
+    if not isinstance(prs, list) or len(prs) != 1 or not isinstance(prs[0], dict):
+        return None
+    number, url, body = (prs[0].get(key) for key in ("number", "url", "body"))
+    if type(number) is not int or not isinstance(url, str) or not isinstance(body, str):
+        return None
+    begin, end = draft_pr.MARK_BEGIN, draft_pr.MARK_END
+    if body.count(begin) != 1 or body.count(end) != 1:
+        return None
+    start, stop = body.find(begin), body.find(end)
+    section = body[start : stop + len(end)]
+    if stop < start or f"- Feature: `{feature}/`" not in section:
+        return None
+    return number, url, section
+
+
+def _adopt_pr(root: Path, repo: str, adopted: tuple[int, str, str], body: str) -> str:
+    """Put the summary on the checkpoint's PR, keeping its managed section."""
+    number, url, section = adopted
+    _gh(
+        root,
+        "pr",
+        "edit",
+        str(number),
+        "--repo",
+        repo,
+        "--body-file",
+        "-",
+        stdin=body + "\n" + section + "\n",
+        category="forge",
+    )
+    return url
+
+
+def _create_pr(  # noqa: PLR0913 - every input explicit
+    root: Path, repo: str, *, base: str, head: str, title: str, body: str
+) -> str:
+    argv = ["pr", "create", "--draft", "--repo", repo, "--head", head]
+    if base:
+        argv += ["--base", base]
+    created = _gh(
+        root, *argv, "--title", title, "--body-file", "-", stdin=body, category="forge"
+    )
+    return (str(created).strip().splitlines() or [""])[-1]
 
 
 def read_checks(root: Path, run_id: str) -> list[dict] | None:

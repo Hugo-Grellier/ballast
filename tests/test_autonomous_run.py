@@ -18,11 +18,13 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_autonomy import (
     FEATURE,
+    GITHUB_PIN,
     GOLDEN_CHECKS,
     ROOT,
     TOOLS,
@@ -985,7 +987,7 @@ class RunRefusalTests(RunCase):
         self.eligible_issue(risk="R2")
         (self.root / "ballast.toml").write_text(
             '[autonomous]\nrisk = ["R0", "R1"]\nallow_epics = true\n'
-            '[checks]\ncommands = ["true"]\n'
+            '[checks]\ncommands = ["true"]\n' + GITHUB_PIN
         )
         self.git("commit", "-qam", "narrow")
         err = self.refused(
@@ -1064,3 +1066,101 @@ class RunRefusalTests(RunCase):
         self.assertEqual(code, 0, err)
         record = autonomy.read_run(self.root, self.launched[0][1])
         self.assertEqual(record["risk"]["level"], "R0")
+
+
+class PublisherCheckpointTests(RunCase):
+    """DEC-0007: the #27 publisher and the #17 checkpoint leave one Draft PR."""
+
+    PR: ClassVar[dict] = {
+        "number": 7,
+        "html_url": "https://github.com/acme/demo/pull/7",
+        "state": "open",
+        "draft": True,
+        "merged_at": None,
+        "closed_at": None,
+        "head": {
+            "ref": "27-demo-run",
+            "repo": {"full_name": "acme/demo", "owner": {"login": "acme"}},
+        },
+        "base": {"ref": "main"},
+    }
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The checkpoint's GitHub reads; `pr create` lists the PR it opened.
+        self.gh_data("repos_acme_demo.json", {"default_branch": "main"})
+        self.gh_data("created-pr.json", self.PR)
+
+    def started_run(self, run_id: str) -> None:
+        """Leave what the real _launch would: the branch pin and the run's inputs."""
+        run.draft_pr.pin_branch(self.root, run_id)
+        inputs = self.root / ".specify/workflows/runs" / run_id / "inputs.json"
+        inputs.write_text(json.dumps({"inputs": {"feature_directory": FEATURE}}))
+        self.publishable(run_id)
+
+    def test_publication_then_checkpoint_leaves_one_pr(self) -> None:
+        self.engine["scenario"] = self.started_run
+        code, out, err = self.start()
+        self.assertEqual(code, 0, out + err)
+        ((_, run_id),) = self.launched
+        lines = [line for line in out.splitlines() if line.startswith("Draft PR:")]
+        # The publisher opens the PR; the checkpoint runs once, after it.
+        self.assertEqual(
+            lines,
+            [
+                "Draft PR: https://github.com/acme/demo/pull/7",
+                "Draft PR: reused #7 https://github.com/acme/demo/pull/7",
+            ],
+        )
+        calls = [c[:2] for c in self.gh_calls()]
+        self.assertEqual(calls.count(["pr", "create"]), 1)
+        self.assertNotIn(["pr", "edit"], calls)
+        # The checkpoint left the publisher's merge-review summary untouched.
+        body = (self.gh_dir / "pr-body.md").read_text()
+        self.assertNotIn(run.draft_pr.MARK_BEGIN, body)
+        self.assertIn("Refs #27", body)
+        events, _ = run.draft_pr.ledger.read(self.root, run_id)
+        outcomes = [
+            (e["data"]["outcome"], e["data"].get("pr_number"))
+            for e in events
+            if e["kind"] == "pull_request"
+        ]
+        self.assertEqual(outcomes, [("reused", 7)])
+        # A later checkpoint keeps reusing it.
+        again = run.draft_pr.checkpoint(self.root, run_id)
+        self.assertEqual((again.state, again.pr_number), ("reused", 7))
+        self.assertEqual([c[:2] for c in self.gh_calls()].count(["pr", "create"]), 1)
+
+    def test_publish_retry_adopts_the_checkpoints_pr(self) -> None:
+        """A PR the checkpoint opened after a failed publication is reused."""
+        self.engine["scenario"] = self.started_run
+        (self.gh_dir / "FAIL_pr_create").write_text("HTTP 502: Bad Gateway\n")
+        code, _, _ = self.start()
+        self.assertEqual(code, 1)
+        ((_, run_id),) = self.launched
+        self.assertEqual(autonomy.read_block(self.root, run_id)["category"], "forge")
+        # The push succeeded, so a later checkpoint opens the PR itself.
+        (self.gh_dir / "FAIL_pr_create").unlink()
+        self.gh_data(
+            "repos_acme_demo_compare_main...27-demo-run.json",
+            {"files": [{"filename": "src/demo.py"}]},
+        )
+        self.gh_data("repos_acme_demo_pulls.json", [])
+        opened = run.draft_pr.checkpoint(self.root, run_id)
+        self.assertEqual((opened.state, opened.pr_number), ("created", 7), opened)
+        section = (self.gh_dir / "pr-body.md").read_text()
+        self.gh_data(
+            "pr-list.json",
+            [{"number": 7, "url": self.PR["html_url"], "body": "Intro\n" + section}],
+        )
+        before = len(self.gh_calls())
+        code, out, err = self.main("publish", run_id)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Draft PR: https://github.com/acme/demo/pull/7", out)
+        calls = [c[:2] for c in self.gh_calls()[before:]]
+        self.assertNotIn(["pr", "create"], calls)
+        self.assertEqual(calls.count(["pr", "edit"]), 1)
+        body = (self.gh_dir / "pr-body.md").read_text()
+        self.assertTrue(body.startswith(f"Autonomous run {run_id} for #27"), body)
+        self.assertEqual(body.count(run.draft_pr.MARK_BEGIN), 1)
+        self.assertTrue(body.rstrip().endswith(run.draft_pr.MARK_END))

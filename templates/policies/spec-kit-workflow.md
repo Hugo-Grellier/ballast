@@ -386,7 +386,7 @@ runner contract for it. Every validator above still runs unchanged.
 | `record-provisional-intent` | trusted `artifacts.py` | Writes the `workflow-provisional` block in `intent.md`, bound to the current spec digest; a later spec change makes it stale. With `--renew` (after decision resolutions) a changed spec blocks the run as stale intent; the runner never decides intent. In an Autonomous run every human approval block is refused. |
 | Reviews (`review-plan`, `review-implementation`, `review-specialists`, `reconcile-spec`) | confined agent on the other provider when available; Claude for every role when Codex's own sandbox cannot start inside `bwrap` (checked once at start, recorded in the run) | One entry per required review kind (security always); any `high` or `critical` finding, or a verdict other than `approved`, blocks; a reviewer that edits source blocks. |
 | `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. |
-| Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It never merges, marks ready, releases or deploys. |
+| Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. When the branch's only open PR is the one the checkpoint opened for this feature, it puts the summary on that PR, keeping its Ballast section, instead of opening another. It never merges, marks ready, releases or deploys. |
 
 Agent steps in an Autonomous run run under `bwrap`: the host is read-only, the
 worktree is writable except its protected inputs, and the operator state,
@@ -588,9 +588,9 @@ and PRs manually.
 
 ## Draft PR
 
-At the end of every `ballast run start` or `resume` invocation, whether the
-workflow completed, paused at a gate or failed, the launcher runs a Draft PR
-checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
+At the end of every `ballast run start`, `resume` or `continue` invocation,
+whether the workflow completed, paused at a gate or failed, and after an
+Autonomous run's own publication, the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
 feature branch as published on GitHub differs from the default branch outside
 `specs/<feature>/`, exactly one Draft PR shows it. Every later invocation reuses
 that PR, including one a human opened by hand from the same branch.
@@ -607,7 +607,10 @@ that PR, including one a human opened by hand from the same branch.
 - On a reused PR Ballast changes only its marked section. It adds that section
   when the body neither has one nor references the Issue, and leaves a body with
   several or unbalanced sections alone.
-- Ballast never pushes: publishing the branch stays your action. It never
+- An Autonomous run's publisher opens its own Draft PR, whose body references
+  the Issue; the checkpoint reuses that PR and leaves its body unchanged.
+- The checkpoint never pushes: publishing the branch stays your action, except
+  for an Autonomous run's publisher. It never
   changes the title, base, labels, reviewers or draft state, and never marks a
   PR ready, merges, closes or reopens one.
 - The checkpoint never changes the run's exit status or step state. Every state

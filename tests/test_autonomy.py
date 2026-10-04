@@ -27,6 +27,7 @@ sys.path.insert(0, str(TOOLS))
 try:
     import artifacts
     import autonomy
+    import draft_pr
     import ledger
 finally:
     sys.path.pop(0)
@@ -43,6 +44,8 @@ Privileged actions before merge: {actions}
 <!-- ballast-intake: issue=#27; scope=feature -->
 """
 UPDATE_GOLDEN = os.environ.get("BALLAST_UPDATE_GOLDEN") == "1"
+GITHUB_URL = "https://github.com/acme/demo.git"
+GITHUB_PIN = '[github]\nrepository = "acme/demo"\n'
 
 
 def _install(source: Path, target: Path) -> None:
@@ -85,9 +88,13 @@ class AutonomyCase(unittest.TestCase):
         self.gh_dir.mkdir()
         self.state = self.base / "state"
         gitconfig = self.base / "gitconfig"
+        origin = self.base / "origin.git"
+        # origin is the pinned GitHub repository by name; pushes reach the
+        # bare repository through the operator's (global) pushInsteadOf.
         gitconfig.write_text(
             "[user]\n\tname = t\n\temail = t@example.test\n"
             "[init]\n\tdefaultBranch = main\n"
+            f'[url "{origin}"]\n\tpushInsteadOf = {GITHUB_URL}\n'
         )
         _install(FIXTURES / "fake_gh.py", self.bin / "gh")
         self.real_path = os.environ["PATH"]
@@ -101,6 +108,9 @@ class AutonomyCase(unittest.TestCase):
             "GIT_CONFIG_NOSYSTEM": "1",
         }
         self.enterContext(patch.dict(os.environ, self.env, clear=True))
+        # The fakes live under the temp root, which gh/git resolution refuses
+        # in production (an agent can write there); trust it in tests.
+        self.enterContext(patch.object(ledger, "agent_temp_roots", tuple))
         self.git("init", "-q")
         (self.root / ".gitignore").write_text(
             ".specify/workflow-state/\n.specify/workflows/runs/\n"
@@ -108,17 +118,18 @@ class AutonomyCase(unittest.TestCase):
         (self.root / ".specify").mkdir()
         (self.root / ".specify/memory").mkdir()
         (self.root / ".specify/memory/constitution.md").write_text("# C\n")
-        (self.root / "ballast.toml").write_text('[checks]\ncommands = ["true"]\n')
+        (self.root / "ballast.toml").write_text(
+            '[checks]\ncommands = ["true"]\n' + GITHUB_PIN
+        )
         (self.root / "README.md").write_text("demo\n")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "base")
-        origin = self.base / "origin.git"
         subprocess.run(  # noqa: S603
             ["git", "init", "-q", "--bare", str(origin)],  # noqa: S607
             check=True,
             capture_output=True,
         )
-        self.git("remote", "add", "origin", str(origin))
+        self.git("remote", "add", "origin", GITHUB_URL)
         self.git("push", "-q", "-u", "origin", "main")
         self.git("checkout", "-q", "-b", "27-demo-run")
 
@@ -1431,7 +1442,9 @@ class PublisherTests(AutonomyCase):
         self.refused("postcondition", "filter=evil")
 
     def test_protected_and_large_paths_are_refused(self) -> None:
-        (self.root / "ballast.toml").write_text('[checks]\ncommands = ["false"]\n')
+        (self.root / "ballast.toml").write_text(
+            '[checks]\ncommands = ["false"]\n' + GITHUB_PIN
+        )
         self.refused("postcondition", "ballast.toml")
         self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
         self.git("checkout", "--", "ballast.toml")
@@ -1500,6 +1513,106 @@ class PublisherTests(AutonomyCase):
         autonomy.raise_risk(record, "R2", [], "PD-0001")
         autonomy.write_run(self.root, record)
         self.refused("ineligible", "risk R2 excluded")
+
+    # DEC-0007: the publisher uses draft_pr's gh and git hardening (#17).
+
+    def test_gh_starts_outside_the_checkout_and_names_the_pinned_repo(self) -> None:
+        with patch.object(draft_pr, "_command", wraps=draft_pr._command) as command:  # noqa: SLF001
+            self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        gh_calls = [c for c in command.call_args_list if c.args[0][1] != "api"]
+        self.assertTrue(gh_calls)
+        for call in gh_calls:
+            self.assertFalse(call.kwargs["cwd"].resolve().is_relative_to(self.root))
+            argv = call.args[0]
+            self.assertIn("acme/demo", argv)
+            if argv[1] == "pr":
+                self.assertEqual(argv[argv.index("--repo") + 1], "acme/demo")
+        create = next(c for c in self.gh_calls() if c[:2] == ["pr", "create"])
+        self.assertEqual(create[create.index("--base") + 1], "main")
+        self.assertEqual(create[create.index("--head") + 1], "27-demo-run")
+
+    def test_checkout_local_gh_and_git_never_run(self) -> None:
+        planted = self.root / ".git/planted-bin"  # In the checkout, not in status.
+        planted.mkdir()
+        marker = self.base / "planted-ran"
+        for name in ("gh", "git"):
+            (planted / name).write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+            (planted / name).chmod(0o755)
+        os.environ["PATH"] = f"{planted}{os.pathsep}{os.environ['PATH']}"
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        self.assertFalse(marker.exists())
+
+    def test_gh_only_in_a_temp_root_is_refused(self) -> None:
+        system = self.base / "system-bin"  # git only, never a real gh
+        system.mkdir()
+        (system / "git").symlink_to(shutil.which("git", path=self.real_path) or "")
+        os.environ["PATH"] = f"{self.bin}{os.pathsep}{system}"
+        with patch.object(ledger, "agent_temp_roots", lambda: (self.bin,)):
+            result = autonomy.publish(self.root, "run42")
+        self.assertEqual(self.gh_calls(), [])
+        self.assertEqual(result["category"], "permission")
+        self.assertIn("gh not found outside working trees", result["message"])
+
+    def test_missing_pin_is_a_retryable_forge_refusal(self) -> None:
+        (self.root / "ballast.toml").write_text('[checks]\ncommands = ["true"]\n')
+        self.refused("forge", "[github] repository")
+        self.assertIn("forge", autonomy.PUBLISH_RETRY)
+
+    def test_origin_other_than_the_pinned_repository_is_refused(self) -> None:
+        self.git("remote", "set-url", "origin", "https://github.com/evil/demo.git")
+        self.refused("postcondition", autonomy.ORIGIN_REFUSAL)
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "list"]])
+
+    def test_open_pr_of_another_feature_is_still_refused(self) -> None:
+        section = (
+            f"{draft_pr.MARK_BEGIN}\n- Feature: `specs/28-other/`\n{draft_pr.MARK_END}"
+        )
+        self.gh_data(
+            "pr-list.json",
+            [
+                {
+                    "number": 9,
+                    "url": "https://github.com/acme/demo/pull/9",
+                    "body": section,
+                }
+            ],
+        )
+        self.refused("postcondition", "reuse is #17")
+
+    def test_adopts_the_checkpoints_pr_and_keeps_its_section(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        self.gh_data(
+            "pr-list.json",
+            [
+                {
+                    "number": 9,
+                    "url": "https://github.com/acme/demo/pull/9",
+                    "body": f"Template\n\n{section}\n",
+                }
+            ],
+        )
+        result = autonomy.publish(self.root, "run42")
+        self.assertEqual(result["url"], "https://github.com/acme/demo/pull/9", result)
+        calls = [c[:2] for c in self.gh_calls()]
+        self.assertNotIn(["pr", "create"], calls)
+        self.assertIn(["pr", "edit"], calls)
+        body = (self.gh_dir / "pr-body.md").read_text()
+        self.assertIn("Refs #27", body)
+        self.assertEqual(body.count(draft_pr.MARK_BEGIN), 1)
+        self.assertTrue(body.endswith(section + "\n"))
+
+    def test_eligibility_needs_the_pin(self) -> None:
+        (self.root / "ballast.toml").write_text('[checks]\ncommands = ["true"]\n')
+        policy, _, warnings = self.policy()
+        with self.assertRaisesRegex(autonomy.AutonomyError, r"\[github\] repository"):
+            autonomy.check_eligibility(
+                self.root,
+                issue=ISSUE,
+                feature=FEATURE,
+                policy=policy,
+                warnings=warnings,
+                self_test=False,
+            )
 
 
 if __name__ == "__main__":
