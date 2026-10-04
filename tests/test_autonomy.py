@@ -1351,6 +1351,21 @@ class PublisherTests(AutonomyCase):
         )
         self.refused("postcondition", autonomy.BRANCH_REFUSAL)
 
+    def test_body_claiming_human_approval_is_never_posted(self) -> None:
+        """AC-007, SC-003: the last guard before the PR body leaves the host."""
+        render = autonomy.render_pr_body
+        with patch.object(
+            autonomy,
+            "render_pr_body",
+            side_effect=lambda *a, **k: (
+                render(*a, **k) + "\nPlan approved by the operator.\n"
+            ),
+        ):
+            result = autonomy.publish(self.root, "run42")
+        self.assertFalse(result["ok"])
+        self.assertIn("human approval", result["message"])
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
+
     def test_forge_failure_is_retryable(self) -> None:
         (self.gh_dir / "FAIL_pr_create").write_text("")
         result = autonomy.publish(self.root, "run42")
