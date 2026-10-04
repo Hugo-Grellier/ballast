@@ -24,6 +24,7 @@ Resolved once per checkpoint by trusted code; never stored as a whole.
 | `local_branch` | `<git> symbolic-ref --quiet --short HEAD` | non-empty, does not start with `-` | `pending/no-branch` |
 | `remote`, `published_branch` | branch upstream (`<git> for-each-ref`) | both present; `refs/heads/` prefix removed | `pending/not-published` |
 | `owner`, `repo` | `<git> remote get-url <remote>` | `OWNER/NAME` parsed from a github.com HTTPS, SCP-style or `ssh://` URL; each part `[A-Za-z0-9._-]{1,100}` | `blocked-unlinked/not-github` |
+| pinned repository | `[github] repository` in the protected `ballast.toml` | `OWNER/NAME`, each part `[A-Za-z0-9._-]{1,100}`; the upstream must match it case-insensitively, and the pin is what every `gh` call targets (DEC-0005: `.git/config` is agent-writable) | `blocked-unlinked/no-repository`, `blocked-unlinked/repository-mismatch` |
 | `base` | `gh api repos/{owner}/{repo}` → `default_branch` | non-empty, differs from `published_branch` | `failed-retryable/<cause>`, or `pending/on-base-branch` |
 
 ## Body inputs
@@ -60,7 +61,7 @@ Delimited by `<!-- ballast:draft-pr:begin -->` and `<!-- ballast:draft-pr:end --
 | one section, equal to canonical text | none |
 | one section, different (always the case after a new checkpoint time) | rewrite the text between the markers; every byte outside them is kept |
 | no section, Issue already referenced (`#N` as a whole token, or `github.com/{owner}/{repo}/issues/N`) | none |
-| no section, Issue not referenced | append only the line `Related to #N` after a blank line (spec edge case: restore at most the Issue link) |
+| no section, Issue not referenced | append the whole marked Ballast section after a blank line (AC-007; DEC-0003) |
 | several sections, or unbalanced markers | none; outcome still `reused`, reason `section-unmanaged` |
 
 ## PR checkpoint outcome
@@ -76,7 +77,7 @@ One per checkpoint. Recorded as a ledger event of kind `pull_request` ([ledger c
 | `failed-retryable` | `gh-untrusted`, `git-untrusted` | `reason`, `issue?` |
 | `blocked-ambiguous` | `several-open`, `base-mismatch`, `create-unverified` | `reason`, `issue`, `matches`; `pr_number`/`pr_url` for `base-mismatch` and `create-unverified` |
 | `blocked-closed` | `closed`, `merged` (`merged` when any match was merged) | `reason`, `issue`, `matches`, `pr_number`/`pr_url` of the most recent match |
-| `blocked-unlinked` | `no-issue-number`, `issue-not-found`, `not-github` | `reason`, `issue?` |
+| `blocked-unlinked` | `no-issue-number`, `issue-not-found`, `not-github`, `no-repository`, `repository-mismatch` | `reason`, `issue?` |
 
 `gh-untrusted` and `git-untrusted` are reasons of the existing `failed-retryable` state (research, plan-review decisions).
 
@@ -90,7 +91,7 @@ There is no stored state machine: each checkpoint recomputes the outcome from Gi
 2. `issue` from `feature` → `blocked-unlinked/no-issue-number`.
 3. `git` resolution → `failed-retryable/git-untrusted`.
 4. `local_branch` → `pending/no-branch`.
-5. Upstream → `pending/not-published`; `owner`/`repo` → `blocked-unlinked/not-github`.
+5. Upstream → `pending/not-published`; `owner`/`repo` → `blocked-unlinked/not-github`; no valid `[github] repository` in `ballast.toml` → `blocked-unlinked/no-repository`; upstream repository differs from it (case-insensitively) → `blocked-unlinked/repository-mismatch` (DEC-0005).
 6. `gh` resolution → `failed-retryable/gh-missing`, `failed-retryable/gh-untrusted`.
 7. `base` → `failed-retryable`; `pending/on-base-branch`.
 8. Issue lookup → `blocked-unlinked/issue-not-found`; Issue comments → `scope`.

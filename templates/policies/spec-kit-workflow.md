@@ -571,6 +571,8 @@ is printed or stored.
 | `blocked-unlinked` | `no-issue-number` | name the feature directory `specs/<issue>-<slug>/` |
 | `blocked-unlinked` | `issue-not-found` | create the Issue, or fix the number in the feature directory |
 | `blocked-unlinked` | `not-github` | none: Draft PRs need a GitHub upstream |
+| `blocked-unlinked` | `no-repository` | declare `[github] repository = "OWNER/NAME"` in `ballast.toml`, then run `ballast trust` |
+| `blocked-unlinked` | `repository-mismatch` | the branch's upstream is not the repository pinned in `ballast.toml`: push the branch there, or fix the pin and run `ballast trust` |
 
 While `BALLAST_TAMPERED` or an unfinished agent step's marker exists, the
 checkpoint prints `Draft PR: skipped: <marker> exists; restore the checkout`
@@ -579,7 +581,9 @@ and records nothing.
 Authority: the checkpoint is trusted launcher code, outside the agent sandbox.
 It uses your authenticated GitHub CLI, `gh` 2.48 or later, and `git`, each
 resolved from absolute `PATH` entries outside every Git working tree and run by
-absolute path without a shell. Agents stay denied `git push` and `gh`, and the
+absolute path without a shell. `gh` starts outside the checkout, and the
+repository it targets is the `[github] repository` you pin in `ballast.toml`,
+never one read from Git configuration an agent can change. Agents stay denied `git push` and `gh`, and the
 launcher withholds `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
 `GITHUB_ENTERPRISE_TOKEN` from the workflow engine and every agent step. See
 ADR-0003 in the Ballast repository.

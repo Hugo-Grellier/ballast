@@ -18,7 +18,11 @@ def checkpoint(root: Path, run_id: str) -> Outcome
 ## Environment boundary
 
 - `run.py` builds the workflow engine's environment from `os.environ` **without** `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN`, so no agent step receives them.
-- The checkpoint runs in `run.py`'s own process and passes `os.environ` (tokens included) plus `GH_PROMPT_DISABLED=1`, `GH_NO_UPDATE_NOTIFIER=1`, `GH_PAGER=cat`, `NO_COLOR=1` to its own commands.
+- The checkpoint runs in `run.py`'s own process and passes `os.environ` (tokens included) plus `GH_PROMPT_DISABLED=1`, `GH_NO_UPDATE_NOTIFIER=1`, `GH_PAGER=cat`, `NO_COLOR=1` to its own commands, with these changes (DEC-0004):
+  - `PATH` keeps only the absolute entries outside every Git working tree, the checkout included, because `gh` runs `git` itself;
+  - `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_INDEX_FILE` are dropped;
+  - `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` set `core.fsmonitor=false` and `core.hooksPath=/dev/null`, and `GIT_CEILING_DIRECTORIES` is the parent of the working directory.
+- Every `gh` call starts in a fresh empty temporary directory, never in the checkout, and names `--repo` (or an `api` path with the repository) explicitly. The checkout's `.git/config` is agent-writable; `gh` must never read it.
 
 ## Program resolution
 
@@ -125,7 +129,9 @@ For `blocked-ambiguous/several-open` and `blocked-closed` the line lists every m
 | `blocked-unlinked/no-issue-number` | name the feature directory `specs/<issue>-<slug>/` |
 | `blocked-unlinked/issue-not-found` | create the Issue, or fix the number in the feature directory |
 | `blocked-unlinked/not-github` | none: Draft PRs need a GitHub upstream |
+| `blocked-unlinked/no-repository` | declare `[github] repository = "OWNER/NAME"` in `ballast.toml`, then run `ballast trust` |
+| `blocked-unlinked/repository-mismatch` | the branch's upstream is not OWNER/NAME, the repository pinned in `ballast.toml`: push the branch there, or fix the pin and run `ballast trust` |
 
 ## Test seam
 
-`draft_pr` runs every external command through one function, `_command(argv, *, stdin=None) -> Result`, so tests replace it with a scripted fake that asserts the exact argv sequence (absolute program paths included) and returns canned JSON, exit codes, timeouts and stderr. Program resolution reads `PATH` through a separate function so tests can point it at temporary directories. No test touches the network (FR-014).
+`draft_pr` runs every external command through one function, `_command(argv, *, stdin=None, cwd, root=None) -> Result` (`root` is the checkout when `cwd` is not), so tests replace it with a scripted fake that asserts the exact argv sequence (absolute program paths included) and returns canned JSON, exit codes, timeouts and stderr. Program resolution reads `PATH` through a separate function so tests can point it at temporary directories. No test touches the network (FR-014).

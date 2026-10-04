@@ -77,7 +77,7 @@ In `tests/test_agent_run_ledger.py`:
 
 ## 2. Live check in a disposable repository (operator, before merge)
 
-From a scratch project that pins this branch's commit and has Issue `#N`:
+From a scratch project that pins this branch's commit, declares `[github] repository = "OWNER/NAME"` in `ballast.toml` (then `ballast trust`), and has Issue `#N`:
 
 1. `ballast run start -i idea="Issue #N: …" -i feature_directory=specs/N-demo` on a feature branch with no upstream, and stop at the first gate. Expect `Draft PR: pending (not-published)`.
 2. Push a commit touching only `specs/N-demo/`, then `ballast run resume RUN_ID`. Expect `pending (no-meaningful-change)`.
@@ -85,5 +85,6 @@ From a scratch project that pins this branch's commit and has Issue `#N`:
 4. Add a line of your own outside the Ballast section, mark the PR ready for review on GitHub, resume with `-i integration=codex`. Expect `reused #P`; the PR is still ready, its title and your line are unchanged, and only the section's checkpoint time moved.
 5. `gh auth logout`, resume. Expect `failed-retryable (gh-unauthenticated): run gh auth login` and the workflow's usual exit status. Log in again and resume: `reused #P`.
 6. `ballast ledger report --run RUN_ID` shows `pull_request` with the latest outcome.
+7. `git remote set-url origin https://github.com/OTHER/NAME`, resume. Expect `blocked-unlinked (repository-mismatch)` and no change on GitHub; restore the URL.
 
 Record the commands and results in the PR description, with any step you could not run.

@@ -144,6 +144,7 @@ description: "Task list for One reusable Draft PR for issue-linked feature work"
 - [ ] T040 Resolve open items in `specs/17-draft-pr/decisions.md` if any, run Spec Kit converge and the spec reconciliation skill, then ask the operator to approve ADR-0003 and set its status to `Accepted` only after that approval (depends on T037, T038, T039).
 
 ---
+- [x] T041 Apply accepted DEC-0003, DEC-0004 and DEC-0005 (depends on T032): fix the data-model reuse row; in `_command` keep only `PATH` entries outside every working tree, drop Git location variables, override `core.fsmonitor`/`core.hooksPath`, and start every `gh` call in an empty temporary directory; read `[github] repository` from `ballast.toml` and stop as `blocked-unlinked/no-repository` or `repository-mismatch` before any `gh` call. Tests: `CommandSeamTests.test_child_path_keeps_only_entries_outside_working_trees`, `test_gh_never_reads_the_checkouts_git_config` (a real `core.fsmonitor` sentinel, shown to fire with both guards removed), `IdentityTests.test_missing_or_invalid_pinned_repository_is_unlinked`, `test_remote_redirected_away_from_pinned_repository_is_refused`, `test_pinned_repository_matches_case_insensitively`; the fake asserts every `gh` call starts outside the checkout. Update the contract, data model, research, quickstart, ADR-0003, policy and README.
 
 ## Dependencies & Execution Order
 
