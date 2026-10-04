@@ -41,16 +41,18 @@ All run with a list argv, `shell=False`, `cwd=root`, a 30 s timeout and the envi
 | Purpose | Command |
 | --- | --- |
 | Local branch | `<git> symbolic-ref --quiet --short HEAD` |
+| Branch pin | written by `run.py` at `ballast run start`, before the engine: `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch` and `published` (the upstream's name, or the branch's own); every checkpoint requires both to match → `blocked-unlinked/branch-unpinned` or `branch-mismatch` before any `gh` call (DEC-0006) |
 | Upstream | `<git> for-each-ref --format=%(upstream:remotename)%00%(upstream:remoteref) refs/heads/<branch>` |
 | Remote URL | `<git> remote get-url <remote>` |
 | Repository and base | `<gh> api repos/<owner>/<repo>` |
 | Issue | `<gh> api repos/<owner>/<repo>/issues/<issue>` |
 | Intake scope comment | `<gh> api --paginate --slurp "repos/<owner>/<repo>/issues/<issue>/comments?per_page=100"` ; selects the newest comment containing `<!-- ballast-intake:` whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR` |
 | PRs for the head | `<gh> api --paginate --slurp "repos/<owner>/<repo>/pulls?head=<owner>:<published>&state=all&per_page=100"`; fields read: `number`, `state`, `draft`, `merged_at`, `base.ref`, `head.ref`, `head.repo.owner.login`, `html_url`, `body` |
-| Diff | `<gh> api repos/<owner>/<repo>/compare/<base>...<published>` |
+| Diff | `<gh> api --paginate --slurp "repos/<owner>/<repo>/compare/<base>...<published>?per_page=100"` (every page, up to GitHub's 3000 files; DEC-0008) |
 | Template | `<gh> api "repos/<owner>/<repo>/contents/.github/pull_request_template.md?ref=<base>"`; 404 = no template |
 | Create | `<gh> pr create --repo <owner>/<repo> --draft --base <base> --head <published> --title <title> --body-file -` (body on stdin) |
 | Verify creation | the PR list command again |
+| Re-read before edit | `<gh> api repos/<owner>/<repo>/pulls/<number>`; a body that differs from the listed one → `reused/body-changed`, no edit (DEC-0007) |
 | Edit section | `<gh> pr edit <number> --repo <owner>/<repo> --body-file -` (body on stdin) |
 
 Branch names are passed as separate arguments; a name starting with `-` is refused as `pending/no-branch` before any call. Path and query segments interpolated into `gh api` paths are validated (`owner` and `repo` by the pattern in the [data model](../data-model.md)) and branch names are URL-quoted with `urllib.parse.quote(..., safe="")`. `--paginate --slurp` needs `gh` 2.48 or later.
@@ -113,6 +115,7 @@ For `blocked-ambiguous/several-open` and `blocked-closed` the line lists every m
 | `pending/no-meaningful-change` | none: a Draft PR opens once implementation changes are pushed |
 | `pending/diff-unclassified` | open the PR by hand; Ballast will adopt it |
 | `reused/section-unmanaged` | keep one Ballast section in the PR body |
+| `reused/body-changed` | none: the PR body changed during the check; the next run refreshes the section |
 | `failed-retryable/gh-missing` | install the GitHub CLI; `ballast doctor` checks it |
 | `failed-retryable/gh-unauthenticated` | run `gh auth login` |
 | `failed-retryable/gh-forbidden` | grant your GitHub account write access to `<owner>/<repo>` |
@@ -129,6 +132,8 @@ For `blocked-ambiguous/several-open` and `blocked-closed` the line lists every m
 | `blocked-unlinked/no-issue-number` | name the feature directory `specs/<issue>-<slug>/` |
 | `blocked-unlinked/issue-not-found` | create the Issue, or fix the number in the feature directory |
 | `blocked-unlinked/not-github` | none: Draft PRs need a GitHub upstream |
+| `blocked-unlinked/branch-unpinned` | start a new run with `ballast run start` on the feature branch |
+| `blocked-unlinked/branch-mismatch` | check out BRANCH, the branch this run started on, with its upstream, then resume |
 | `blocked-unlinked/no-repository` | declare `[github] repository = "OWNER/NAME"` in `ballast.toml`, then run `ballast trust` |
 | `blocked-unlinked/repository-mismatch` | the branch's upstream is not OWNER/NAME, the repository pinned in `ballast.toml`: push the branch there, or fix the pin and run `ballast trust` |
 

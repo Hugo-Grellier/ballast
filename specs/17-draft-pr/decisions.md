@@ -62,12 +62,20 @@
 - Proposal: record the feature branch in operator state (`state_dir`, outside the checkout) when the operator runs `ballast run start`, and stop as `blocked-unlinked/branch-mismatch` when the checked-out branch or its published name differs on any later checkpoint. Alternative: derive the branch from the feature directory name; rejected in research R4 because projects name branches freely.
 - Not implemented: it adds operator state and a new outcome, so it waits for human resolution.
 
+## DEC-0006 — Resolution
+
+- Accepted by the operator (2026-10-04). `run.py` calls `draft_pr.pin_branch` at `ballast run start`, before the engine, writing `branch` and `published` to operator state outside the checkout; a resume never re-pins. The checkpoint stops as `blocked-unlinked/branch-unpinned` or `branch-mismatch` before any `gh` call. Contract, data model, research, quickstart (step 8), ADR-0003 and policy updated (T042).
+
 ## DEC-0007 — Proposal
 
 - Source: R2 implementation review (engineering, high). `reuse()` builds the new body from the earlier pulls listing and submits the whole body with `gh pr edit --body-file -`. A human edit made between the listing and the edit is overwritten outside the Ballast section, against FR-007. GitHub's REST API offers no conditional (If-Match) update for a PR body, so the window cannot be closed completely.
 - Classification: spec violation (FR-007) with a platform limit.
 - Proposal: immediately before an edit, re-read that one PR (`gh api repos/{repo}/pulls/{n}`) and edit only when its body still equals the body the replacement was built from; otherwise record `reused/section-unmanaged`-style `reused/body-changed` and leave the PR alone until the next run. Document the remaining sub-second window in the policy. Alternative: never edit an existing body (drop section refresh), a product change.
 - Not implemented: it adds an outcome reason and accepts a residual race, so it waits for human resolution.
+
+## DEC-0007 — Resolution
+
+- Accepted by the operator (2026-10-04). Before an edit the checkpoint re-reads the PR (`gh api repos/{repo}/pulls/{n}`); a body that differs from the listed one gives `reused/body-changed` and no edit. The sub-second window GitHub's API cannot close is documented in the data model (T042).
 
 ## DEC-0008 — Proposal
 
@@ -76,9 +84,17 @@
 - Proposal: paginate the compare's files (`gh api --paginate`, GitHub serves up to 3000) and stop at the first file outside the spec directory; keep `pending/diff-unclassified` only beyond GitHub's own 3000-file limit. Alternative: keep the 300 cap and state it in FR-003 as accepted.
 - Not implemented: it changes an approved data source and the call budget, so it waits for human resolution.
 
+## DEC-0008 — Resolution
+
+- Accepted by the operator (2026-10-04). The compare is read with `--paginate --slurp` and `per_page=100`; `pending/diff-unclassified` remains only at GitHub's own 3000-file limit (T042).
+
 ## DEC-0009 — Proposal
 
 - Source: R2 implementation review (architecture, medium). The launcher starts `run.py` with `-I` (`launcher.py`, `COMMANDS`), not `-I -S` as the constitution requires of workflow tools, and `run.py` now holds the operator's GitHub credentials. `-I` already ignores `PYTHON*` variables, the user site directory and the script directory, so no checkout path is imported; only root-owned system site-packages load. `run.py` and everything it imports are standard-library-only.
 - Classification: architecture issue (pre-existing; launcher trust model, R2).
 - Proposal: change `COMMANDS["run"]` to `("-IS", "run.py")` and add a test that `run.py` starts with `sys.flags.no_site`. It changes what the launcher executes for every run, so it belongs in its own bugfix PR rather than #17.
 - Not implemented: launcher change outside this feature's scope; waits for human resolution.
+
+## DEC-0009 — Resolution
+
+- Accepted by the operator (2026-10-04): fix in its own bugfix PR, not in #17. No change on this branch.

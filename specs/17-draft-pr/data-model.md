@@ -22,6 +22,7 @@ Resolved once per checkpoint by trusted code; never stored as a whole.
 | `issue_title` | `gh api repos/{owner}/{repo}/issues/{issue}` | exists, no `pull_request` key; title truncated to 256 characters | `blocked-unlinked/issue-not-found` |
 | `run_id` | `run.py` | `RUN_ID_PATTERN` (existing) | n/a (validated before the run) |
 | `local_branch` | `<git> symbolic-ref --quiet --short HEAD` | non-empty, does not start with `-` | `pending/no-branch` |
+| branch pin | operator state written at `ballast run start` (outside the checkout) | `local_branch` and `published_branch` must equal the pinned pair; without an upstream at start, `published` is the branch's own name (DEC-0006) | `blocked-unlinked/branch-unpinned`, `blocked-unlinked/branch-mismatch` |
 | `remote`, `published_branch` | branch upstream (`<git> for-each-ref`) | both present; `refs/heads/` prefix removed | `pending/not-published` |
 | `owner`, `repo` | `<git> remote get-url <remote>` | `OWNER/NAME` parsed from a github.com HTTPS, SCP-style or `ssh://` URL; each part `[A-Za-z0-9._-]{1,100}` | `blocked-unlinked/not-github` |
 | pinned repository | `[github] repository` in the protected `ballast.toml` | `OWNER/NAME`, each part `[A-Za-z0-9._-]{1,100}`; the upstream must match it case-insensitively, and the pin is what every `gh` call targets (DEC-0005: `.git/config` is agent-writable) | `blocked-unlinked/no-repository`, `blocked-unlinked/repository-mismatch` |
@@ -63,6 +64,7 @@ Delimited by `<!-- ballast:draft-pr:begin -->` and `<!-- ballast:draft-pr:end --
 | no section, Issue already referenced (`#N` as a whole token, or `github.com/{owner}/{repo}/issues/N`) | none |
 | no section, Issue not referenced | append the whole marked Ballast section after a blank line (AC-007; DEC-0003) |
 | several sections, or unbalanced markers | none; outcome still `reused`, reason `section-unmanaged` |
+| any edit above | first re-read the PR; when its body differs from the listed body, no edit and reason `body-changed` (DEC-0007; GitHub offers no conditional update, so a sub-second window remains) |
 
 ## PR checkpoint outcome
 
@@ -72,12 +74,12 @@ One per checkpoint. Recorded as a ledger event of kind `pull_request` ([ledger c
 | --- | --- | --- |
 | `pending` | `no-branch`, `not-published`, `on-base-branch`, `no-meaningful-change`, `diff-unclassified` | `reason`, `issue` |
 | `created` | none | `issue`, `pr_number`, `pr_url` |
-| `reused` | none, or `section-unmanaged` | `issue`, `pr_number`, `pr_url`, `reason?` |
+| `reused` | none, `section-unmanaged` or `body-changed` | `issue`, `pr_number`, `pr_url`, `reason?` |
 | `failed-retryable` | `gh-missing`, `gh-unauthenticated`, `gh-forbidden`, `github-unreachable`, `github-error`, `lock-busy`, `internal-error` | `reason`, `issue?` |
 | `failed-retryable` | `gh-untrusted`, `git-untrusted` | `reason`, `issue?` |
 | `blocked-ambiguous` | `several-open`, `base-mismatch`, `create-unverified` | `reason`, `issue`, `matches`; `pr_number`/`pr_url` for `base-mismatch` and `create-unverified` |
 | `blocked-closed` | `closed`, `merged` (`merged` when any match was merged) | `reason`, `issue`, `matches`, `pr_number`/`pr_url` of the most recent match |
-| `blocked-unlinked` | `no-issue-number`, `issue-not-found`, `not-github`, `no-repository`, `repository-mismatch` | `reason`, `issue?` |
+| `blocked-unlinked` | `no-issue-number`, `issue-not-found`, `not-github`, `no-repository`, `repository-mismatch`, `branch-unpinned`, `branch-mismatch` | `reason`, `issue?` |
 
 `gh-untrusted` and `git-untrusted` are reasons of the existing `failed-retryable` state (research, plan-review decisions).
 

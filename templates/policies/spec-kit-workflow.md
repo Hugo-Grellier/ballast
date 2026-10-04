@@ -550,6 +550,7 @@ is printed or stored.
 | `created` | | none |
 | `reused` | | none |
 | `reused` | `section-unmanaged` | keep one Ballast section in the PR body |
+| `reused` | `body-changed` | none: the PR body changed during the check; the next run refreshes the section |
 | `pending` | `no-branch` | check out the feature branch, then resume |
 | `pending` | `not-published` | publish the branch, e.g. `git push -u <remote or origin> <branch>` |
 | `pending` | `on-base-branch` | run the feature on its own branch |
@@ -571,6 +572,8 @@ is printed or stored.
 | `blocked-unlinked` | `no-issue-number` | name the feature directory `specs/<issue>-<slug>/` |
 | `blocked-unlinked` | `issue-not-found` | create the Issue, or fix the number in the feature directory |
 | `blocked-unlinked` | `not-github` | none: Draft PRs need a GitHub upstream |
+| `blocked-unlinked` | `branch-unpinned` | start a new run with `ballast run start` on the feature branch |
+| `blocked-unlinked` | `branch-mismatch` | check out the branch the run started on, with its upstream, then resume |
 | `blocked-unlinked` | `no-repository` | declare `[github] repository = "OWNER/NAME"` in `ballast.toml`, then run `ballast trust` |
 | `blocked-unlinked` | `repository-mismatch` | the branch's upstream is not the repository pinned in `ballast.toml`: push the branch there, or fix the pin and run `ballast trust` |
 

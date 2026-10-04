@@ -32,7 +32,10 @@ uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_dr
 | Branch without upstream; compare returns 404 | `pending/not-published`, no create call | AC-003 |
 | Empty `files` in the compare | `pending/no-meaningful-change` | AC-003, AC-004 |
 | Only `specs/<feature>/` files in the compare | `pending/no-meaningful-change` | AC-005 |
-| 300 spec-only files | `pending/diff-unclassified` | FR-003 |
+| 3000 spec-only files | `pending/diff-unclassified` | FR-003 |
+| 450 spec-only files, then one outside on a later page | `created` | FR-003, DEC-0008 |
+| Branch switched or upstream redirected after start; no pin | `blocked-unlinked/branch-mismatch` / `branch-unpinned`, no `gh` call | DEC-0006 |
+| PR body changed between list and edit | `reused/body-changed`, no edit | FR-007, DEC-0007 |
 | Existing Ballast Draft PR whose section equals the canonical text (fixed clock) | `reused`, no edit call | AC-006 |
 | Existing Ballast PR with a section from another run or an older checkpoint time | `reused`, one edit; every byte outside the markers (template text, human text before and after) is identical | AC-006, FR-007 |
 | Hand-opened PR without section or Issue reference | `reused`, the body edit appends the section and keeps every other byte | AC-007 |
@@ -86,5 +89,6 @@ From a scratch project that pins this branch's commit, declares `[github] reposi
 5. `gh auth logout`, resume. Expect `failed-retryable (gh-unauthenticated): run gh auth login` and the workflow's usual exit status. Log in again and resume: `reused #P`.
 6. `ballast ledger report --run RUN_ID` shows `pull_request` with the latest outcome.
 7. `git remote set-url origin https://github.com/OTHER/NAME`, resume. Expect `blocked-unlinked (repository-mismatch)` and no change on GitHub; restore the URL.
+8. `git checkout -b other && git push -u origin other`, resume. Expect `blocked-unlinked (branch-mismatch)`; check out the feature branch again.
 
 Record the commands and results in the PR description, with any step you could not run.
