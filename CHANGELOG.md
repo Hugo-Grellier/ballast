@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/Hugo-Grellier/ballast/compare/v0.2.0...v0.3.0) (2026-10-04)
+
+
+### Features
+
+* **run:** open and reuse one issue-linked Draft PR at the end of ballast run ([#33](https://github.com/Hugo-Grellier/ballast/issues/33)) ([ec9551c](https://github.com/Hugo-Grellier/ballast/commit/ec9551c2e0f3ecd793a0c391c52bb10914590ec4))
+
+
+### Bug Fixes
+
+* **launcher:** start run.py with -I -S like every other workflow tool ([#31](https://github.com/Hugo-Grellier/ballast/issues/31)) ([0675e0a](https://github.com/Hugo-Grellier/ballast/commit/0675e0af7ca9532e2ec6565e4255b0e871e23eed))
+
 ## [0.2.0](https://github.com/Hugo-Grellier/ballast/compare/v0.1.0...v0.2.0) (2026-10-04)
 
 
