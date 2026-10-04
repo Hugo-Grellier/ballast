@@ -63,6 +63,24 @@ def listed_pr(number: int, body: str, **changes: object) -> dict:
     }
 
 
+def served_pr(number: int, body: str, **changes: object) -> dict:
+    """`gh api repos/acme/demo/pulls/N`: an open draft from 27-demo-run to main."""
+    return {
+        "number": number,
+        "html_url": f"https://github.com/acme/demo/pull/{number}",
+        "state": "open",
+        "merged_at": None,
+        "draft": True,
+        "body": body,
+        "base": {"ref": "main"},
+        "head": {
+            "ref": "27-demo-run",
+            "repo": {"full_name": "acme/demo", "owner": {"login": "acme"}},
+        },
+        **changes,
+    }
+
+
 def _install(source: Path, target: Path) -> None:
     shutil.copyfile(source, target)
     target.chmod(0o755)
@@ -1489,7 +1507,11 @@ class PublisherTests(AutonomyCase):
         for call in [*git_calls, *self.gh_calls()]:
             for word in forbidden:
                 self.assertNotIn(word, call, call)
-        gh_commands = {tuple(c[:2]) for c in self.gh_calls()}
+        # Reads back through `gh api` are GETs: no method or field flags.
+        for call in self.gh_calls():
+            if call[0] == "api":
+                self.assertFalse({"-X", "--method", "-f", "-F"} & set(call), call)
+        gh_commands = {tuple(c[:2]) for c in self.gh_calls() if c[0] != "api"}
         self.assertLessEqual(
             gh_commands,
             {("repo", "view"), ("pr", "list"), ("pr", "create")},
@@ -1681,16 +1703,87 @@ class PublisherTests(AutonomyCase):
 
     def test_adopts_the_checkpoints_pr_and_keeps_its_section(self) -> None:
         section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
-        self.gh_data("pr-list.json", [listed_pr(9, f"Template\n\n{section}\n")])
+        body = f"Template\n\n{section}\n"
+        self.gh_data("pr-list.json", [listed_pr(9, body)])
+        self.gh_data("repos_acme_demo_pulls_9.json", served_pr(9, body))
         result = autonomy.publish(self.root, "run42")
         self.assertEqual(result["url"], "https://github.com/acme/demo/pull/9", result)
         calls = [c[:2] for c in self.gh_calls()]
         self.assertNotIn(["pr", "create"], calls)
         self.assertIn(["pr", "edit"], calls)
         body = (self.gh_dir / "pr-body.md").read_text()
+        # Only the publisher's own section is added; all other text is kept.
+        self.assertTrue(body.startswith("Template\n\n"), body)
+        self.assertEqual(body.count(autonomy.SUMMARY_BEGIN), 1)
         self.assertIn("Refs #27", body)
         self.assertEqual(body.count(draft_pr.MARK_BEGIN), 1)
         self.assertTrue(body.endswith(section + "\n"))
+
+    def test_republish_replaces_only_its_own_section(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        old = f"{autonomy.SUMMARY_BEGIN}\nold summary\n{autonomy.SUMMARY_END}"
+        body = f"Human note\n\n{old}\n\n{section}\nTrailer\n"
+        self.gh_data("pr-list.json", [listed_pr(9, body)])
+        self.gh_data("repos_acme_demo_pulls_9.json", served_pr(9, body))
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        edited = (self.gh_dir / "pr-body.md").read_text()
+        self.assertNotIn("old summary", edited)
+        self.assertTrue(edited.startswith("Human note\n\n" + autonomy.SUMMARY_BEGIN))
+        self.assertTrue(edited.endswith(f"{section}\nTrailer\n"))
+        self.assertIn("Refs #27", edited)
+
+    def test_ready_or_retargeted_pr_is_never_adopted(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        self.gh_data("pr-list.json", [listed_pr(9, section)])
+        for changes, problem in (
+            ({"draft": False}, "is not a draft"),
+            ({"base": {"ref": "develop"}}, "targets develop"),
+            ({"state": "closed"}, "is not open"),
+        ):
+            with self.subTest(changes=changes):
+                self.gh_data(
+                    "repos_acme_demo_pulls_9.json", served_pr(9, section, **changes)
+                )
+                self.refused("postcondition", problem)
+                self.assertNotIn(["pr", "edit"], [c[:2] for c in self.gh_calls()])
+
+    def test_concurrent_body_edit_is_never_overwritten(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        self.gh_data("pr-list.json", [listed_pr(9, section)])
+        self.gh_data("repos_acme_demo_pulls_9.json", served_pr(9, section))
+        edited = f"Reviewer: please keep this.\n\n{section}"
+        # GitHub changes the body after the publisher first read it.
+        self.gh_data("repos_acme_demo_pulls_9.then.json", served_pr(9, edited))
+        result = autonomy.publish(self.root, "run42")
+        self.assertEqual(result["category"], "forge", result)
+        self.assertIn("changed", result["message"])
+        self.assertNotIn(["pr", "edit"], [c[:2] for c in self.gh_calls()])
+        self.assertIn("forge", autonomy.PUBLISH_RETRY)
+        # The retry keeps the human's text.
+        retry = autonomy.publish(self.root, "run42")
+        self.assertTrue(retry["ok"], retry)
+        body = (self.gh_dir / "pr-body.md").read_text()
+        self.assertTrue(body.startswith("Reviewer: please keep this."), body)
+
+    def test_created_pr_is_read_back_and_verified(self) -> None:
+        for changes, problem in (
+            ({"draft": False}, "is not a draft"),
+            ({"base": {"ref": "develop"}}, "targets develop"),
+            (
+                {"head": {"ref": "x", "repo": {"full_name": "acme/demo"}}},
+                "head is not",
+            ),
+        ):
+            with self.subTest(changes=changes):
+                self.gh_data("create-override.json", changes)
+                result = autonomy.publish(self.root, "run42")
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["category"], "postcondition", result)
+                self.assertIn(problem, result["message"])
+        reads = [
+            c for c in self.gh_calls() if c[:2] == ["api", "repos/acme/demo/pulls/7"]
+        ]
+        self.assertEqual(len(reads), 3)
 
     def test_pr_from_another_head_repository_is_never_adopted(self) -> None:
         """Same branch name and section, but not acme/demo's own branch."""
@@ -1718,6 +1811,7 @@ class PublisherTests(AutonomyCase):
             url="https://github.com/ACME/Demo/pull/9",
         )
         self.gh_data("pr-list.json", [pr])
+        self.gh_data("repos_acme_demo_pulls_9.json", served_pr(9, section))
         self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
 
     def bare(self, name: str) -> Path:

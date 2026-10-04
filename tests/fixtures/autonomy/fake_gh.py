@@ -5,8 +5,11 @@
 the first are empty; `--paginate --slurp` wraps the page in a list); `repo
 view` reads `repo.json`; `pr list` reads `pr-list.json` (default `[]`); `pr
 create` copies the body (`--body-file PATH` or `-` for stdin) to `pr-body.md`,
-prints a PR URL and, when `created-pr.json` exists, lists that PR as
-`repos/acme/demo/pulls`; `pr edit` copies the body to `pr-body.md`; `auth
+prints a PR URL, and serves PR #7 as `repos/acme/demo/pulls/7` (from
+`created-pr.json` when it exists, which is also listed as `repos/acme/demo/pulls`,
+else from the create arguments; `create-override.json` is merged in); `pr
+edit` copies the body to `pr-body.md`. After serving `<name>.json`, a
+`<name>.then.json` replaces it (a concurrent change on GitHub); `auth
 status` succeeds only when `auth.ok` exists. A missing file is an HTTP 404.
 `FAIL_<word>` files make the matching subcommand fail, printing their content
 (or `simulated failure`).
@@ -30,6 +33,9 @@ def serve(name: str, default: str | None = None, *, slurp: bool = False) -> None
     if path.is_file():
         text = path.read_text(encoding="utf-8")
         sys.stdout.write(f"[{text}]" if slurp else text)
+        then = path.with_suffix(".then.json")
+        if then.is_file():
+            then.replace(path)
     elif default is not None:
         sys.stdout.write(default)
     else:
@@ -66,10 +72,30 @@ elif args[:2] == ["pr", "list"]:
 elif args[:2] == ["pr", "create"]:
     copy_body()
     created = data / "created-pr.json"
+    body = (data / "pr-body.md").read_text(encoding="utf-8")
     if created.is_file():
         pr = json.loads(created.read_text(encoding="utf-8"))
-        pr["body"] = (data / "pr-body.md").read_text(encoding="utf-8")
+        pr["body"] = body
         (data / "repos_acme_demo_pulls.json").write_text(json.dumps([pr]))
+    else:
+        repo = args[args.index("--repo") + 1]
+        pr = {
+            "number": 7,
+            "html_url": "https://github.com/acme/demo/pull/7",
+            "state": "open",
+            "merged_at": None,
+            "draft": "--draft" in args,
+            "body": body,
+            "base": {"ref": args[args.index("--base") + 1] if "--base" in args else ""},
+            "head": {
+                "ref": args[args.index("--head") + 1],
+                "repo": {"full_name": repo, "owner": {"login": repo.split("/")[0]}},
+            },
+        }
+    override = data / "create-override.json"
+    if override.is_file():
+        pr |= json.loads(override.read_text(encoding="utf-8"))
+    (data / "repos_acme_demo_pulls_7.json").write_text(json.dumps(pr))
     sys.stdout.write("https://github.com/acme/demo/pull/7\n")
 elif args[:2] == ["pr", "edit"]:
     copy_body()

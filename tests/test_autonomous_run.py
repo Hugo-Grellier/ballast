@@ -1180,6 +1180,8 @@ class PublisherCheckpointTests(RunCase):
         self.assertNotIn(["pr", "create"], calls)
         self.assertEqual(calls.count(["pr", "edit"]), 1)
         body = (self.gh_dir / "pr-body.md").read_text()
-        self.assertTrue(body.startswith(f"Autonomous run {run_id} for #27"), body)
+        # The checkpoint's body, with the publisher's own section added.
+        self.assertTrue(body.startswith(autonomy.SUMMARY_BEGIN), body)
+        self.assertIn(f"Autonomous run {run_id} for #27", body)
         self.assertEqual(body.count(run.draft_pr.MARK_BEGIN), 1)
         self.assertTrue(body.rstrip().endswith(run.draft_pr.MARK_END))

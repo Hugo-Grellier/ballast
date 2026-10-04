@@ -2290,6 +2290,15 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         adopted = _adoptable(prs, run["feature"], repo)
         if prs and adopted is None:
             return refuse("postcondition", f"{BRANCH_REFUSAL}; reuse is #17")
+        if adopted is not None:
+            # The list entry carries no base or draft state: read the PR back.
+            current = _read_pr(root, repo, adopted[0])
+            problem = _pr_problem(current, repo, default_branch, branch)
+            if problem:
+                return refuse(
+                    "postcondition",
+                    f"{BRANCH_REFUSAL}; PR #{adopted[0]} {problem}; reuse is #17",
+                )
         checked = run.get("checked_tree")
         if not checked or checked_digest(root, run["feature"]) != checked:
             return refuse(
@@ -2359,9 +2368,9 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         _guard_body(body)
         title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
         if adopted is not None:
-            url = _adopt_pr(root, repo, adopted, body)
+            url = _adopt_pr(root, repo, adopted[0], current, body)
         else:
-            url = _create_pr(
+            url = _create_verified(
                 root, repo, base=default_branch, head=branch, title=title, body=body
             )
     except AutonomyError as error:
@@ -2499,9 +2508,72 @@ def _adoptable(prs: object, feature: str, repo: str) -> tuple[int, str, str] | N
     return number, url, section
 
 
-def _adopt_pr(root: Path, repo: str, adopted: tuple[int, str, str], body: str) -> str:
-    """Put the summary on the checkpoint's PR, keeping its managed section."""
-    number, url, section = adopted
+SUMMARY_BEGIN = "<!-- ballast:autonomous:begin -->"
+SUMMARY_END = "<!-- ballast:autonomous:end -->"
+
+
+def _read_pr(root: Path, repo: str, number: int) -> dict:
+    """Read one PR back through the hardened gh."""
+    data = _gh(root, "api", f"repos/{repo}/pulls/{number}", category="forge")
+    if not isinstance(data, dict):
+        message = f"PR #{number} could not be read back"
+        raise AutonomyError(message, "forge")
+    return data
+
+
+def _pr_problem(pr: dict, repo: str, base: str, branch: str) -> str | None:
+    """Why a read-back PR is not the open Draft PR FR-024 requires, or None.
+
+    The rule of draft_pr's verify(): open, a draft, to the default branch,
+    from the branch of the pinned repository itself.
+    """
+    head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+    source = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+    target = pr.get("base") if isinstance(pr.get("base"), dict) else {}
+    url = f"https://github.com/{repo}/pull/{pr.get('number')}"
+    if pr.get("state") != "open" or pr.get("merged_at"):
+        return "is not open"
+    if pr.get("draft") is not True:
+        return "is not a draft"
+    if target.get("ref") != base:
+        return f"targets {target.get('ref')}, not {base}"
+    if (
+        head.get("ref") != branch
+        or str(source.get("full_name")).lower() != repo.lower()
+        or str(pr.get("html_url")).lower() != url.lower()
+    ):
+        return f"head is not {repo}:{branch}"
+    return None
+
+
+def _with_summary(body: str, summary: str) -> str:
+    """Body with the publisher's own section set; every other byte kept.
+
+    Replaces the one existing section, or inserts it before the #17 section.
+    """
+    section = f"{SUMMARY_BEGIN}\n{summary.rstrip()}\n{SUMMARY_END}"
+    start, stop = body.find(SUMMARY_BEGIN), body.find(SUMMARY_END)
+    if body.count(SUMMARY_BEGIN) == body.count(SUMMARY_END) == 1 and start < stop:
+        return body[:start] + section + body[stop + len(SUMMARY_END) :]
+    at = body.find(_trusted().MARK_BEGIN)
+    return body[:at] + section + "\n\n" + body[at:]
+
+
+def _adopt_pr(root: Path, repo: str, number: int, read: dict, summary: str) -> str:
+    """Set the summary on the checkpoint's PR, keeping all other text.
+
+    GitHub has no conditional body update (#17 DEC-0007): re-read just before
+    writing, and leave a body that changed since it was read; the block is
+    retryable with `ballast run publish`.
+    """
+    body = str(read.get("body") or "")
+    current = _read_pr(root, repo, number)
+    if str(current.get("body") or "") != body:
+        message = (
+            f"the body of PR #{number} changed while publishing; nothing was "
+            "overwritten, ballast run publish retries"
+        )
+        raise AutonomyError(message, "forge")
     _gh(
         root,
         "pr",
@@ -2511,10 +2583,10 @@ def _adopt_pr(root: Path, repo: str, adopted: tuple[int, str, str], body: str) -
         repo,
         "--body-file",
         "-",
-        stdin=body + "\n" + section + "\n",
+        stdin=_with_summary(body, summary),
         category="forge",
     )
-    return url
+    return str(read.get("html_url"))
 
 
 def _create_pr(  # noqa: PLR0913 - every input explicit
@@ -2527,6 +2599,24 @@ def _create_pr(  # noqa: PLR0913 - every input explicit
         root, *argv, "--title", title, "--body-file", "-", stdin=body, category="forge"
     )
     return (str(created).strip().splitlines() or [""])[-1]
+
+
+def _create_verified(  # noqa: PLR0913 - every input explicit
+    root: Path, repo: str, *, base: str, head: str, title: str, body: str
+) -> str:
+    """Create the Draft PR, then read it back and verify it (FR-024)."""
+    url = _create_pr(root, repo, base=base, head=head, title=title, body=body)
+    pattern = rf"https://github\.com/{re.escape(repo)}/pull/([0-9]+)"
+    match = re.fullmatch(pattern, url, re.IGNORECASE)
+    if match is None:
+        message = f"gh pr create returned no PR URL: {url[:200]}"
+        raise AutonomyError(message, "forge")
+    created = _read_pr(root, repo, int(match.group(1)))
+    problem = _pr_problem(created, repo, base, head)
+    if problem:
+        message = f"Draft PR {url} was created but {problem}"
+        raise AutonomyError(message, "postcondition")
+    return url
 
 
 def read_checks(root: Path, run_id: str) -> list[dict] | None:
