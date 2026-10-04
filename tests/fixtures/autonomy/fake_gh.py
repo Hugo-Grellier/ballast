@@ -5,7 +5,8 @@
 the first are empty); `repo view` reads `repo.json`; `pr list` reads
 `pr-list.json` (default `[]`); `pr create` copies the body to `pr-body.md` and
 prints a PR URL; `auth status` succeeds only when `auth.ok` exists. A missing
-file is an HTTP 404. `FAIL_<word>` files make the matching subcommand fail.
+file is an HTTP 404. `FAIL_<word>` files make the matching subcommand fail, printing their
+content (or `simulated failure`).
 """
 
 import json
@@ -31,11 +32,10 @@ def serve(name: str, default: str | None = None) -> None:
         sys.exit(1)
 
 
-if (data / f"FAIL_{args[0]}").exists() or (
-    data / f"FAIL_{'_'.join(args[:2])}"
-).exists():
-    sys.stderr.write("simulated failure\n")
-    sys.exit(1)
+for fail in (data / f"FAIL_{args[0]}", data / f"FAIL_{'_'.join(args[:2])}"):
+    if fail.exists():
+        sys.stderr.write(fail.read_text(encoding="utf-8") or "simulated failure\n")
+        sys.exit(1)
 if args[:1] == ["api"]:
     path, _, query = args[1].partition("?")
     if "page=" in query and "page=1" not in query.split("&"):

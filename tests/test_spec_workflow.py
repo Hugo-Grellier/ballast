@@ -8,6 +8,7 @@ drives Spec Kit with a fake integration executable.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import pty
@@ -18,7 +19,7 @@ import subprocess
 import sys
 import time
 import unittest
-from contextlib import suppress
+from contextlib import redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -1834,3 +1835,614 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
             if step["type"] == "gate":
                 self.assertEqual(step, feature[step["id"]], step["id"])
                 self.assertEqual(step["on_reject"], "retry")
+
+
+sys.path.insert(0, str(ROOT / "tests"))
+from test_autonomy import AutonomyCase, _bwrap_works, autonomy  # noqa: E402
+
+sys.path.pop(0)
+sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+try:
+    import run as run_module  # noqa: E402
+finally:
+    sys.path.pop(0)
+
+AUTO_FEATURE = "specs/27-demo-run"
+DONE_TASKS = TASKS.replace("- [ ]", "- [x]")
+
+
+def _draft(point: str, artifact: str, **changes: object) -> str:
+    data = {
+        "point": point,
+        "decision": autonomy.POINT_DECISION[point],
+        "summary": f"{point} is acceptable",
+        "basis": "Consistent with the spec and the Issue.",
+        "evidence": [artifact],
+        "artifact": artifact,
+        "model": "fake-model",
+        "material": False,
+        "supersedes": None,
+        "privileged_actions": [],
+        "review": None,
+        "assumption": None,
+    }
+    return json.dumps(data | changes)
+
+
+def _review(point: str, kind: str, findings: list | None = None) -> dict[str, str]:
+    report = f"{AUTO_FEATURE}/reviews/{kind}.md"
+    review = {
+        "kind": kind,
+        "verdict": "approved",
+        "report": report,
+        "findings": findings or [],
+    }
+    name = f"{point}-{kind}.json" if point == "specialist-review" else f"{point}.json"
+    return {
+        report: f"# {kind} review\n\nConsistent with the plan.\n",
+        f"{AUTO_FEATURE}/autonomous/drafts/{name}": _draft(
+            point, report, review=review
+        ),
+    }
+
+
+def _autonomous_plan() -> dict[str, dict[str, str]]:
+    """What each fake agent step writes, keyed by the fake agent's directory."""
+    feature, drafts = AUTO_FEATURE, f"{AUTO_FEATURE}/autonomous/drafts"
+    spec, plan = f"{feature}/spec.md", f"{feature}/plan.md"
+
+    def decide(point: str, artifact: str) -> dict[str, str]:
+        return {f"{drafts}/{point}.json": _draft(point, artifact)}
+
+    return {
+        "speckit-ballast-decide-scope": decide("scope", "README.md"),
+        "speckit-specify": {spec: SPEC},
+        "speckit-ballast-decide-intent": decide("intent", spec),
+        "speckit-plan": {plan: PLAN},
+        "speckit-ballast-review-plan": _review("plan-review", "plan"),
+        "speckit-ballast-decide-plan": decide("plan", plan),
+        "speckit-tasks": {f"{feature}/tasks.md": TASKS},
+        "speckit-ballast-decide-tasks": decide("tasks", f"{feature}/tasks.md"),
+        "speckit-implement": {
+            f"{feature}/tasks.md": DONE_TASKS,
+            "src/demo/import.py": "print('import')\n",
+            "tests/test_import.py": "assert True\n",
+        },
+        "speckit-ballast-review-implementation": _review(
+            "implementation-review", "engineering"
+        ),
+        "speckit-ballast-review-specialists": _review("specialist-review", "test")
+        | _review("specialist-review", "security"),
+        "speckit-ballast-review-spec-reconciliation": _review(
+            "spec-reconciliation", "spec-reconciliation"
+        )
+        | {f"{feature}/reviews/convergence.md": "# Convergence\n\n- Verdict: CONVERGED\n"},
+        "speckit-ballast-decide-final-acceptance": decide(
+            "final-acceptance", f"{feature}/tasks.md"
+        ),
+    }
+
+
+BLOCKED = {"stdout.txt": "RECONCILE_STATUS: BLOCKED_DECISION\n"}
+# A bwrap that skips confinement but answers the self-test as confined: it
+# stands for a confinement hole, behind which the wrapper's protected-file
+# check and the run's block mapping must still hold.
+UNCONFINED_BWRAP = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+command = args[args.index("--") + 1 :]
+if len(command) > 4 and command[3] == "-c" and "targets, persist" in command[4]:
+    targets = json.loads(command[5])[0]
+    print(json.dumps({**{t: "ok" for t in targets}, "operator environ": "ok"}))
+    sys.exit(0)
+os.execvp(command[0], command)
+"""
+
+
+def _block_draft(category: str, condition: str) -> dict[str, str]:
+    draft = {
+        "category": category,
+        "condition": condition,
+        "no_safe_default": "Each option changes what users see",
+        "options": [
+            {"option": "Keep", "consequence": "Imports stay visible"},
+            {"option": "Hide", "consequence": "Imports need a review first"},
+        ],
+        "recovery": "Choose an option in spec.md, then continue human-gated",
+        "evidence": [f"{AUTO_FEATURE}/spec.md"],
+    }
+    return {f"{AUTO_FEATURE}/autonomous/drafts/block.json": json.dumps(draft)}
+
+
+@unittest.skipUnless(
+    shutil.which("specify") and _user_systemd() and _bwrap_works(),
+    "needs Spec Kit, a systemd user manager and a working bwrap",
+)
+class AutonomousEngineCase(AutonomyCase):
+    """ballast-autonomous through run.py, Spec Kit, the confined agent wrapper
+    and the trusted recorders, with a fake agent, a fake gh and a bare origin.
+
+    Shared by the engine test classes below; it has no tests of its own.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The ignore rules tools/setup installs, and the standard laid out the
+        # way it places it in a project.
+        (self.root / ".gitignore").write_text(".ballast/\n.specify/*\n!.specify/memory/\n")
+        shutil.copytree(
+            ROOT / "tools/spec_workflow",
+            self.root / ".ballast/spec_workflow",
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        for name in ("autonomous", "continue"):
+            subprocess.run(  # noqa: S603
+                [  # noqa: S607 - resolved by the skip condition
+                    "specify",
+                    "workflow",
+                    "add",
+                    "--dev",
+                    str(ROOT / "templates/spec-kit/workflows" / name),
+                ],
+                cwd=self.root,
+                check=True,
+                capture_output=True,
+            )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "install")
+        self.eligible_issue()
+        (self.gh_dir / "auth.ok").write_text("")
+        for name in ("claude", "codex"):
+            target = self.bin / name
+            shutil.copyfile(ROOT / "tests/fixtures/autonomy/fake_agent.py", target)
+            target.chmod(0o755)
+        # Inside .git: readable from the agent sandbox, whose /tmp is private,
+        # and outside the worktree the run must keep clean.
+        self.plan_dir = self.root / ".git/fake-agent-plan"
+        self.layout(_autonomous_plan())
+        os.environ["FAKE_AGENT_PLAN"] = str(self.plan_dir)
+        self.enterContext(patch.object(run_module, "ROOT", self.root))
+        self.enterContext(
+            patch.object(run_module, "BIN", self.root / ".ballast/spec_workflow/bin")
+        )
+
+    def layout(self, plan: dict[str, dict[str, str]]) -> None:
+        """(Re)write the fake agent's per-step output tree."""
+        shutil.rmtree(self.plan_dir, ignore_errors=True)
+        for step, files in plan.items():
+            for path, text in files.items():
+                target = self.plan_dir / step / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+
+    def unconfined(self) -> None:
+        """Put the self-test-passing, non-confining bwrap first on PATH."""
+        target = self.bin / "bwrap"
+        target.write_text(UNCONFINED_BWRAP)
+        target.chmod(0o755)
+
+    def main(self, *argv: str) -> tuple[int, str, str]:
+        """run.main in process, with stdin that cannot answer a gate."""
+        out, err = io.StringIO(), io.StringIO()
+        saved = os.dup(0)
+        with Path(os.devnull).open() as null:
+            os.dup2(null.fileno(), 0)
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                code = run_module.main(list(argv))
+        finally:
+            os.dup2(saved, 0)
+            os.close(saved)
+        return code, out.getvalue(), err.getvalue()
+
+    def run_ids(self) -> list[str]:
+        runs = autonomy.state_dir(self.root) / "runs"
+        return sorted(p.name for p in runs.iterdir()) if runs.is_dir() else []
+
+    def start(self, *extra: str, integration: str = "claude") -> tuple[int, str, str, str]:
+        """Run `ballast run start --mode autonomous`; return code, out, err, run."""
+        code, out, err = self.main(
+            "start",
+            "--mode",
+            "autonomous",
+            *extra,
+            "-i",
+            "issue=27",
+            "-i",
+            "idea=Issue #27: demo",
+            "-i",
+            f"feature_directory={AUTO_FEATURE}",
+            "-i",
+            f"integration={integration}",
+        )
+        ids = self.run_ids()
+        return code, out, err, ids[0] if ids else ""
+
+    def engine_state(self, run_id: str) -> dict:
+        path = self.root / ".specify/workflows/runs" / run_id / "state.json"
+        return json.loads(path.read_text())
+
+    def agent_commands(self, run_id: str) -> list[str]:
+        """The agent steps that ran, as `<command> <first arg>`."""
+        return [
+            step["command"].lstrip("/$")
+            for step in autonomy.read_steps(self.root, run_id)
+            if step.get("ran")
+        ]
+
+    def stopped(self, *extra: str, integration: str = "claude") -> tuple[str, dict, str]:
+        """Start a run that must stop on a block; return run ID, block, output."""
+        code, out, err, run_id = self.start(*extra, integration=integration)
+        self.assertEqual(code, 1, out + err)
+        record = autonomy.read_run(self.root, run_id)
+        self.assertEqual(record["status"], "stopped")
+        block = autonomy.read_block(self.root, run_id)
+        self.assertIn(f"Next: {block['command']}", out)
+        self.assertIn(f"Autonomous run blocked ({block['category']})", out)
+        self.assertNotIn("Draft PR", out)
+        if block["category"] not in autonomy.PUBLISH_RETRY:
+            self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
+        return run_id, block, out
+
+
+class AutonomousEngineTests(AutonomousEngineCase):
+    """T033 [AC-001, AC-002, AC-003, SC-001, SC-002]: a full unattended run."""
+
+    def test_runs_to_a_draft_pr_without_a_prompt(self) -> None:
+        code, out, err, run_id = self.start()
+        self.assertEqual(code, 0, out + err)
+        state = self.engine_state(run_id)
+        self.assertEqual(state["status"], "completed")
+        results = state["step_results"]
+        # Every step ran, and ballast-autonomous has no gate to prompt at.
+        self.assertEqual(set(results), {step[0] for step in AUTONOMOUS_STEPS})
+        record = autonomy.read_run(self.root, run_id)
+        self.assertEqual(record["status"], "published")
+        current = autonomy.current_decisions(autonomy.read_decisions(self.root, run_id))
+        points = [entry["point"] for entry in current]
+        for point in autonomy.SINGLE_POINTS:
+            self.assertEqual(points.count(point), 1, point)
+        rendered = (self.root / AUTO_FEATURE / "autonomous/record.md").read_text()
+        for entry in current:
+            self.assertIn(entry["id"], rendered)
+            self.assertIsNotNone(entry["agent"]["provider"])
+        self.assertIn("Draft PR:", out)
+        self.assertIn(["pr", "create", "--draft"], [c[:3] for c in self.gh_calls()])
+        body = (self.gh_dir / "pr-body.md").read_text()
+        for entry in current:
+            self.assertIn(entry["id"], body)
+        # Every agent step ran under the confined wrapper; reviews on codex.
+        reviewers = {
+            step["integration"]
+            for step in autonomy.read_steps(self.root, run_id)
+            if step.get("role") == "reviewer"
+        }
+        self.assertEqual(reviewers, {"codex"})
+        self.assertEqual(record["agent_steps"], len(self.agent_commands(run_id)))
+
+    def test_failed_validator_stops_the_run(self) -> None:
+        plan = _autonomous_plan()
+        del plan["speckit-plan"]
+        self.layout(plan)
+        run_id, block, _ = self.stopped()
+        results = self.engine_state(run_id)["step_results"]
+        self.assertEqual(results["validate-plan"]["status"], "failed")
+        self.assertNotIn("review-plan", results)
+        self.assertEqual(block["category"], "postcondition")
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-plan")
+
+
+class AutonomousContinueEngineTests(AutonomousEngineCase):
+    """T042 [AC-009, AC-017]: merge feedback continues human-gated."""
+
+    def test_changes_requested_starts_ballast_continue(self) -> None:
+        code, out, err, run_id = self.start()
+        self.assertEqual(code, 0, out + err)
+        before = autonomy.read_decisions(self.root, run_id)
+        url = "https://github.com/acme/demo/pull/7#pullrequestreview-1"
+        code, out, err = self.main(
+            "continue", run_id, "--reason", "changes-requested", "--ref", url
+        )
+        (new_id,) = set(self.run_ids()) - {run_id}
+        state = self.engine_state(new_id)
+        self.assertEqual(state["workflow_id"], "ballast-continue", out + err)
+        results = state["step_results"]
+        self.assertEqual(results["preflight"]["status"], "completed", out + err)
+        self.assertEqual(results["validate-clarified-spec"]["status"], "completed", out + err)
+        # The first gate is the first thing that waits for a human.
+        self.assertEqual(state["status"], "paused")
+        self.assertEqual(state["current_step_id"], "approve-intent")
+        self.assertEqual(results["approve-intent"]["type"], "gate")
+        self.assertNotIn("record-intent", results)
+        (decision,) = autonomy.read_human_decisions(self.root, run_id)
+        self.assertEqual((decision["kind"], decision["ref"]), ("merge-feedback", url))
+        source = autonomy.read_run(self.root, run_id)
+        self.assertEqual(source["status"], "continued")
+        self.assertEqual(autonomy.effective_mode(source), "human-gated")
+        self.assertEqual(autonomy.read_decisions(self.root, run_id), before)
+        rendered = (self.root / AUTO_FEATURE / "autonomous/record.md").read_text()
+        for entry in before:
+            self.assertIn(entry["id"], rendered)
+        self.assertIn("agent-provisional", rendered)
+        self.assertIn("human-gated", rendered)
+
+
+class AutonomousBlockEngineTests(AutonomousEngineCase):
+    """T046, T046a [SC-004, AC-011, AC-012, AC-013, AC-024, FR-021]: each block
+    category stops the run before the next agent step, with its reason and
+    recovery command."""
+
+    def blocked_at(self, step: str, files: dict[str, str]) -> None:
+        plan = _autonomous_plan()
+        plan[step] = files
+        self.layout(plan)
+
+    def test_decision(self) -> None:
+        self.blocked_at(
+            "speckit-ballast-decide-plan",
+            _block_draft("decision", "Should imports be visible before review?")
+            | BLOCKED,
+        )
+        run_id, block, out = self.stopped()
+        self.assertEqual(block["category"], "decision")
+        self.assertIn("No safe, reversible default", block["condition"])
+        self.assertIn("option: Keep -> Imports stay visible", out)
+        points = [e["point"] for e in autonomy.read_decisions(self.root, run_id)]
+        self.assertNotIn("plan", points)
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-decide")
+
+    def test_contradiction(self) -> None:
+        self.blocked_at(
+            "speckit-ballast-clarify",
+            _block_draft("contradiction", "The Issue requires both X and not-X")
+            | BLOCKED,
+        )
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "contradiction")
+        self.assertIn("both X and not-X", block["condition"])
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-clarify")
+
+    def test_several_outcomes_recommend_decomposition(self) -> None:
+        """T046a: no provisional split, no Issue created."""
+        self.blocked_at(
+            "speckit-ballast-clarify",
+            _block_draft(
+                "decision",
+                "The Issue holds three independent outcomes; decompose it into "
+                "separate Issues before running it",
+            )
+            | BLOCKED,
+        )
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "decision")
+        self.assertIn("decompose", block["condition"])
+        self.assertNotIn(
+            "clarification",
+            [e["point"] for e in autonomy.read_decisions(self.root, run_id)],
+        )
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["issue", "create"]])
+        self.assertFalse([c for c in self.gh_calls() if "POST" in c])
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-clarify")
+
+    def test_review_finding(self) -> None:
+        finding = {
+            "id": "F-001",
+            "severity": "high",
+            "label": "spec-violation",
+            "disposition": "resolved",
+            "reason": "Fixed in the plan",
+            "evidence": [],
+        }
+        self.blocked_at(
+            "speckit-ballast-review-plan", _review("plan-review", "plan", [finding])
+        )
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "review-finding")
+        self.assertIn("F-001", block["condition"])
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-review")
+
+    def test_limit(self) -> None:
+        run_id, block, _ = self.stopped("--max-agent-steps", "3")
+        self.assertEqual(block["category"], "limit")
+        self.assertIn("agent step limit exhausted", block["condition"])
+        self.assertEqual(len(self.agent_commands(run_id)), 3)
+        refused = autonomy.read_steps(self.root, run_id)[-1]
+        self.assertEqual((refused["ran"], refused["exit_code"]), (False, 5))
+        self.assertTrue((self.root / ".specify/workflow-state" / run_id / "agents").is_dir())
+
+    def test_tamper(self) -> None:
+        self.unconfined()
+        self.blocked_at("speckit-ballast-decide-intent", {"tamper": "ballast.toml"})
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "tamper")
+        self.assertEqual(block["command"], "ballast discard-runs")
+        self.assertTrue((self.root / "BALLAST_TAMPERED").exists())
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-decide")
+
+    def test_unfinished_step(self) -> None:
+        self.unconfined()
+        self.blocked_at("speckit-ballast-decide-intent", {"kill-parent": ""})
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "unfinished-step")
+        self.assertEqual(block["command"], "ballast discard-runs")
+        # The killed step recorded nothing; nothing ran after it.
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-clarify")
+        self.assertNotIn("intent", [e["point"] for e in autonomy.read_decisions(self.root, run_id)])
+
+    def test_postcondition(self) -> None:
+        plan = _autonomous_plan()
+        del plan["speckit-tasks"]
+        self.layout(plan)
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "postcondition")
+        self.assertIn("tasks.md is missing", block["condition"])
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-tasks")
+
+    def test_ineligible(self) -> None:
+        self.blocked_at(
+            "speckit-ballast-decide-intent",
+            {
+                f"{AUTO_FEATURE}/autonomous/drafts/intent.json": _draft(
+                    "intent", f"{AUTO_FEATURE}/spec.md", privileged_actions=["deploy"]
+                )
+            },
+        )
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "ineligible")
+        self.assertIn("deploy", block["condition"])
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-decide")
+
+    def test_forge(self) -> None:
+        (self.gh_dir / "FAIL_pr_create").write_text("HTTP 422: Validation Failed\n")
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "forge")
+        self.assertEqual(block["command"], f"ballast run publish {run_id}")
+
+    def test_permission(self) -> None:
+        (self.gh_dir / "FAIL_pr_create").write_text(
+            "gh: To use GitHub CLI, authenticate with gh auth login\n"
+        )
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "permission")
+        self.assertEqual(block["command"], f"ballast run publish {run_id}")
+
+    def test_interrupted(self) -> None:
+        self.unconfined()
+        os.environ["FAKE_INTERRUPT_PID"] = str(os.getpid())
+        self.blocked_at("speckit-plan", {f"{AUTO_FEATURE}/plan.md": PLAN, "interrupt": ""})
+        code, out, err, run_id = self.start()
+        self.assertEqual(code, 130, out + err)
+        # The wrapper outlives the killed engine briefly; let its check finish.
+        marker = autonomy.state_dir(self.root) / "in-progress"
+        deadline = time.monotonic() + 30
+        while marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(block["category"], "interrupted")
+        self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "stopped")
+        self.assertIn(f"Next: {block['command']}", out)
+        self.assertNotIn("speckit-ballast-review", self.agent_commands(run_id))
+
+    def test_trust(self) -> None:
+        """A changed trusted input stops recovery before any run code executes.
+
+        No `trust` block is written: the launcher refuses before run.py, so the
+        stopped run keeps its block (DEC-0002).
+        """
+        plan = _autonomous_plan()
+        del plan["speckit-plan"]
+        self.layout(plan)
+        run_id, block, _ = self.stopped()
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import launcher  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        previous = Path.cwd()
+        os.chdir(self.root)
+        try:
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(launcher.main(["trust"]), 0)
+            workflow = self.root / ".specify/workflows/ballast-continue/workflow.yml"
+            workflow.write_text(workflow.read_text() + "# changed\n")
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = launcher.main(
+                    ["run", "continue", run_id, "--reason", "block-resolved", "--ref", "x"]
+                )
+        finally:
+            os.chdir(previous)
+        self.assertEqual(code, 2)
+        self.assertIn("ballast: refusing:", err.getvalue())
+        self.assertEqual(self.run_ids(), [run_id])
+        self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "stopped")
+        self.assertEqual(autonomy.read_block(self.root, run_id), block)
+
+
+class AutonomousConfinementEngineTests(AutonomousEngineCase):
+    """T048 [AC-016, SC-005, FR-003]: agent writes cannot change the mode,
+    eligibility, limits, the decision log or the committed projections."""
+
+    ATTEMPTS = (
+        ("toml", "echo 'risk = [\"R3\"]' >> ballast.toml"),
+        ("run", "echo '{}' > \"$RUN_DIR/run.json\""),
+        ("log", "echo '{}' >> \"$RUN_DIR/decisions.jsonl\""),
+        (
+            "ballast",
+            "python3 -I -S .ballast/spec_workflow/run.py start --mode autonomous "
+            "-i issue=27 -i idea=x -i feature_directory=specs/27-demo-run "
+            "-i integration=claude",
+        ),
+        ("publish", "python3 -I -S .ballast/spec_workflow/run.py publish \"$RUN_ID\""),
+    )
+
+    def attempt_script(self) -> str:
+        state = autonomy.state_dir(self.root)
+        lines = [f'RUN_ID="$SPECKIT_WORKFLOW_RUN_ID"; RUN_DIR="{state}/runs/$RUN_ID"']
+        for name, command in self.ATTEMPTS:
+            lines.append(f"({command}) >/dev/null 2>&1; echo {name}=$?")
+        return "\n".join(lines) + "\n"
+
+    def attempts(self, run_id: str, command: str) -> dict[str, str]:
+        agents = self.root / ".specify/workflow-state" / run_id / "agents"
+        log = min(p for p in agents.iterdir() if f"-{command}-" in p.name)
+        text = (log / "stdout.log").read_text()
+        found = dict(
+            line.split("=", 1) for line in text.splitlines() if "=" in line
+        )
+        return {name: found.get(name, "missing") for name, _ in self.ATTEMPTS}
+
+    def test_agent_writes_change_nothing_operator_side(self) -> None:
+        installed = self.git("rev-parse", "HEAD").strip()
+        for integration in ("claude", "codex"):
+            with self.subTest(integration=integration):
+                plan = _autonomous_plan()
+                plan["speckit-ballast-decide-scope"] |= {"exec": self.attempt_script()}
+                self.layout(plan)
+                toml = (self.root / "ballast.toml").read_bytes()
+                code, out, err, run_id = self.start(integration=integration)
+                self.assertEqual(code, 0, out + err)
+                results = self.attempts(run_id, "speckit-ballast-decide")
+                self.assertNotIn("0", results.values(), results)
+                self.assertNotIn("missing", results.values(), results)
+                self.assertEqual((self.root / "ballast.toml").read_bytes(), toml)
+                record = autonomy.read_run(self.root, run_id)
+                self.assertEqual(autonomy.effective_mode(record), "autonomous")
+                self.assertTrue(record["eligibility"]["eligible"])
+                self.assertEqual(record["limits"]["max_agent_steps"], 30)
+                self.assertEqual(record["integration"], integration)
+                self.assertEqual(self.run_ids(), [run_id])
+                self.assertEqual(record["status"], "published")
+                # Reset for the next integration: a fresh branch and state.
+                shutil.rmtree(autonomy.state_dir(self.root))
+                self.git("reset", "-q", "--hard", installed)
+                self.git("clean", "-qfd", "--", "specs", "src", "tests")
+                self.git("push", "-q", "origin", "--delete", "27-demo-run")
+
+    def test_edited_record_fails_the_next_recorder(self) -> None:
+        plan = _autonomous_plan()
+        plan["speckit-ballast-decide-plan"] |= {
+            "tamper": f"{AUTO_FEATURE}/autonomous/record.md"
+        }
+        self.layout(plan)
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "postcondition")
+        self.assertIn("edited outside the recorder", block["condition"])
+        self.assertNotIn(
+            "plan", [e["point"] for e in autonomy.read_decisions(self.root, run_id)]
+        )
+
+    def test_edited_provisional_intent_fails_the_next_validator(self) -> None:
+        plan = _autonomous_plan()
+        # Rebind the provisional block to another spec version.
+        forge = (
+            "import re; p = '" + AUTO_FEATURE + "/intent.md'; t = open(p).read(); "
+            "open(p, 'w').write(re.sub('sha256:[0-9a-f]{64}', 'sha256:' + '0' * 64, t))"
+        )
+        plan["speckit-plan"] |= {"exec": f'python3 -c "{forge}"'}
+        self.layout(plan)
+        run_id, block, _ = self.stopped()
+        self.assertEqual(block["category"], "postcondition")
+        self.assertIn("intent", block["condition"])
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-plan")
