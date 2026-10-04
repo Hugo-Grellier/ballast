@@ -179,5 +179,82 @@ class CheckTests(unittest.TestCase):
             setup.Setup(self.root).install_spec_kit(self.root)
 
 
+class AutonomousInstallTests(unittest.TestCase):
+    """T032, T041: setup installs the Autonomous workflows and extension."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        (self.root / ".specify/templates").mkdir(parents=True)
+        self.calls: list[tuple[str, ...]] = []
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def setup(self, config: str = "") -> setup.Setup:
+        (self.root / "ballast.toml").write_text(config)
+        tool = setup.Setup(self.root)
+        tool.specify = lambda *args: self.calls.append(args)  # type: ignore[method-assign]
+        tool.run = lambda *args, **_: self.calls.append(args)  # type: ignore[method-assign]
+        return tool
+
+    def test_installs_every_workflow(self) -> None:
+        self.setup().install_standard()
+        added = [call[-1] for call in self.calls if call[:2] == ("workflow", "add")]
+        self.assertEqual(
+            added,
+            [
+                str(ROOT / "templates/spec-kit/workflows" / name)
+                for name in ("feature", "autonomous", "continue")
+            ],
+        )
+        for name in ("autonomous", "continue"):
+            self.assertTrue(
+                (ROOT / "templates/spec-kit/workflows" / name / "workflow.yml").is_file()
+            )
+
+    def test_installs_the_ballast_extension_before_claude_skills(self) -> None:
+        tool = self.setup()
+        sources = {name: self.root / name for name in setup.SOURCES}
+        for source in sources.values():
+            (source / "bundles").mkdir(parents=True)
+        with (
+            patch.object(setup, "_fetch_source", side_effect=lambda n, _: sources[n]),
+            patch.object(setup.shutil, "which", return_value="/usr/bin/x"),
+            patch.object(tool, "complete_claude_extension_skills") as skills,
+        ):
+            skills.side_effect = lambda: self.calls.append(("claude-skills",))
+            tool.install_spec_kit(self.root)
+        extension = (
+            "extension",
+            "add",
+            str(ROOT / "templates/spec-kit/extensions/ballast"),
+            "--dev",
+        )
+        self.assertIn(extension, self.calls)
+        self.assertLess(
+            self.calls.index(extension), self.calls.index(("claude-skills",))
+        )
+
+    def test_autonomous_tables_leave_permissions_unchanged(self) -> None:
+        config = (
+            '[autonomous]\nrisk = ["R0"]\n[checks]\ncommands = ["true"]\n'
+            '[agents.permissions]\nextra_allow = ["Bash(make:*)"]\n'
+        )
+        tool = self.setup(config)
+        base = {"permissions": {"allow": ["A"], "deny": ["D"]}}
+        merged = setup.merge_permissions(base, tool.config)["permissions"]
+        self.assertEqual(merged, {"allow": ["A", "Bash(make:*)"], "deny": ["D"]})
+
+    def test_new_installed_paths_are_ignored(self) -> None:
+        probes = dict(setup.IGNORE_PROBES)
+        for path in (
+            ".specify/workflows/ballast-autonomous/workflow.yml",
+            ".specify/workflows/ballast-continue/workflow.yml",
+            ".specify/extensions/ballast/extension.yml",
+        ):
+            self.assertTrue(probes[path], path)
+
+
 if __name__ == "__main__":
     unittest.main()

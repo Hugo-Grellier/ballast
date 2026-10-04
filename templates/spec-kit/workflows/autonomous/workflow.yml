@@ -1,0 +1,225 @@
+schema_version: "1.0"
+
+workflow:
+  id: ballast-autonomous
+  name: Ballast Autonomous Feature Workflow
+  version: 1.0.0
+  author: Ballast
+  description: >-
+    Feature lifecycle without approval prompts: every human gate of
+    ballast-feature becomes an agent-provisional decision recorded by a trusted
+    step, every postcondition stays, and the human approves once, at merge.
+
+requires:
+  speckit_version: ">=1.0.11"
+  integrations:
+    any: [claude, codex]
+
+# Start only with `ballast run start --mode autonomous` (run.py): it checks
+# eligibility and writes the operator run record (mode, risk, limits) that
+# every step below verifies. Mode, limits and eligibility are never inputs.
+inputs:
+  idea:
+    type: string
+    required: true
+    prompt: "Link the scoped feature Issue and summarize its outcome"
+  feature_directory:
+    type: string
+    required: true
+    prompt: "Use specs/<issue-number>-<slug> for the scoped feature Issue"
+  integration:
+    type: string
+    required: true
+    enum: [claude, codex]
+    prompt: "Authoring agent integration"
+  review_integration:
+    type: string
+    required: true
+    enum: [claude, codex]
+    prompt: "Reviewing agent integration (the other provider when available)"
+
+# Each agent decision step writes only a draft under
+# <feature>/autonomous/drafts/; the shell step after it validates the draft,
+# appends the provisional decision to the operator log and re-renders
+# <feature>/autonomous/record.md. Every shell step first requires an active
+# run and an untouched record. Shell steps receive only the run ID.
+
+steps:
+  - id: preflight
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py autonomous-preflight --run {{ context.run_id }}
+
+  - id: decide-scope
+    command: speckit.ballast.decide
+    integration: "{{ inputs.integration }}"
+    input:
+      args: scope
+
+  - id: record-scope
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point scope
+
+  - id: specify
+    command: speckit.specify
+    integration: "{{ inputs.integration }}"
+    input:
+      args: >-
+        {{ inputs.idea }}. Set
+        SPECIFY_FEATURE_DIRECTORY={{ inputs.feature_directory }} before creating
+        spec.md; keep this path for the feature's later artifacts.
+
+  - id: validate-spec
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py spec --run {{ context.run_id }}
+
+  - id: clarify
+    command: speckit.ballast.clarify
+    integration: "{{ inputs.integration }}"
+
+  - id: record-clarifications
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point clarification
+
+  - id: validate-clarified-spec
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py clarified-spec --run {{ context.run_id }}
+
+  - id: decide-intent
+    command: speckit.ballast.decide
+    integration: "{{ inputs.integration }}"
+    input:
+      args: intent
+
+  - id: record-provisional-intent
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-provisional-intent --run {{ context.run_id }}
+
+  - id: validate-intent
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py intent --run {{ context.run_id }}
+
+  - id: plan
+    command: speckit.plan
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-plan
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py plan --run {{ context.run_id }}
+
+  - id: review-plan
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: plan
+
+  - id: record-plan-review
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point plan-review
+
+  - id: decide-plan
+    command: speckit.ballast.decide
+    integration: "{{ inputs.integration }}"
+    input:
+      args: plan
+
+  - id: record-plan
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point plan
+
+  - id: tasks
+    command: speckit.tasks
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-tasks
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py tasks --run {{ context.run_id }}
+
+  - id: analyze
+    command: speckit.analyze
+    integration: "{{ inputs.integration }}"
+
+  - id: decide-tasks
+    command: speckit.ballast.decide
+    integration: "{{ inputs.integration }}"
+    input:
+      args: tasks
+
+  - id: record-tasks
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point tasks
+
+  - id: implementation-baseline
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py implementation-baseline --run {{ context.run_id }}
+
+  - id: implement
+    command: speckit.implement
+    integration: "{{ inputs.integration }}"
+
+  - id: validate-implementation
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py implementation --run {{ context.run_id }}
+
+  - id: review-implementation
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: implementation
+
+  - id: review-specialists
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: specialists
+
+  - id: record-implementation-review
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point implementation-review
+
+  - id: resolve-decisions
+    command: speckit.ballast.resolve
+    integration: "{{ inputs.integration }}"
+
+  - id: record-resolutions
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point decision-resolution
+
+  - id: renew-intent
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-provisional-intent --run {{ context.run_id }} --renew
+
+  - id: validate-decisions
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py decisions --run {{ context.run_id }}
+
+  - id: converge
+    command: speckit.converge
+    integration: "{{ inputs.integration }}"
+
+  - id: reconcile-spec
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: spec-reconciliation
+
+  - id: record-reconciliation
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point spec-reconciliation
+
+  - id: validate-convergence
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py convergence --run {{ context.run_id }}
+
+  - id: run-checks
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }}
+
+  - id: decide-final
+    command: speckit.ballast.decide
+    integration: "{{ inputs.integration }}"
+    input:
+      args: final-acceptance
+
+  - id: record-final
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point final-acceptance

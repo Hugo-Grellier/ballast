@@ -690,9 +690,14 @@ BLOCK_COMMAND = re.compile(
 )
 
 
+# Blocks that `ballast run publish` retries: the forge refused or the operator's
+# forge credential was unavailable; nothing in the run itself needs changing.
+PUBLISH_RETRY = ("forge", "permission")
+
+
 def recovery_command(run_id: str, category: str) -> str:
     """The one command that recovers from a block of this category."""
-    if category == "forge":
+    if category in PUBLISH_RETRY:
         return f"ballast run publish {run_id}"
     if category in {"tamper", "unfinished-step"}:
         return "ballast discard-runs"

@@ -1,0 +1,36 @@
+schema_version: "1.0"
+
+extension:
+  id: ballast
+  name: "Ballast Autonomous Decisions"
+  version: "1.0.0"
+  description: "Agent-provisional decisions, clarification, reviews and resolutions for ballast-autonomous runs"
+  category: "process"
+  effect: "read-write"
+  author: "Ballast"
+  repository: "https://github.com/Hugo-Grellier/ballast"
+  homepage: "https://github.com/Hugo-Grellier/ballast"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=1.0.11"
+
+provides:
+  commands:
+    - name: "speckit.ballast.decide"
+      file: "commands/speckit.ballast.decide.md"
+      description: "Record one agent-provisional gate decision as a draft, or block"
+    - name: "speckit.ballast.clarify"
+      file: "commands/speckit.ballast.clarify.md"
+      description: "Resolve open clarifications with safe, reversible defaults only, or block"
+    - name: "speckit.ballast.review"
+      file: "commands/speckit.ballast.review.md"
+      description: "Run an independent review and record its findings as a draft"
+    - name: "speckit.ballast.resolve"
+      file: "commands/speckit.ballast.resolve.md"
+      description: "Give each open implementation discovery an agent-provisional resolution"
+
+tags:
+  - "ballast"
+  - "autonomous"
+  - "decisions"
