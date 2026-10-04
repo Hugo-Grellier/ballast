@@ -513,6 +513,77 @@ deliberately from the approved feature plan, then update GitHub with concise
 status. GitHub remains useful without API/MCP access: humans can update Issues
 and PRs manually.
 
+## Draft PR
+
+At the end of every `ballast run start` or `resume` invocation, whether the
+workflow completed, paused at a gate or failed, the launcher runs a Draft PR
+checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
+feature branch as published on GitHub differs from the default branch outside
+`specs/<feature>/`, exactly one Draft PR shows it. Every later invocation reuses
+that PR, including one a human opened by hand from the same branch.
+
+- A created PR is always a draft to the repository's default branch. Its title
+  is the Issue title (at most 256 characters). Its body is the default branch's
+  `.github/pull_request_template.md` as stored on GitHub (never the feature
+  branch's copy), then a Ballast section between
+  `<!-- ballast:draft-pr:begin -->` and `<!-- ballast:draft-pr:end -->`: `Related
+  to #<issue>` (never a closing keyword), the feature directory, the run ID, the
+  last checkpoint time, and the `Main outcome:`, `Risk:` and `Scope gate:` lines
+  of the newest intake scope comment (`<!-- ballast-intake:`) written by an
+  owner, member or collaborator.
+- On a reused PR Ballast changes only its marked section. It adds that section
+  when the body neither has one nor references the Issue, and leaves a body with
+  several or unbalanced sections alone.
+- Ballast never pushes: publishing the branch stays your action. It never
+  changes the title, base, labels, reviewers or draft state, and never marks a
+  PR ready, merges, closes or reopens one.
+- The checkpoint never changes the run's exit status or step state. Every state
+  is recomputed from Git and GitHub at the next invocation.
+
+The run ends with one line, `Draft PR: <state>[ (<reason>)][ #<number>
+<url>][: <remedy>]`, and the run ledger records a `pull_request` event (`ballast
+ledger report --run RUN_ID` shows the latest one). No `gh` output or credential
+is printed or stored.
+
+| State | Reason | Remedy |
+| --- | --- | --- |
+| `created` | | none |
+| `reused` | | none |
+| `reused` | `section-unmanaged` | keep one Ballast section in the PR body |
+| `pending` | `no-branch` | check out the feature branch, then resume |
+| `pending` | `not-published` | publish the branch, e.g. `git push -u <remote or origin> <branch>` |
+| `pending` | `on-base-branch` | run the feature on its own branch |
+| `pending` | `no-meaningful-change` | none: a Draft PR opens once implementation changes are pushed |
+| `pending` | `diff-unclassified` | open the PR by hand; Ballast will adopt it |
+| `failed-retryable` | `gh-missing` | install the GitHub CLI; `ballast doctor` checks it |
+| `failed-retryable` | `gh-unauthenticated` | run `gh auth login` |
+| `failed-retryable` | `gh-forbidden` | grant your GitHub account write access to `<owner>/<repo>` |
+| `failed-retryable` | `github-unreachable` | check the network; the next run retries |
+| `failed-retryable` | `github-error` | the next run retries; check GitHub status, or upgrade `gh` to 2.48 or later, if it persists |
+| `failed-retryable` | `lock-busy` | another checkpoint is running; the next run retries |
+| `failed-retryable` | `internal-error` | report it with the run ID; the next run retries |
+| `failed-retryable` | `gh-untrusted` | gh not found outside working trees: install it in a directory outside any Git working tree and put that directory on `PATH` |
+| `failed-retryable` | `git-untrusted` | git not found outside working trees: put a system `git` on `PATH` ahead of any checkout directory |
+| `blocked-ambiguous` | `several-open` | close all but one of the listed PRs |
+| `blocked-ambiguous` | `base-mismatch` | PR #N targets X, expected Y: change its base on GitHub, or close it |
+| `blocked-ambiguous` | `create-unverified` | check the listed PR on GitHub: its base, head or draft state is not what Ballast requested |
+| `blocked-closed` | `closed`, `merged` | reopen the PR, or open a new one by hand from this branch; Ballast will adopt it |
+| `blocked-unlinked` | `no-issue-number` | name the feature directory `specs/<issue>-<slug>/` |
+| `blocked-unlinked` | `issue-not-found` | create the Issue, or fix the number in the feature directory |
+| `blocked-unlinked` | `not-github` | none: Draft PRs need a GitHub upstream |
+
+While `BALLAST_TAMPERED` or an unfinished agent step's marker exists, the
+checkpoint prints `Draft PR: skipped: <marker> exists; restore the checkout`
+and records nothing.
+
+Authority: the checkpoint is trusted launcher code, outside the agent sandbox.
+It uses your authenticated GitHub CLI, `gh` 2.48 or later, and `git`, each
+resolved from absolute `PATH` entries outside every Git working tree and run by
+absolute path without a shell. Agents stay denied `git push` and `gh`, and the
+launcher withholds `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
+`GITHUB_ENTERPRISE_TOKEN` from the workflow engine and every agent step. See
+ADR-0003 in the Ballast repository.
+
 ## Project status and component choices
 
 `speckit.status-report.show` derives a convenient overview from feature
