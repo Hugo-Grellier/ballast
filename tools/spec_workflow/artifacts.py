@@ -1211,9 +1211,9 @@ def write_required_reviews(feature: Feature) -> Path:
     read-only; the recorder still recomputes it.
     """
     required = sorted(required_kinds(feature, []))
-    path = feature.root / REQUIRED_REVIEWS_DIR / f"{Path(feature.relative).name}.json"
+    relative = f"{REQUIRED_REVIEWS_DIR}/{Path(feature.relative).name}.json"
     text = json.dumps({"feature": feature.relative, "required": required}) + "\n"
-    return autonomy.replace_file(path, text)
+    return autonomy.replace_file(feature.root, relative, text)
 
 
 def _frozen_check(feature: Feature, *, required: bool = False) -> None:

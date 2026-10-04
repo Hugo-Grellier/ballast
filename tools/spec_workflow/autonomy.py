@@ -1128,11 +1128,8 @@ def checked_digest(root: Path, feature: str) -> str:
 
 def effective_config(root: Path) -> list[tuple[str, str, str, str]]:
     """Every effective Git setting as (scope, origin, key, value)."""
-    result = git(
-        root, "config", "--list", "--show-scope", "--show-origin", "-z", check=False
-    )
-    if result.returncode != 0:
-        return []
+    # check=True: a failed listing must never read as "nothing configured".
+    result = git(root, "config", "--list", "--show-scope", "--show-origin", "-z")
     tokens = result.stdout.split("\0")
     entries = []
     for scope, origin, pair in zip(
@@ -1691,7 +1688,11 @@ def repository(root: Path, category: str = "ineligible") -> tuple[str, str]:
         message = f"{prefix}gh repo view did not return {repo}"
         raise AutonomyError(message, category)
     branch = (data.get("defaultBranchRef") or {}).get("name")
-    return repo, branch if isinstance(branch, str) else ""
+    if not isinstance(branch, str) or not branch:
+        # An empty repository: no base to target, so refuse before any write.
+        message = f"{prefix}{repo} has no default branch yet"
+        raise AutonomyError(message, category)
+    return repo, branch
 
 
 def _label_names(issue: dict) -> set[str]:
@@ -1896,12 +1897,19 @@ def issue_snapshot_path(issue: int) -> str:
     return f"{ISSUE_SNAPSHOT_DIR}/{issue}.md"
 
 
-def replace_file(path: Path, text: str) -> Path:
-    """Write text to path by rename: replaces a symlink, never writes through it."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.is_symlink():
-        message = f"{path.parent} must not be a symlink"
-        raise AutonomyError(message)
+def replace_file(root: Path, relative: str, text: str) -> Path:
+    """Write root/relative by rename: never through a symlink, leaf or directory.
+
+    Every directory from the checkout down to the file must be a real one.
+    """
+    path = root / relative
+    current = root
+    for part in Path(relative).parts[:-1]:
+        current /= part
+        if current.is_symlink():
+            message = f"{current} must not be a symlink"
+            raise AutonomyError(message)
+        current.mkdir(exist_ok=True)
     staged = path.with_name(path.name + ".tmp")
     staged.unlink(missing_ok=True)
     staged.write_text(text, encoding="utf-8")
@@ -1911,8 +1919,8 @@ def replace_file(path: Path, text: str) -> Path:
 
 def write_issue_snapshot(root: Path, issue: dict, scope_comment: str) -> Path:
     """Write the snapshot under `.specify/`, which agent steps see read-only."""
-    path = root / issue_snapshot_path(int(issue["number"]))
-    return replace_file(path, render_issue_snapshot(issue, scope_comment))
+    relative = issue_snapshot_path(int(issue["number"]))
+    return replace_file(root, relative, render_issue_snapshot(issue, scope_comment))
 
 
 def write_feature_json(root: Path, feature: str) -> Path:
@@ -1922,7 +1930,7 @@ def write_feature_json(root: Path, feature: str) -> Path:
     agents to the wrong directory.
     """
     text = json.dumps({"feature_directory": feature}) + "\n"
-    return replace_file(root / ".specify/feature.json", text)
+    return replace_file(root, ".specify/feature.json", text)
 
 
 def raise_risk(record: dict, level: str | None, boundaries: list[str], pd: str) -> bool:
@@ -2383,7 +2391,15 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         _guard_body(body)
         title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
         if adopted is not None:
-            url = _adopt_pr(root, repo, adopted[0], current, body)
+            url = _adopt_pr(
+                root,
+                repo,
+                adopted[0],
+                current,
+                body,
+                base=default_branch,
+                branch=branch,
+            )
         else:
             url = _create_verified(
                 root, repo, base=default_branch, head=branch, title=title, body=body
@@ -2571,10 +2587,25 @@ def _with_summary(body: str, summary: str) -> str:
     if body.count(SUMMARY_BEGIN) == body.count(SUMMARY_END) == 1 and start < stop:
         return body[:start] + section + body[stop + len(SUMMARY_END) :]
     at = body.find(_trusted().MARK_BEGIN)
+    if at < 0:
+        message = (
+            "the PR no longer carries Ballast's section; nothing was overwritten, "
+            "ballast run publish retries"
+        )
+        raise AutonomyError(message, "forge")
     return body[:at] + section + "\n\n" + body[at:]
 
 
-def _adopt_pr(root: Path, repo: str, number: int, read: dict, summary: str) -> str:
+def _adopt_pr(  # noqa: PLR0913 - every input explicit
+    root: Path,
+    repo: str,
+    number: int,
+    read: dict,
+    summary: str,
+    *,
+    base: str,
+    branch: str,
+) -> str:
     """Set the summary on the checkpoint's PR, keeping all other text.
 
     GitHub has no conditional body update (#17 DEC-0007): re-read just before
@@ -2583,6 +2614,10 @@ def _adopt_pr(root: Path, repo: str, number: int, read: dict, summary: str) -> s
     """
     body = str(read.get("body") or "")
     current = _read_pr(root, repo, number)
+    problem = _pr_problem(current, repo, base, branch)
+    if problem:
+        message = f"PR #{number} {problem}; nothing was edited"
+        raise AutonomyError(message, "postcondition")
     if str(current.get("body") or "") != body:
         message = (
             f"the body of PR #{number} changed while publishing; nothing was "

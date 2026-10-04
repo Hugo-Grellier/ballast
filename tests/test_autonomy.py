@@ -1317,6 +1317,15 @@ class IssueSnapshotTests(AutonomyCase):
         self.assertLessEqual(len(text), autonomy.ISSUE_SNAPSHOT_LIMIT)
         self.assertIn("[truncated by Ballast]", text)
 
+    def test_snapshot_never_writes_through_a_symlinked_directory(self) -> None:
+        elsewhere = self.base / "elsewhere"
+        elsewhere.mkdir()
+        state = self.root / ".specify/workflow-state"
+        state.symlink_to(elsewhere)
+        with self.assertRaisesRegex(autonomy.AutonomyError, "symlink"):
+            autonomy.write_issue_snapshot(self.root, self.ISSUE, "")
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
     def test_snapshot_never_follows_a_symlink(self) -> None:
         target = self.base / "elsewhere.md"
         issues = self.root / ".specify/workflow-state/issues"
@@ -1346,6 +1355,15 @@ class FeatureJsonTests(AutonomyCase):
         self.assertEqual(target.read_text(), "{}\n")
         self.assertFalse(path.is_symlink())
         self.assertEqual(json.loads(path.read_text()), {"feature_directory": FEATURE})
+
+
+class EffectiveConfigTests(AutonomyCase):
+    """Implementation review fable-3: a failed listing is never an empty one."""
+
+    def test_failed_listing_raises(self) -> None:
+        (self.root / ".git/config").write_text("[broken\n")
+        with self.assertRaises(autonomy.AutonomyError):
+            autonomy.effective_config(self.root)
 
 
 class RecordRenderTests(unittest.TestCase):
@@ -1947,6 +1965,46 @@ class PublisherTests(AutonomyCase):
         self.snapshot()
         self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
         self.assertFalse(marker.exists())
+
+    # Implementation review fable-3, Low findings.
+
+    def test_body_without_the_checkpoint_section_is_never_reshuffled(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        self.gh_data("pr-list.json", [listed_pr(9, section)])
+        # The PR as read back no longer carries the #17 section.
+        self.gh_data("repos_acme_demo_pulls_9.json", served_pr(9, "Human text."))
+        result = autonomy.publish(self.root, "run42")
+        self.assertEqual(result["category"], "forge", result)
+        self.assertNotIn(["pr", "edit"], [c[:2] for c in self.gh_calls()])
+
+    def test_pr_marked_ready_before_the_edit_is_not_edited(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        self.gh_data("pr-list.json", [listed_pr(9, section)])
+        self.gh_data("repos_acme_demo_pulls_9.json", served_pr(9, section))
+        self.gh_data(
+            "repos_acme_demo_pulls_9.then.json", served_pr(9, section, draft=False)
+        )
+        result = autonomy.publish(self.root, "run42")
+        self.assertEqual(result["category"], "postcondition", result)
+        self.assertIn("is not a draft", result["message"])
+        self.assertNotIn(["pr", "edit"], [c[:2] for c in self.gh_calls()])
+
+    def test_unknown_default_branch_refuses_before_any_write(self) -> None:
+        self.gh_data("repo.json", {"nameWithOwner": "acme/demo"})
+        self.refused("forge", "no default branch")
+        calls = [c[:2] for c in self.gh_calls()]
+        self.assertNotIn(["pr", "create"], calls)
+        self.assertNotIn("27-demo-run", self.branches(self.base / "origin.git"))
+        policy, _, warnings = self.policy()
+        with self.assertRaisesRegex(autonomy.AutonomyError, "no default branch"):
+            autonomy.check_eligibility(
+                self.root,
+                issue=ISSUE,
+                feature=FEATURE,
+                policy=policy,
+                warnings=warnings,
+                self_test=False,
+            )
 
     def test_eligibility_needs_the_pin(self) -> None:
         (self.root / "ballast.toml").write_text('[checks]\ncommands = ["true"]\n')
