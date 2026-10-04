@@ -180,6 +180,9 @@ CREDENTIAL_DIRS = (
 CREDENTIAL_FILES = (".git-credentials", ".netrc", ".pypirc")
 SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|AUTH")
 SECRET_VARIABLES = ("SSH_AUTH_SOCK", "GPG_AGENT_INFO", "GIT_ASKPASS")
+# Variables that relocate gh or Git credentials: cleared for the agent, and
+# the directories they name are hidden like CREDENTIAL_DIRS.
+CREDENTIAL_LOCATIONS = ("GH_CONFIG_DIR", "XDG_CONFIG_HOME")
 INTEGRATION_KEYS = {
     "claude": ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
     "codex": ("OPENAI_API_KEY", "CODEX_API_KEY"),
@@ -1017,13 +1020,14 @@ def git(
     env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run git as the operator with hooks and fsmonitor disabled."""
+    """Run git as the operator with hooks, fsmonitor and filters disabled."""
     executable = shutil.which("git")
     if executable is None:
         message = "git is required"
         raise AutonomyError(message)
+    overrides = [] if args[:1] == ("config",) else filter_overrides(root, env)
     result = subprocess.run(  # noqa: S603 - resolved executable, argument list
-        [executable, *GIT_HARDENING, *args],
+        [executable, *GIT_HARDENING, *overrides, *args],
         cwd=root,
         env=env,
         capture_output=True,
@@ -1034,6 +1038,37 @@ def git(
         message = f"git {args[0]} failed: {result.stderr.strip()}"
         raise AutonomyError(message)
     return result
+
+
+def filter_overrides(root: Path, env: dict[str, str] | None = None) -> list[str]:
+    """`-c` flags that empty every configured filter driver.
+
+    A filter runs only when the configuration defines its command, and an
+    agent can add a `.gitattributes` that selects one; emptying each defined
+    driver means no `clean`, `smudge` or `process` program ever runs.
+    """
+    listed = git(root, "config", "--list", "--name-only", "-z", env=env).stdout
+    return filter_flags(listed)
+
+
+def filter_flags(listed: str) -> list[str]:
+    """`-c` flags for `filter_overrides`, from `git config --list --name-only -z`."""
+    names = {
+        key[len("filter.") :].rpartition(".")[0]
+        for key in listed.split("\0")
+        if key.lower().startswith("filter.") and key.count(".") >= 2  # noqa: PLR2004
+    }
+    flags = []
+    for name in sorted(names):
+        if "=" in name or "\n" in name:
+            message = f"refusing a filter driver name Git cannot override: {name!r}"
+            raise AutonomyError(message)
+        for key, value in FILTER_OFF:
+            flags += ["-c", f"filter.{name}.{key}={value}"]
+    return flags
+
+
+FILTER_OFF = (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false"))
 
 
 def git_path(root: Path, *args: str) -> Path:
@@ -1239,7 +1274,11 @@ def confined_env(env: dict[str, str], integration: str | None) -> dict[str, str]
         name: value
         for name, value in env.items()
         if name in keep
-        or (not SECRET_NAME.search(name.upper()) and name not in SECRET_VARIABLES)
+        or (
+            not SECRET_NAME.search(name.upper())
+            and name not in SECRET_VARIABLES
+            and name not in CREDENTIAL_LOCATIONS
+        )
     }
 
 
@@ -1325,7 +1364,8 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     `private` is a wrapper-owned temporary directory for the per-step copy of
     `~/.claude.json`. Agent homes and caches get throwaway overlays,
     credential paths are hidden, and the agent cannot reach the operator's
-    processes, user bus or runtime sockets.
+    processes, user bus or runtime sockets. Pass the operator's environment,
+    not `confined_env()`'s: it names the credential locations to hide.
     """
     bwrap = shutil.which("bwrap")
     if bwrap is None:
@@ -1355,6 +1395,11 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     # Credential directories are emptied first and made read-only last, so an
     # agent home inside one (CODEX_HOME under ~/.config) can still be overlaid.
     hidden = [home / name for name in CREDENTIAL_DIRS if (home / name).is_dir()]
+    hidden += [
+        Path(env[name]).resolve()
+        for name in CREDENTIAL_LOCATIONS
+        if env.get(name) and Path(env[name]).is_dir()
+    ]
     for path in hidden:
         args += ["--tmpfs", str(path)]
     for name in CREDENTIAL_FILES:

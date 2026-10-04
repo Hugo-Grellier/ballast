@@ -230,7 +230,7 @@ class LedgerTests(unittest.TestCase):
     def isolated_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         cli_dir = self.root / "tools/spec_workflow"
         cli_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("ledger.py", "artifacts.py"):
+        for name in ("ledger.py", "artifacts.py", "autonomy.py", "launcher.py"):
             shutil.copy2(ROOT / "tools/spec_workflow" / name, cli_dir / name)
         return subprocess.run(  # noqa: S603
             [sys.executable, "-I", "-S", str(cli_dir / "ledger.py"), *args],

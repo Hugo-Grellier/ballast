@@ -2476,6 +2476,28 @@ class AutonomousConfinementEngineTests(AutonomousEngineCase):
                 self.git("clean", "-qfd", "--", "specs", "src", "tests")
                 self.git("push", "-q", "origin", "--delete", "27-demo-run")
 
+    def test_custom_gh_config_dir_is_hidden_from_the_agent(self) -> None:
+        """Review F1: the wrapper hides the operator's GH_CONFIG_DIR."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        outside = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp")))
+        (outside / "hosts.yml").write_text("oauth_token: secret\n")
+        plan = _autonomous_plan()
+        plan["speckit-ballast-decide-scope"] |= {
+            "exec": f"cat {outside}/hosts.yml; echo gh=$?; "
+            'echo "dir=${GH_CONFIG_DIR-unset}"\n'
+        }
+        self.layout(plan)
+        with patch.dict(os.environ, {"GH_CONFIG_DIR": str(outside)}):
+            code, out, err, run_id = self.start()
+        self.assertEqual(code, 0, out + err)
+        agents = self.root / ".specify/workflow-state" / run_id / "agents"
+        log = min(p for p in agents.iterdir() if "-speckit-ballast-decide-" in p.name)
+        text = (log / "stdout.log").read_text()
+        self.assertNotIn("oauth_token", text)
+        self.assertNotIn("gh=0", text)
+        self.assertIn("dir=unset", text)
+
     def test_edited_record_fails_the_next_recorder(self) -> None:
         plan = _autonomous_plan()
         plan["speckit-ballast-decide-plan"] |= {

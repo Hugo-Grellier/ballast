@@ -25,7 +25,9 @@ TOOLS = ROOT / "tools/spec_workflow"
 FIXTURES = ROOT / "tests/fixtures/autonomy"
 sys.path.insert(0, str(TOOLS))
 try:
+    import artifacts
     import autonomy
+    import ledger
 finally:
     sys.path.pop(0)
 
@@ -698,6 +700,29 @@ class GitHelperTests(AutonomyCase):
             autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",)), digest
         )
 
+    def test_no_filter_runs_in_operator_git(self) -> None:
+        """Review F2: an agent-added .gitattributes never runs a filter driver."""
+        marker = self.base / "filter-ran"
+        with Path(os.environ["GIT_CONFIG_GLOBAL"]).open("a") as config:
+            config.write(
+                f'[filter "Evil"]\n\tclean = "touch {marker}; cat"\n'
+                f"\tsmudge = cat\n\trequired = true\n"
+                f'[filter "proc"]\n\tprocess = "touch {marker}"\n'
+            )
+        before = autonomy.tree_digest(self.root)
+        for driver in ("Evil", "proc"):
+            with self.subTest(driver=driver):
+                (self.root / ".gitattributes").write_text(f"* filter={driver}\n")
+                (self.root / "new.txt").write_text(driver)
+                self.assertNotEqual(autonomy.tree_digest(self.root), before)
+                autonomy.checked_digest(self.root, FEATURE)
+                autonomy.git(self.root, "add", "--all")
+                autonomy.git(self.root, "status", "--porcelain")
+                autonomy.git(self.root, "reset", "-q")
+                artifacts.worktree_tree(self.root)
+                ledger.implementation_tree(self.root)
+                self.assertFalse(marker.exists())
+
     def test_hooks_never_run(self) -> None:
         marker = self.base / "hook-ran"
         hook = self.root / ".git/hooks/pre-commit"
@@ -822,6 +847,26 @@ class ConfinementTests(AutonomyCase):
             autonomy.confined_env(env, "codex"),
             {"OPENAI_API_KEY": "o", "HOME": "/h", "PATH": "/p"},
         )
+
+    def test_custom_gh_and_xdg_config_locations_are_hidden(self) -> None:
+        """Review F1: GH_CONFIG_DIR and XDG_CONFIG_HOME are cleared and hidden."""
+        gh = self.base / "elsewhere/gh"
+        xdg = self.base / "elsewhere/xdg"
+        for path in (gh, xdg / "gh"):
+            path.mkdir(parents=True)
+            (path / "hosts.yml").write_text("oauth_token: secret\n")
+        env = {"GH_CONFIG_DIR": str(gh), "XDG_CONFIG_HOME": str(xdg), "PATH": "/p"}
+        self.assertEqual(autonomy.confined_env(env, "claude"), {"PATH": "/p"})
+        private = self.base / "private"
+        private.mkdir()
+        joined = " ".join(
+            autonomy.confined_argv(
+                self.root, ["true"], private=private, env=env, home=self.base / "h"
+            )
+        )
+        for path in (gh, xdg):
+            self.assertIn(f"--tmpfs {path}", joined)
+            self.assertIn(f"--remount-ro {path}", joined)
 
     def test_missing_bwrap_fails_closed(self) -> None:
         which = shutil.which
@@ -952,6 +997,49 @@ class RealConfinementTests(AutonomyCase):
             "GIT_TERMINAL_PROMPT=0 git credential fill",
         )
         self.assertNotIn("password=", fill.stdout)
+
+    def test_custom_gh_and_xdg_config_locations_unreadable(self) -> None:
+        """Review F1, under real bwrap: custom credential locations stay hidden.
+
+        /var/tmp, unlike /tmp, is not emptied by the sandbox, so only the
+        hiding of the configured directories keeps the files out of reach.
+        """
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        outside = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp")))
+        gh = outside / "gh"
+        xdg = outside / "xdg"
+        for path in (gh, xdg / "gh"):
+            path.mkdir(parents=True)
+            (path / "hosts.yml").write_text("oauth_token: secret\n")
+        env = {
+            **os.environ,
+            "PATH": self.real_path,
+            "GH_CONFIG_DIR": str(gh),
+            "XDG_CONFIG_HOME": str(xdg),
+        }
+        private = self.base / "private"
+        private.mkdir(exist_ok=True)
+        script = 'echo "${GH_CONFIG_DIR-unset} ${XDG_CONFIG_HOME-unset}"; cat "$0" "$1"'
+        files = [str(gh / "hosts.yml"), str(xdg / "gh/hosts.yml")]
+        argv = autonomy.confined_argv(
+            self.root,
+            ["sh", "-c", script, *files],
+            private=private,
+            feature=FEATURE,
+            env=env,
+        )
+        result = subprocess.run(  # noqa: S603
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=autonomy.confined_env(env, None),
+            timeout=60,
+        )
+        self.assertEqual(result.stdout.splitlines()[0], "unset unset")
+        self.assertNotIn("oauth_token", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
 
 
 class EligibilityTests(AutonomyCase):

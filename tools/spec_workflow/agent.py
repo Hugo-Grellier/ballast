@@ -441,10 +441,11 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
             "tree_before": autonomy.tree_digest(root, _review_exclusions(feature)),
         }
         private = Path(tempfile.mkdtemp(prefix="ballast-agent-"))
-        env = autonomy.confined_env(env, integration)
+        # The operator's environment names the credential locations to hide.
         argv = autonomy.confined_argv(
             root, argv, private=private, feature=feature, env=env
         )
+        env = autonomy.confined_env(env, integration)
     meta = {
         "run_id": key,
         "feature_directory": _feature_directory(root, key),

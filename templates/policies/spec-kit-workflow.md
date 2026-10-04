@@ -390,7 +390,11 @@ runner contract for it. Every validator above still runs unchanged.
 
 Agent steps in an Autonomous run run under `bwrap`: the host is read-only, the
 worktree is writable except its protected inputs, and the operator state,
-Git directory, credentials and session bus are out of reach. A missing `bwrap`
+Git directory, credentials and session bus are out of reach. `GH_CONFIG_DIR`
+and `XDG_CONFIG_HOME` are cleared for the agent and the directories they name
+are hidden. Every Git command the operator side runs (tree digests, staging,
+publication) empties each configured filter driver, so no `clean`, `smudge` or
+`process` program runs, whatever `.gitattributes` an agent adds. A missing `bwrap`
 or a failed confinement self-test refuses the start. Wall-time and agent-step
 limits are enforced by the wrapper (exit 5).
 

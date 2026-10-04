@@ -369,8 +369,15 @@ def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     if git is None:
         message = "git is required"
         raise ContractError(message)
+    # No filter driver runs, whatever .gitattributes an agent added.
+    filters = autonomy.filter_overrides(root, env)
     result = subprocess.run(  # noqa: S603 - fixed executable, argument list
-        [git, *args], cwd=root, env=env, capture_output=True, text=True, check=False
+        [git, *filters, *args],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         message = f"git {args[0]} failed: {result.stderr.strip()}"
@@ -1558,7 +1565,7 @@ def run_checks(feature: Feature) -> None:
                 ["sh", "-c", command],
                 private=Path(private),
                 feature=feature.relative,
-                env=env,
+                env=dict(os.environ),
             )
             started = time.monotonic()
             timed_out = False

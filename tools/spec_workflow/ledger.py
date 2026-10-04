@@ -37,6 +37,7 @@ sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN  # noqa: E402
+from autonomy import AutonomyError, filter_flags  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = 1
@@ -265,8 +266,23 @@ def fail(message: str) -> NoReturn:
 
 
 def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    # No filter driver runs, whatever .gitattributes an agent added.
+    listed = subprocess.run(
+        ["git", "config", "--list", "--name-only", "-z"],  # noqa: S607
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode:
+        fail(listed.stderr.strip() or "git config failed")
+    try:
+        filters = filter_flags(listed.stdout)
+    except AutonomyError as error:
+        fail(str(error))
     result = subprocess.run(  # noqa: S603
-        ["git", *args],  # noqa: S607 - Git is required local tooling.
+        ["git", *filters, *args],  # noqa: S607 - Git is required local tooling.
         cwd=root,
         env=env,
         capture_output=True,
