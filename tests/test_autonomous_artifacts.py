@@ -447,6 +447,19 @@ class ProvisionalIntentTests(RecorderCase):
             "- **Decision**: PD-0003", (self.feature / "intent.md").read_text()
         )
 
+    def test_plain_human_gated_record_intent_keeps_a_provisional_block(self) -> None:
+        """Only a continuation replaces the provisional block (SC-007)."""
+        self.intent()
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, "-I", "-S", str(ARTIFACTS), "record-intent", "--feature", FEATURE],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("workflow-provisional", (self.feature / "intent.md").read_text())
+
 
 class ReviewRecorderTests(RecorderCase):
     """AC-004, AC-024, FR-016, FR-019: reviews are independent and severity blocks."""
@@ -1030,6 +1043,34 @@ class ContinuePreflightTests(RecorderCase):
         state.mkdir(parents=True)
         (state / "implementation-baseline.json").write_text("{}")
         self.assertEqual(self.preflight().returncode, 0, self.preflight().stderr)
+
+    def gated(self, check: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603
+            [sys.executable, "-I", "-S", str(ARTIFACTS), check, "--run", "cont01"],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_human_approval_supersedes_the_provisional_intent(self) -> None:
+        """AC-009, AC-017: the continuation's approve-intent gate records a human
+        approval; the provisional block leaves intent.md, the PD stays logged."""
+        record = autonomy.read_run(self.root, "run42")
+        record["status"] = "active"
+        record["mode_history"] = record["mode_history"][:1]
+        autonomy.write_run(self.root, record)
+        self.intent()
+        record["status"] = "continued"
+        autonomy.write_run(self.root, record)
+        self.assertNotEqual(self.gated("intent").returncode, 0)
+        result = self.gated("record-intent")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        intent = (self.feature / "intent.md").read_text()
+        self.assertNotIn("workflow-provisional", intent)
+        self.assertIn("- **Approved by**: human user", intent)
+        self.assertEqual(self.gated("intent").returncode, 0)
+        self.assertEqual([e["point"] for e in self.decisions()], ["intent"])
 
 
 if __name__ == "__main__":

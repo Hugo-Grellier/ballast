@@ -251,6 +251,14 @@ def record_intent(feature: Feature) -> None:
             APPROVAL_END,
         )
     )
+    if feature.continued is not None:
+        # A human-gated continuation of an Autonomous run: this approval
+        # supersedes the agent-provisional intent, which stays in the operator
+        # log and autonomous/record.md.
+        path = feature.file("intent.md")
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+            path.write_text(PROVISIONAL_BLOCK.sub("", text), encoding="utf-8")
     _write_intent_block(feature, spec, block, APPROVAL_START, APPROVAL_END)
     check_intent(feature)
 

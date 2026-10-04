@@ -7,6 +7,7 @@ drives Spec Kit with a fake integration executable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pty
@@ -1646,3 +1647,190 @@ class RunHistoryTests(unittest.TestCase):
             [event["data"]["choice"] for event in events if event["kind"] == "gate"],
             ["unobserved"],
         )
+
+
+AUTONOMOUS_WORKFLOW = ROOT / "templates/spec-kit/workflows/autonomous/workflow.yml"
+CONTINUE_WORKFLOW = ROOT / "templates/spec-kit/workflows/continue/workflow.yml"
+# SHA-256 of ballast-feature's workflow.yml on main before Autonomous runs.
+FEATURE_WORKFLOW_DIGEST = (
+    "af141e8475e3934493ef143baa485744c30fcde0503e0b8c3ebf36622d1ab3ed"
+)
+# contracts/workflow.md, ballast-autonomous: (step id, check or command, args).
+AUTONOMOUS_STEPS = (
+    ("preflight", "autonomous-preflight", None),
+    ("decide-scope", "speckit.ballast.decide", "scope"),
+    ("record-scope", "record-decision", "scope"),
+    ("specify", "speckit.specify", None),
+    ("validate-spec", "spec", None),
+    ("clarify", "speckit.ballast.clarify", None),
+    ("record-clarifications", "record-decision", "clarification"),
+    ("validate-clarified-spec", "clarified-spec", None),
+    ("decide-intent", "speckit.ballast.decide", "intent"),
+    ("record-provisional-intent", "record-provisional-intent", None),
+    ("validate-intent", "intent", None),
+    ("plan", "speckit.plan", None),
+    ("validate-plan", "plan", None),
+    ("review-plan", "speckit.ballast.review", "plan"),
+    ("record-plan-review", "record-decision", "plan-review"),
+    ("decide-plan", "speckit.ballast.decide", "plan"),
+    ("record-plan", "record-decision", "plan"),
+    ("tasks", "speckit.tasks", None),
+    ("validate-tasks", "tasks", None),
+    ("analyze", "speckit.analyze", None),
+    ("decide-tasks", "speckit.ballast.decide", "tasks"),
+    ("record-tasks", "record-decision", "tasks"),
+    ("implementation-baseline", "implementation-baseline", None),
+    ("implement", "speckit.implement", None),
+    ("validate-implementation", "implementation", None),
+    ("review-implementation", "speckit.ballast.review", "implementation"),
+    ("review-specialists", "speckit.ballast.review", "specialists"),
+    ("record-implementation-review", "record-decision", "implementation-review"),
+    ("resolve-decisions", "speckit.ballast.resolve", None),
+    ("record-resolutions", "record-decision", "decision-resolution"),
+    ("renew-intent", "record-provisional-intent", "--renew"),
+    ("validate-decisions", "decisions", None),
+    ("converge", "speckit.converge", None),
+    ("reconcile-spec", "speckit.ballast.review", "spec-reconciliation"),
+    ("record-reconciliation", "record-decision", "spec-reconciliation"),
+    ("validate-convergence", "convergence", None),
+    ("run-checks", "run-checks", None),
+    ("decide-final", "speckit.ballast.decide", "final-acceptance"),
+    ("record-final", "record-decision", "final-acceptance"),
+)
+REVIEW_STEPS = ("review-plan", "review-implementation", "review-specialists")
+SHELL_PREFIX = "python3 -I -S .ballast/spec_workflow/artifacts.py "
+
+
+def _shell_check(run: str) -> tuple[str, str | None]:
+    """(check, --point value or --renew) of a validator command line."""
+    rest = run.removeprefix(SHELL_PREFIX).split()
+    check, extra = rest[0], rest[1:]
+    assert extra[:2] == ["--run", "{{"], run  # noqa: S101
+    tail = extra[4:]
+    if tail[:1] == ["--point"]:
+        return check, tail[1]
+    return check, tail[0] if tail else None
+
+
+class AutonomousWorkflowDefinitionTests(unittest.TestCase):
+    """T015 [AC-001, SC-007]: ballast-autonomous has no gate and every check."""
+
+    def setUp(self) -> None:
+        self.doc = yaml.safe_load(AUTONOMOUS_WORKFLOW.read_text())
+        self.steps = self.doc["steps"]
+
+    def test_parses_with_no_gate(self) -> None:
+        self.assertEqual(self.doc["workflow"]["id"], "ballast-autonomous")
+        self.assertNotIn("gate", {step.get("type") for step in self.steps})
+        self.assertEqual(
+            set(self.doc["inputs"]),
+            {"idea", "feature_directory", "integration", "review_integration"},
+        )
+
+    def test_steps_match_the_contract(self) -> None:
+        found = []
+        for step in self.steps:
+            if step.get("type") == "shell":
+                check, extra = _shell_check(step["run"])
+                found.append((step["id"], check, extra))
+            else:
+                args = (step.get("input") or {}).get("args")
+                found.append(
+                    (step["id"], step["command"], args if "ballast" in step["command"] else None)
+                )
+        self.assertEqual(tuple(found), AUTONOMOUS_STEPS)
+
+    def test_shell_steps_never_interpolate_inputs(self) -> None:
+        for step in self.steps:
+            if step.get("type") == "shell":
+                self.assertTrue(step["run"].startswith(SHELL_PREFIX), step["id"])
+                self.assertIn("--run {{ context.run_id }}", step["run"], step["id"])
+                self.assertNotIn("inputs.", step["run"], step["id"])
+
+    def test_review_steps_use_the_review_integration(self) -> None:
+        for step in self.steps:
+            if step.get("type") == "shell":
+                continue
+            expected = (
+                "{{ inputs.review_integration }}"
+                if step["id"] in (*REVIEW_STEPS, "reconcile-spec")
+                else "{{ inputs.integration }}"
+            )
+            self.assertEqual(step["integration"], expected, step["id"])
+
+    def test_every_producer_is_followed_by_its_check(self) -> None:
+        ids = [step["id"] for step in self.steps]
+        for producer, check in (
+            ("decide-scope", "record-scope"),
+            ("specify", "validate-spec"),
+            ("clarify", "record-clarifications"),
+            ("decide-intent", "record-provisional-intent"),
+            ("plan", "validate-plan"),
+            ("review-plan", "record-plan-review"),
+            ("decide-plan", "record-plan"),
+            ("tasks", "validate-tasks"),
+            ("decide-tasks", "record-tasks"),
+            ("implement", "validate-implementation"),
+            ("review-specialists", "record-implementation-review"),
+            ("resolve-decisions", "record-resolutions"),
+            ("reconcile-spec", "record-reconciliation"),
+            ("decide-final", "record-final"),
+        ):
+            self.assertEqual(ids[ids.index(producer) + 1], check, producer)
+
+    def test_feature_workflow_is_unchanged(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(WORKFLOW.read_bytes()).hexdigest(), FEATURE_WORKFLOW_DIGEST
+        )
+
+
+class ContinueWorkflowDefinitionTests(unittest.TestCase):
+    """T037 [AC-009, AC-017]: ballast-continue has only validators and gates."""
+
+    def setUp(self) -> None:
+        self.doc = yaml.safe_load(CONTINUE_WORKFLOW.read_text())
+        self.steps = self.doc["steps"]
+
+    def test_no_command_step(self) -> None:
+        self.assertEqual(self.doc["workflow"]["id"], "ballast-continue")
+        self.assertEqual(
+            {step.get("type") for step in self.steps}, {"shell", "gate"}
+        )
+        self.assertFalse(any("command" in step for step in self.steps))
+
+    def test_steps_match_the_contract(self) -> None:
+        found = []
+        for step in self.steps:
+            if step["type"] == "shell":
+                found.append(_shell_check(step["run"])[0])
+            else:
+                found.append("gate " + step["id"])
+        self.assertEqual(
+            found,
+            [
+                "continue-preflight",
+                "clarified-spec",
+                "gate approve-intent",
+                "record-intent",
+                "intent",
+                "plan",
+                "gate review-plan",
+                "tasks",
+                "gate review-tasks",
+                "implementation",
+                "gate review-implementation",
+                "decisions",
+                "gate spec-reconciliation",
+                "convergence",
+                "gate final-acceptance",
+            ],
+        )
+
+    def test_gates_equal_ballast_feature(self) -> None:
+        feature = {
+            step["id"]: step for step in _steps() if step.get("type") == "gate"
+        }
+        for step in self.steps:
+            if step["type"] == "gate":
+                self.assertEqual(step, feature[step["id"]], step["id"])
+                self.assertEqual(step["on_reject"], "retry")
