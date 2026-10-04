@@ -483,13 +483,15 @@ class AgentWrapperTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         fake = self.root / "fake-bin"
         fake.mkdir()
+        # systemd-run resolves only outside working trees and temp roots.
+        trusted = trusted_directory(self)
+        _fake_systemd(trusted)
         for name in ("claude", "codex"):
             (fake / name).write_text(FAKE_CLI)
             (fake / name).chmod(0o755)
-        _fake_systemd(fake)
         self.env = {
             **os.environ,
-            "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}",
+            "PATH": os.pathsep.join([str(trusted), str(fake), os.environ["PATH"]]),
             "FAKE_SYSTEMCTL_LOG": str(self.root / "systemctl.log"),
             "FAKE_ARGV": str(self.root / "argv.json"),
             "SPECKIT_WORKFLOW_RUN_ID": "run42",
@@ -648,8 +650,44 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertIn("could not be stopped", result.stderr)
 
+    def plant_systemd_run(self) -> tuple[Path, Path]:
+        planted = self.root / "planted-bin"  # In the checkout and a temp root.
+        planted.mkdir()
+        marker = self.root / "planted-ran"
+        (planted / "systemd-run").write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        (planted / "systemd-run").chmod(0o755)
+        return planted, marker
+
+    def test_planted_systemd_run_never_runs(self) -> None:
+        """Fable-3: systemd-run resolves like gh and git (ADR-0003)."""
+        planted, marker = self.plant_systemd_run()
+        result = self.run_wrapper(
+            "claude",
+            "-p",
+            "/speckit-plan",
+            PATH=f"{planted}{os.pathsep}{self.env['PATH']}",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_only_an_untrusted_systemd_run_refuses(self) -> None:
+        planted, marker = self.plant_systemd_run()
+        python = self.root / "python-only"
+        python.mkdir()
+        (python / "python3").symlink_to(sys.executable)
+        result = self.run_wrapper(
+            "claude",
+            "-p",
+            "/speckit-plan",
+            PATH=os.pathsep.join(
+                [str(planted), str(self.root / "fake-bin"), str(python)]
+            ),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("working tree or temp directory", result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_refuses_without_a_systemd_user_manager(self) -> None:
-        (self.root / "fake-bin/systemd-run").unlink()
         python = self.root / "python-only"
         python.mkdir()
         (python / "python3").symlink_to(sys.executable)
@@ -800,6 +838,9 @@ class ScopeContainmentTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         fake = self.root / "fake-bin"
         fake.mkdir()
+        # systemd-run resolves only outside working trees and temp roots.
+        trusted = trusted_directory(self)
+        _fake_systemd(trusted)
         for name in ("claude", "codex"):
             (fake / name).write_text(FAKE_CLI)
             (fake / name).chmod(0o755)
@@ -936,8 +977,7 @@ class TrustedLauncherTests(unittest.TestCase):
         (self.root / ".specify/extensions.yml").write_text("hooks: {}\n")
         (self.root / ".venv/lib").mkdir(parents=True)
         (self.root / ".git").write_text("gitdir: /repo/.git/worktrees/checkout\n")
-        fake = Path(self.directory.name) / "fake-bin"
-        fake.mkdir()
+        fake = trusted_directory(self)
         _fake_systemd(fake)
         self.env = {
             **os.environ,
@@ -1838,7 +1878,12 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
 
 
 sys.path.insert(0, str(ROOT / "tests"))
-from test_autonomy import AutonomyCase, _bwrap_works, autonomy  # noqa: E402
+from test_autonomy import (  # noqa: E402
+    AutonomyCase,
+    _bwrap_works,
+    autonomy,
+    trusted_directory,
+)
 
 sys.path.pop(0)
 sys.path.insert(0, str(ROOT / "tools/spec_workflow"))

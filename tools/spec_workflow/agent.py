@@ -226,7 +226,7 @@ def _children() -> list[int]:
     return found
 
 
-def _containment() -> tuple[str, list[str]]:
+def _containment(root: Path) -> tuple[str, list[str]]:
     """Prepare both process guards; return the systemd-run path and options.
 
     systemd 254 expands `$VAR` in the command line by default, which blanks a
@@ -234,7 +234,14 @@ def _containment() -> tuple[str, list[str]]:
     exists; an older or unreadable systemd-run keeps the scope, without it.
     """
     _become_subreaper()
-    systemd_run = shutil.which("systemd-run")
+    # Like gh and git: never a copy an agent could have written (ADR-0003).
+    systemd_run, shadowed = autonomy.trusted_program("systemd-run", root)
+    if systemd_run is None and shadowed:
+        message = (
+            "process containment refuses systemd-run found only in a working "
+            "tree or temp directory; put the system one on PATH"
+        )
+        raise OSError(message)
     if systemd_run is None or not scope_available():
         message = "process containment needs a systemd user manager"
         raise OSError(message)
@@ -400,7 +407,7 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
             _real_executable(integration),
             *permission_args(integration, sys.argv[1:]),
         ]
-        systemd_run, scope_options = _containment()
+        systemd_run, scope_options = _containment(Path.cwd())
     except (ValueError, OSError) as error:
         sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
         return EXIT_USAGE

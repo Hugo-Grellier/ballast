@@ -1398,9 +1398,10 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     processes, user bus or runtime sockets. Pass the operator's environment,
     not `confined_env()`'s: it names the credential locations to hide.
     """
-    bwrap = shutil.which("bwrap")
+    bwrap, shadowed = trusted_program("bwrap", root)
     if bwrap is None:
-        message = "confinement unavailable: bwrap not found"
+        where = " outside working trees and temp roots" if shadowed else ""
+        message = f"confinement unavailable: bwrap not found{where}"
         raise AutonomyError(message, "ineligible")
     env = dict(os.environ if env is None else env)
     home = home or Path.home()
@@ -2413,6 +2414,16 @@ def _guard_body(body: str) -> None:
     if HUMAN_APPROVAL.search(body):
         message = "PR body would claim a human approval"
         raise AutonomyError(message)
+
+
+def trusted_program(name: str, root: Path) -> tuple[str | None, bool]:
+    """Find an operator-side program as draft_pr does (ADR-0003).
+
+    Only absolute PATH entries outside every working tree and agent temp root
+    count: a copy an agent could write never runs with operator authority.
+    Returns the resolved path, or None and whether an untrusted copy exists.
+    """
+    return _trusted()._resolve(name, root)  # noqa: SLF001
 
 
 def _trusted() -> ModuleType:

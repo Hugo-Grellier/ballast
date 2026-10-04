@@ -81,6 +81,20 @@ def served_pr(number: int, body: str, **changes: object) -> dict:
     }
 
 
+def trusted_directory(case: unittest.TestCase) -> Path:
+    """Return a fresh directory outside every Git working tree and temp root.
+
+    Operator-side programs (bwrap, systemd-run, gh, git) resolve only from
+    such directories (ADR-0003), so their test fakes live here, not in /tmp.
+    """
+    base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    base /= "ballast-tests"
+    base.mkdir(parents=True, exist_ok=True)
+    directory = TemporaryDirectory(dir=base)
+    case.addCleanup(directory.cleanup)
+    return Path(directory.name).resolve()
+
+
 def _install(source: Path, target: Path) -> None:
     shutil.copyfile(source, target)
     target.chmod(0o755)
@@ -115,8 +129,8 @@ class AutonomyCase(unittest.TestCase):
         self.base = Path(self.directory.name).resolve()
         self.root = self.base / "repo"
         self.root.mkdir()
-        self.bin = self.base / "bin"
-        self.bin.mkdir()
+        # Fakes of operator-side programs: outside working trees and /tmp.
+        self.bin = trusted_directory(self)
         self.gh_dir = self.base / "gh"
         self.gh_dir.mkdir()
         self.state = self.base / "state"
@@ -943,14 +957,55 @@ class ConfinementTests(AutonomyCase):
             self.assertIn(f"--tmpfs {path}", joined)
             self.assertIn(f"--remount-ro {path}", joined)
 
+    def plant_bwrap(self, directory: Path) -> Path:
+        marker = self.base / "planted-ran"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "bwrap").write_text(f"#!/bin/sh\ntouch {marker}\nexit 0\n")
+        (directory / "bwrap").chmod(0o755)
+        return marker
+
+    def test_planted_bwrap_is_never_used(self) -> None:
+        """Fable-3: bwrap resolves like gh and git (ADR-0003)."""
+        _install(Path("/bin/true"), self.bin / "bwrap")
+        for planted, roots in (
+            (self.root / ".git/planted-bin", ()),
+            (self.base / "temp-root/bin", (self.base / "temp-root",)),
+        ):
+            with self.subTest(planted=planted):
+                self.plant_bwrap(planted)
+                os.environ["PATH"] = f"{planted}{os.pathsep}{self.env['PATH']}"
+                with patch.object(ledger, "agent_temp_roots", lambda r=roots: r):
+                    self.assertEqual(self.argv()[0], str(self.bin / "bwrap"))
+
+    def test_only_an_untrusted_bwrap_refuses_and_never_runs(self) -> None:
+        planted = self.root / ".git/planted-bin"
+        marker = self.plant_bwrap(planted)
+        system = self.base / "system-bin"  # git and python3, never a bwrap
+        system.mkdir()
+        for name in ("git", "python3"):
+            (system / name).symlink_to(shutil.which(name, path=self.real_path) or "")
+        os.environ["PATH"] = f"{planted}{os.pathsep}{system}"
+        with (
+            patch.object(autonomy.shutil, "which", return_value=None),
+            self.assertRaisesRegex(autonomy.AutonomyError, "outside working trees"),
+        ):
+            autonomy.confinement_self_test(self.root)
+        self.assertFalse(marker.exists())
+
     def test_missing_bwrap_fails_closed(self) -> None:
         which = shutil.which
 
         def no_bwrap(name: str, *args: object, **kwargs: object) -> str | None:
             return None if name == "bwrap" else which(name, *args, **kwargs)
 
+        trusted = autonomy.trusted_program
+
+        def no_trusted_bwrap(name: str, root: Path) -> tuple[str | None, bool]:
+            return (None, False) if name == "bwrap" else trusted(name, root)
+
         with (
             patch.object(autonomy.shutil, "which", side_effect=no_bwrap),
+            patch.object(autonomy, "trusted_program", side_effect=no_trusted_bwrap),
             self.assertRaisesRegex(autonomy.AutonomyError, "bwrap not found") as raised,
         ):
             autonomy.confinement_self_test(self.root)
