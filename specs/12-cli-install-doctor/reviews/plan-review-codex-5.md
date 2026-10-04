@@ -1,0 +1,14 @@
+REJECT
+
+| Round 4 finding | Status | Evidence |
+| --- | --- | --- |
+| T016: symlinked `PATH` entry can execute a checkout program (high) | RESOLVED | [T016](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:135) now requires resolving both search directories and the selected executable, and names the symlink test. |
+| Missing installed output can leave doctor reporting readiness (high) | NOT RESOLVED | The [contract](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/contracts/standard-manifest.md:25) now requires absent outputs to fail. [T028–T029](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:210) still specify only stamp and fingerprint checks, with no deleted-output test. |
+| T008: failure after replacement can destroy the previous install (high) | NOT RESOLVED | [T008](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:71) moves digest verification before replacement, but the research decision it cites still requires [re-reading the target after replacement](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/research.md:25). Following that decision recreates the failure path. |
+| T001/T009 versus plan: README `extra-files` (medium) | NOT RESOLVED | [T001](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:30) and the [plan](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/plan.md:70) require adding `README.md`; [T009](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:77) still treats that change as a proposal. |
+
+### New critical/high finding
+
+| Severity | Failure path | Required correction |
+| --- | --- | --- |
+| High | [T001](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:30) puts `x-release-please-version` on its own line before the README code block. Release Please’s generic updater [replaces a version only on the annotated line](https://github.com/googleapis/release-please/blob/main/docs/customizing.md#updating-arbitrary-files). That comment has no version, so a release bump leaves the install command pointing at the old release. | Put the command inside Release Please’s version block markers, and verify that a simulated bump changes the README command. |

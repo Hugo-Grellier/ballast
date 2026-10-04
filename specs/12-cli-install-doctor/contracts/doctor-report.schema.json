@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ballast doctor report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "cli_version", "project", "standard", "checks", "verdict", "blocked"],
+  "properties": {
+    "schema": { "const": 1 },
+    "cli_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "project": { "type": ["string", "null"] },
+    "standard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "path", "local"],
+      "properties": {
+        "ref": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] },
+        "local": { "type": "boolean" }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "scope", "status", "gates", "detail", "remedy"],
+        "properties": {
+          "name": {
+            "enum": [
+              "python", "cli-on-path", "git", "uvx", "patch", "network", "linux",
+              "systemd-user", "systemd-run", "specify", "agent-cli", "gh",
+              "ballast-toml", "standard-fetched", "cli-version", "setup-current", "trust"
+            ]
+          },
+          "scope": { "enum": ["machine", "project"] },
+          "status": { "enum": ["passing", "missing", "unsupported", "inconclusive", "skipped"] },
+          "gates": { "type": "array", "items": { "type": "string" } },
+          "detail": { "type": "string" },
+          "remedy": { "type": ["string", "null"] }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "status": { "enum": ["missing", "unsupported", "inconclusive"] } } },
+            "then": { "properties": { "remedy": { "type": "string", "minLength": 1 } } }
+          }
+        ]
+      }
+    },
+    "verdict": { "enum": ["ok", "blocked"] },
+    "blocked": { "type": "array", "items": { "type": "string" } }
+  }
+}

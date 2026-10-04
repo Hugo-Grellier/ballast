@@ -12,6 +12,10 @@ can write. From the checkout root:
     ballast ledger snapshot|check|record ...
     ballast discard-runs       # after an unfinished agent step
 
+`status --json` prints whether the workflow is installed and why `run` would
+refuse, as `{"installed": bool, "refusal": null | "<reason>"}`; it writes
+nothing, so `ballast doctor` can call it before trust.
+
 `trust` records digests of every executable workflow input in your state
 directory. `run` and `ledger` refuse unless those inputs still match, no
 tamper marker exists, and no agent step was left unfinished. This file uses
@@ -231,7 +235,14 @@ def _trust(root: Path, state: Path) -> int:
 def main(argv: list[str]) -> int:
     """Verify the checkout, then run a workflow tool or record a baseline."""
     root = Path.cwd()
-    if not (root / ".ballast/spec_workflow/run.py").is_file() or not argv:
+    installed = (root / ".ballast/spec_workflow/run.py").is_file()
+    if argv == ["status", "--json"]:
+        refusal = _refusal(root) if installed else None
+        sys.stdout.write(
+            json.dumps({"installed": installed, "refusal": refusal}) + "\n"
+        )
+        return 0
+    if not installed or not argv:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
     if argv[0] in {"trust", "discard-runs"}:

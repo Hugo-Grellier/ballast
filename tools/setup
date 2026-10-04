@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Install Spec Kit and this standard into a project's git-ignored paths.
 
-Usage: tools/setup [--project DIR]
+Usage: tools/setup [--project DIR] [--check]
+
+`--check` reports whether this checkout holds the current installation
+(`current`, `stale`, `absent` or `incomplete: <path>`) and writes nothing.
 
 The project commits `ballast.toml` and its own overrides only. Everything this
 script writes is rebuildable and must be ignored; see GITIGNORE below.
@@ -74,6 +77,12 @@ IGNORE_PROBES = (
     (".specify/memory/constitution.md", False),
     (".specify/bugs/demo/assessment.md", False),
     (".specify/assessments/demo.md", False),
+)
+# Installed outputs a setup stamp promises; `--check` confirms they exist.
+PROMISED = (
+    ".ballast/spec_workflow/run.py",
+    ".ballast/feature_intake.py",
+    ".specify/workflows/ballast-feature/workflow.yml",
 )
 # Project-owned files that `specify init --force` would overwrite.
 PRESERVED = (".specify/memory/constitution.md",)
@@ -228,7 +237,10 @@ class Setup:
         """Install the pinned Spec Kit sources and apply the patches."""
         for executable in ("uvx", "patch"):
             if shutil.which(executable) is None:
-                message = f"Required setup tool is missing: {executable}"
+                message = (
+                    f"Required setup tool is missing: {executable}; "
+                    "run `ballast doctor` for details"
+                )
                 raise RuntimeError(message)
         sources = {name: _fetch_source(name, temporary) for name in SOURCES}
         preserved = {
@@ -325,6 +337,18 @@ class Setup:
             str(STANDARD / "templates/spec-kit/workflows/feature"),
         )
 
+    def check(self) -> bool:
+        """Report whether this checkout holds the current installation."""
+        if not self.stamp.is_file():
+            state = "absent"
+        elif self.stamp.read_text().strip() != self.fingerprint():
+            state = "stale"
+        else:
+            missing = [p for p in PROMISED if not (self.root / p).is_file()]
+            state = f"incomplete: {missing[0]}" if missing else "current"
+        sys.stdout.write(state + "\n")
+        return state == "current"
+
     def main(self) -> None:
         """Install unless this checkout already holds the same installation."""
         if (
@@ -388,7 +412,12 @@ def _fetch_source(name: str, temporary: Path) -> Path:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", type=Path, default=Path.cwd())
+    parser.add_argument("--check", action="store_true", help="report, write nothing")
+    arguments = parser.parse_args()
     try:
-        Setup(parser.parse_args().project.resolve()).main()
+        setup = Setup(arguments.project.resolve())
+        if arguments.check:
+            sys.exit(0 if setup.check() else 1)
+        setup.main()
     except (RuntimeError, ValueError) as error:
         sys.exit(f"setup: {error}")

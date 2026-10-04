@@ -17,11 +17,43 @@ This repository is the source of the standard. Projects pin a version and instal
 
 Review each template before copying it into a project. Replace project-specific placeholders, remove guidance that does not apply, and keep the resulting instructions close to the code they govern. Treat templates as a starting point, not as a substitute for the target project's own conventions.
 
+## Installing the Ballast CLI
+
+Once per machine, run this line. It downloads the `ballast` command of one release and its SHA-256 checksum into a fresh directory under `/tmp`, checks the checksum, and installs the command as `~/.local/bin/ballast`; on a mismatch or a failed download it installs nothing. It reads nothing from the current directory, so it is safe to run inside any checkout.
+
+<!-- x-release-please-start-version -->
+```sh
+(c=$PATH; PATH=/usr/local/bin:/usr/bin:/bin; v=v0.1.0; u=https://github.com/Hugo-Grellier/ballast/releases/download/$v; d=$(TMPDIR=/tmp mktemp -d) && { curl -q -fsSL -o "$d/ballast" "$u/ballast" && curl -q -fsSL -o "$d/ballast.sha256" "$u/ballast.sha256" || { echo "ballast: cannot download $v from $u; nothing installed" >&2; false; }; } && { [ "$(cut -d" " -f1 "$d/ballast.sha256")" = "$(sha256sum <"$d/ballast" | cut -d" " -f1)" ] || { echo "ballast: checksum mismatch for $v; nothing installed" >&2; false; }; } && BALLAST_CALLER_PATH="$c" /usr/bin/python3 -I -S "$d/ballast" self-install)
+```
+<!-- x-release-please-end -->
+
+If the download fails with 404, that release predates the installer; use the developer fallback below.
+
+Then check the machine and, from a project root, the project:
+
+```bash
+ballast --version
+ballast doctor            # add --json for a machine-readable report
+```
+
+`ballast doctor` is read-only: it downloads and writes nothing. It reports each prerequisite as passing, missing, unsupported or inconclusive, names the commands each gap blocks and gives the exact fix, and exits 1 while any command is blocked. Its checks are the authoritative prerequisite list; in summary:
+
+- `python`: `/usr/bin/python3` 3.11 or newer, which runs every Ballast tool.
+- `cli-on-path`: the `ballast` command on `PATH`.
+- `git`, `uvx` and `patch` for `ballast setup`, and `network`: HTTPS access to GitHub and PyPI the first time a version is fetched.
+- `linux`, `systemd-user` and `systemd-run`: headless agent steps of `ballast run` need Linux with a systemd user session that can start transient scopes.
+- `specify` (the Spec Kit CLI) and `agent-cli` (Claude Code or Codex) for `ballast run`.
+- `gh`, authenticated, for issue intake and PR steps.
+
+Inside a project it also checks the pin in `ballast.toml`, whether that version is fetched, the CLI version it needs, whether setup is current, and whether the launcher would refuse until `ballast trust`.
+
+To develop the standard itself, install from a reviewed checkout of this repository instead: `install -m 0755 tools/ballast ~/.local/bin/ballast`.
+
 ## Installing the Spec Kit workflow
 
 `tools/setup` installs pinned Spec Kit sources and this standard's workflow tooling into a project. Everything it writes is rebuildable and git-ignored; the project commits only its own files. Projects reach it through one global command:
 
-1. Once per machine, from a reviewed checkout of this repository: `install -m 0755 tools/ballast ~/.local/bin/ballast`.
+1. Once per machine, install the `ballast` command (see [Installing the Ballast CLI](#installing-the-ballast-cli)) and run `ballast doctor`.
 2. Add `ballast.toml` at the project root. It pins the standard version (a tag or commit) and can extend the headless-agent permissions:
 
    ```toml
@@ -33,7 +65,7 @@ Review each template before copying it into a project. Replace project-specific 
    extra_deny = ["Edit(./private/**)"]
    ```
 
-3. From the project root, run `ballast setup`. It downloads the pinned version once into `$XDG_DATA_HOME/ballast/standard/<ref>/`, then runs its `tools/setup`. On the first run, add the ignore block it prints to the project's `.gitignore`; the block keeps `.specify/memory/constitution.md` tracked. Setup needs `git`, `uvx`, `patch`, and network access to GitHub.
+3. From the project root, run `ballast setup`. It downloads the pinned version once into `$XDG_DATA_HOME/ballast/standard/<ref>/`, then runs its `tools/setup`. On the first run, add the ignore block it prints to the project's `.gitignore`; the block keeps `.specify/memory/constitution.md` tracked. Setup needs `git`, `uvx`, `patch`, and network access to GitHub; `ballast doctor` checks them.
 
 The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `ballast-feature` workflow and its tools under `.ballast/`, the `ballast-*` skills under `.agents/skills/` (linked from `.claude/skills/`), and the standard's policies under `docs/policies/`. Project-specific additions go in `docs/policies/project/`, which setup never touches. A rerun is a no-op until this repository or `ballast.toml` changes. A new Git worktree copies the installation from its primary checkout when both match. A reinstall keeps `.specify/workflows/runs/` and the project constitution.
 
@@ -55,7 +87,7 @@ This repository installs Ballast like any project: `ballast.toml` pins a release
 
 ## Releases
 
-Release Please opens a release PR from Conventional Commit titles on `main`; merging it tags `vX.Y.Z`, updates `CHANGELOG.md` and `version.txt`, and publishes the GitHub release. Projects pin those tags in `ballast.toml`. The workflow needs a `RELEASE_PLEASE_TOKEN` repository secret (a fine-grained token with contents and pull-request write access) so its release PR runs CI.
+Release Please opens a release PR from Conventional Commit titles on `main`; merging it tags `vX.Y.Z`, updates `CHANGELOG.md`, `version.txt`, the CLI's `VERSION` and the install line above, and publishes the GitHub release. A follow-up job attaches the unchanged `tools/ballast` and its `ballast.sha256` to that release, for the install line. Projects pin those tags in `ballast.toml`. The workflow needs a `RELEASE_PLEASE_TOKEN` repository secret (a fine-grained token with contents and pull-request write access) so its release PR runs CI.
 
 ## Status
 

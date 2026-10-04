@@ -58,6 +58,14 @@ TASKS = """# Tasks: Demo import
 """
 
 
+def _tree(root: Path) -> dict[str, str]:
+    """Every path under root with its content, to prove a command wrote nothing."""
+    return {
+        str(path.relative_to(root)): "dir" if path.is_dir() else path.read_bytes().hex()
+        for path in sorted(root.rglob("*"))
+    }
+
+
 def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)  # noqa: S603, S607
 
@@ -977,6 +985,39 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual((operator / "runs/keep.txt").read_text(), "keep\n")
         self.assertEqual(list(state_root.iterdir()), [])
+
+    def status(self) -> dict:
+        state = Path(self.env["XDG_STATE_HOME"])
+        before = _tree(self.root), _tree(state) if state.exists() else None
+        result = self.launch("status", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = _tree(self.root), _tree(state) if state.exists() else None
+        self.assertEqual(after, before)
+        return json.loads(result.stdout)
+
+    def test_status_reports_the_refusal_without_writing(self) -> None:
+        state = Path(self.env["XDG_STATE_HOME"])
+        self.assertEqual(
+            self.status(),
+            {
+                "installed": True,
+                "refusal": "no trusted baseline; review the checkout, then run `trust`",
+            },
+        )
+        self.assertFalse(state.exists())
+        self.assertEqual(self.launch("trust").returncode, 0)
+        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+        (self.root / ".specify/extensions.yml").write_text("hooks: {x: y}\n")
+        self.assertIn("workflow inputs changed", self.status()["refusal"])
+        self.assertEqual(self.launch("trust").returncode, 0)
+        (self.root / "BALLAST_TAMPERED").write_text("x\n")
+        self.assertIn("BALLAST_TAMPERED exists", self.status()["refusal"])
+        (self.root / "BALLAST_TAMPERED").unlink()
+        (marker_dir,) = (state / "ballast").iterdir()
+        (marker_dir / "in-progress").write_text("ballast-agent-r1-step.scope\n")
+        self.assertIn("did not finish", self.status()["refusal"])
+        (self.tools / "run.py").unlink()
+        self.assertEqual(self.status(), {"installed": False, "refusal": None})
 
     def test_tamper_marker_and_unfinished_step_are_refused(self) -> None:
         self.assertEqual(self.launch("trust").returncode, 0)
