@@ -2,7 +2,7 @@
 
 ## R2 boundaries
 
-In addition to the base list, these changes are R2 and need explicit human approval before the change and before merge:
+In addition to the base list, these changes are R2. In a human-gated run they need explicit human approval before the change and before merge; in an Autonomous run the pre-change approval is agent-provisional and the merge decision is the single human approval, with the R2 notice in the Draft PR:
 
 - the headless-agent permission model: `claude-settings.json`, the wrapper's argv rules, protected inputs and tamper handling;
 - the launcher's trust model: trusted inputs, refusal conditions, state location;

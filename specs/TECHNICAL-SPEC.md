@@ -1132,6 +1132,10 @@ repeated agent failure
 
 ```
 
+In the human-gated mode, the human also approves at each workflow gate (scope, intent, plan, tasks, implementation review, spec reconciliation, final acceptance), and an R2 change needs that approval before the change.
+
+In an eligible Autonomous run (#27), the run does not interrupt the human at those gates. An agent records each gate decision as agent-provisional, with its basis and evidence; a provisional decision is never human approval (constitution BL-INV-006). The single human approval is the merge of the Draft PR, including for R2, whose PR states that the risky change was made without prior human approval. An escalation from the list above becomes a block that stops the run with its reason and recovery command; the operator continues human-gated.
+
 ---
 
 # 38. Deterministic verification API
@@ -2384,7 +2388,7 @@ One compatible zero-cost execution backend must be qualified as an opt-in fallba
 
 A UI demo video is captured **on request** from a project-supplied reproducible scenario and linked to the existing PR with its commit and scenario. Routine UI PRs do not require automatic capture. The PR also carries concise, source-linked acceptance evidence, checks and unresolved decisions.
 
-The 1.0 release gate and phased implementation map are in [`docs/plans/2026-10-02-product-roadmap.md`](../docs/plans/2026-10-02-product-roadmap.md). The current workflow's required human approvals must be deliberately reconciled with Autonomous's provisional-decision model before that mode ships; selecting a CLI mode does not itself weaken the trust boundary.
+The 1.0 release gate and phased implementation map are in [`docs/plans/2026-10-02-product-roadmap.md`](../docs/plans/2026-10-02-product-roadmap.md). The reconciliation of the human-gated approvals with Autonomous's provisional-decision model is specified in [`specs/27-autonomous-core/`](27-autonomous-core/spec.md): for an eligible Autonomous run, every intermediate approval, including the R2 pre-change approval, is agent-provisional and the merge decision is the single human approval; the human-gated mode keeps its approvals. Selecting a CLI mode does not itself weaken the trust boundary: the mode is recorded in operator state, agent steps run confined, and publication is done by the trusted runner, never by an agent.
 
 Later releases may add:
 

@@ -289,6 +289,10 @@ def _scope_text(path: Path) -> str:
         not re.search(rf"(?m)^{re.escape(field)}[ \t]*\S", scope) for field in fields
     ) or not re.search(r"(?m)^Risk:[ \t]*R[012]\b", scope):
         _fail("scope file needs classification, outcome, in/out and R0/R1/R2 risk")
+    if re.search(r"(?mi)^Autonomous:[ \t]*yes\b", scope) and not re.search(
+        r"(?mi)^Privileged actions before merge:[ \t]*\S", scope
+    ):
+        _fail("an Autonomous scope needs a Privileged actions before merge: line")
     return scope
 
 

@@ -73,6 +73,9 @@ IGNORE_PROBES = (
     (".specify/scripts/python/common.py", True),
     (".specify/templates/plan-template.md", True),
     (".specify/workflows/workflow-registry.json", True),
+    (".specify/workflows/ballast-autonomous/workflow.yml", True),
+    (".specify/workflows/ballast-continue/workflow.yml", True),
+    (".specify/extensions/ballast/extension.yml", True),
     (".specify/memory/.constitution-template.json", True),
     (".specify/memory/constitution.md", False),
     (".specify/bugs/demo/assessment.md", False),
@@ -83,10 +86,16 @@ PROMISED = (
     ".ballast/spec_workflow/run.py",
     ".ballast/feature_intake.py",
     ".specify/workflows/ballast-feature/workflow.yml",
+    ".specify/workflows/ballast-autonomous/workflow.yml",
+    ".specify/workflows/ballast-continue/workflow.yml",
 )
 # Project-owned files that `specify init --force` would overwrite.
 PRESERVED = (".specify/memory/constitution.md",)
 WORKFLOW = "ballast-feature"
+# Shipped workflows (templates/spec-kit/workflows/<name>), each installed with
+# `specify workflow add --dev`: ballast-feature, ballast-autonomous and the
+# gate-only ballast-continue.
+WORKFLOWS = ("feature", "autonomous", "continue")
 INSTALLED = (
     ".ballast",
     ".specify/scripts",
@@ -269,6 +278,13 @@ class Setup:
             self.specify("bundle", "install", str(sources["core"] / "bundles" / bundle))
         for extension in ("multi-model-review", "status-report", "intent"):
             self.specify("extension", "add", str(sources[extension]), "--dev")
+        # Ballast's own commands for Autonomous runs, shipped with the standard.
+        self.specify(
+            "extension",
+            "add",
+            str(STANDARD / "templates/spec-kit/extensions/ballast"),
+            "--dev",
+        )
         self.specify("preset", "add", "--dev", str(sources["preset"]))
         self.run(
             "patch", "-p1", "--batch", "--forward", "-i", str(PATCHES / "skills.patch")
@@ -330,12 +346,13 @@ class Setup:
             link.symlink_to(Path("../../.agents/skills") / skill.name)
         for template in (STANDARD / "templates/spec-kit/templates").glob("*.md"):
             shutil.copy2(template, self.root / ".specify/templates" / template.name)
-        self.specify(
-            "workflow",
-            "add",
-            "--dev",
-            str(STANDARD / "templates/spec-kit/workflows/feature"),
-        )
+        for workflow in WORKFLOWS:
+            self.specify(
+                "workflow",
+                "add",
+                "--dev",
+                str(STANDARD / "templates/spec-kit/workflows" / workflow),
+            )
 
     def check(self) -> bool:
         """Report whether this checkout holds the current installation."""

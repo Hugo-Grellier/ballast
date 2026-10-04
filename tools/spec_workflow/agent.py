@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless agent wrapper for the ballast-feature workflow.
+"""Headless agent wrapper for the ballast-feature and ballast-autonomous workflows.
 
 Spec Kit 1.0.11 runs `claude -p ...` or `codex exec ...` for command steps and
 only records the exit code. The launcher points SPECKIT_INTEGRATION_<KEY>_
@@ -15,6 +15,12 @@ EXECUTABLE at `bin/claude` / `bin/codex` (symlinks to this file), which:
 - on a protected change, leave TAMPER_MARKER so the launcher refuses every
   later start or resume until the operator restores the checkout.
 
+For an Autonomous run (operator run record with workflow ballast-autonomous)
+it also refuses a run that is not active, enforces the wall-time and step
+limits (EXIT_LIMIT), runs the agent under bubblewrap (autonomy.confined_argv),
+and records which drafts the step created, so a recorder attributes each draft
+to the step that wrote it. Human-gated runs keep the argv above unchanged.
+
 Artifact validation steps remain the primary postcondition; this wrapper only
 adds evidence and an early stop.
 """
@@ -22,6 +28,7 @@ adds evidence and an early stop.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -29,6 +36,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import suppress
@@ -39,6 +47,7 @@ from typing import BinaryIO
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
 
+import autonomy  # noqa: E402
 from launcher import (  # noqa: E402
     IN_PROGRESS,
     SCOPE,
@@ -64,6 +73,7 @@ FORBIDDEN = (
 )
 EXIT_BLOCKED = 3
 EXIT_TAMPERED = 4
+EXIT_LIMIT = 5
 EXIT_USAGE = 2
 EXIT_INTERRUPTED = 130
 PR_SET_CHILD_SUBREAPER = 36
@@ -216,7 +226,7 @@ def _children() -> list[int]:
     return found
 
 
-def _containment() -> tuple[str, list[str]]:
+def _containment(root: Path) -> tuple[str, list[str]]:
     """Prepare both process guards; return the systemd-run path and options.
 
     systemd 254 expands `$VAR` in the command line by default, which blanks a
@@ -224,7 +234,14 @@ def _containment() -> tuple[str, list[str]]:
     exists; an older or unreadable systemd-run keeps the scope, without it.
     """
     _become_subreaper()
-    systemd_run = shutil.which("systemd-run")
+    # Like gh and git: never a copy an agent could have written (ADR-0003).
+    systemd_run, shadowed = autonomy.trusted_program("systemd-run", root)
+    if systemd_run is None and shadowed:
+        message = (
+            "process containment refuses systemd-run found only in a working "
+            "tree or temp directory; put the system one on PATH"
+        )
+        raise OSError(message)
     if systemd_run is None or not scope_available():
         message = "process containment needs a systemd user manager"
         raise OSError(message)
@@ -276,7 +293,110 @@ def _mark_tampered(root: Path, reasons: list[str]) -> None:
             marker.write("\n".join(reasons) + "\n")
 
 
-def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
+class Refusal(Exception):  # noqa: N818 - a refusal, not an error
+    """An Autonomous agent step refused before the agent started."""
+
+    def __init__(self, code: int, message: str) -> None:
+        """Keep the wrapper exit code with the reason."""
+        super().__init__(message)
+        self.code = code
+
+
+def _workflow_id(root: Path, key: str) -> str | None:
+    state = root / ".specify/workflows/runs" / key / "state.json"
+    try:
+        return json.loads(state.read_text(encoding="utf-8")).get("workflow_id")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _autonomous_run(root: Path, key: str) -> dict | None:
+    """Return the active Autonomous run record for this step, or None if human-gated.
+
+    Refuses (before any agent starts) an Autonomous run without a record, one
+    that is not active, an exhausted limit, and a failed confinement
+    self-test; otherwise counts the step.
+    """
+    try:
+        record = autonomy.find_run(root, key)
+    except autonomy.AutonomyError as error:
+        raise Refusal(EXIT_USAGE, f"run record unreadable: {error}") from error
+    if record is None:
+        if _workflow_id(root, key) == "ballast-autonomous":
+            message = (
+                "autonomous run has no operator run record; start it with "
+                "ballast run start --mode autonomous"
+            )
+            raise Refusal(EXIT_USAGE, message)
+        return None
+    if record["workflow"] != "ballast-autonomous":
+        return None
+    if record["status"] != "active":
+        message = (
+            f"run {key} is {record['status']}, not active; "
+            + autonomy.RESUME_REFUSAL.format(run_id=key)
+        )
+        raise Refusal(EXIT_USAGE, message)
+    if autonomy.remaining_seconds(record) <= 0:
+        raise Refusal(EXIT_LIMIT, "wall-time limit exhausted")
+    if record["agent_steps"] >= record["limits"]["max_agent_steps"]:
+        raise Refusal(EXIT_LIMIT, "agent step limit exhausted")
+    try:
+        autonomy.confinement_self_test(root)
+    except autonomy.AutonomyError as error:
+        raise Refusal(EXIT_USAGE, str(error)) from error
+    record["agent_steps"] += 1
+    autonomy.write_run(root, record)
+    return record
+
+
+def _set_aside(root: Path, record: dict, step: str) -> list[str]:
+    """Move drafts left by earlier steps out of the agent's reach."""
+    directory = autonomy.drafts_dir(root, record["feature"])
+    if directory.is_symlink() or not directory.is_dir():
+        return []
+    target = autonomy.run_dir(root, record["run_id"]) / "set-aside" / step
+    moved = []
+    for path in sorted(directory.iterdir()):
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.move(str(path), str(target / path.name))
+        moved.append(path.name)
+    return moved
+
+
+def _created_drafts(root: Path, record: dict, step: str) -> dict[str, str]:
+    """{name: sha256} of the drafts this step created, copied to operator state."""
+    directory = autonomy.drafts_dir(root, record["feature"])
+    if directory.is_symlink():
+        return {"(drafts directory)": "invalid"}
+    if not directory.is_dir():
+        return {}
+    created = {}
+    for path in sorted(directory.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            created[path.name] = "invalid"
+            continue
+        try:
+            copy = autonomy.snapshot_draft(root, record["run_id"], step, path.name)
+        except autonomy.AutonomyError:
+            created[path.name] = "invalid"
+            continue
+        data = path.read_bytes()
+        copy.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        copy.write_bytes(data)
+        created[path.name] = hashlib.sha256(data).hexdigest()
+    return created
+
+
+def _role(prompt: str) -> str:
+    return "reviewer" if "ballast-review" in prompt.split(maxsplit=1)[0] else "author"
+
+
+def _review_exclusions(feature: str) -> tuple[str, ...]:
+    return (f"{feature}/reviews", f"{feature}/autonomous/drafts")
+
+
+def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent step
     """Run the real agent CLI with bounded permissions and persistent logs."""
     integration = Path(sys.argv[0]).name
     if integration not in {"claude", "codex"}:
@@ -287,13 +407,52 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
             _real_executable(integration),
             *permission_args(integration, sys.argv[1:]),
         ]
-        systemd_run, scope_options = _containment()
+        systemd_run, scope_options = _containment(Path.cwd())
     except (ValueError, OSError) as error:
         sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
         return EXIT_USAGE
 
     root = Path.cwd()
+    run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "")
+    try:
+        record = _autonomous_run(root, run_id) if RUN_ID.fullmatch(run_id) else None
+    except Refusal as refusal:
+        sys.stderr.write(f"spec workflow agent wrapper: refusing: {refusal}\n")
+        with suppress(autonomy.AutonomyError, OSError):
+            if autonomy.find_run(root, run_id):
+                autonomy.append_step(
+                    root,
+                    run_id,
+                    {
+                        "step": None,
+                        "ran": False,
+                        "exit_code": refusal.code,
+                        "reason": str(refusal),
+                        "at": autonomy.now(),
+                    },
+                )
+        return refusal.code
     log_dir, key = _log_dir(root, integration, sys.argv[2])
+    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
+    private = None
+    step_record: dict = {}
+    if record is not None:
+        feature = record["feature"]
+        step_record = {
+            "step": log_dir.name,
+            "ran": True,
+            "command": sys.argv[2].split(maxsplit=1)[0],
+            "integration": integration,
+            "role": _role(sys.argv[2]),
+            "set_aside": _set_aside(root, record, log_dir.name),
+            "tree_before": autonomy.tree_digest(root, _review_exclusions(feature)),
+        }
+        private = Path(tempfile.mkdtemp(prefix="ballast-agent-"))
+        # The operator's environment names the credential locations to hide.
+        argv = autonomy.confined_argv(
+            root, argv, private=private, feature=feature, env=env
+        )
+        env = autonomy.confined_env(env, integration)
     meta = {
         "run_id": key,
         "feature_directory": _feature_directory(root, key),
@@ -332,7 +491,7 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
         argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE},
+        env=env,
     )
     assert process.stdout is not None  # noqa: S101 - set by PIPE above
     assert process.stderr is not None  # noqa: S101 - set by PIPE above
@@ -350,8 +509,20 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
     ]
     for thread in threads:
         thread.start()
+    # An Autonomous step may only run until the run's deadline.
+    timeout = (
+        max(autonomy.remaining_seconds(record), 0.0) if record is not None else None
+    )
+    limit_hit = False
     try:
-        exit_code = process.wait()
+        exit_code = process.wait(timeout)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(
+            "spec workflow agent wrapper: wall-time limit exhausted during the "
+            "step; stopping the agent\n"
+        )
+        limit_hit = True
+        exit_code = EXIT_LIMIT
     except KeyboardInterrupt:
         # The check below must run: ignore further interrupts, and stop an agent
         # that does not exit on its own.
@@ -403,6 +574,24 @@ def main() -> int:  # noqa: C901, PLR0915 - one guarded, linear agent step
         "protected_changes": tampered,
         "stopped_descendants": survivors,
     }
+    if record is not None:
+        drafts = _created_drafts(root, record, log_dir.name)
+        meta["drafts"] = drafts
+        reason = "wall-time limit exhausted during the step" if limit_hit else None
+        autonomy.append_step(
+            root,
+            record["run_id"],
+            {
+                **step_record,
+                "drafts": drafts,
+                "exit_code": exit_code,
+                "blocking_status": blocked,
+                "reason": reason,
+                "at": autonomy.now(),
+            },
+        )
+    if private is not None:
+        shutil.rmtree(private, ignore_errors=True)
     with meta_file:
         meta_file.write((json.dumps(meta, indent=2) + "\n").encode())
     return exit_code

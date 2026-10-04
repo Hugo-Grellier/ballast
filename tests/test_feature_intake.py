@@ -372,6 +372,29 @@ class FeatureIntakeTests(unittest.TestCase):
         self.assertEqual(result["pending"], ["scope", "ready"])
         self.assertEqual(result["completed"], [])
 
+    def test_autonomous_scope_needs_privileged_actions_line(self) -> None:
+        """FR-006: only an `Autonomous: yes` scope needs the new line."""
+        command = (
+            "prepare",
+            "--issue",
+            "103",
+            "--scope-file",
+            str(self.scope),
+            "--classification",
+            "feature",
+        )
+        base = self.scope.read_text()
+        self.scope.write_text(base + "Autonomous: yes\n")
+        code, result = self.run_intake(*command)
+        self.assertEqual(code, 1)
+        self.assertIn("Privileged actions before merge:", result["error"])
+        self.assertFalse(json.loads(self.state_path.read_text())["comments"])
+        self.scope.write_text(
+            base + "Autonomous: yes\nPrivileged actions before merge: none\n"
+        )
+        code, result = self.run_intake(*command)
+        self.assertEqual(code, 0, result)
+
 
 if __name__ == "__main__":
     unittest.main()

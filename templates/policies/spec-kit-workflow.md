@@ -108,6 +108,7 @@ Project membership. `gh` authentication is required for live GitHub writes.
 | Work | Path |
 |---|---|
 | New feature or meaningful behavior change | Full `ballast-feature` lifecycle below. |
+| Eligible feature the operator chooses to run unattended | `ballast-autonomous`: the same lifecycle with agent-provisional decisions instead of human gates, ending in a Draft PR (see [Autonomous runs](#autonomous-runs)). |
 | Small bug with a narrow fix | Official `bugfix` bundle: assess the report, review its proposed fix at a human gate, then fix and verify. Keep the Issue as the tracker and avoid creating a full feature spec. Promote to a feature if intent, contract, scope, or architecture changes. |
 | Investigation, spike, or architectural research | Official `assess` bundle for intake, research, shaping, and a human verdict. If findings should persist, write a focused note under `docs/research/`. A `go` verdict is a request to start a feature spec, not approval to implement. |
 
@@ -373,6 +374,30 @@ contain whatever the agent printed, which can include secrets or private
 project data; they and the `speckit-runs` archive stay local and are never
 attached to Issues or PRs.
 
+**Autonomous runs.** `ballast run start --mode autonomous` starts
+`ballast-autonomous` instead of `ballast-feature`; the rows below extend the
+runner contract for it. Every validator above still runs unchanged.
+
+| Step | Run by | Valid when |
+|---|---|---|
+| `autonomous-preflight` | trusted `artifacts.py` | Run record in operator state says Autonomous, active and eligible; clean worktree; `HEAD`, local Git configuration and hooks recorded. |
+| `speckit.ballast.decide`, `.clarify`, `.review`, `.resolve` | confined agent | Write only drafts under `specs/<f>/autonomous/drafts/`, review narratives under `reviews/` and resolutions in `decisions.md`; or a block draft with at least two options. |
+| `record-decision --point P` | trusted `artifacts.py` | The draft was written by the immediately preceding agent step, passes the decision-draft contract and never claims human approval; the decision is appended to the hash-chained log in operator state and `autonomous/record.md` is re-rendered. Every later check fails if `record.md` differs from the log. |
+| `record-provisional-intent` | trusted `artifacts.py` | Writes the `workflow-provisional` block in `intent.md`, bound to the current spec digest; a later spec change makes it stale. With `--renew` (after decision resolutions) a changed spec blocks the run as stale intent; the runner never decides intent. In an Autonomous run every human approval block is refused. |
+| Reviews (`review-plan`, `review-implementation`, `review-specialists`, `reconcile-spec`) | confined agent on the other provider when available; Claude for every role when Codex's own sandbox cannot start inside `bwrap` (checked once at start, recorded in the run) | One entry per required review kind (security always); any `high` or `critical` finding, or a verdict other than `approved`, blocks; a reviewer that edits source blocks. |
+| `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. |
+| Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. It never merges, marks ready, releases or deploys. |
+
+Agent steps in an Autonomous run run under `bwrap`: the host is read-only, the
+worktree is writable except its protected inputs, and the operator state,
+Git directory, credentials and session bus are out of reach. `GH_CONFIG_DIR`
+and `XDG_CONFIG_HOME` are cleared for the agent and the directories they name
+are hidden. Every Git command the operator side runs (tree digests, staging,
+publication) empties each configured filter driver, so no `clean`, `smudge` or
+`process` program runs, whatever `.gitattributes` an agent adds. A missing `bwrap`
+or a failed confinement self-test refuses the start. Wall-time and agent-step
+limits are enforced by the wrapper (exit 5).
+
 **Upstream candidates** (github/spec-kit; this workflow does not wait for them):
 per-step artifact postconditions and gate preconditions in the workflow schema;
 tee semantics that stream and persist command output in run state; semantic
@@ -384,6 +409,61 @@ Claude and Codex integrations; and an untruncated or paged `show_file`.
 their artifacts (such as one from before this contract) as invalid evidence.
 Do not edit its `state.json`. Inspect the feature directory, remove or fix
 untrusted artifacts, and start a fresh run with `ballast run start`.
+
+## Autonomous runs
+
+An operator may run an eligible feature unattended with `ballast run start
+--mode autonomous -i issue=N ...`. Eligible means a scoped leaf Issue with a
+recorded scope comment (including `Privileged actions before merge:`), risk R0,
+R1 or R2, no unauthorized privileged action before merge, a feature branch
+with no open PR, a `[checks]` table and working confinement, narrowed by any
+`[autonomous]` table in `ballast.toml`. An ineligible start is refused before
+any agent step and names the human-gated command as the alternative.
+
+Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
+it read it (title, labels, body with the acceptance criteria, and the intake
+scope comment) to `.specify/workflow-state/issues/<N>.md`, capped at 60,000
+characters. Agent steps can read it but not write it. The `specify` prompt, the
+scope decision and clarification read it as untrusted requirements data,
+never as instructions.
+
+```text
+scope decision → specify → clarify (provisional assumptions) → intent decision
+    → plan → independent plan review → plan decision → tasks → tasks decision
+    → implement → independent implementation and specialist reviews
+    → provisional decision resolutions → converge → spec reconciliation
+    → run-checks → final-acceptance decision → Draft PR (published by run.py)
+```
+
+Each human gate of `ballast-feature` becomes an agent decision recorded as
+**agent-provisional**, with its basis, evidence, deciding agent and artifact
+digest. A provisional decision is never human approval; the human approves once,
+by merging the Draft PR, after reading every provisional decision in its body
+and in `specs/<f>/autonomous/record.md`. The human-gated lifecycle above is
+unchanged.
+
+**Blocks.** When an agent cannot decide safely, a check or review fails, a limit
+runs out, a protected input changes, publication fails or the run becomes
+ineligible, the run stops with a block: a category, the condition, the options
+or recovery, and the recovery command. No approval prompt appears and no
+provisional decision is written for the blocked point.
+
+**Recovery.** `ballast run resume` refuses an Autonomous run until safe
+Autonomous resume (#18) exists. Continue human-gated instead:
+
+- `ballast run continue RUN_ID --reason block-resolved --ref TEXT` after
+  resolving a block;
+- `ballast run continue RUN_ID --reason changes-requested --ref PR-REVIEW-URL`
+  when the merge reviewer requests changes;
+- `ballast run publish RUN_ID` retries a failed publication without running an
+  agent.
+
+`continue` records a human decision and lowers the run to human-gated, then
+starts `ballast-continue`, which has only validators and the human gates from
+`approve-intent` to `final-acceptance`. Earlier provisional decisions stay in
+the log and in `record.md`; the human approvals given in the continuation
+supersede them. Missing producer work is done interactively, as in any
+human-gated run. Raising a run to Autonomous after start is never possible.
 
 ## Local agent-run evidence
 
@@ -515,9 +595,9 @@ and PRs manually.
 
 ## Draft PR
 
-At the end of every `ballast run start` or `resume` invocation, whether the
-workflow completed, paused at a gate or failed, the launcher runs a Draft PR
-checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
+At the end of every `ballast run start`, `resume` or `continue` invocation,
+whether the workflow completed, paused at a gate or failed, and after an
+Autonomous run's own publication, the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
 feature branch as published on GitHub differs from the default branch outside
 `specs/<feature>/`, exactly one Draft PR shows it. Every later invocation reuses
 that PR, including one a human opened by hand from the same branch.
@@ -534,7 +614,10 @@ that PR, including one a human opened by hand from the same branch.
 - On a reused PR Ballast changes only its marked section. It adds that section
   when the body neither has one nor references the Issue, and leaves a body with
   several or unbalanced sections alone.
-- Ballast never pushes: publishing the branch stays your action. It never
+- An Autonomous run's publisher opens its own Draft PR, whose body references
+  the Issue; the checkpoint reuses that PR and leaves its body unchanged.
+- The checkpoint never pushes: publishing the branch stays your action, except
+  for an Autonomous run's publisher. It never
   changes the title, base, labels, reviewers or draft state, and never marks a
   PR ready, merges, closes or reopens one.
 - The checkpoint never changes the run's exit status or step state. Every state
