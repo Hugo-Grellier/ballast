@@ -7,8 +7,11 @@ only place Ballast uses GitHub authority (docs/adr/0003):
 - it refuses to act while `BALLAST_TAMPERED` or the launcher's `in-progress`
   marker exists;
 - it runs only `git` and the operator's `gh`, each resolved outside every Git
-  working tree and called by absolute path with a fixed list argv, no shell;
-- it reads identity from Git configuration and GitHub, never agent-written text;
+  working tree and temp root and called by absolute path with a fixed list
+  argv, no shell; `gh` starts outside the checkout;
+- Git state is agent-writable, so the repository comes from the protected
+  `ballast.toml` and the branch from the pin recorded at `ballast run start`;
+  names from Git appear only shell-quoted in remedies;
 - it never pushes, never changes readiness, never merges, closes or reopens;
 - `gh` output is parsed, never printed or stored; every result is one fixed
   outcome, reason and remedy, printed as one line and recorded in the ledger.
@@ -24,6 +27,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -364,7 +368,9 @@ def _outcome(state: str, reason: str | None = None, **values: Any) -> Outcome:  
     """Build an outcome with its fixed remedy, formatted from validated values."""
     fill = values.pop("fill", {})
     template = REMEDIES.get((state, reason))
-    remedy = template.format(**fill) if template else None
+    # Names come from agent-writable Git state; a remedy may be pasted.
+    quoted = {key: shlex.quote(str(value)) for key, value in fill.items()}
+    remedy = template.format(**quoted) if template else None
     return Outcome(state, reason, remedy=remedy, **values)
 
 

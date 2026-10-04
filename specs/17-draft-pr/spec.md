@@ -83,7 +83,7 @@ When GitHub cannot be reached, credentials are missing or the situation is ambig
 - A PR from a fork, or with another head repository, names a branch of the same name: it is not treated as the feature's PR.
 - The base branch cannot be determined: `failed-retryable` with the reason. No PR is opened against a guessed base.
 - An agent writes text meant to change the PR title or description (in the spec, a commit message or a branch name): the PR content comes only from fixed wording, the Issue number and title, the intake scope comment on the Issue, the pull-request template as committed on the **base** branch on GitHub (never the feature branch's copy), and paths that Ballast checks. Untrusted text is never run as code or passed to a shell.
-- The operator deletes the Ballast-marked section of a reused PR: Ballast restores at most the Issue link, and touches nothing else.
+- The operator deletes the Ballast-marked section of a reused PR: when the description no longer references the Issue, Ballast appends the whole marked section again (DEC-0003), and touches nothing else.
 - A run is aborted or discarded: the PR is left as it is. Closing it is the operator's decision.
 - The PR checkpoint is reached when the agent sandbox is unavailable: the checkpoint runs in trusted launcher code and does not depend on the sandbox.
 
