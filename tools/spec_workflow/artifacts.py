@@ -453,6 +453,8 @@ def check_implementation(feature: Feature) -> None:
             f"feature needs no code change, add {NO_CODE_CHANGE} to tasks.md"
         )
         raise ContractError(message)
+    if feature.run is not None:
+        write_required_reviews(feature)
 
 
 def check_decisions(feature: Feature) -> None:
@@ -1196,6 +1198,22 @@ def required_kinds(feature: Feature, reviews: list[dict]) -> set[str]:
     for review in reviews:
         required.update(review.get("required_kinds", []))
     return required
+
+
+REQUIRED_REVIEWS_DIR = ".specify/workflow-state/required-reviews"
+
+
+def write_required_reviews(feature: Feature) -> Path:
+    """Tell the specialists step which kinds the recorder will require.
+
+    The same computation as `record-decision --point implementation-review`,
+    before reviewer-declared kinds. Under `.specify/`, which agent steps see
+    read-only; the recorder still recomputes it.
+    """
+    required = sorted(required_kinds(feature, []))
+    path = feature.root / REQUIRED_REVIEWS_DIR / f"{Path(feature.relative).name}.json"
+    text = json.dumps({"feature": feature.relative, "required": required}) + "\n"
+    return autonomy.replace_file(path, text)
 
 
 def _frozen_check(feature: Feature, *, required: bool = False) -> None:

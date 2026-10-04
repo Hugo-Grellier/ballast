@@ -43,9 +43,9 @@ The definition has no `gate` step. The table maps each human gate of `ballast-fe
 | 22 | `record-tasks` | shell `record-decision --point tasks` | — | — |
 | 23 | `implementation-baseline` | shell | same | — |
 | 24 | `implement` | command `speckit.implement` | `speckit.intent.implement` | — |
-| 25 | `validate-implementation` | shell `implementation` | same | — |
+| 25 | `validate-implementation` | shell `implementation` | same | In a run with an operator record, also writes `.specify/workflow-state/required-reviews/<slug>.json`, the kinds step 28 will require (same computation, before reviewer-declared kinds); agents read it read-only |
 | 26 | `review-implementation` | command `speckit.ballast.review` (args `implementation`), review integration | `review-implementation` gate | `reviews/engineering.md`, `reviews/test.md` |
-| 27 | `review-specialists` | command `speckit.ballast.review` (args `specialists`), review integration | (manual today) | One report per required kind |
+| 27 | `review-specialists` | command `speckit.ballast.review` (args `specialists`), review integration | (manual today) | One report per required kind listed in the hint of step 25; `architecture` uses `ballast-engineering-review` focused on the ADRs and architecture sections the change touches |
 | 28 | `record-implementation-review` | shell `record-decision --point implementation-review` | — | Required-kind coverage (R-08); severity block; risk re-check |
 | 29 | `resolve-decisions` | command `speckit.ballast.resolve` | `reconcile-intent` | Provisional `DEC-NNNN — Resolution` records + drafts |
 | 30 | `record-resolutions` | shell `record-decision --point decision-resolution` | — | — |

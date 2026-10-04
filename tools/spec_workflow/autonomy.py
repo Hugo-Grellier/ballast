@@ -1896,7 +1896,7 @@ def issue_snapshot_path(issue: int) -> str:
     return f"{ISSUE_SNAPSHOT_DIR}/{issue}.md"
 
 
-def _replace_file(path: Path, text: str) -> Path:
+def replace_file(path: Path, text: str) -> Path:
     """Write text to path by rename: replaces a symlink, never writes through it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.parent.is_symlink():
@@ -1912,7 +1912,7 @@ def _replace_file(path: Path, text: str) -> Path:
 def write_issue_snapshot(root: Path, issue: dict, scope_comment: str) -> Path:
     """Write the snapshot under `.specify/`, which agent steps see read-only."""
     path = root / issue_snapshot_path(int(issue["number"]))
-    return _replace_file(path, render_issue_snapshot(issue, scope_comment))
+    return replace_file(path, render_issue_snapshot(issue, scope_comment))
 
 
 def write_feature_json(root: Path, feature: str) -> Path:
@@ -1922,7 +1922,7 @@ def write_feature_json(root: Path, feature: str) -> Path:
     agents to the wrong directory.
     """
     text = json.dumps({"feature_directory": feature}) + "\n"
-    return _replace_file(root / ".specify/feature.json", text)
+    return replace_file(root / ".specify/feature.json", text)
 
 
 def raise_risk(record: dict, level: str | None, boundaries: list[str], pd: str) -> bool:

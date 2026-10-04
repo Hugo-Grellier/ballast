@@ -2100,6 +2100,45 @@ class AutonomousEngineCase(AutonomyCase):
 class AutonomousEngineTests(AutonomousEngineCase):
     """T033 [AC-001, AC-002, AC-003, SC-001, SC-002]: a full unattended run."""
 
+    def test_r2_specialists_follow_the_required_reviews_hint(self) -> None:
+        """Pilot: an R2 run missed the architecture review the recorder needs.
+
+        The fake specialist reviewer does what speckit.ballast.review says:
+        it writes one report and draft per kind listed in the hint file.
+        """
+        self.eligible_issue(risk="R2", extra="R2 boundaries: authentication")
+        staged = self.root / ".git/fake-agent-kinds"
+        for kind in autonomy.REVIEW_KINDS:
+            for path, text in _review("specialist-review", kind).items():
+                target = staged / kind / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+        hint = (
+            f".specify/workflow-state/required-reviews/{Path(AUTO_FEATURE).name}.json"
+        )
+        follow = (
+            "import json, shutil, sys; "
+            f"kinds = json.load(open({hint!r}))['required']; "
+            "[shutil.copytree(f'{sys.argv[1]}/{k}', '.', dirs_exist_ok=True) "
+            "for k in kinds if k != 'engineering']; "
+            "print('kinds=' + ','.join(kinds))"
+        )
+        plan = _autonomous_plan()
+        plan["speckit-ballast-review-specialists"] = {
+            "exec": f'python3 -c "{follow}" {staged}'
+        }
+        self.layout(plan)
+        code, out, err, run_id = self.start()
+        self.assertEqual(code, 0, out + err)
+        kinds = {
+            e["review"]["kind"]
+            for e in autonomy.current_decisions(
+                autonomy.read_decisions(self.root, run_id)
+            )
+            if e.get("review")
+        }
+        self.assertLessEqual({"security", "architecture"}, kinds)
+
     def test_runs_to_a_draft_pr_without_a_prompt(self) -> None:
         code, out, err, run_id = self.start()
         self.assertEqual(code, 0, out + err)

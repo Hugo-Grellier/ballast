@@ -693,6 +693,47 @@ class ImplementationReviewTests(RecorderCase):
         self.failed(result, "architecture")
         self.assertIn("documentation", result.stderr)
 
+    def hint(self) -> dict:
+        sys.path.insert(0, str(TOOLS))
+        try:
+            import artifacts  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        feature = artifacts.Feature(self.root, FEATURE, "run42")
+        feature.run = autonomy.read_run(self.root, "run42")
+        path = artifacts.write_required_reviews(feature)
+        self.assertEqual(
+            path.relative_to(self.root).as_posix(),
+            f".specify/workflow-state/required-reviews/{Path(FEATURE).name}.json",
+        )
+        data = json.loads(path.read_text())
+        self.assertEqual(
+            data["required"], sorted(artifacts.required_kinds(feature, []))
+        )
+        return data
+
+    def test_required_reviews_hint_matches_the_recorder(self) -> None:
+        """The specialists step reads the recorder's own computation."""
+        self.assertEqual(self.hint()["required"], ["engineering", "security", "test"])
+        record = autonomy.read_run(self.root, "run42")
+        record["risk"]["boundaries"] = ["authentication"]
+        autonomy.write_run(self.root, record)
+        (self.root / "docs").mkdir()
+        (self.root / "docs/guide.md").write_text("guide\n")
+        (self.root / "uv.lock").write_text("lock\n")
+        required = self.hint()["required"]
+        for kind in ("architecture", "security", "documentation", "dependency"):
+            self.assertIn(kind, required)
+
+    def test_review_template_states_the_recorder_rule(self) -> None:
+        template = (
+            TOOLS.parents[1]
+            / "templates/spec-kit/extensions/ballast/commands/speckit.ballast.review.md"
+        ).read_text()
+        self.assertIn(".specify/workflow-state/required-reviews/", template)
+        self.assertIn("R2 or declares any R2 boundary", template)
+        self.assertIn("`architecture`", template)
+
     def test_reviewer_declared_kind(self) -> None:
         drafts = self.reviews("test", "security")
         drafts["implementation-review.json"]["review"]["required_kinds"] = [
