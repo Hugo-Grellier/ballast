@@ -46,6 +46,8 @@ $ARGUMENTS
    }
    ```
 
+   Cite only files that exist: list as `evidence` only repository paths you checked are present. If a file this command suggests reading (for example `AGENTS.md` or `docs/policies/project/*.md`) is absent, say so in `basis` instead of citing it; the recorder refuses a missing path.
+
    Set `material` exactly as in the resolution record. The recorder rewrites the status line with the decision ID it records.
 
 ## Block

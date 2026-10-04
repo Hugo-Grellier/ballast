@@ -67,6 +67,7 @@ Write each draft under `<f>/autonomous/drafts/`:
 - Every finding: `id` (`F-NNN`), `severity` (`critical`, `high`, `medium`, `low`, `info`), `label` (`spec-violation`, `implementation-bug`, `architecture-issue`, `missing-test`, `spec-ambiguity`, `proposed-product-change`), `disposition` and `reason`.
 - Report every `critical` or `high` finding honestly: it stops the run for a human, whatever disposition you give it. A `medium` finding may be `accepted-provisionally` only with a reason. `open` is allowed only for `low` and `info`.
 - `required_kinds` lists further review kinds the change needs (for example `documentation`).
+- Cite only files that exist: list as `evidence` only repository paths you checked are present. If a file this command suggests reading (for example `AGENTS.md` or `docs/policies/project/*.md`) is absent, say so in `basis` instead of citing it; the recorder refuses a missing path.
 - `privileged_actions` lists any action the change now needs before merge (see `speckit.ballast.decide`).
 
 ## Never

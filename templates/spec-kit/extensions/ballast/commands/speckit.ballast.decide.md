@@ -48,7 +48,7 @@ Write `<f>/autonomous/drafts/<point>.json` (create the directory if needed) and 
 }
 ```
 
-- `evidence` lists 1–20 existing repository-relative paths (no `..`, no symlinks) or `https://` links.
+- `evidence` lists 1–20 existing repository-relative paths (no `..`, no symlinks) or `https://` links. Cite only files that exist: list as `evidence` only repository paths you checked are present. If a file this command suggests reading (for example `AGENTS.md` or `docs/policies/project/*.md`) is absent, say so in `basis` instead of citing it; the recorder refuses a missing path.
 - `privileged_actions` is required. List every action the change now needs **before merge** that a human would normally authorize: deployment, release, merge, marking the PR ready, writes to an external authoritative system, secret provisioning, or repository or CI permission changes outside the PR diff. Use `[]` when there is none.
 - `risk` may only raise the recorded level (`R0` < `R1` < `R2`) when the work turns out riskier; `boundaries` names any R2 boundary touched (for example `agent authority`).
 - Set `material: true` when the decision changes product behavior, scope, data authority, a security boundary or accepted architecture.

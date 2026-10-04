@@ -725,6 +725,15 @@ class ImplementationReviewTests(RecorderCase):
         for kind in ("architecture", "security", "documentation", "dependency"):
             self.assertIn(kind, required)
 
+    def test_draft_templates_cite_only_existing_evidence(self) -> None:
+        """Pilot: a decide agent cited AGENTS.md in a project without one."""
+        commands = TOOLS.parents[1] / "templates/spec-kit/extensions/ballast/commands"
+        for name in ("decide", "review", "resolve", "clarify"):
+            text = (commands / f"speckit.ballast.{name}.md").read_text()
+            with self.subTest(command=name):
+                self.assertIn("Cite only files that exist", text)
+                self.assertIn("say so in `basis` instead of citing it", text)
+
     def test_review_template_states_the_recorder_rule(self) -> None:
         template = (
             TOOLS.parents[1]

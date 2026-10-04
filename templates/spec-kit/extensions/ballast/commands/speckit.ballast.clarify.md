@@ -37,6 +37,8 @@ $ARGUMENTS
      }
      ```
 
+     Cite only files that exist: list as `evidence` only repository paths you checked are present. If a file this command suggests reading (for example `AGENTS.md` or `docs/policies/project/*.md`) is absent, say so in `basis` instead of citing it; the recorder refuses a missing path.
+
    - If no such default exists, block (below) and stop.
 5. When you finish, `<f>/spec.md` contains no `NEEDS CLARIFICATION` marker. Writing no draft is correct when there was no open question.
 
