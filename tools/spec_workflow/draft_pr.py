@@ -794,13 +794,16 @@ def _pull_request(entry: dict[str, Any], run: _Run) -> _PullRequest | None:
     owner = repository.get("owner") if isinstance(repository.get("owner"), dict) else {}
     base = entry.get("base") if isinstance(entry.get("base"), dict) else {}
     number = entry.get("number")
+    full_name = f"{run.owner}/{run.repo}"
     if (
         type(number) is not int
         or not 0 < number < 10**10
         or head.get("ref") != run.published
-        or owner.get("login") != run.owner
-        or entry.get("html_url")
-        != f"https://github.com/{run.owner}/{run.repo}/pull/{number}"
+        or str(owner.get("login")).lower() != run.owner.lower()
+        or str(repository.get("full_name")).lower() != full_name.lower()
+        or not isinstance(entry.get("html_url"), str)
+        or entry["html_url"].lower()
+        != f"https://github.com/{full_name}/pull/{number}".lower()
         or not isinstance(base.get("ref"), str)
     ):
         return None

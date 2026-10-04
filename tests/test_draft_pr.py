@@ -84,6 +84,7 @@ def pull(  # noqa: PLR0913
     base: str = "main",
     head: str = "feat-x",
     owner: str = "o",
+    repo: str = "r",
     body: str = "",
     merged: bool = False,
     closed_at: str | None = None,
@@ -96,7 +97,14 @@ def pull(  # noqa: PLR0913
         "merged_at": "2026-10-01T00:00:00Z" if merged else None,
         "closed_at": closed_at,
         "base": {"ref": base},
-        "head": {"ref": head, "repo": {"owner": {"login": owner}}},
+        "head": {
+            "ref": head,
+            "repo": {
+                "name": repo,
+                "full_name": f"{owner}/{repo}",
+                "owner": {"login": owner},
+            },
+        },
         "html_url": url(number),
         "body": body,
     }
@@ -604,6 +612,16 @@ class CreationTests(CheckpointCase):
         self.fake.prs.append(pull(5, owner="fork"))
         self.assertOutcome(self.check(), "created")
         self.assertEqual(len(self.fake.gh_calls("create")), 1)
+
+    def test_pr_from_another_repository_of_the_same_owner_is_ignored(self) -> None:
+        # R2 review: the owner alone does not identify the head repository.
+        self.fake.prs.append(pull(5, repo="other", body="Related to #17"))
+        self.assertOutcome(self.check(), "created")
+        self.assertEqual(self.fake.gh_calls("edit"), [])
+
+    def test_head_repository_matches_case_insensitively(self) -> None:
+        self.fake.prs.append(pull(5, owner="O", repo="R", body=section()))
+        self.assertOutcome(self.check(), "reused")
 
 
 class PendingTests(CheckpointCase):
