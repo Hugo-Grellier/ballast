@@ -26,18 +26,18 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
 import time
+import tomllib
 import urllib.parse
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, NoReturn
+from pathlib import Path
+from typing import Any, NoReturn
 
 import ledger
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN
 from launcher import IN_PROGRESS, TAMPER_MARKER, state_dir
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 MARK_BEGIN = "<!-- ballast:draft-pr:begin -->"
 MARK_END = "<!-- ballast:draft-pr:end -->"
@@ -73,6 +73,10 @@ GITHUB_REMOTE = re.compile(
     r"(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?"
 )
 EXIT_UNAUTHENTICATED = 4
+GIT_LOCATION = frozenset(
+    {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"}
+)
+GIT_OVERRIDES = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull))
 
 REASONS = ledger.PR_REASONS
 REMEDIES: dict[tuple[str, str | None], str] = {
@@ -138,6 +142,14 @@ REMEDIES: dict[tuple[str, str | None], str] = {
         "create the Issue, or fix the number in the feature directory"
     ),
     ("blocked-unlinked", "not-github"): "none: Draft PRs need a GitHub upstream",
+    ("blocked-unlinked", "no-repository"): (
+        'declare [github] repository = "OWNER/NAME" in ballast.toml, then run '
+        "ballast trust"
+    ),
+    ("blocked-unlinked", "repository-mismatch"): (
+        "the branch's upstream is not {repo}, the repository pinned in "
+        "ballast.toml: push the branch there, or fix the pin and run ballast trust"
+    ),
 }
 
 
@@ -206,13 +218,30 @@ class LockUnavailableError(OSError):
     """The PR lock is a link or not a regular file."""
 
 
-def _command(argv: list[str], *, stdin: str | None = None, cwd: Path) -> Result:
-    """Run one fixed command: list argv, no shell, bounded, output kept local."""
+def _command(
+    argv: list[str], *, stdin: str | None = None, cwd: Path, root: Path | None = None
+) -> Result:
+    """Run one fixed command: list argv, no shell, bounded, output kept local.
+
+    `root` is the checkout, when `cwd` is not. Its PATH entries are dropped,
+    Git stops searching for a repository above `cwd`, and the repository
+    settings that run commands (fsmonitor, hooks) are overridden.
+    """
+    env = {
+        **{k: v for k, v in os.environ.items() if k not in GIT_LOCATION},
+        **GH_ENV,
+        "PATH": _child_path(root or cwd),
+        "GIT_CEILING_DIRECTORIES": str(cwd.resolve().parent),
+        "GIT_CONFIG_COUNT": str(len(GIT_OVERRIDES)),
+    }
+    for index, (key, value) in enumerate(GIT_OVERRIDES):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
     try:
         result = subprocess.run(  # noqa: S603 - Absolute program, fixed argv.
             argv,
             cwd=cwd,
-            env={**os.environ, **GH_ENV},
+            env=env,
             input=stdin,
             capture_output=True,
             text=True,
@@ -228,6 +257,33 @@ def _command(argv: list[str], *, stdin: str | None = None, cwd: Path) -> Result:
 
 def _path_entries() -> list[str]:
     return os.environ.get("PATH", "").split(os.pathsep)
+
+
+def _child_path(root: Path) -> str:
+    """PATH for gh and git: gh runs git itself, so drop checkout entries too."""
+    return os.pathsep.join(ledger.trusted_entries(_path_entries(), (root.resolve(),)))
+
+
+def _pinned_repository(root: Path) -> tuple[str, str] | None:
+    """Return `[github] repository` from the protected ballast.toml.
+
+    The upstream remote lives in agent-writable `.git/config`; this pin is
+    what keeps an agent from steering the operator's credentials elsewhere.
+    """
+    try:
+        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    github = config.get("github")
+    value = github.get("repository") if isinstance(github, dict) else None
+    if not isinstance(value, str):
+        return None
+    owner, _, repo = value.partition("/")
+    if not all(
+        NAME.fullmatch(part) and part not in {".", ".."} for part in (owner, repo)
+    ):
+        return None
+    return owner, repo
 
 
 def _now() -> datetime:
@@ -344,7 +400,12 @@ class _Checkpoint:
         return _command([self.run.git, *args], cwd=self.run.root)
 
     def gh(self, *args: str, stdin: str | None = None) -> Result:
-        return _command([self.run.gh, *args], stdin=stdin, cwd=self.run.root)
+        # gh runs git itself; from an empty directory it never reads the
+        # agent-writable .git/config. Every call names --repo explicitly.
+        with tempfile.TemporaryDirectory(prefix="ballast-gh-") as away:
+            return _command(
+                [self.run.gh, *args], stdin=stdin, cwd=Path(away), root=self.run.root
+            )
 
     def api(self, path: str, *, paginate: bool = False) -> Result:
         flags = ("--paginate", "--slurp") if paginate else ()
@@ -442,7 +503,7 @@ class _Checkpoint:
             )
         ):
             self.stop("blocked-unlinked", "not-github")
-        run.owner, run.repo = match.group("owner", "repo")
+        run.owner, run.repo = self.pinned(*match.group("owner", "repo"))
         gh, shadowed = _resolve("gh", run.root)
         if gh is None:
             self.stop("failed-retryable", "gh-untrusted" if shadowed else "gh-missing")
@@ -457,6 +518,19 @@ class _Checkpoint:
         run.base = base
         if base == published:
             self.stop("pending", "on-base-branch")
+
+    def pinned(self, owner: str, repo: str) -> tuple[str, str]:
+        """Accept the upstream only when it is the repository pinned in ballast.toml."""
+        pinned = _pinned_repository(self.run.root)
+        if pinned is None:
+            self.stop("blocked-unlinked", "no-repository")
+        if (owner.lower(), repo.lower()) != tuple(part.lower() for part in pinned):
+            self.stop(
+                "blocked-unlinked",
+                "repository-mismatch",
+                fill={"repo": "/".join(pinned)},
+            )
+        return pinned
 
     def lookup_issue(self) -> None:
         run = self.run

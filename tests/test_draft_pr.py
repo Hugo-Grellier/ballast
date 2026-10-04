@@ -156,6 +156,7 @@ class TempRepo:
         git(root, "remote", "add", "origin", "https://github.com/o/r.git")
         git(root, "config", "branch.feat-x.remote", "origin")
         git(root, "config", "branch.feat-x.merge", "refs/heads/feat-x")
+        (root / "ballast.toml").write_text('[github]\nrepository = "o/r"\n')
         self.inputs(FEATURE)
 
     def inputs(self, feature: str) -> None:
@@ -199,9 +200,18 @@ class FakeGitHub:
         self.next_number = 42
 
     def __call__(
-        self, argv: list[str], *, stdin: str | None = None, cwd: Path
+        self,
+        argv: list[str],
+        *,
+        stdin: str | None = None,
+        cwd: Path,
+        root: Path | None = None,
     ) -> draft_pr.Result:
         assert Path(argv[0]).is_absolute(), argv  # noqa: S101
+        if argv[0] == self.gh:
+            # gh never starts inside the checkout, whose .git/config is agent-writable.
+            assert root is not None  # noqa: S101
+            assert not cwd.is_relative_to(root), cwd  # noqa: S101
         with self.lock:
             self.calls.append(list(argv))
             self.stdins.append((list(argv), stdin))
@@ -471,6 +481,27 @@ class IdentityTests(CheckpointCase):
         git(self.repo.root, "remote", "set-url", "origin", "https://gitlab.com/o/r.git")
         self.assertOutcome(self.check(), "blocked-unlinked", "not-github")
         self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_missing_or_invalid_pinned_repository_is_unlinked(self) -> None:
+        for text in ("", "[github]\n", '[github]\nrepository = "o"\n', "not toml ["):
+            with self.subTest(text=text):
+                (self.repo.root / "ballast.toml").write_text(text)
+                outcome = self.check()
+                self.assertOutcome(outcome, "blocked-unlinked", "no-repository")
+                self.assertIn("ballast.toml", outcome.remedy)
+                self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_remote_redirected_away_from_pinned_repository_is_refused(self) -> None:
+        # DEC-0005: .git/config is agent-writable; ballast.toml is protected.
+        git(self.repo.root, "remote", "set-url", "origin", "https://github.com/x/r")
+        outcome = self.check()
+        self.assertOutcome(outcome, "blocked-unlinked", "repository-mismatch")
+        self.assertIn("o/r", outcome.remedy)
+        self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_pinned_repository_matches_case_insensitively(self) -> None:
+        git(self.repo.root, "remote", "set-url", "origin", "https://github.com/O/R.git")
+        self.assertOutcome(self.check(), "created")
 
     def test_github_url_forms_parse_to_owner_and_repo(self) -> None:
         for remote in (
@@ -1080,6 +1111,78 @@ class CommandSeamTests(unittest.TestCase):
         self.assertEqual(captured["timeout"], draft_pr.TIMEOUT)
         for name, value in {**tokens, **draft_pr.GH_ENV}.items():
             self.assertEqual(captured["env"][name], value)
+
+    def test_child_path_keeps_only_entries_outside_working_trees(self) -> None:
+        # DEC-0004: gh runs git itself; a checkout-local git must not be on its PATH.
+        captured: dict[str, Any] = {}
+
+        def fake_run(
+            argv: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            checkout = base / "repo"
+            (checkout / ".git").mkdir(parents=True)
+            (checkout / "bin").mkdir()
+            (base / "system").mkdir()
+            path = os.pathsep.join(
+                [str(checkout / "bin"), "relative", "", str(base / "system")]
+            )
+            away = base / "away"
+            away.mkdir()
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "PATH": path,
+                        "GIT_DIR": str(checkout / ".git"),
+                        "GIT_WORK_TREE": "/",
+                    },
+                ),
+                patch.object(draft_pr.subprocess, "run", fake_run),
+            ):
+                draft_pr._command(["/usr/bin/gh"], cwd=away, root=checkout)  # noqa: SLF001
+        env = captured["env"]
+        self.assertEqual(env["PATH"], str(base / "system"))
+        self.assertNotIn("GIT_DIR", env)
+        self.assertNotIn("GIT_WORK_TREE", env)
+        self.assertEqual(captured["cwd"], away)
+        self.assertEqual(env["GIT_CEILING_DIRECTORIES"], str(base))
+        overrides = {
+            env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"]
+            for i in range(int(env["GIT_CONFIG_COUNT"]))
+        }
+        self.assertEqual(overrides["core.fsmonitor"], "false")
+        self.assertEqual(overrides["core.hooksPath"], os.devnull)
+
+    def test_gh_never_reads_the_checkouts_git_config(self) -> None:
+        # Security review of DEC-0004: gh runs git itself, and .git/config is
+        # agent-writable; a core.fsmonitor command there must never run.
+        with TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            repo = TempRepo(base / "repo")
+            sentinel = base / "fsmonitor-ran"
+            (repo.root / "tracked").write_text("x\n")
+            git(repo.root, "add", "tracked")
+            touch = shutil.which("touch")
+            git(repo.root, "config", "core.fsmonitor", f"{touch} {sentinel}; false")
+            system = base / "system"
+            (system / "git").parent.mkdir()
+            (system / "git").symlink_to(REAL_GIT)
+            gh = executable(
+                system / "gh",
+                f"#!/bin/sh\npwd > {base / 'gh-cwd'}\ngit status >/dev/null 2>&1\n",
+            )
+            work = draft_pr._Checkpoint(repo.root, RUN)  # noqa: SLF001
+            work.run.gh = str(gh)
+            with patch.dict(os.environ, {"PATH": str(system)}):
+                work.gh("pr", "list")
+            ran_in = Path((base / "gh-cwd").read_text().strip()).resolve()
+            self.assertFalse(ran_in.is_relative_to(repo.root), ran_in)
+            self.assertFalse(sentinel.exists())
 
     def test_timeout_is_reported_not_raised(self) -> None:
         def slow(argv: list[str], **_: object) -> None:

@@ -81,7 +81,15 @@ PR_REASONS: dict[str, frozenset[str]] = {
         {"several-open", "base-mismatch", "create-unverified"}
     ),
     "blocked-closed": frozenset({"closed", "merged"}),
-    "blocked-unlinked": frozenset({"no-issue-number", "issue-not-found", "not-github"}),
+    "blocked-unlinked": frozenset(
+        {
+            "no-issue-number",
+            "issue-not-found",
+            "not-github",
+            "no-repository",
+            "repository-mismatch",
+        }
+    ),
 }
 SOURCES = {"runner", "client-counter", "operator-attested", "agent-reported"}
 RANK = {"economy": 0, "standard": 1, "senior": 2, "critical": 3}
@@ -329,13 +337,8 @@ def resolve_program(
     Returns the resolved absolute path, or None and whether a copy was found
     only in a working tree or a relative PATH entry.
     """
-    kept, dropped = [], []
-    for entry in entries:
-        if not entry or not Path(entry).is_absolute():
-            dropped.append(entry or ".")
-            continue
-        resolved = Path(entry).resolve()
-        (dropped if in_working_tree(resolved, excluded) else kept).append(entry)
+    kept = trusted_entries(entries, excluded)
+    dropped = [entry or "." for entry in entries if entry not in kept]
     shadowed = False
     for entry in kept:
         found = _executable(Path(entry) / name)
@@ -346,6 +349,17 @@ def resolve_program(
             return str(program), False
         shadowed = True
     return None, shadowed or any(_executable(Path(e) / name) for e in dropped)
+
+
+def trusted_entries(entries: list[str], excluded: tuple[Path, ...] = ()) -> list[str]:
+    """Return the absolute PATH entries that lie outside every Git working tree."""
+    return [
+        entry
+        for entry in entries
+        if entry
+        and Path(entry).is_absolute()
+        and not in_working_tree(Path(entry).resolve(), excluded)
+    ]
 
 
 def _executable(path: Path) -> Path | None:
