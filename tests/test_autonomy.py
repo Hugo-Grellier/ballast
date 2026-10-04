@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import unittest
@@ -796,6 +797,33 @@ class ConfinementTests(AutonomyCase):
             env={"XDG_RUNTIME_DIR": "/run/user/1000"},
         )
 
+    def test_resolver_files_hidden_by_a_tmpfs_are_bound_back(self) -> None:
+        """systemd-resolved: /etc/resolv.conf links into the hidden /run."""
+        hidden = self.base / "run"
+        (hidden / "systemd/resolve").mkdir(parents=True)
+        stub = hidden / "systemd/resolve/stub-resolv.conf"
+        stub.write_text("nameserver 127.0.0.53\n")
+        etc = self.base / "etc"
+        etc.mkdir()
+        (etc / "resolv.conf").symlink_to(stub)
+        (etc / "hosts").write_text("127.0.0.1 localhost\n")
+        (etc / "nsswitch.conf").symlink_to(hidden)  # a directory: never bound
+        files = tuple(etc / name for name in ("resolv.conf", "hosts", "nsswitch.conf"))
+        with (
+            patch.object(autonomy, "RESOLVER_FILES", files),
+            patch.object(autonomy, "TMPFS_HIDDEN", (hidden,)),
+        ):
+            argv = self.argv()
+        triples = list(zip(argv, argv[1:], argv[2:], strict=False))
+        bind = ("--ro-bind", str(stub), str(stub))
+        self.assertIn(bind, triples)
+        # After the tmpfs that hides it, and nothing else of the hidden tree.
+        self.assertGreater(triples.index(bind), argv.index("/run"))
+        sources = [argv[i + 1] for i, a in enumerate(argv) if a == "--ro-bind"]
+        self.assertNotIn(str(hidden), sources)
+        self.assertNotIn(str(etc / "hosts"), sources)
+        self.assertEqual([s for s in sources if s.startswith(str(hidden))], [str(stub)])
+
     def test_argv_shape(self) -> None:
         home = self.base / "home"
         for name in (".claude", ".codex", ".cache", ".config", ".ssh"):
@@ -929,6 +957,17 @@ class RealConfinementTests(AutonomyCase):
 
     def test_self_test_passes(self) -> None:
         autonomy.confinement_self_test(self.root)
+
+    def test_dns_resolves_inside_when_it_does_outside(self) -> None:
+        """Agent steps keep the host network and its resolver configuration."""
+        host = "api.anthropic.com"
+        try:
+            socket.getaddrinfo(host, 443)
+        except OSError:
+            self.skipTest("no DNS resolution on this host")
+        code = f"import socket; socket.getaddrinfo({host!r}, 443)"
+        result = self.confined("python3", "-I", "-S", "-c", code)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_protected_and_operator_paths_are_read_only(self) -> None:
         (self.root / ".specify/workflows").mkdir()

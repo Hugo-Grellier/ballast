@@ -1327,8 +1327,33 @@ def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
     return args
 
 
+TMPFS_HIDDEN = (Path("/tmp"), Path("/run"))  # noqa: S108 - emptied in the sandbox
+# Name resolution the agent CLIs need; systemd-resolved links resolv.conf into /run.
+RESOLVER_FILES = (
+    Path("/etc/resolv.conf"),
+    Path("/etc/hosts"),
+    Path("/etc/nsswitch.conf"),
+    Path("/etc/gai.conf"),
+)
+
+
 def _hidden_by_tmpfs(path: Path) -> bool:
-    return any(path.is_relative_to(base) for base in (Path("/tmp"), Path("/run")))  # noqa: S108
+    return any(path.is_relative_to(base) for base in TMPFS_HIDDEN)
+
+
+def _resolver_binds() -> list[str]:
+    """Bind back each resolver file a tmpfs hides, and nothing else under it.
+
+    Only the resolved regular file: never its directory, the user bus or a
+    runtime socket. Agent steps keep the host network, so a stub resolver on
+    127.0.0.53 stays reachable.
+    """
+    args: list[str] = []
+    for name in RESOLVER_FILES:
+        target = name.resolve()
+        if target != name and _hidden_by_tmpfs(target) and target.is_file():
+            args += ["--ro-bind", str(target), str(target)]
+    return args
 
 
 def _visible_binds(root: Path, command: list[str]) -> list[str]:
@@ -1401,6 +1426,7 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     runtime = env.get("XDG_RUNTIME_DIR")
     if runtime:
         args += ["--tmpfs", runtime]
+    args += _resolver_binds()
     # Credential directories are emptied first and made read-only last, so an
     # agent home inside one (CODEX_HOME under ~/.config) can still be overlaid.
     hidden = [home / name for name in CREDENTIAL_DIRS if (home / name).is_dir()]
