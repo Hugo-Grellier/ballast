@@ -275,33 +275,46 @@ def _child_path(root: Path) -> str:
     return os.pathsep.join(ledger.trusted_entries(_path_entries(), excluded))
 
 
-def _pin_path(root: Path, run_id: str) -> Path:
-    return state_dir(root) / "draft-pr" / f"{run_id}.json"
+def _pin_path(root: Path, run_id: str) -> Path | None:
+    """Return the pin's path, or None when an agent could write it.
+
+    That is state under the checkout or a temp root, e.g. XDG_STATE_HOME=/tmp/x.
+    """
+    path = state_dir(root) / "draft-pr" / f"{run_id}.json"
+    resolved = path.resolve()
+    writable = (root.resolve(), *ledger.agent_temp_roots())
+    if any(resolved.is_relative_to(base) for base in writable):
+        return None
+    return path
 
 
-def pin_branch(root: Path, run_id: str) -> None:
+def pin_branch(root: Path, run_id: str) -> str | None:
     """Record the run's branch when the operator starts it.
 
     HEAD lives in agent-writable Git state; every later checkpoint must still
     be on this branch, published under the same name (DEC-0006, DEC-0010).
     """
-    if not RUN_ID_PATTERN.fullmatch(run_id):
-        return
+    path = _pin_path(root, run_id) if RUN_ID_PATTERN.fullmatch(run_id) else None
+    if path is None:
+        return None
     git, _ = _resolve("git", root)
     if git is None:
-        return
+        return None
     head = _command([git, "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root)
     branch = head.stdout.strip()
     if head.returncode or not branch or branch.startswith("-"):
-        return
-    path = _pin_path(root, run_id)
+        return None
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text(json.dumps({"branch": branch}), encoding="utf-8")
+    return branch
 
 
 def _branch_pin(root: Path, run_id: str) -> str | None:
+    path = _pin_path(root, run_id)
+    if path is None:
+        return None
     try:
-        pin = json.loads(_pin_path(root, run_id).read_text(encoding="utf-8"))
+        pin = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     branch = pin.get("branch") if isinstance(pin, dict) else None
@@ -609,7 +622,14 @@ class _Checkpoint:
         )
         if result.returncode:
             self.failed(result)
-        run.scope = _scope(_pages(_json(result)))
+        run.scope = _scope(self.pages(result))
+
+    def pages(self, result: Result) -> list[dict[str, Any]]:
+        """Entries of a `--paginate --slurp` list; unreadable is never empty."""
+        data = _json(result)
+        if not isinstance(data, list) or not all(isinstance(p, list) for p in data):
+            self.stop("failed-retryable", "github-error")
+        return _pages(data)
 
     def list_prs(self) -> list[_PullRequest]:
         run = self.run
@@ -621,7 +641,7 @@ class _Checkpoint:
         if result.returncode:
             self.failed(result)
         prs = []
-        for entry in _pages(_json(result)):
+        for entry in self.pages(result):
             pr = _pull_request(entry, run)
             if pr is not None:
                 prs.append(pr)
@@ -731,7 +751,10 @@ class _Checkpoint:
             self.failed(result)
         data = _json(result)
         files = data.get("files") if isinstance(data, dict) else None
-        files = [item for item in files or [] if isinstance(item, dict)]
+        if not isinstance(files, list):
+            # Unreadable is never "no change" (R2 round 3).
+            self.stop("failed-retryable", "github-error")
+        files = [item for item in files if isinstance(item, dict)]
         prefix = f"{run.feature}/"
         for item in files:
             for key in ("filename", "previous_filename"):

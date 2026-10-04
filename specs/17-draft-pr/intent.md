@@ -19,9 +19,9 @@ As approved in [`spec.md`](spec.md) at the digest recorded under Authority. The 
 ## Authority
 
 <!-- workflow-approval: begin -->
-- **Approved by**: human user
-- **Approved**: 2026-10-04T10:42:20+00:00
-- **Source**: ballast-feature approve-intent gate (3eea832b)
+- **Approved by**: agent (Claude) under the operator's standing authority for Epic #11 children; provisional, confirm at merge
+- **Approved**: 2026-10-04T13:54:45+00:00
+- **Source**: spec amended to match accepted DEC-0008 and DEC-0010 (spec reconciliation gap 4); the original spec was approved by the human user at 2026-10-04T10:42:20+00:00 (approve-intent gate, run 3eea832b)
 - **Spec**: specs/17-draft-pr/spec.md
-- **Approved spec digest**: sha256:13b2e62bb908c3f655cc10625fe837f6b5e76d6791eb4189043b46149c3ced45
+- **Approved spec digest**: sha256:411ff5a2bc2e967b3f7fc92758fa27bf590bed4f267353b86803229bfb62aa52
 <!-- workflow-approval: end -->

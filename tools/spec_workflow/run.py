@@ -160,7 +160,10 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912, PLR0915 - Preserve run
         archive_policy(ROOT, run_id)
         # Before any agent step can change HEAD or .git/config (DEC-0006).
         with contextlib.suppress(Exception):  # The checkpoint reports it unpinned.
-            draft_pr.pin_branch(ROOT, run_id)
+            pinned = draft_pr.pin_branch(ROOT, run_id)
+            if pinned:
+                # The operator sees which branch the run's PR will follow.
+                sys.stdout.write(f"Draft PR: branch pinned: {pinned}\n")
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(command, cwd=ROOT, env=env, check=False)  # noqa: S603

@@ -79,7 +79,7 @@ When GitHub cannot be reached, credentials are missing or the situation is ambig
 
 ### Edge Cases
 
-- The feature branch is pushed under a different name on GitHub (its upstream does not match the local branch): Ballast uses the branch's configured upstream when there is one. With no upstream, it treats the branch as unpublished (`pending`), and the reason says so.
+- The feature branch is pushed under a different name on GitHub (its upstream does not match the local branch), or has no upstream: Ballast treats the branch as unpublished (`pending`), and the reason says so with the command to publish it under its own name. The upstream's name lives in Git configuration an agent can write, so it is never followed (DEC-0010).
 - A PR from a fork, or with another head repository, names a branch of the same name: it is not treated as the feature's PR.
 - The base branch cannot be determined: `failed-retryable` with the reason. No PR is opened against a guessed base.
 - An agent writes text meant to change the PR title or description (in the spec, a commit message or a branch name): the PR content comes only from fixed wording, the Issue number and title, the intake scope comment on the Issue, the pull-request template as committed on the **base** branch on GitHub (never the feature branch's copy), and paths that Ballast checks. Untrusted text is never run as code or passed to a shell.
@@ -93,7 +93,7 @@ When GitHub cannot be reached, credentials are missing or the situation is ambig
 
 - **FR-001**: The PR checkpoint MUST run only in trusted launcher code, after launcher trust verification and outside the agent sandbox. No agent gains GitHub write authority or credentials through this feature.
 - **FR-002**: The launcher MUST reach a PR checkpoint at least when a `ballast run` start or resume invocation ends, whether the workflow completed, paused at a gate or failed.
-- **FR-003**: A branch MUST count as holding a meaningful change only when the branch as published on GitHub has a non-empty content difference from its base. Only differences outside the feature's own spec directory `specs/<feature>/` count (see AC-005).
+- **FR-003**: A branch MUST count as holding a meaningful change only when the branch as published on GitHub has a non-empty content difference from its base. Only differences outside the feature's own spec directory `specs/<feature>/` count (see AC-005). When GitHub cannot list the whole difference (its compare lists at most 300 files), Ballast does not conclude: the status is `pending` with a reason saying the difference could not be classified and a remedy to open the PR by hand, which Ballast then adopts (DEC-0008).
 - **FR-004**: Ballast MUST NOT push commits in this feature; it observes the published branch. Publishing the branch stays an operator action, or the Autonomous publisher's (#27); this feature only observes what is on GitHub, per Issue #17's "defer until a remote diff exists" (provisional decision, 2026-10-03 standing authority).
 - **FR-005**: Before creating a PR, Ballast MUST look for open PRs from the same repository whose head is the feature branch. If it finds one, it reuses it. If it finds several, it reports `blocked-ambiguous`. If the only matching PR is closed or merged, it reports `blocked-closed`.
 - **FR-006**: A created PR MUST be a draft, target the base branch and include a Ballast-marked section that links the Issue, the feature directory and the run. The link MUST NOT close the Issue when the PR merges.

@@ -525,6 +525,18 @@ class IdentityTests(CheckpointCase):
         self.assertOutcome(self.check(), "pending", "not-published")
         self.assertEqual(self.fake.gh_calls(), [])
 
+    def test_pin_in_agent_writable_state_is_never_trusted(self) -> None:
+        # R2 round 3: XDG_STATE_HOME under /tmp would let an agent rewrite it.
+        state = self.base / "state"
+        with patch.object(ledger, "agent_temp_roots", lambda: (state,)):
+            self.assertIsNone(draft_pr.pin_branch(self.repo.root, RUN))
+            outcome = self.check()
+        self.assertOutcome(outcome, "blocked-unlinked", "branch-unpinned")
+        self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_pin_returns_the_pinned_branch(self) -> None:
+        self.assertEqual(draft_pr.pin_branch(self.repo.root, RUN), "feat-x")
+
     def test_branch_pin_lives_outside_the_checkout(self) -> None:
         path = draft_pr._pin_path(self.repo.root, RUN)  # noqa: SLF001
         self.assertFalse(path.resolve().is_relative_to(self.repo.root))
@@ -678,6 +690,33 @@ class PendingTests(CheckpointCase):
         self.assertOutcome(outcome, "pending", "not-published")
         self.assertIn("git push -u origin feat-x", outcome.remedy)
         self.assertNoWrite()
+
+    def test_malformed_list_is_retryable_never_empty(self) -> None:
+        # Reconciliation gap 3: an unreadable PR list read as "no PR" and
+        # allowed a second PR; unreadable comments silently dropped the scope.
+        for stage in ("pulls", "comments"):
+            for result in (
+                draft_pr.Result(0, "not json"),
+                draft_pr.Result(0, '{"message": "x"}'),
+                draft_pr.Result(0, '[{"number": 1}]'),
+            ):
+                with self.subTest(stage=stage, stdout=result.stdout):
+                    self.fake.failures.clear()
+                    self.fake.failures[stage] = result
+                    self.assertOutcome(self.check(), "failed-retryable", "github-error")
+                    self.assertNoWrite()
+
+    def test_malformed_compare_is_retryable_not_empty(self) -> None:
+        # R2 round 3: an unreadable compare must never read as "no change".
+        for result in (
+            draft_pr.Result(0, "not json"),
+            draft_pr.Result(0, '{"status": "ahead"}'),
+            draft_pr.Result(0, '{"files": "x"}'),
+        ):
+            with self.subTest(stdout=result.stdout):
+                self.fake.failures["compare"] = result
+                self.assertOutcome(self.check(), "failed-retryable", "github-error")
+                self.assertNoWrite()
 
     def test_spec_only_or_empty_differences_are_not_meaningful(self) -> None:
         for files in (

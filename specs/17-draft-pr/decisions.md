@@ -118,3 +118,13 @@
 ## DEC-0011 — Resolution
 
 - Provisional, under the operator's standing authority; confirm at merge): `ledger.agent_temp_roots()` (`/tmp`, `/var/tmp`, `/dev/shm`, `$TMPDIR`) are excluded like working trees when `draft_pr` resolves programs and builds the child `PATH`, and when the ledger resolves its own `git`. `ballast doctor` keeps its working-tree rule. Implemented in T043.
+
+## DEC-0012 — Proposal
+
+- Source: R2 round-3 review (`reviews/implementation-review-codex-3.md`). (a) The pin records the branch `HEAD` names at `ballast run start`; an earlier run's agent could have moved `HEAD`. (b) Program trust excludes working trees and temp roots only; another agent-writable directory on `PATH` would be trusted. (c) `XDG_STATE_HOME` under an agent-writable location would let an agent rewrite the pin. (d) A malformed compare response read as an empty file list, i.e. `no-meaningful-change`.
+- Classification: (a)(b)(c) architecture issue (security boundary; R2); (d) implementation bug.
+
+## DEC-0012 — Resolution
+
+- Provisional, under the operator's standing authority for Epic #11 children; confirm at merge. (c) and (d) fixed in T044: a pin whose path resolves under the checkout or a temp root is neither written nor trusted (`blocked-unlinked/branch-unpinned`), and a compare without a `files` list is `failed-retryable/github-error`. (a) mitigated, residual accepted: `ballast run start` prints `Draft PR: branch pinned: <branch>` so the operator sees it before any agent runs; exploiting it needs an earlier compromised run, and its effect is limited to Draft PR metadata in the pinned repository (no code, no push, no merge). (b) accepted for supported environments, whose agent write authority is the checkout plus the temp roots (Codex `workspace-write`; Claude edits limited to the project). The launcher-wide boundary, including allowlisted `git` output options and the trust baseline's state directory, is tracked in #34.
+

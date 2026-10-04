@@ -577,6 +577,9 @@ is printed or stored.
 | `blocked-unlinked` | `no-repository` | declare `[github] repository = "OWNER/NAME"` in `ballast.toml`, then run `ballast trust` |
 | `blocked-unlinked` | `repository-mismatch` | the branch's upstream is not the repository pinned in `ballast.toml`: push the branch there, or fix the pin and run `ballast trust` |
 
+`ballast run start` prints `Draft PR: branch pinned: <branch>` before any agent
+runs; every later checkpoint must be on that branch, published under that name.
+
 While `BALLAST_TAMPERED` or an unfinished agent step's marker exists, the
 checkpoint prints `Draft PR: skipped: <marker> exists; restore the checkout`
 and records nothing.

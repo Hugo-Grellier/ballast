@@ -1794,8 +1794,9 @@ class DraftPrRunTests(unittest.TestCase):
 
             def pin(
                 root: Path, rid: str, pins: list[tuple[Path, str, bool]] = pins
-            ) -> None:
+            ) -> str:
                 pins.append((root, rid, self.dump.exists()))
+                return "feat-x"
 
             with (
                 self.subTest(command=args[0]),
@@ -1810,10 +1811,12 @@ class DraftPrRunTests(unittest.TestCase):
                     return_value=self.run.draft_pr.Outcome("pending", "no-branch"),
                 ),
             ):
-                self.main(0, *args)
+                _, output = self.main(0, *args)
             self.assertEqual(
                 pins, [(self.repo.root, run_id, False)] if expected else []
             )
+            # The operator sees which branch the run's PR will follow.
+            self.assertEqual("Draft PR: branch pinned: feat-x" in output, expected)
 
     def test_failing_pin_never_stops_the_start(self) -> None:
         with (

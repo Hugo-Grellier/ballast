@@ -41,14 +41,14 @@ All run with a list argv, `shell=False`, `cwd=root`, a 30 s timeout and the envi
 | Purpose | Command |
 | --- | --- |
 | Local branch | `<git> symbolic-ref --quiet --short HEAD` |
-| Branch pin | written by `run.py` at `ballast run start`, before the engine: `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch`; every checkpoint requires the local branch to equal it (`blocked-unlinked/branch-mismatch`) and its published name to equal it (`pending/not-published`); no pin → `blocked-unlinked/branch-unpinned`; all before any `gh` call (DEC-0006, DEC-0010) |
+| Branch pin | written by `run.py` at `ballast run start`, before the engine, which prints `Draft PR: branch pinned: <branch>`; never written or trusted when the state path resolves under the checkout or a temp root (DEC-0012): `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch`; every checkpoint requires the local branch to equal it (`blocked-unlinked/branch-mismatch`) and its published name to equal it (`pending/not-published`); no pin → `blocked-unlinked/branch-unpinned`; all before any `gh` call (DEC-0006, DEC-0010) |
 | Upstream | `<git> for-each-ref --format=%(upstream:remotename)%00%(upstream:remoteref) refs/heads/<branch>` |
 | Remote URL | `<git> remote get-url <remote>` |
 | Repository and base | `<gh> api repos/<owner>/<repo>` |
 | Issue | `<gh> api repos/<owner>/<repo>/issues/<issue>` |
 | Intake scope comment | `<gh> api --paginate --slurp "repos/<owner>/<repo>/issues/<issue>/comments?per_page=100"` ; selects the newest comment containing `<!-- ballast-intake:` whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR` |
 | PRs for the head | `<gh> api --paginate --slurp "repos/<owner>/<repo>/pulls?head=<owner>:<published>&state=all&per_page=100"`; fields read: `number`, `state`, `draft`, `merged_at`, `base.ref`, `head.ref`, `head.repo.owner.login`, `html_url`, `body` |
-| Diff | `<gh> api repos/<owner>/<repo>/compare/<base>...<published>` (one response: GitHub lists at most 300 files, on the first page only; 300 or more → never concluded, `pending/diff-unclassified`; DEC-0008) |
+| Diff | `<gh> api repos/<owner>/<repo>/compare/<base>...<published>` (one response: GitHub lists at most 300 files, on the first page only; 300 or more → never concluded, `pending/diff-unclassified`; DEC-0008; no `files` list → `failed-retryable/github-error`, DEC-0012) |
 | Template | `<gh> api "repos/<owner>/<repo>/contents/.github/pull_request_template.md?ref=<base>"`; 404 = no template |
 | Create | `<gh> pr create --repo <owner>/<repo> --draft --base <base> --head <published> --title <title> --body-file -` (body on stdin) |
 | Verify creation | the PR list command again |
