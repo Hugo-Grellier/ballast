@@ -1,0 +1,14 @@
+REJECT
+
+| Round 5 finding | Status | Evidence |
+| --- | --- | --- |
+| Deleted installed output can leave doctor reporting ready | RESOLVED | [T028–T029](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:210) now require output-existence checks and a deleted-output test, matching the [contract](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/contracts/standard-manifest.md:25). |
+| Failure after replacement can destroy the previous install | NOT RESOLVED | [T008](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:71) and [research R4](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/research.md:25) verify the temporary file before replacement. The [plan](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/plan.md:47) still directs a target read and digest comparison *after* replacement. A read failure at that point reports failure after the previous install is gone. |
+| T001/T009 treated the README update as both required and proposed | RESOLVED | [T001](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:30) and [T009](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:77) now both require it; the [plan](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/plan.md:70) also requires it. |
+| Release Please does not bump the README install command | NOT RESOLVED | T009 adds supported block markers, but requires copying the [contract’s install line](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/contracts/install.md:13) exactly. Its `v=vX.Y.Z` placeholder contains no numeric version for Release Please’s [generic updater](https://github.com/googleapis/release-please/blob/main/src/updaters/generic.ts) to replace. |
+
+### New critical/high finding
+
+| Severity | Failure path | Required correction |
+| --- | --- | --- |
+| High | The new block-marker fix leaves `v=vX.Y.Z` in the README command. A release bump cannot replace that placeholder, so a user copying the documented command requests a nonexistent release. [T012](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/specs/12-cli-install-doctor/tasks.md:92) substitutes a test tag, masking the failure. | Put a real initial version in the contract and README command; test the release bump on the unmodified README command. |

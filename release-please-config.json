@@ -19,5 +19,10 @@
     { "type": "build", "section": "Build System", "hidden": true },
     { "type": "ci", "section": "Continuous Integration", "hidden": true }
   ],
-  "packages": { ".": { "initial-version": "0.1.0" } }
+  "packages": {
+    ".": {
+      "initial-version": "0.1.0",
+      "extra-files": ["tools/ballast", "README.md"]
+    }
+  }
 }

@@ -1,0 +1,20 @@
+APPROVE WITH CHANGES
+
+| Round‑1 finding | Status | Evidence |
+| --- | --- | --- |
+| Install target symlink could be retained | RESOLVED | [tools/ballast:219](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:219) refuses a symlink unless forced; forced install replaces it. [Regression test](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_ballast.py:332) checks both paths, including an identical file in a checkout. |
+| Doctor could execute a tool from another checkout | RESOLVED | [tools/ballast:319](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:319) checks resolved paths for any Git working tree. [Regression test](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_doctor.py:427) covers an external checkout and a symlink into it. |
+| Non-table `[standard]` caused a traceback | RESOLVED | [tools/ballast:102](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:102) validates the shape before reading `ref`. [Regression test](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_doctor.py:524) covers `[[standard]]` and other malformed shapes. |
+| Doctor starts a transient scope | NOT RESOLVED | [tools/ballast:425](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:425) still runs `systemd-run --user --scope`. The file snapshot cannot detect a change to the user manager’s runtime state. |
+| Failed scope start produced a successful verdict | RESOLVED | [tools/ballast:430](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:430) now returns `unsupported`; [the test](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_doctor.py:313) requires exit 1 and a blocked verdict. |
+| HTTP 403/429/500 passed the network check | RESOLVED | [tools/ballast:550](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:550) returns `inconclusive` for those errors. [Status tests](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_doctor.py:325) would fail with the old passing result. |
+| Read-only test missed home/temp writes and redirects | RESOLVED | [tests/test_doctor.py:187](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_doctor.py:187) includes controlled home and temp paths in the before/after snapshot; [the redirect test](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tests/test_doctor.py:706) requires one HEAD request and no follow-up request. |
+
+**New critical/high findings:** None found in the reviewed fixes.
+
+**Mediums:**
+
+- The unresolved scope probe changes systemd runtime state on every doctor run. Replace it with a passive check and report scope availability as inconclusive when it cannot be established without starting one.
+- [tools/ballast:328](/home/hugo/orca/workspaces/agentic-repo-standard/feat-cli-install-ballast-in-one-command-and-diag/tools/ballast:328): `resolve_program` checks only the first executable found on the filtered `PATH`. If that match is a symlink into a checkout, it reports the tool missing even when a later safe executable exists. Continue searching after rejecting a match; add a test with both entries.
+
+These are regression-capable tests by code inspection, **not executed passes**: the read-only sandbox prevented temporary-directory creation and loopback socket binding, so the focused six-test run failed during setup.

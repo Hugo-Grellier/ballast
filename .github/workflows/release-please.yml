@@ -10,8 +10,40 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       # A personal access token, so the release PR triggers CI like any other PR.
       - uses: googleapis/release-please-action@v5.0.0
+        id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+  publish-cli:
+    # Attach the unchanged tools/ballast and its SHA-256 to the new release,
+    # for the install line in the README. Only this job may write.
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - run: cp tools/ballast ballast
+      - run: sha256sum ballast > ballast.sha256
+      - run: sha256sum -c ballast.sha256
+      - run: gh release upload "$TAG" ballast ballast.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+      # Postcondition: the release serves the reviewed file and its checksum.
+      - run: |
+          gh release download "$TAG" -p ballast -p ballast.sha256 -D uploaded
+          cmp uploaded/ballast tools/ballast
+          test "$(cut -d' ' -f1 uploaded/ballast.sha256)" = "$(sha256sum <uploaded/ballast | cut -d' ' -f1)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}

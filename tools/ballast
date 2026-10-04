@@ -1,9 +1,12 @@
 #!/usr/bin/python3 -IS
 """Run the standard version a project pins, from outside its checkout.
 
-Install once per machine, from a reviewed copy of this repository:
+Install once per machine with the line in the README, which downloads a
+released copy of this file, checks its SHA-256 and runs `self-install`:
 
-    install -m 0755 tools/ballast ~/.local/bin/ballast
+    ballast self-install [--dir DIR] [--force]   # install this file as DIR/ballast
+    ballast --version
+    ballast doctor [--json]    # read-only check of every prerequisite
 
 Then, from a project root whose ballast.toml has `[standard] ref = "..."`:
 
@@ -16,24 +19,75 @@ Each version is extracted once into $XDG_DATA_HOME/ballast/standard/<ref>/.
 Only `setup` downloads; every other command runs the launcher
 of an already fetched version. The repository is fixed here, so a project can
 choose a version but never a source. Set BALLAST_STANDARD_DIR to a local
-checkout of this repository to develop the standard itself.
+checkout of this repository to develop the standard itself; from such a
+checkout, `install -m 0755 tools/ballast ~/.local/bin/ballast` also installs it.
+`doctor` writes nothing, downloads nothing and runs only the read-only probes a
+fetched version declares in its tools/cli.toml.
 """
 
 from __future__ import annotations
 
-import os
-import re
 import sys
+
+if sys.version_info < (3, 11):  # noqa: UP036 - the guard is the point
+    found = ".".join(str(part) for part in sys.version_info[:2])
+    sys.stderr.write(f"ballast: needs Python 3.11 or newer (found {found})\n")
+    sys.exit(1)
+
+import argparse
+import hashlib
+import json
+import os
+import queue
+import re
+import shutil
+import subprocess
 import tarfile
 import tempfile
+import threading
+import time
 import tomllib
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 REPOSITORY = "Hugo-Grellier/ballast"
+VERSION = "0.1.0"  # x-release-please-version
 ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PYTHON = "/usr/bin/python3"
+USAGE = (
+    "usage: ballast setup | trust | run ... | ledger ... | doctor [--json]"
+    " | self-install [--dir DIR] [--force] | --version"
+)
+DOCTOR_HINT = "; run `ballast doctor` for details"
+# The README's install line, with the version as a placeholder. A test keeps
+# both copies identical.
+INSTALL_LINE = (
+    "(c=$PATH; PATH=/usr/local/bin:/usr/bin:/bin; v=vX.Y.Z;"
+    " u=https://github.com/Hugo-Grellier/ballast/releases/download/$v;"
+    " d=$(TMPDIR=/tmp mktemp -d)"
+    ' && { curl -q -fsSL -o "$d/ballast" "$u/ballast"'
+    ' && curl -q -fsSL -o "$d/ballast.sha256" "$u/ballast.sha256"'
+    ' || { echo "ballast: cannot download $v from $u; nothing installed" >&2;'
+    " false; }; }"
+    ' && { [ "$(cut -d" " -f1 "$d/ballast.sha256")"'
+    ' = "$(sha256sum <"$d/ballast" | cut -d" " -f1)" ]'
+    ' || { echo "ballast: checksum mismatch for $v; nothing installed" >&2; false; }; }'
+    ' && BALLAST_CALLER_PATH="$c" /usr/bin/python3 -I -S "$d/ballast" self-install)'
+)
+IDENTITY = re.compile(rf'^REPOSITORY = "{re.escape(REPOSITORY)}"$', re.MULTILINE)
+VERSION_LINE = re.compile(r'^VERSION = "([^"]+)"', re.MULTILINE)
+SEMVER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+MINIMUM_PYTHON = (3, 11)
+PROBE_SECONDS = 3
+NETWORK_SECONDS = 5
+EXIT_REFUSED = 2
 
 
 def fail(message: str) -> None:
@@ -41,15 +95,27 @@ def fail(message: str) -> None:
     sys.exit(f"ballast: {message}")
 
 
-def pinned_ref(root: Path) -> str:
-    """Return the validated `[standard] ref` from the project's ballast.toml."""
+def read_pin(root: Path) -> tuple[str | None, str | None]:
+    """Return `(ref, None)` from the project's ballast.toml, or `(None, error)`."""
     try:
         config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        fail(f"cannot read ballast.toml: {error}")
-    ref = config.get("standard", {}).get("ref")
+        return None, f"cannot read ballast.toml: {error}"
+    standard = config.get("standard", {})
+    ref = standard.get("ref") if isinstance(standard, dict) else None
     if not isinstance(ref, str) or not REF.fullmatch(ref) or ".." in ref:
-        fail("ballast.toml needs [standard] ref, a tag or commit of the standard")
+        return (
+            None,
+            "ballast.toml needs [standard] ref, a tag or commit of the standard",
+        )
+    return ref, None
+
+
+def pinned_ref(root: Path) -> str:
+    """Return the validated `[standard] ref` from the project's ballast.toml."""
+    ref, error = read_pin(root)
+    if error is not None:
+        fail(error + DOCTOR_HINT)
     return ref
 
 
@@ -73,10 +139,768 @@ def fetch(ref: str, target: Path) -> None:
         top.rename(target)
 
 
+def install_line(tag: str) -> str:
+    """Return the documented install line for one release tag."""
+    return INSTALL_LINE.replace("vX.Y.Z", tag)
+
+
+def semver(text: str) -> tuple[int, int, int] | None:
+    """Parse `X.Y.Z`, or return None."""
+    match = SEMVER.fullmatch(text)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def ballast_version(path: Path) -> tuple[bool, str | None]:
+    """Whether a file is a Ballast CLI, and its version when it declares one."""
+    try:
+        text = path.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return False, None
+    match = VERSION_LINE.search(text)
+    return bool(IDENTITY.search(text)), match.group(1) if match else None
+
+
+def within(path: Path, roots: tuple[Path, ...]) -> bool:
+    """Whether a resolved path lies in one of roots."""
+    return any(path.is_relative_to(root) for root in roots)
+
+
+def in_working_tree(path: Path, roots: tuple[Path, ...] = ()) -> bool:
+    """Whether a resolved path lies in one of roots or under a `.git` parent."""
+    return within(path, roots) or any(
+        os.path.lexists(parent / ".git") for parent in (path, *path.parents)
+    )
+
+
+def digest(path: Path) -> str:
+    """SHA-256 of a file."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def python_version(python: str) -> str | None:
+    """`X.Y` of an interpreter, None when it is missing or does not answer."""
+    result = probe(
+        [python, "-I", "-S", "-c", "import sys; print(*sys.version_info[:2], sep='.')"]
+    )
+    if result is None or result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def python_ok(version: str | None) -> bool:
+    """Whether an `X.Y` version meets the minimum."""
+    parts = tuple(int(p) for p in version.split(".")) if version else ()
+    return parts >= MINIMUM_PYTHON
+
+
+def on_path(directory: Path, path: str) -> bool:
+    """Whether a directory is an entry of a PATH value."""
+    target = directory.resolve()
+    return any(
+        entry and Path(entry).resolve() == target for entry in path.split(os.pathsep)
+    )
+
+
+def self_install(argv: list[str]) -> int:
+    """Install this file's own bytes atomically as DIR/ballast."""
+    parser = argparse.ArgumentParser(prog="ballast self-install")
+    parser.add_argument("--dir", type=Path, default=Path.home() / ".local/bin")
+    parser.add_argument("--force", action="store_true")
+    arguments = parser.parse_args(argv)
+    source = Path(__file__).read_bytes()
+    directory = arguments.dir.expanduser().absolute()
+    if in_working_tree(directory.resolve()):
+        sys.stderr.write(
+            f"ballast: {directory} is inside a Git working tree; "
+            "install outside any checkout\n"
+        )
+        return EXIT_REFUSED
+    target = directory / "ballast"
+    previous: str | None = None
+    message = f"installed ballast v{VERSION} at {target}"
+    if os.path.lexists(target):
+        # A link is never followed or kept: it could point into a checkout.
+        link = target.is_symlink()
+        is_ballast, previous = (False, None) if link else ballast_version(target)
+        if (target.is_dir() and not link) or not (is_ballast or arguments.force):
+            sys.stderr.write(
+                f"ballast: {target} is not a Ballast command; "
+                "rerun with --force to replace it\n"
+            )
+            return EXIT_REFUSED
+        if is_ballast and previous == VERSION and target.read_bytes() == source:
+            sys.stdout.write(f"ballast v{VERSION} is already installed at {target}\n")
+            return report_environment(directory)
+        shown = f"v{previous}" if previous else "(previous version unknown)"
+        if not is_ballast:
+            shown = "a symbolic link" if link else "a non-Ballast file"
+        message = f"replaced ballast {shown} with v{VERSION} at {target}"
+    temporary: Path | None = None
+    try:
+        directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=directory, prefix=".ballast-", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(source)
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o755)
+            os.fsync(handle.fileno())
+        # Verify before the rename; nothing is read after it.
+        if digest(temporary) != hashlib.sha256(source).hexdigest():
+            mismatch = "the written file does not match the source"
+            raise OSError(mismatch)  # noqa: TRY301
+        temporary.replace(target)
+    except OSError as error:
+        sys.stderr.write(f"ballast: cannot install: {error}\n")
+        return 1
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    sys.stdout.write(message + "\n")
+    return report_environment(directory)
+
+
+def report_environment(directory: Path) -> int:
+    """Say how to reach the installed command, and whether it can run."""
+    caller = os.environ.get("BALLAST_CALLER_PATH") or os.environ.get("PATH", "")
+    if not on_path(directory, caller):
+        sys.stdout.write(
+            f"{directory} is not on PATH; add this line to your shell configuration:\n"
+            f'  export PATH="{directory}:$PATH"\n'
+        )
+    version = python_version(PYTHON)
+    if not python_ok(version):
+        sys.stdout.write(
+            f"warning: ballast runs under {PYTHON}, which is "
+            f"{version or 'missing'}; it needs Python 3.11 or newer\n"
+        )
+    return 0
+
+
+# --- doctor -----------------------------------------------------------------
+
+STATUSES = ("passing", "missing", "unsupported", "inconclusive", "skipped")
+BLOCKING = frozenset({"missing", "unsupported"})
+EVERY = ("ballast setup", "ballast trust", "ballast run", "ballast ledger")
+HEADLESS = ("ballast run (headless steps)",)
+LINGER = 'loginctl enable-linger "$USER", then log in again'
+
+
+class Check(NamedTuple):
+    """One prerequisite and what doctor observed."""
+
+    name: str
+    scope: str
+    status: str
+    gates: list[str]
+    detail: str
+    remedy: str | None = None
+
+
+class Context(NamedTuple):
+    """What the checks may look at; nothing here is ever written."""
+
+    root: Path
+    project: bool
+    excluded: tuple[Path, ...]
+    ref: str | None = None
+    pin_error: str | None = None
+    standard: Path | None = None
+    local: bool = False
+
+
+def git_root(path: Path) -> Path | None:
+    """Find the enclosing Git working tree without running Git."""
+    for parent in (path, *path.parents):
+        if os.path.lexists(parent / ".git"):
+            return parent
+    return None
+
+
+def resolve_program(name: str, excluded: tuple[Path, ...]) -> tuple[str | None, str]:
+    """Find a program on PATH, never inside the project or any Git working tree."""
+    kept, dropped = [], []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry or not Path(entry).is_absolute():
+            dropped.append(entry or ".")
+            continue
+        resolved = Path(entry).resolve()
+        (dropped if in_working_tree(resolved, excluded) else kept).append(entry)
+    shadow = None
+    for entry in kept:
+        found = shutil.which(name, path=entry)
+        if found is None:
+            continue
+        program = Path(found).resolve()
+        if not in_working_tree(program, excluded):
+            return str(program), ""
+        shadow = found
+    shadow = shadow or shutil.which(name, path=os.pathsep.join(dropped))
+    note = (
+        f"; ignored {name} found only in the checkout, another Git working tree"
+        " or a relative PATH entry"
+    )
+    return None, note if shadow else ""
+
+
+def probe(
+    argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str] | None:
+    """Run a read-only probe; None when it does not answer in time."""
+    environment = {
+        **(os.environ if env is None else env),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    try:
+        return subprocess.run(  # noqa: S603 - resolved program, fixed arguments
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_SECONDS,
+            cwd=cwd,
+            env=environment,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    except OSError as error:
+        return subprocess.CompletedProcess(argv, 127, "", str(error))
+
+
+SLOW = f"did not answer within {PROBE_SECONDS} s"
+Outcome = tuple[str, str] | tuple[str, str, str]
+
+
+def _check_python(_: Context) -> Outcome:
+    if not Path(PYTHON).is_file():
+        return "missing", f"{PYTHON} not found"
+    version = python_version(PYTHON)
+    if version is None:
+        return "inconclusive", f"{PYTHON} {SLOW} or failed"
+    return ("passing" if python_ok(version) else "missing"), f"{PYTHON} {version}"
+
+
+def _check_cli(context: Context) -> Outcome:
+    program, note = resolve_program("ballast", context.excluded)
+    if program is None:
+        return "missing", "no `ballast` on PATH" + note
+    is_ballast, version = ballast_version(Path(program))
+    if not is_ballast:
+        return "missing", f"{program} is not the Ballast CLI" + note
+    return "passing", f"{program} v{version or '(unknown)'}"
+
+
+def _presence(name: str) -> Callable[[Context], Outcome]:
+    def check(context: Context) -> Outcome:
+        program, note = resolve_program(name, context.excluded)
+        return (
+            ("passing", program) if program else ("missing", f"{name} not found" + note)
+        )
+
+    return check
+
+
+def _check_linux(_: Context) -> Outcome:
+    if sys.platform == "linux":
+        return "passing", "linux"
+    return "unsupported", f"{sys.platform}: headless steps need Linux"
+
+
+def _check_systemd_user(context: Context) -> Outcome:
+    if sys.platform != "linux":
+        return "unsupported", "headless steps need Linux"
+    program, note = resolve_program("systemctl", context.excluded)
+    if program is None:
+        return "missing", "systemctl not found" + note
+    result = probe([program, "--user", "show", "--property=Version"])
+    if result is None:
+        return "inconclusive", f"systemctl --user {SLOW}"
+    if result.returncode != 0:
+        return "missing", "no systemd user session"
+    return "passing", "systemd user session available"
+
+
+def _check_systemd_run(context: Context) -> Outcome:
+    if sys.platform != "linux":
+        return "unsupported", "headless steps need Linux"
+    program, note = resolve_program("systemd-run", context.excluded)
+    if program is None:
+        return "missing", "systemd-run not found" + note
+    command = [program, "--user", "--scope", "--quiet", "--collect"]
+    command += ["--setenv=PATH=/usr/bin:/bin", "/usr/bin/true"]
+    result = probe(command, env={**os.environ, "PATH": "/usr/bin:/bin"})
+    if result is None:
+        return "inconclusive", f"systemd-run {SLOW}"
+    if result.returncode != 0:
+        return (
+            "unsupported",
+            "systemd-run is present, but a transient scope did not start",
+        )
+    return "passing", "transient user scopes start"
+
+
+def _check_agent(context: Context) -> Outcome:
+    resolved = {n: resolve_program(n, context.excluded) for n in ("claude", "codex")}
+    found = [name for name, (program, _) in resolved.items() if program]
+    if found:
+        return "passing", ", ".join(found)
+    notes = "".join(note for _, note in resolved.values())
+    return "missing", "neither claude nor codex found" + notes
+
+
+def _check_gh(context: Context) -> Outcome:
+    program, note = resolve_program("gh", context.excluded)
+    if program is None:
+        return "missing", "gh not found" + note
+    # Only the exit status is used: the output may name an account or token.
+    result = probe([program, "auth", "status"])
+    if result is None:
+        return "inconclusive", f"gh auth status {SLOW}", "gh auth login"
+    if result.returncode != 0:
+        return "missing", "gh is not authenticated", "gh auth login"
+    return "passing", "gh authenticated"
+
+
+# The single source of the prerequisite list; the README summarises it.
+# (name, gates, remedy, probe). `network` runs separately: it needs the project.
+MACHINE_CHECKS = (
+    (
+        "python",
+        EVERY,
+        f"install Python 3.11 or newer as {PYTHON} (sudo apt install python3)",
+        _check_python,
+    ),
+    (
+        "cli-on-path",
+        EVERY,
+        (
+            "install the CLI with the line in the README, or add its directory to PATH:"
+            ' export PATH="$HOME/.local/bin:$PATH"'
+        ),
+        _check_cli,
+    ),
+    (
+        "git",
+        ("ballast setup", "ballast run", "feature intake"),
+        "sudo apt install git",
+        _presence("git"),
+    ),
+    (
+        "uvx",
+        ("ballast setup",),
+        "install uv, which provides uvx: https://docs.astral.sh/uv/",
+        _presence("uvx"),
+    ),
+    ("patch", ("ballast setup",), "sudo apt install patch", _presence("patch")),
+    (
+        "network",
+        ("ballast setup",),
+        (
+            "allow HTTPS to github.com, codeload.github.com and pypi.org,"
+            " then rerun `ballast doctor`"
+        ),
+        None,
+    ),
+    (
+        "linux",
+        HEADLESS,
+        "run headless steps on Linux with a systemd user session",
+        _check_linux,
+    ),
+    ("systemd-user", HEADLESS, LINGER, _check_systemd_user),
+    (
+        "systemd-run",
+        HEADLESS,
+        f"enable a systemd user session that can start transient scopes: {LINGER}",
+        _check_systemd_run,
+    ),
+    (
+        "specify",
+        ("ballast run",),
+        "install the Spec Kit CLI: uv tool install specify-cli",
+        _presence("specify"),
+    ),
+    (
+        "agent-cli",
+        ("ballast run (agent steps)",),
+        (
+            "install Claude Code (npm install -g @anthropic-ai/claude-code)"
+            " or Codex (npm install -g @openai/codex)"
+        ),
+        _check_agent,
+    ),
+    (
+        "gh",
+        ("feature intake", "PR steps"),
+        "install the GitHub CLI (https://cli.github.com), then run `gh auth login`",
+        _check_gh,
+    ),
+)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect proves the host answered; following it could download."""
+
+    def redirect_request(self, *_: object) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
+def reach(url: str) -> tuple[str, str]:
+    """Send one HEAD: `reachable` on 2xx/3xx, `missing` on 404 or no connection."""
+    request = urllib.request.Request(url, method="HEAD")  # noqa: S310 - fixed https URL
+    try:
+        _OPENER.open(request, timeout=PROBE_SECONDS).close()
+    except urllib.error.HTTPError as error:
+        # The opener never follows a redirect, so a 3xx arrives here.
+        if 300 <= error.code < 400:  # noqa: PLR2004
+            return "reachable", ""
+        kind = "missing" if error.code == 404 else "inconclusive"  # noqa: PLR2004
+        return kind, f"{url} returned {error.code}"
+    except (OSError, ValueError) as error:
+        return "missing", str(getattr(error, "reason", error))
+    return "reachable", ""
+
+
+def start_network(context: Context) -> Callable[[], Outcome]:
+    """Probe the hosts setup will contact; return a function that collects."""
+    if not context.project:
+        return lambda: ("skipped", "no ballast.toml found")
+    if context.ref is None or context.local:
+        return lambda: (
+            "skipped",
+            "no fetch to check: no valid pin, or a local standard",
+        )
+    if context.standard is not None and context.standard.is_dir():
+        return lambda: ("skipped", f"standard {context.ref} is already fetched")
+    targets = {
+        "github.com": ARCHIVE.format(repository=REPOSITORY, ref=context.ref),
+        "pypi.org": "https://pypi.org/simple/specify-cli/",
+    }
+    answers: queue.Queue[tuple[str, tuple[str, str]]] = queue.Queue()
+    for host, url in targets.items():
+        # Daemon threads: a resolver that never answers cannot hold exit.
+        threading.Thread(
+            target=lambda h=host, u=url: answers.put((h, reach(u))), daemon=True
+        ).start()
+    deadline = time.monotonic() + NETWORK_SECONDS
+
+    def collect() -> Outcome:
+        results: dict[str, tuple[str, str]] = {}
+        while len(results) < len(targets):
+            try:
+                host, error = answers.get(timeout=max(deadline - time.monotonic(), 0))
+            except queue.Empty:
+                break
+            results[host] = error
+        detail = _network_detail(list(targets), results)
+        kinds = {kind for kind, _ in results.values()}
+        if "missing" in kinds:
+            return "missing", detail
+        if "inconclusive" in kinds or len(results) < len(targets):
+            return "inconclusive", detail
+        return "passing", detail
+
+    return collect
+
+
+def _network_detail(hosts: list[str], results: dict[str, tuple[str, str]]) -> str:
+    parts = []
+    for host in hosts:
+        if host not in results:
+            parts.append(f"{host} did not answer within {NETWORK_SECONDS} s")
+        else:
+            kind, note = results[host]
+            shown = {"missing": "unreachable", "inconclusive": "answered with an error"}
+            parts.append(
+                f"{host} {shown.get(kind, kind)}" + (f" ({note})" if note else "")
+            )
+    unverified = ["codeload.github.com (archive downloads)"]
+    if any(os.environ.get(v) for v in ("UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_INDEX")):
+        unverified.append("the uv index set in the environment")
+    return "; ".join(parts) + "; unverified: " + ", ".join(unverified)
+
+
+PROJECT_GATES = {
+    "ballast-toml": EVERY,
+    "standard-fetched": EVERY[1:],
+    "cli-version": EVERY,
+    "setup-current": EVERY[1:],
+    "trust": ("ballast run", "ballast ledger"),
+}
+TRUST = "review the checkout, then run `ballast trust`"
+PIN_REMEDY = (
+    'set [standard] ref = "vX.Y.Z" (a tag or commit of the standard) in ballast.toml'
+)
+PROBE_FILES = ("tools/setup", "tools/spec_workflow/launcher.py")
+
+
+def manifest(standard: Path) -> tuple[tuple[int, ...] | None, set[str], str | None]:
+    """Read `(minimum, probes, error)` from a standard's tools/cli.toml, as data."""
+    path = standard / "tools/cli.toml"
+    if not path.is_file():
+        return None, set(), None
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        minimum = data.get("cli", {}).get("minimum")
+        probes = data.get("doctor", {}).get("probes", [])
+    except (OSError, ValueError, AttributeError) as error:
+        return None, set(), f"cannot read tools/cli.toml: {error}"
+    parsed = semver(minimum) if isinstance(minimum, str) else None
+    if (minimum is not None and parsed is None) or not (
+        isinstance(probes, list) and all(isinstance(p, str) for p in probes)
+    ):
+        error = "tools/cli.toml has an invalid [cli] minimum or [doctor] probes"
+        return None, set(), error
+    return parsed, set(probes), None
+
+
+def _cli_version(minimum: tuple[int, ...] | None, error: str | None) -> Outcome:
+    if error:
+        remedy = "pin a released version of the standard, then run `ballast setup`"
+        return "inconclusive", error, remedy
+    if minimum is None or minimum <= semver(VERSION):
+        return "passing", f"v{VERSION} meets the pinned version's minimum"
+    wanted = "v" + ".".join(map(str, minimum))
+    remedy = (
+        f"{install_line(wanted)}  (if {wanted} is not published yet, the pin needs "
+        "an unreleased CLI: pin a release instead)"
+    )
+    return (
+        "missing",
+        f"the pinned version needs CLI {wanted}; this is v{VERSION}",
+        remedy,
+    )
+
+
+def _probe_boundary(context: Context) -> tuple[str, str] | None:
+    """Why the standard's probes must not run, if they must not."""
+    standard = context.standard
+    if context.local:
+        remedy = "unset BALLAST_STANDARD_DIR to check the pinned version"
+        return "local standard: probes not executed", remedy
+    paths = [standard, *(standard / p for p in PROBE_FILES)]
+    if any(in_working_tree(p.resolve(), context.excluded) for p in paths):
+        remedy = (
+            f"remove {standard}, then run `ballast setup` with XDG_DATA_HOME "
+            "outside any checkout"
+        )
+        return "standard directory resolves into a working tree", remedy
+    return None
+
+
+def _setup_current(context: Context, probes: set[str]) -> Outcome:
+    if "setup-check" not in probes:
+        remedy = "run `ballast setup` if you have not since changing the pin"
+        return (
+            "inconclusive",
+            "freshness not checked: pinned version predates doctor",
+            remedy,
+        )
+    setup = (context.standard / PROBE_FILES[0]).resolve()
+    command = [
+        PYTHON,
+        "-I",
+        "-S",
+        str(setup),
+        "--project",
+        str(context.root),
+        "--check",
+    ]
+    result = probe(command)
+    if result is None:
+        return "inconclusive", f"setup --check {SLOW}", "ballast setup"
+    state = result.stdout.strip() or result.stderr.strip()
+    if result.returncode == 0:
+        return "passing", f"setup is {state}"
+    if result.returncode == 1:
+        return "missing", f"setup is {state}", "ballast setup"
+    return "inconclusive", f"setup --check failed: {state}", "ballast setup"
+
+
+def _trust(context: Context, probes: set[str]) -> Outcome:
+    if "launcher-status" not in probes:
+        return (
+            "inconclusive",
+            "trust not checked: pinned version predates doctor",
+            TRUST,
+        )
+    launcher = (context.standard / PROBE_FILES[1]).resolve()
+    command = [PYTHON, "-I", "-S", str(launcher), "status", "--json"]
+    result = probe(command, cwd=context.root)
+    try:
+        status = json.loads(result.stdout) if result.returncode == 0 else None
+        installed, refusal = status["installed"], status["refusal"]
+    except (AttributeError, TypeError, KeyError, ValueError):
+        detail = f"launcher status {SLOW if result is None else 'was unreadable'}"
+        return "inconclusive", detail, TRUST
+    if not installed:
+        return (
+            "missing",
+            "the workflow is not installed in this checkout",
+            "ballast setup",
+        )
+    if refusal is None:
+        return "passing", "the launcher accepts this checkout"
+    remedy = TRUST
+    if "BALLAST_TAMPERED" in refusal:
+        remedy = "restore the checkout and delete BALLAST_TAMPERED, then " + TRUST
+    elif "did not finish" in refusal:
+        remedy = "review the checkout, run `ballast discard-runs`, then `ballast trust`"
+    return "missing", f"launcher will refuse: {refusal}", remedy
+
+
+def project_checks(context: Context) -> list[Check]:
+    """Check the pin, the fetched version, the CLI minimum, setup and trust."""
+    results: dict[str, Outcome] = {}
+
+    def finish(skipped: str) -> list[Check]:
+        checks = []
+        for name, gates in PROJECT_GATES.items():
+            status, detail, *remedy = results.get(name, ("skipped", skipped))
+            shown = list(gates) if name in results else []
+            checks.append(Check(name, "project", status, shown, detail, *remedy))
+        return checks
+
+    if not context.project:
+        return finish("no ballast.toml found")
+    if context.pin_error:
+        results["ballast-toml"] = ("missing", context.pin_error, PIN_REMEDY)
+        return finish("after fixing ballast.toml")
+    results["ballast-toml"] = ("passing", f"ref {context.ref}")
+    if context.local and not (context.standard / "tools").is_dir():
+        detail = f"local standard {context.standard} is not a checkout of the standard"
+        remedy = "set BALLAST_STANDARD_DIR to a checkout of the standard, or unset it"
+        results["standard-fetched"] = ("missing", detail, remedy)
+        return finish("after fixing BALLAST_STANDARD_DIR")
+    if context.local:
+        results["standard-fetched"] = (
+            "passing",
+            f"using local standard {context.standard}",
+        )
+    elif not context.standard.is_dir():
+        detail = f"standard {context.ref} is not fetched"
+        results["standard-fetched"] = ("missing", detail, "ballast setup")
+        return finish("after `ballast setup`")
+    else:
+        results["standard-fetched"] = ("passing", str(context.standard))
+    minimum, probes, error = manifest(context.standard)
+    results["cli-version"] = _cli_version(minimum, error)
+    boundary = _probe_boundary(context)
+    if boundary:
+        results["setup-current"] = results["trust"] = ("inconclusive", *boundary)
+    else:
+        results["setup-current"] = _setup_current(context, probes)
+        results["trust"] = _trust(context, probes)
+    return finish("")
+
+
+def context_for(root: Path) -> Context:
+    """Read what doctor needs about the cwd, without writing anything."""
+    project = (root / "ballast.toml").is_file()
+    excluded = tuple(
+        p.resolve() for p in (root if project else None, git_root(root)) if p
+    )
+    ref, error = read_pin(root) if project else (None, None)
+    local = os.environ.get("BALLAST_STANDARD_DIR")
+    standard = Path(local).absolute() if local else ref and standard_dir(ref)
+    return Context(root, project, excluded, ref, error, standard, bool(local))
+
+
+def diagnose(root: Path) -> tuple[Context, list[Check]]:
+    """Run every check concurrently; each has its own time limit."""
+    context = context_for(root)
+    network = start_network(context)
+    with ThreadPoolExecutor(max_workers=len(MACHINE_CHECKS) + 1) as pool:
+        futures = {
+            name: pool.submit(check, context)
+            for name, _, _, check in MACHINE_CHECKS
+            if check is not None
+        }
+        project = pool.submit(project_checks, context)
+        checks = []
+        for name, gates, remedy, _ in MACHINE_CHECKS:
+            status, detail, *override = (
+                network() if name == "network" else futures[name].result()
+            )
+            fix = (
+                None if status in {"passing", "skipped"} else (override or [remedy])[0]
+            )
+            checks.append(Check(name, "machine", status, list(gates), detail, fix))
+        checks += project.result()
+    return context, checks
+
+
+def render(context: Context, checks: list[Check]) -> tuple[str, list[str], int]:
+    """Build the human report, the blocked commands and the number of gaps."""
+    blocking = [c for c in checks if c.status in BLOCKING]
+    blocked = sorted({gate for check in blocking for gate in check.gates})
+    pin = f" (pinned {context.ref})" if context.ref else ""
+    if context.local:
+        pin += f", using local standard {context.standard}"
+    lines = [f"Ballast doctor (CLI v{VERSION})", ""]
+    for scope, title in (
+        ("machine", "Machine"),
+        ("project", f"Project {context.root}{pin}"),
+    ):
+        lines.append(title if scope == "machine" or context.project else "Project")
+        for check in (c for c in checks if c.scope == scope):
+            label = "ok" if check.status == "passing" else check.status
+            lines.append(f"  {label:<13}{check.name:<17}{check.detail}")
+            if check.status not in {"passing", "skipped"}:
+                lines.append(f"{'':<32}needed by: {', '.join(check.gates)}")
+                lines.append(f"{'':<32}fix: {check.remedy}")
+    lines.append("")
+    if blocked:
+        gaps = f"{len(blocking)} gap{'s' if len(blocking) > 1 else ''}"
+        lines.append(f"Blocked: {', '.join(blocked)} ({gaps}).")
+    else:
+        lines.append("Everything Ballast needs is in place.")
+    return "\n".join(lines) + "\n", blocked, len(blocking)
+
+
+def doctor(argv: list[str]) -> int:
+    """Report every prerequisite, read-only; exit 1 when a command is blocked."""
+    parser = argparse.ArgumentParser(prog="ballast doctor")
+    parser.add_argument("--json", action="store_true")
+    arguments = parser.parse_args(argv)
+    context, checks = diagnose(Path.cwd())
+    text, blocked, _ = render(context, checks)
+    if arguments.json:
+        report = {
+            "schema": 1,
+            "cli_version": VERSION,
+            "project": str(context.root) if context.project else None,
+            "standard": {
+                "ref": context.ref,
+                "path": None if context.standard is None else str(context.standard),
+                "local": context.local,
+            },
+            "checks": [check._asdict() for check in checks],
+            "verdict": "blocked" if blocked else "ok",
+            "blocked": blocked,
+        }
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+    else:
+        sys.stdout.write(text)
+    return 1 if blocked else 0
+
+
 def main(argv: list[str]) -> int:
     """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
     if not argv:
-        fail("usage: ballast setup | trust | run ... | ledger ...")
+        fail(USAGE)
+    if argv[0] == "--version":
+        sys.stdout.write(f"v{VERSION}\n")
+        return 0
+    if argv[0] == "self-install":
+        return self_install(argv[1:])
+    if argv[0] == "doctor":
+        return doctor(argv[1:])
     root = Path.cwd()
     local = os.environ.get("BALLAST_STANDARD_DIR")
     if local:
@@ -87,14 +911,14 @@ def main(argv: list[str]) -> int:
         standard = standard_dir(ref)
         if not standard.is_dir():
             if argv[0] != "setup":
-                fail(f"standard {ref} is not fetched; run `ballast setup`")
+                fail(f"standard {ref} is not fetched; run `ballast setup`{DOCTOR_HINT}")
             fetch(ref, standard)
     if argv[0] == "setup":
         tool = standard / "tools/setup"
         os.execv(PYTHON, [PYTHON, str(tool), "--project", str(root), *argv[1:]])  # noqa: S606
     launcher = standard / "tools/spec_workflow/launcher.py"
     if not launcher.is_file():
-        fail(f"{standard} has no launcher")
+        fail(f"{standard} has no launcher{DOCTOR_HINT}")
     os.execv(PYTHON, [PYTHON, "-IS", str(launcher), *argv])  # noqa: S606
     return 1
 

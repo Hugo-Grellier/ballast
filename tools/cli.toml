@@ -1,0 +1,11 @@
+# What this standard version needs from the global `ballast` command.
+# `ballast doctor` reads this file as data and never executes it.
+
+[cli]
+# Bump only when this standard relies on a CLI behaviour added after it.
+minimum = "0.1.0"
+
+[doctor]
+# Read-only probes this version supports: `tools/setup --check` and
+# `tools/spec_workflow/launcher.py status --json`.
+probes = ["setup-check", "launcher-status"]
