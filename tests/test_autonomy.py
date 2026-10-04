@@ -835,6 +835,13 @@ class GitHelperTests(AutonomyCase):
 class ConfinementTests(AutonomyCase):
     """AC-016, SC-005: agent steps run under a read-only host."""
 
+    def setUp(self) -> None:
+        super().setUp()
+        # These tests inspect the argv and never run bwrap; CI has none, so
+        # give the trusted resolver a stand-in when no real copy exists.
+        if autonomy.trusted_program("bwrap", self.root)[0] is None:
+            _install(Path("/bin/true"), self.bin / "bwrap")
+
     def argv(self, home: Path | None = None) -> list[str]:
         private = self.base / "private"
         private.mkdir(exist_ok=True)
