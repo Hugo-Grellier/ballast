@@ -12,3 +12,11 @@ extra_allow = [
 
 [github]
 repository = "Hugo-Grellier/ballast"
+
+[checks]
+commands = [
+  "uvx ruff check",
+  "uvx ruff format --check",
+  "uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py",
+]
+timeout_minutes = 30
