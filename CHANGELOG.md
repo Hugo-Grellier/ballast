@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Hugo-Grellier/ballast/compare/v0.3.0...v0.4.0) (2026-10-04)
+
+
+### Features
+
+* **run:** run eligible features to a Draft PR with provisional Autonomous decisions ([#39](https://github.com/Hugo-Grellier/ballast/issues/39)) ([9d4c866](https://github.com/Hugo-Grellier/ballast/commit/9d4c866a7969c856cc05e7d7d941f1ab5ee71e81))
+
 ## [0.3.0](https://github.com/Hugo-Grellier/ballast/compare/v0.2.0...v0.3.0) (2026-10-04)
 
 

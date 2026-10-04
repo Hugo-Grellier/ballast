@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 REPOSITORY = "Hugo-Grellier/ballast"
-VERSION = "0.3.0"  # x-release-please-version
+VERSION = "0.4.0"  # x-release-please-version
 ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PYTHON = "/usr/bin/python3"
