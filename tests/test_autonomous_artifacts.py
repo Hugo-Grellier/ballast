@@ -128,7 +128,9 @@ class RecorderCase(AutonomyCase):
     def review_draft(
         self, point: str, kind: str, findings: list | None = None, **changes: object
     ) -> dict:
-        report = self.feature / "reviews" / f"{kind}.md"
+        # The report names of speckit.ballast.review's table.
+        name = "convergence" if kind == "spec-reconciliation" else kind
+        report = self.feature / "reviews" / f"{name}.md"
         if not report.exists():
             report.write_text(f"# {kind} review\n\nLooks consistent.\n")
         return self.draft(
@@ -136,7 +138,7 @@ class RecorderCase(AutonomyCase):
             review={
                 "kind": kind,
                 "verdict": "approved",
-                "report": f"{FEATURE}/reviews/{kind}.md",
+                "report": f"{FEATURE}/reviews/{name}.md",
                 "findings": findings or [],
                 **changes,
             },
@@ -952,6 +954,35 @@ class FinalAcceptanceTests(RecorderCase):
         self.ok(self.record("spec-reconciliation"))
         (self.root / "ballast.toml").write_text('[checks]\ncommands = ["true"]\n')
         self.ok(self.check("run-checks"))
+
+    def test_review_reports_follow_the_review_command_table(self) -> None:
+        """Every kind's report path matches speckit.ballast.review.md."""
+        table = (
+            TOOLS.parents[1]
+            / "templates/spec-kit/extensions/ballast/commands/speckit.ballast.review.md"
+        ).read_text()
+        self.assertIn(
+            "`<f>/reviews/convergence.md` (kind `spec-reconciliation`)", table
+        )
+        sys.path.insert(0, str(TOOLS))
+        try:
+            import artifacts  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        for kind in autonomy.REVIEW_KINDS:
+            name = "convergence" if kind == "spec-reconciliation" else kind
+            self.assertEqual(
+                artifacts.review_report("specs/1-x", kind),
+                f"specs/1-x/reviews/{name}.md",
+            )
+
+    def test_spec_reconciliation_report_is_convergence(self) -> None:
+        """Pilot: the recorder refused the report the review command names."""
+        self.all_points()  # Records spec-reconciliation with reviews/convergence.md.
+        self.assertFalse((self.feature / "reviews/spec-reconciliation.md").exists())
+        current = autonomy.current_decisions(self.decisions())
+        (entry,) = [e for e in current if e["point"] == "spec-reconciliation"]
+        self.assertEqual(entry["review"]["report"], f"{FEATURE}/reviews/convergence.md")
 
     def test_final_acceptance(self) -> None:
         self.all_points()

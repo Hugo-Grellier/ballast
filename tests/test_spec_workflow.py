@@ -1870,7 +1870,9 @@ def _draft(point: str, artifact: str, **changes: object) -> str:
 
 
 def _review(point: str, kind: str, findings: list | None = None) -> dict[str, str]:
-    report = f"{AUTO_FEATURE}/reviews/{kind}.md"
+    # The report names of speckit.ballast.review's table.
+    report_name = "convergence" if kind == "spec-reconciliation" else kind
+    report = f"{AUTO_FEATURE}/reviews/{report_name}.md"
     review = {
         "kind": kind,
         "verdict": "approved",
@@ -1879,7 +1881,8 @@ def _review(point: str, kind: str, findings: list | None = None) -> dict[str, st
     }
     name = f"{point}-{kind}.json" if point == "specialist-review" else f"{point}.json"
     return {
-        report: f"# {kind} review\n\nConsistent with the plan.\n",
+        report: f"# {kind} review\n\nConsistent with the plan.\n"
+        + ("\n- Verdict: CONVERGED\n" if report_name == "convergence" else ""),
         f"{AUTO_FEATURE}/autonomous/drafts/{name}": _draft(
             point, report, review=review
         ),
@@ -1915,12 +1918,7 @@ def _autonomous_plan() -> dict[str, dict[str, str]]:
         | _review("specialist-review", "security"),
         "speckit-ballast-review-spec-reconciliation": _review(
             "spec-reconciliation", "spec-reconciliation"
-        )
-        | {
-            f"{feature}/reviews/convergence.md": (
-                "# Convergence\n\n- Verdict: CONVERGED\n"
-            )
-        },
+        ),
         "speckit-ballast-decide-final-acceptance": decide(
             "final-acceptance", f"{feature}/tasks.md"
         ),

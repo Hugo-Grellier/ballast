@@ -831,6 +831,16 @@ def _string_list(value: object, name: str, limit: int = 20) -> list[str]:
     return sorted({" ".join(v.lower().split()) for v in value})
 
 
+# speckit.ballast.review writes each kind's report here; spec reconciliation
+# writes the convergence report that the `convergence` check reads.
+REPORT_NAMES = {"spec-reconciliation": "convergence"}
+
+
+def review_report(feature: str, kind: str) -> str:
+    """Repository-relative path of a review kind's report."""
+    return f"{feature}/reviews/{REPORT_NAMES.get(kind, kind)}.md"
+
+
 def _validate_review(  # noqa: C901, PLR0912 - one field per rule
     feature: Feature, review: object, point: str, step: dict
 ) -> dict:
@@ -845,7 +855,7 @@ def _validate_review(  # noqa: C901, PLR0912 - one field per rule
     if review.get("verdict") not in autonomy.VERDICTS:
         message = f"{kind} review has an unknown verdict"
         raise ContractError(message)
-    report = f"{feature.relative}/reviews/{kind}.md"
+    report = review_report(feature.relative, kind)
     if review.get("report") != report:
         message = f"{kind} review report must be {report}"
         raise ContractError(message)
