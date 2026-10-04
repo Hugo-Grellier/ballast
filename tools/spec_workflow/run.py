@@ -41,8 +41,8 @@ if __name__ == "__main__" and os.path.lexists(ROOT / TAMPER_MARKER):
     sys.stderr.write(TAMPER_MESSAGE)
     sys.exit(2)
 # Never read checkout bytecode: a headless agent may have planted it. The
-# trusted launcher starts this file under `-I`, which leaves this directory off
-# sys.path.
+# trusted launcher starts this file under `-I -S`, which leaves this directory
+# off sys.path and runs no site-packages startup code.
 sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

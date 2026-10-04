@@ -62,7 +62,7 @@ SCOPE_SECONDS = 10.0
 UNIT_NOT_ACTIVE = frozenset({3, 4})
 RUN_STATE = (".specify/workflows/runs", ".specify/workflow-state")
 EXIT_REFUSED = 2
-COMMANDS = {"run": ("-I", "run.py"), "ledger": ("-IS", "ledger.py")}
+COMMANDS = {"run": ("-IS", "run.py"), "ledger": ("-IS", "ledger.py")}
 
 
 def state_dir(root: Path) -> Path:
