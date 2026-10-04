@@ -1157,6 +1157,8 @@ class RecordRenderTests(unittest.TestCase):
         decisions = golden_decisions()
         record = autonomy.render_record(fixed_run(), decisions, None)
         self.assertIn("- run-checks: not run yet", record)
+        # Plan review: checks see git-ignored files that the PR does not carry.
+        self.assertIn(autonomy.IGNORED_FILES_NOTE, record)
         self.assertIn("- PD-0007 (decision-resolution, agent-provisional)", record)
         self.assertIn("| PD-0002 | intent |", record)
         self.assertIn("| PD-0008 |", record)

@@ -1849,6 +1849,12 @@ def _open_findings(decisions: list[dict]) -> list[str]:
     return [*lines, *(found or ["None."]), ""]
 
 
+IGNORED_FILES_NOTE = (
+    "- run-checks ran in the run's worktree, so git-ignored files there were "
+    "visible to them and are not part of this PR"
+)
+
+
 def _check_lines(checks: list[dict] | None) -> list[str]:
     lines = ["## Checks", ""]
     if checks is None:
@@ -1860,6 +1866,7 @@ def _check_lines(checks: list[dict] | None) -> list[str]:
             for c in checks
         ]
     lines += [
+        IGNORED_FILES_NOTE,
         "- agent-reported: none; agent claims never satisfy run-checks",
         "",
         "CI results appear on this PR.",

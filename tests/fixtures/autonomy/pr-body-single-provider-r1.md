@@ -91,6 +91,7 @@ Reduced independence: reviews used the authoring provider.
 ## Checks
 
 - runner: `true` exited 0 in 0.2s
+- run-checks ran in the run's worktree, so git-ignored files there were visible to them and are not part of this PR
 - agent-reported: none; agent claims never satisfy run-checks
 
 CI results appear on this PR.
