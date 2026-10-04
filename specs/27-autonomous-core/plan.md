@@ -107,6 +107,8 @@ Full rationale: [research.md](research.md).
 | D-5 | Whether Ballast's own `ballast.toml` narrows Autonomous to R0/R1 for this repository, given that `docs/policies/project/workflow.md` lists the launcher and permission model as R2 boundaries. | Decided (operator, 2026-10-03, option 3 on #11): no narrowing; R2 runs fully autonomous to the PR and is reviewed at merge. The plan amends `docs/policies/project/workflow.md` to scope its "before the change" rule to human-gated runs. |
 | D-6 | Constitution 1.1.0 adds BL-INV-006: "A provisional decision is never human approval; only merging the PR that contains it accepts it." | Accept (FR-030). |
 | D-7 | In Autonomous, every agent step (Claude and Codex) runs under `bwrap` with operator state and the ledger bound read-only; a missing `bwrap` or failed self-test refuses Autonomous (R-02). Human-gated runs unchanged. | Accepted (operator, 2026-10-03; plan review F-1). |
+| D-8 | A changed trusted input stays a launcher refusal before `run.py` runs; there is no `trust` block category. Only the publisher reports a `permission` block. | Accepted (operator, 2026-10-04; DEC-0002, DEC-0005). |
+| D-9 | When Codex's own sandbox cannot start inside Ballast's `bwrap`, a confined, offline probe at run start routes both roles to Claude and records the fallback; Codex never runs with its sandbox off. | Accepted (operator, 2026-10-04; DEC-0004). Running Codex unsandboxed under `bwrap` stays a possible R2 follow-up. |
 
 ## Repository Impact
 

@@ -46,3 +46,38 @@
 - **Label**: spec ambiguity.
 - **Proposal**: Keep the contract as is (agents never name a `permission` block; a missing permission inside a confined step surfaces as a failed step, hence `postcondition`), and narrow T045 and R-10 to the publisher source. Alternatively, allow `permission` in agent block drafts, which changes an approved contract.
 - **Needs**: human resolution (operator).
+
+## DEC-0001 — Resolution
+
+- **Status**: accepted by the operator, 2026-10-04 (human resolution).
+- **Resolution**: Keep `docs/adr/0003-autonomous-provisional-decisions.md` on this branch. The final ADR number is settled at merge against `feat-github-draft-pr`'s `0003-launcher-github-authority.md`: whichever branch merges second renumbers its ADR and updates its references in `plan.md`, `tasks.md` and the ADR.
+- **Changed now**: nothing.
+- **Tests**: none (artifact numbering only).
+
+## DEC-0002 — Resolution
+
+- **Status**: accepted by the operator, 2026-10-04 (human resolution).
+- **Resolution**: A changed trusted input stays a launcher refusal (`ballast: refusing:` before `run.py` executes); there is no `trust` block category.
+- **Changed**: `trust` removed from `BLOCK_CATEGORIES` and `RECOVERY` in `tools/spec_workflow/autonomy.py`, so a block naming it is refused; the block schema in `data-model.md`, research R-10, plan decision D-8 and tasks T045 and T046 updated.
+- **Tests**: `BlockRecordTests.test_no_trust_block` (`tests/test_autonomy.py`); `AutonomousBlockEngineTests.test_trust` (`tests/test_spec_workflow.py`) is T046's evidence for the refusal. T045 and T046 ticked.
+
+## DEC-0003 — Resolution
+
+- **Status**: accepted by the operator, 2026-10-04 (human resolution).
+- **Resolution**: Under real confinement an agent edit to `ballast.toml` is refused at the filesystem; the wrapper's exit 4 is the second guard behind a confinement hole.
+- **Changed**: T048's text now names both tests as its evidence; no code change.
+- **Tests**: `AutonomousConfinementEngineTests.test_agent_writes_change_nothing_operator_side` (real `bwrap`, both integrations) and `AutonomousBlockEngineTests.test_tamper` (exit 4, `tamper` block). T048 ticked.
+
+## DEC-0004 — Resolution
+
+- **Status**: accepted by the operator, 2026-10-04 (human resolution): option 2.
+- **Resolution**: Codex's sandbox is never disabled. Whenever Codex would take either role, `run.py` probes once at run start (the result is kept in the run record for the whole run): `autonomy.codex_sandbox_nests()` runs `codex sandbox -c sandbox_mode="workspace-write" -c sandbox_workspace_write.network_access=false -- true` inside Ballast's `bwrap` with `--unshare-net`. If it fails, Claude takes both the author and reviewer roles (`cross_provider: false`), the run record gets `integration_fallback` with the fixed reason `autonomy.CODEX_FALLBACK`, the start output prints it and `record.md` renders it. A host without `claude` is refused with the same reason. Option 1 (Codex unsandboxed under `bwrap`) stays a possible R2 follow-up.
+- **Changed**: `tools/spec_workflow/autonomy.py` (`CODEX_FALLBACK`, `codex_sandbox_nests`, run-record validation, record rendering), `tools/spec_workflow/run.py` (`_start_autonomous`), `templates/policies/spec-kit-workflow.md` (review row), plan decision D-9, research R-07 review routing, `data-model.md` (`integration_fallback`), `contracts/cli.md`, tasks T067 and new T067a.
+- **Tests**: `RunStartTests.test_nested_codex_sandbox_keeps_cross_provider_review`, `test_codex_without_nested_sandbox_falls_back_to_claude` (failed before the fallback existed: the workflow got `review_integration=codex` or `integration=codex`), `test_codex_only_host_without_nested_sandbox_is_refused` and `test_no_probe_without_codex` (`tests/test_autonomous_run.py`); `CodexNestedSandboxTests.test_probe_reports_no_nested_sandbox` (`tests/test_spec_workflow.py`, real `codex` and `bwrap`, skipped unless `apparmor_restrict_unprivileged_userns=1`), which passes on the qualified host (bwrap 0.11.1), where the probe fails with `bwrap: No permissions to create a new namespace`. T067 and T067a ticked.
+
+## DEC-0005 — Resolution
+
+- **Status**: accepted by the operator, 2026-10-04 (human resolution).
+- **Resolution**: Only the publisher reports a `permission` block (`gh` missing or unauthenticated at publication). The block-draft contract is unchanged: agents report only `decision` or `contradiction`, and a missing permission inside a confined step fails the step.
+- **Changed**: T045 and research R-10 narrowed to the publisher source; `contracts/decision-draft.md` states that agents never report `permission`.
+- **Tests**: `RunBlockTests.test_publisher_permission_failure` (`tests/test_autonomous_run.py`), `AutonomousBlockEngineTests.test_permission` (`tests/test_spec_workflow.py`), and a new `permission` case in `BlockRecordTests.test_agent_block_draft_rules` (`tests/test_autonomy.py`) refusing it in an agent draft. T045 ticked.

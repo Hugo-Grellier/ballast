@@ -15,7 +15,7 @@ ballast run start [--mode human-gated|autonomous] [--wall-time MINUTES] [--max-a
   - `-i issue=N` is required and must match the number in `feature_directory`.
   - `run.py` checks eligibility (data-model: Eligibility result).
   - It creates the run record with `status=active`.
-  - It sets `review_integration`.
+  - It sets `review_integration`. When Codex would take either role, it first probes once, confined and offline, whether Codex's own sandbox starts inside Ballast's `bwrap`; if not, Claude takes both roles, `integration_fallback` is recorded and the start prints `ballast: codex cannot start its own sandbox inside Ballast's confinement; claude takes both roles (DEC-0004)` (DEC-0004).
   - It starts `ballast-autonomous` with inputs `idea`, `feature_directory`, `integration` and `review_integration`.
   - Mode, limits and eligibility are not workflow inputs.
 - The current branch must not be the repository's default branch, and no open PR may exist for it (it is checked again at publish).
@@ -31,6 +31,7 @@ ballast run start [--mode human-gated|autonomous] [--wall-time MINUTES] [--max-a
 | Unauthorized pre-merge privileged action | `not eligible for autonomous: privileged action <a> before merge` |
 | `gh` unavailable or the query failed | `cannot check autonomous eligibility: <cause>` (fails closed) |
 | Default branch or existing PR | `autonomous needs a feature branch without an open PR` |
+| Codex's sandbox cannot nest and `claude` is not on `PATH` | `codex cannot start its own sandbox inside Ballast's confinement; ... but claude is not on PATH` |
 
 Each refusal ends with: `Run it human-gated instead: ballast run start -i idea=... -i feature_directory=...`. Widening keys found in `ballast.toml` are printed as `ignored [autonomous] <key>: cannot widen eligibility`.
 

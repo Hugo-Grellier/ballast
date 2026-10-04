@@ -55,7 +55,7 @@ Fields the runner owns (`id`, `prev`, `at`, `provider`, `step_id`, `role`) are i
 }
 ```
 
-`category` is `decision` or `contradiction`. Two or more options are required. A `decision` block also needs a reason why no safe, reversible default exists. `run.py` adds the `command` field and moves the block into `block.json` in operator state. No provisional decision is recorded for the blocked point (AC-011). A clarification that finds several independent outcomes uses `category: decision` and recommends decomposition. It never creates Issues.
+`category` is `decision` or `contradiction`; agents never report a `permission` block, which only the publisher records (DEC-0005). Two or more options are required. A `decision` block also needs a reason why no safe, reversible default exists. `run.py` adds the `command` field and moves the block into `block.json` in operator state. No provisional decision is recorded for the blocked point (AC-011). A clarification that finds several independent outcomes uses `category: decision` and recommends decomposition. It never creates Issues.
 
 ## Provisional decision resolution in `decisions.md` (Autonomous only)
 

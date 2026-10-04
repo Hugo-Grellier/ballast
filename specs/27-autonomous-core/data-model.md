@@ -20,6 +20,7 @@ Committed projections live in the feature directory: `specs/<f>/autonomous/recor
 | `limits` | Limits | Autonomous only |
 | `agent_steps` | int | ≥0; incremented by the wrapper before each agent step |
 | `integration`, `review_integration` | str | `claude` or `codex`; `cross_provider` is a bool |
+| `integration_fallback` | str, optional | Present only when Codex's own sandbox could not start inside Ballast's confinement at run start, so Claude took both roles; holds the fixed reason (DEC-0004) |
 | `continues` | str or null | Source run ID for a `ballast-continue` run |
 | `started_at` | str | ISO-8601 UTC |
 
@@ -96,7 +97,7 @@ Invariants:
 
 ## Block: `block.json`
 
-`{ "category": "decision"|"contradiction"|"review-finding"|"limit"|"postcondition"|"tamper"|"unfinished-step"|"trust"|"permission"|"ineligible"|"forge"|"interrupted", "step_id": str|null, "condition": str, "options": [{ "option": str, "consequence": str }], "recovery": str, "command": str, "evidence": [path], "at": ISO }`
+`{ "category": "decision"|"contradiction"|"review-finding"|"limit"|"postcondition"|"tamper"|"unfinished-step"|"permission"|"ineligible"|"forge"|"interrupted", "step_id": str|null, "condition": str, "options": [{ "option": str, "consequence": str }], "recovery": str, "command": str, "evidence": [path], "at": ISO }`
 
 - Only one current block exists per run, and a new one replaces the old. Earlier blocks are kept in `blocks.jsonl`.
 - `decision` and `contradiction` blocks come from the agent draft `drafts/block.json` and must list at least two options.
