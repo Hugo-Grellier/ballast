@@ -9,3 +9,6 @@ extra_allow = [
   "Bash(uvx ruff format*)",
   "Bash(uv run --no-project --python 3.13 --with pyyaml python -m unittest *)",
 ]
+
+[github]
+repository = "Hugo-Grellier/ballast"
