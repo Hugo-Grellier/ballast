@@ -1393,11 +1393,18 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
         for finding in review["findings"]
         if finding["severity"] in autonomy.BLOCKING_SEVERITIES
     ]
+    # Only an approved review lets the run proceed; any other verdict stops it.
+    blocking += [
+        f"{review['kind']} verdict {review['verdict']}"
+        for review in reviews
+        if review["verdict"] != "approved"
+    ]
     if blocking:
         _block(
             feature,
             "review-finding",
-            "unresolved high or critical review findings: " + ", ".join(blocking),
+            "reviews block the run (high or critical findings, or a verdict "
+            "other than approved): " + ", ".join(blocking),
             evidence=sorted({review["report"] for review in reviews}),
         )
     for review in reviews:

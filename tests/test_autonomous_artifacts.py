@@ -541,6 +541,27 @@ class ReviewRecorderTests(RecorderCase):
                         path.unlink()
                     autonomy.consume_steps(self.root, "run42")
 
+    def test_only_an_approved_verdict_proceeds(self) -> None:
+        """Review F5: a failed or partial review blocks, even with no finding."""
+        for verdict in ("failed", "changes-requested", "partial"):
+            with self.subTest(verdict=verdict):
+                self.step(
+                    {
+                        "plan-review.json": self.review_draft(
+                            "plan-review", "plan", verdict=verdict
+                        )
+                    },
+                    role="reviewer",
+                )
+                result = self.record("plan-review")
+                self.failed(result, "review-finding block")
+                self.assertIn(f"plan verdict {verdict}", result.stderr)
+                self.assertEqual(self.block()["category"], "review-finding")
+                self.assertEqual(self.decisions(), [])
+                for path in (self.feature / "autonomous/drafts").iterdir():
+                    path.unlink()
+                autonomy.consume_steps(self.root, "run42")
+
     def test_medium_rules(self) -> None:
         for finding, text in (
             (self.finding("medium", "accepted-provisionally", None), "needs a reason"),

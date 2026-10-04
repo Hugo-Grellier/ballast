@@ -61,7 +61,7 @@ Write each draft under `<f>/autonomous/drafts/`:
 ```
 
 - `point` is `plan-review`, `implementation-review` (kind `engineering`), `specialist-review` (every other implementation-time kind) or `spec-reconciliation`.
-- `verdict`: `approved`, `changes-requested`, `partial` or `failed`.
+- `verdict`: `approved`, `changes-requested`, `partial` or `failed`. Only `approved` lets the run continue; any other verdict stops it for a human, with or without findings.
 - Every finding: `id` (`F-NNN`), `severity` (`critical`, `high`, `medium`, `low`, `info`), `label` (`spec-violation`, `implementation-bug`, `architecture-issue`, `missing-test`, `spec-ambiguity`, `proposed-product-change`), `disposition` and `reason`.
 - Report every `critical` or `high` finding honestly: it stops the run for a human, whatever disposition you give it. A `medium` finding may be `accepted-provisionally` only with a reason. `open` is allowed only for `low` and `info`.
 - `required_kinds` lists further review kinds the change needs (for example `documentation`).
