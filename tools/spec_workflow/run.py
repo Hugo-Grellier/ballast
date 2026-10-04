@@ -395,8 +395,9 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         return EXIT_REFUSED
     try:
         autonomy.write_issue_snapshot(ROOT, result["issue"], result["scope_comment"])
+        autonomy.write_feature_json(ROOT, feature)
     except (autonomy.AutonomyError, OSError, ValueError, KeyError) as error:
-        return _refuse(f"cannot write the Issue snapshot: {error}")
+        return _refuse(f"cannot write the run's Issue snapshot or feature: {error}")
     snapshot = autonomy.issue_snapshot_path(issue)
     run_id = uuid.uuid4().hex[:8]
     record = autonomy.new_run(

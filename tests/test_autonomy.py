@@ -148,7 +148,9 @@ class AutonomyCase(unittest.TestCase):
         self.enterContext(patch.object(ledger, "agent_temp_roots", tuple))
         self.git("init", "-q")
         (self.root / ".gitignore").write_text(
+            # What tools/setup ignores under .specify/ that runs write.
             ".specify/workflow-state/\n.specify/workflows/runs/\n"
+            ".specify/feature.json\n"
         )
         (self.root / ".specify").mkdir()
         (self.root / ".specify/memory").mkdir()
@@ -1324,6 +1326,26 @@ class IssueSnapshotTests(AutonomyCase):
         self.assertFalse(target.exists())
         self.assertFalse(path.is_symlink())
         self.assertIn("- works", path.read_text())
+
+
+class FeatureJsonTests(AutonomyCase):
+    """The run's feature directory for Spec Kit's scripts."""
+
+    def test_replaces_another_feature(self) -> None:
+        path = self.root / ".specify/feature.json"
+        path.write_text('{"feature_directory": "specs/1-other"}\n')
+        autonomy.write_feature_json(self.root, FEATURE)
+        self.assertEqual(json.loads(path.read_text()), {"feature_directory": FEATURE})
+
+    def test_never_writes_through_a_symlink(self) -> None:
+        target = self.base / "elsewhere.json"
+        target.write_text("{}\n")
+        path = self.root / ".specify/feature.json"
+        path.symlink_to(target)
+        autonomy.write_feature_json(self.root, FEATURE)
+        self.assertEqual(target.read_text(), "{}\n")
+        self.assertFalse(path.is_symlink())
+        self.assertEqual(json.loads(path.read_text()), {"feature_directory": FEATURE})
 
 
 class RecordRenderTests(unittest.TestCase):

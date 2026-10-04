@@ -1896,18 +1896,33 @@ def issue_snapshot_path(issue: int) -> str:
     return f"{ISSUE_SNAPSHOT_DIR}/{issue}.md"
 
 
-def write_issue_snapshot(root: Path, issue: dict, scope_comment: str) -> Path:
-    """Write the snapshot under `.specify/`, which agent steps see read-only."""
-    path = root / issue_snapshot_path(int(issue["number"]))
+def _replace_file(path: Path, text: str) -> Path:
+    """Write text to path by rename: replaces a symlink, never writes through it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.parent.is_symlink():
         message = f"{path.parent} must not be a symlink"
         raise AutonomyError(message)
-    staged = path.with_suffix(".tmp")
+    staged = path.with_name(path.name + ".tmp")
     staged.unlink(missing_ok=True)
-    staged.write_text(render_issue_snapshot(issue, scope_comment), encoding="utf-8")
-    staged.replace(path)  # Replaces a symlink, never writes through it.
+    staged.write_text(text, encoding="utf-8")
+    staged.replace(path)
     return path
+
+
+def write_issue_snapshot(root: Path, issue: dict, scope_comment: str) -> Path:
+    """Write the snapshot under `.specify/`, which agent steps see read-only."""
+    path = root / issue_snapshot_path(int(issue["number"]))
+    return _replace_file(path, render_issue_snapshot(issue, scope_comment))
+
+
+def write_feature_json(root: Path, feature: str) -> Path:
+    """Point `.specify/feature.json` at the run's feature, replacing an earlier one.
+
+    Spec Kit's scripts read it; one left by another feature's run sent the
+    agents to the wrong directory.
+    """
+    text = json.dumps({"feature_directory": feature}) + "\n"
+    return _replace_file(root / ".specify/feature.json", text)
 
 
 def raise_risk(record: dict, level: str | None, boundaries: list[str], pd: str) -> bool:

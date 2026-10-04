@@ -414,6 +414,15 @@ class RunStartTests(RunCase):
         self.assertIn(".specify/workflow-state/issues/27.md", idea)
         self.assertIn("acceptance criteria", idea)
 
+    def test_start_replaces_a_stale_feature_json(self) -> None:
+        """Pilot: feature.json from an earlier feature broke Spec Kit scripts."""
+        path = self.root / ".specify/feature.json"
+        path.write_text('{"feature_directory": "specs/1-titlecase"}\n')
+        self.engine["scenario"] = self.publishable
+        code, _, err = self.start()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(path.read_text()), {"feature_directory": FEATURE})
+
     def test_single_provider_review(self) -> None:
         which = run.shutil.which
         self.engine["scenario"] = self.publishable
