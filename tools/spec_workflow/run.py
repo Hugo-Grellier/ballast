@@ -16,10 +16,16 @@ output only in run state.
 After every start or resume it archives the run under
 `<git common dir>/speckit-runs/<run>/`, local to the clone and shared by its
 worktrees. The full run state and agent logs stay outside Git tracking.
+
+Then it runs the Draft PR checkpoint (draft_pr.py, imported here before any
+agent step) and prints its one-line outcome; nothing the checkpoint does
+changes the exit status. The workflow engine, and so every agent step, never
+receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -46,6 +52,7 @@ if __name__ == "__main__" and os.path.lexists(ROOT / TAMPER_MARKER):
 sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import draft_pr  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
 BIN = ROOT / ".ballast/spec_workflow/bin"
@@ -104,7 +111,7 @@ def _record(root: Path, run_id: str, exit_status: int | None = None) -> None:
             pending.replace(archive / "invocation.json")
 
 
-def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
+def main(argv: list[str]) -> int:  # noqa: C901, PLR0912, PLR0915 - Preserve runner exit.
     """Launch Spec Kit with the wrapper environment."""
     if len(argv) < 1 or argv[0] not in {"start", "resume"}:
         sys.stderr.write(__doc__ or "")
@@ -139,7 +146,11 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
         run_id = options[0]
         command = [specify, "workflow", "resume", *options]
     env = {
-        **os.environ,
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in draft_pr.TOKEN_VARIABLES
+        },
         "BALLAST_SPEC_WORKFLOW": "1",
         "SPECKIT_WORKFLOW_RUN_ID": run_id,
         "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(BIN / "claude"),
@@ -147,6 +158,12 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
     }
     if argv[0] == "start":
         archive_policy(ROOT, run_id)
+        # Before any agent step can change HEAD or .git/config (DEC-0006).
+        with contextlib.suppress(Exception):  # The checkpoint reports it unpinned.
+            pinned = draft_pr.pin_branch(ROOT, run_id)
+            if pinned:
+                # The operator sees which branch the run's PR will follow.
+                sys.stdout.write(f"Draft PR: branch pinned: {pinned}\n")
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(command, cwd=ROOT, env=env, check=False)  # noqa: S603
@@ -193,6 +210,14 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912 - Preserve runner exit.
             sys.stderr.write(f"workflow ledger import failed: {error}\n")
             if status == 0:
                 status = 1
+        # Never assigns status: a PR failure must not change the run's result.
+        try:
+            line = draft_pr.format_line(draft_pr.checkpoint(ROOT, run_id))
+        except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
+            line = (
+                f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
+            )
+        sys.stdout.write(line + "\n")
     return status
 
 
