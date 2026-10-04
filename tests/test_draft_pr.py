@@ -496,7 +496,11 @@ class IdentityTests(CheckpointCase):
         # at start, so the branch must be published under its own name.
         git(self.repo.root, "config", "branch.feat-x.merge", "refs/heads/other-name")
         draft_pr.pin_branch(self.repo.root, RUN)
-        self.assertOutcome(self.check(), "blocked-unlinked", "branch-mismatch")
+        outcome = self.check()
+        # Not published under its own name: push it there (live check: a
+        # worktree branch created from origin/main tracks main).
+        self.assertOutcome(outcome, "pending", "not-published")
+        self.assertIn("git push -u origin feat-x", outcome.remedy)
         self.assertEqual(self.fake.gh_calls(), [])
 
     def test_run_without_a_branch_pin_is_unlinked(self) -> None:
@@ -518,7 +522,7 @@ class IdentityTests(CheckpointCase):
 
     def test_upstream_redirected_after_start_is_refused(self) -> None:
         git(self.repo.root, "config", "branch.feat-x.merge", "refs/heads/victim")
-        self.assertOutcome(self.check(), "blocked-unlinked", "branch-mismatch")
+        self.assertOutcome(self.check(), "pending", "not-published")
         self.assertEqual(self.fake.gh_calls(), [])
 
     def test_branch_pin_lives_outside_the_checkout(self) -> None:

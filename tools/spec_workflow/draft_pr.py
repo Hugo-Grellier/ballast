@@ -536,7 +536,7 @@ class _Checkpoint:
                 "not-published",
                 fill={"remote": remote or "origin", "branch": branch},
             )
-        self.pinned_branch(branch, published)
+        self.pinned_branch(branch, published, remote)
         run.remote, run.published = remote, published
         result = self.git("remote", "get-url", remote)
         match = GITHUB_REMOTE.fullmatch(result.stdout.strip())
@@ -565,13 +565,18 @@ class _Checkpoint:
         if base == published:
             self.stop("pending", "on-base-branch")
 
-    def pinned_branch(self, branch: str, published: str) -> None:
+    def pinned_branch(self, branch: str, published: str, remote: str) -> None:
         """Accept only the branch and upstream recorded at `ballast run start`."""
         pin = _branch_pin(self.run.root, self.run.run_id)
         if pin is None:
             self.stop("blocked-unlinked", "branch-unpinned")
-        if branch != pin or published != pin:
+        if branch != pin:
             self.stop("blocked-unlinked", "branch-mismatch", fill={"branch": pin})
+        if published != pin:
+            # Published elsewhere, or tracking another branch such as main.
+            self.stop(
+                "pending", "not-published", fill={"remote": remote, "branch": pin}
+            )
 
     def pinned(self, owner: str, repo: str) -> tuple[str, str]:
         """Accept the upstream only when it is the repository pinned in ballast.toml."""
