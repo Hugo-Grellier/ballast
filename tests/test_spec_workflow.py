@@ -2390,6 +2390,29 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
         self.assertEqual(autonomy.read_block(self.root, run_id), block)
 
 
+def _userns_restricted() -> bool:
+    flag = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+    try:
+        return flag.read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+@unittest.skipUnless(
+    shutil.which("codex") and _bwrap_works() and _userns_restricted(),
+    "needs codex, bwrap and a host that restricts unprivileged user namespaces",
+)
+class CodexNestedSandboxTests(AutonomyCase):
+    """DEC-0004: the probe sees that Codex's sandbox cannot nest here.
+
+    On a host that restricts unprivileged user namespaces, Codex's own sandbox
+    cannot start inside Ballast's bwrap.
+    """
+
+    def test_probe_reports_no_nested_sandbox(self) -> None:
+        self.assertFalse(autonomy.codex_sandbox_nests(self.root))
+
+
 class AutonomousConfinementEngineTests(AutonomousEngineCase):
     """T048 [AC-016, SC-005, FR-003]: agent writes change no operator state.
 

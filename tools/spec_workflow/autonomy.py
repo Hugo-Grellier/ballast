@@ -406,6 +406,10 @@ def validate_run(record: object, run_id: str) -> dict:
         isinstance(record.get("cross_provider"), bool),
         "run record has no cross-provider flag",
     )
+    _require(
+        record.get("integration_fallback") in {None, CODEX_FALLBACK},
+        "run record has an unknown integration fallback",
+    )
     continues = record.get("continues")
     _require(
         continues is None or bool(RUN_ID.fullmatch(str(continues))),
@@ -1478,6 +1482,49 @@ def confinement_self_test(root: Path, *, env: dict[str, str] | None = None) -> N
         raise AutonomyError(message, "ineligible")
 
 
+CODEX_FALLBACK = (
+    "codex cannot start its own sandbox inside Ballast's confinement; "
+    "claude takes both roles (DEC-0004)"
+)
+
+
+def codex_sandbox_nests(root: Path, *, env: dict[str, str] | None = None) -> bool:
+    """Whether Codex's workspace-write sandbox starts inside Ballast's bwrap.
+
+    Runs `true` under `codex sandbox` in a confined, network-less step, once
+    per run start. Any failure, including a missing codex, is False.
+    """
+    codex = shutil.which("codex")
+    if codex is None:
+        return False
+    env = dict(os.environ if env is None else env)
+    command = [
+        codex,
+        "sandbox",
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "-c",
+        "sandbox_workspace_write.network_access=false",
+        "--",
+        "true",
+    ]
+    with tempfile.TemporaryDirectory(prefix="ballast-confine-") as private:
+        try:
+            argv = confined_argv(root, command, private=Path(private), env=env)
+            argv.insert(argv.index("--"), "--unshare-net")
+            result = subprocess.run(  # noqa: S603 - resolved bwrap, argument list
+                argv,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=60,
+                check=False,
+                env=confined_env(env, None),
+            )
+        except (AutonomyError, OSError, subprocess.TimeoutExpired):
+            return False
+    return result.returncode == 0
+
+
 # --- Eligibility ----------------------------------------------------------
 
 
@@ -1762,6 +1809,8 @@ def _mode_lines(run: dict) -> list[str]:
         f"- Authoring integration: {run['integration']}; review integration: "
         f"{run['review_integration']}"
     )
+    if run.get("integration_fallback"):
+        lines.append(f"- Integration fallback: {run['integration_fallback']}")
     return [*lines, ""]
 
 

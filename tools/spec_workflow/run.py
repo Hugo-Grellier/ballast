@@ -281,6 +281,27 @@ def _integrations(requested: str) -> tuple[str, str] | str:
     return requested, other if shutil.which(other) else requested
 
 
+def _route_codex(
+    integration: str, review: str, eligibility: dict
+) -> tuple[str, str, str | None]:
+    """DEC-0004: route Codex roles to Claude when Codex's sandbox cannot nest.
+
+    Probed once per eligible run start. Codex never runs with its own sandbox
+    off; a host without Claude then becomes ineligible.
+    """
+    if not eligibility["eligible"] or "codex" not in {integration, review}:
+        return integration, review, None
+    if autonomy.codex_sandbox_nests(ROOT):
+        return integration, review, None
+    fallback = autonomy.CODEX_FALLBACK
+    if not shutil.which("claude"):
+        eligibility["eligible"] = False
+        eligibility["reasons"].append(f"{fallback}, but claude is not on PATH")
+        return integration, review, None
+    sys.stdout.write(f"ballast: {fallback}\n")
+    return "claude", "claude", fallback
+
+
 def _number(value: str | None, name: str) -> int | None:
     if value is None:
         return None
@@ -335,6 +356,7 @@ def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
     except autonomy.AutonomyError as error:
         return _refuse(str(error), alternative=True)
     eligibility = result["eligibility"]
+    integration, review, fallback = _route_codex(integration, review, eligibility)
     if not eligibility["eligible"]:
         for reason in eligibility["reasons"]:
             sys.stderr.write(f"ballast: refusing: {reason}\n")
@@ -353,6 +375,8 @@ def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
         eligibility=eligibility,
         limits=limits,
     )
+    if fallback:
+        record["integration_fallback"] = fallback
     record["issue_title"] = result["issue_title"]
     autonomy.write_run(ROOT, record)
     sys.stdout.write(

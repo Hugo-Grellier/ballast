@@ -322,7 +322,7 @@ class RunCase(WrapperCase):
             code = run.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
-    def start(self, *extra: str) -> tuple[int, str, str]:
+    def start(self, *extra: str, integration: str = "claude") -> tuple[int, str, str]:
         return self.main(
             "start",
             "--mode",
@@ -335,7 +335,7 @@ class RunCase(WrapperCase):
             "-i",
             f"feature_directory={FEATURE}",
             "-i",
-            "integration=claude",
+            f"integration={integration}",
         )
 
     def run_ids(self) -> list[str]:
@@ -407,6 +407,89 @@ class RunStartTests(RunCase):
         self.assertEqual(record["review_integration"], "claude")
         self.assertFalse(record["cross_provider"])
         self.assertIn("reduced independence", out)
+
+    def codex_sandbox(self, *, nests: bool) -> None:
+        """Install a codex whose own sandbox does (or does not) start inside bwrap."""
+        refusal = "echo 'bwrap: No permissions to create a new namespace' >&2; exit 1"
+        _write(
+            self.bin / "codex",
+            f'#!/bin/sh\n[ "$1" = sandbox ] && {{ {"exit 0" if nests else refusal}; }}'
+            "\nexit 0\n",
+        )
+
+    def probes(self) -> list[list[str]]:
+        log = self.base / "bwrap.log"
+        lines = log.read_text().splitlines() if log.exists() else []
+        return [a for a in map(json.loads, lines) if "sandbox" in a]
+
+    def test_nested_codex_sandbox_keeps_cross_provider_review(self) -> None:
+        """DEC-0004: the probe runs once, confined and offline, and passes."""
+        self.codex_sandbox(nests=True)
+        self.engine["scenario"] = self.publishable
+        code, out, err = self.start()
+        self.assertEqual(code, 0, err)
+        record = autonomy.read_run(self.root, self.launched[0][1])
+        self.assertEqual(
+            (record["integration"], record["review_integration"]), ("claude", "codex")
+        )
+        self.assertNotIn("integration_fallback", record)
+        (probe,) = self.probes()
+        self.assertIn("--unshare-net", probe)
+        self.assertNotIn(autonomy.CODEX_FALLBACK, out)
+
+    def test_codex_without_nested_sandbox_falls_back_to_claude(self) -> None:
+        """DEC-0004: Claude takes both roles; the fallback is recorded and shown."""
+        self.codex_sandbox(nests=False)
+        for requested in ("claude", "codex", "auto"):
+            with self.subTest(integration=requested):
+                self.launched.clear()
+                self.engine["scenario"] = self.publishable
+                code, out, err = self.start(integration=requested)
+                self.assertEqual(code, 0, err)
+                ((command, run_id),) = self.launched
+                self.assertIn("integration=claude", command)
+                self.assertIn("review_integration=claude", command)
+                record = autonomy.read_run(self.root, run_id)
+                self.assertEqual(
+                    (record["integration"], record["review_integration"]),
+                    ("claude", "claude"),
+                )
+                self.assertFalse(record["cross_provider"])
+                self.assertEqual(
+                    record["integration_fallback"], autonomy.CODEX_FALLBACK
+                )
+                self.assertIn(autonomy.CODEX_FALLBACK, out)
+                self.assertIn("reduced independence", out)
+                rendered = autonomy.render_record(record, [], None)
+                self.assertIn(autonomy.CODEX_FALLBACK, rendered)
+
+    def test_codex_only_host_without_nested_sandbox_is_refused(self) -> None:
+        self.codex_sandbox(nests=False)
+        which = run.shutil.which
+        with patch.object(
+            run.shutil,
+            "which",
+            side_effect=lambda n: None if n == "claude" else which(n),
+        ):
+            code, _, err = self.start(integration="codex")
+        self.assertEqual(code, run.EXIT_REFUSED)
+        self.assertIn(autonomy.CODEX_FALLBACK, err)
+        self.assertEqual(self.launched, [])
+        self.assertEqual(self.run_ids(), [])
+
+    def test_no_probe_without_codex(self) -> None:
+        self.codex_sandbox(nests=False)
+        which = run.shutil.which
+        self.engine["scenario"] = self.publishable
+        with patch.object(
+            run.shutil,
+            "which",
+            side_effect=lambda n: None if n == "codex" else which(n),
+        ):
+            code, out, _ = self.start()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.probes(), [])
+        self.assertNotIn(autonomy.CODEX_FALLBACK, out)
 
     def test_limits_need_autonomous_mode(self) -> None:
         for argv in (
