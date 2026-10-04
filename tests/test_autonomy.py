@@ -669,6 +669,20 @@ class GitHelperTests(AutonomyCase):
         self.assertEqual(self.git("status", "--porcelain", "--", "README.md"), "")
         self.assertNotIn("spec.md", self.git("diff", "--cached", "--name-only"))
 
+    def test_digest_with_git_ignored_protected_inputs(self) -> None:
+        """An installed project ignores .ballast/ and most of .specify/."""
+        before = autonomy.tree_digest(self.root)
+        (self.root / ".gitignore").write_text(".ballast/\n.specify/*\n.venv/\n")
+        (self.root / ".ballast/spec_workflow").mkdir(parents=True)
+        (self.root / ".ballast/spec_workflow/run.py").write_text("x")
+        (self.root / ".venv").mkdir()
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "ignore installed paths")
+        digest = autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",))
+        self.assertNotEqual(digest, before)
+        (self.root / ".ballast/spec_workflow/run.py").write_text("y")
+        self.assertEqual(autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",)), digest)
+
     def test_hooks_never_run(self) -> None:
         marker = self.base / "hook-ran"
         hook = self.root / ".git/hooks/pre-commit"

@@ -1053,8 +1053,10 @@ def tree_digest(root: Path, exclude: tuple[str, ...] = ()) -> str:
         if index.is_file():
             shutil.copyfile(index, private)
         env = {**os.environ, "GIT_INDEX_FILE": str(private)}
-        specs = [f":(top,exclude){path}" for path in excluded]
-        git(root, "add", "--all", "--", ":/", *specs, env=env)
+        # Exclusions are removed below rather than as `add` pathspecs: git
+        # refuses an exclude pathspec that names an ignored path, and installed
+        # projects ignore .ballast/ and most of .specify/.
+        git(root, "add", "--all", "--", ":/", env=env)
         git(
             root,
             "rm",
