@@ -48,7 +48,9 @@ These are defaults, not quality rankings.
 | Spec reconciliation / convergence | Other provider, `senior` medium | Persistent spec/implementation disagreement |
 | Repeated difficult failure | `senior` high | After another failed bounded attempt -> `critical` |
 
-R2 still requires the human gates in the engineering workflow regardless of model strength.
+R2 still requires the human gates in the engineering workflow regardless of model strength; in an Autonomous run, the R2 approval is the merge decision.
+
+In an Autonomous run, the runner picks the review integration, not a model: review steps use the other provider when its CLI is installed, and otherwise the authoring provider in a fresh context. A single-provider run is recorded as `cross-provider: no`, and its Draft PR states that review independence was reduced, so the merge reviewer can weigh it.
 
 ## Classifier rule
 
