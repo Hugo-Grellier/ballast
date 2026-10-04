@@ -2477,6 +2477,30 @@ class AutonomousConfinementEngineTests(AutonomousEngineCase):
                 self.git("clean", "-qfd", "--", "specs", "src", "tests")
                 self.git("push", "-q", "origin", "--delete", "27-demo-run")
 
+    def test_agents_read_the_issue_snapshot_but_cannot_write_it(self) -> None:
+        """DEC-0008: the Issue body reaches confined agents, read-only."""
+        snapshot = ".specify/workflow-state/issues/27.md"
+        script = (
+            f"grep -q '^- works$' {snapshot}; echo read=$?\n"
+            f"(echo x >> {snapshot}) 2>/dev/null; echo write=$?\n"
+        )
+        plan = _autonomous_plan()
+        for step in ("speckit-ballast-decide-scope", "speckit-specify"):
+            plan[step] |= {"exec": script}
+        self.layout(plan)
+        code, out, err, run_id = self.start()
+        self.assertEqual(code, 0, out + err)
+        agents = self.root / ".specify/workflow-state" / run_id / "agents"
+        for command in ("speckit-ballast-decide", "speckit-specify"):
+            log = min(p for p in agents.iterdir() if f"-{command}-" in p.name)
+            text = (log / "stdout.log").read_text()
+            self.assertIn("read=0", text, command)
+            self.assertNotIn("write=0", text, command)
+        idea = json.loads(
+            (self.root / ".specify/workflows/runs" / run_id / "inputs.json").read_text()
+        )["inputs"]["idea"]
+        self.assertIn(snapshot, idea)
+
     def test_custom_gh_config_dir_is_hidden_from_the_agent(self) -> None:
         """Review F1: the wrapper hides the operator's GH_CONFIG_DIR."""
         if not os.access("/var/tmp", os.W_OK):  # noqa: S108

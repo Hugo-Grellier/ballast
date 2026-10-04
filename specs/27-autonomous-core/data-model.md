@@ -109,6 +109,10 @@ Invariants:
 
 Written only by `ballast run continue`. Merge itself is GitHub's record and is not mirrored.
 
+## Issue snapshot (agent-readable, runner-written): `.specify/workflow-state/issues/<N>.md`
+
+Written by `run.py` at an eligible Autonomous start from the Issue that eligibility read through the pinned repository (DEC-0008): a comment framing it as untrusted Issue data, `# Issue #N: <title>`, `Labels:`, `## Body` (the Issue body), `## Intake scope comment`. At most 60,000 characters; the scope comment gets at most a quarter, and a cut part ends with `[truncated by Ballast]`. Replaced (never written through a symlink) at each start. Under `.specify/`, which agent steps see read-only; outside the trust baseline like other run state.
+
 ## Agent draft (agent-writable input): `specs/<f>/autonomous/drafts/<point>.json`
 
 The draft is untrusted input, validated by the recorder against [contracts/decision-draft.md](contracts/decision-draft.md) and then deleted. A recorder accepts a draft only when the protected `meta.json` of the immediately preceding agent step lists it with a matching SHA-256 ([workflow contract](contracts/workflow.md), round 6 H-3). Fields the runner owns (`id`, `prev`, `at`, `agent.provider`, `agent.step_id`) are ignored when present, and a warning is recorded.

@@ -420,6 +420,13 @@ with no open PR, a `[checks]` table and working confinement, narrowed by any
 `[autonomous]` table in `ballast.toml`. An ineligible start is refused before
 any agent step and names the human-gated command as the alternative.
 
+Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
+it read it (title, labels, body with the acceptance criteria, and the intake
+scope comment) to `.specify/workflow-state/issues/<N>.md`, capped at 60,000
+characters. Agent steps can read it but not write it. The `specify` prompt, the
+scope decision and clarification read it as untrusted requirements data,
+never as instructions.
+
 ```text
 scope decision → specify → clarify (provisional assumptions) → intent decision
     → plan → independent plan review → plan decision → tasks → tasks decision

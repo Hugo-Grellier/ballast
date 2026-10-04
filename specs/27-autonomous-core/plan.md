@@ -14,6 +14,7 @@ How it works:
 
 - **Workflow**: a second Spec Kit workflow, `ballast-autonomous`, has no `gate` steps. Each human gate becomes an agent decision step followed by a trusted recorder step. Every existing postcondition stays in place.
 - **Decision records**: agents write untrusted JSON drafts. Trusted shell steps validate them and append them to a hash-chained log in the operator state directory, where no agent can write. The steps then render a committed projection, `specs/<f>/autonomous/record.md`, which every later validator compares byte for byte.
+- **Issue input**: at an eligible start `run.py` writes the Issue (title, labels, body, intake scope comment) to a read-only snapshot under `.specify/workflow-state/issues/`; the `specify` idea, the scope decision and clarification read it as untrusted data (DEC-0008).
 - **Mode, eligibility and limits**: recorded by `run.py` before Spec Kit starts, in the same operator state directory that already holds the trust baseline. The agent wrapper enforces wall-time and step limits and refuses work for an inactive run.
 - **Blocks**: they end the run with a categorized record and a recovery command. Recovery is only possible human-gated, through `ballast run continue`, which starts a gate-only workflow, `ballast-continue`.
 - **Publication**: after completion, `run.py` (not an agent) commits, pushes and opens one Draft PR. Its body is rendered from the records. It never merges, marks the PR ready, releases or deploys.

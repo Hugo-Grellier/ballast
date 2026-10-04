@@ -19,6 +19,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import ClassVar
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1270,6 +1271,41 @@ class EligibilityTests(AutonomyCase):
             autonomy.REFUSAL + "confinement unavailable: x",
             result["eligibility"]["reasons"],
         )
+
+
+class IssueSnapshotTests(AutonomyCase):
+    """DEC-0008: the runner's Issue snapshot for agents."""
+
+    ISSUE: ClassVar[dict] = {
+        "number": 27,
+        "title": "Demo run",
+        "body": "## Acceptance criteria\n\n- works\n",
+        "labels": [{"name": "ready-for-agent"}],
+    }
+
+    def test_renders_body_labels_and_scope_as_untrusted_data(self) -> None:
+        text = autonomy.render_issue_snapshot(self.ISSUE, "Risk: R1\n")
+        self.assertIn("Untrusted Issue data", text)
+        self.assertIn("# Issue #27: Demo run", text)
+        self.assertIn("Labels: ready-for-agent", text)
+        self.assertIn("## Acceptance criteria\n\n- works", text)
+        self.assertIn("Risk: R1", text)
+
+    def test_long_body_is_capped_with_a_marker(self) -> None:
+        issue = self.ISSUE | {"body": "x" * (autonomy.ISSUE_SNAPSHOT_LIMIT * 2)}
+        text = autonomy.render_issue_snapshot(issue, "y" * 100_000)
+        self.assertLessEqual(len(text), autonomy.ISSUE_SNAPSHOT_LIMIT)
+        self.assertIn("[truncated by Ballast]", text)
+
+    def test_snapshot_never_follows_a_symlink(self) -> None:
+        target = self.base / "elsewhere.md"
+        issues = self.root / ".specify/workflow-state/issues"
+        issues.mkdir(parents=True)
+        (issues / "27.md").symlink_to(target)
+        path = autonomy.write_issue_snapshot(self.root, self.ISSUE, "")
+        self.assertFalse(target.exists())
+        self.assertFalse(path.is_symlink())
+        self.assertIn("- works", path.read_text())
 
 
 class RecordRenderTests(unittest.TestCase):

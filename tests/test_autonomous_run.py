@@ -396,6 +396,24 @@ class RunStartTests(RunCase):
         archive = self.root / ".git/speckit-runs" / run_id / "autonomous/run.json"
         self.assertTrue(archive.is_file())
 
+    def test_start_writes_the_issue_snapshot_for_agents(self) -> None:
+        """DEC-0008: the Issue body and scope reach the agents' prompts."""
+        self.engine["scenario"] = self.publishable
+        code, _, err = self.start()
+        self.assertEqual(code, 0, err)
+        ((command, _),) = self.launched
+        path = self.root / ".specify/workflow-state/issues/27.md"
+        text = path.read_text()
+        self.assertIn("untrusted", text.lower())
+        self.assertIn("# Issue #27: Demo run", text)
+        self.assertIn("## Acceptance criteria\n\n- works", text)
+        self.assertIn("Labels: ready-for-agent", text)
+        self.assertIn("Main outcome: Demo outcome", text)
+        idea = next(a for a in command if a.startswith("idea="))
+        self.assertTrue(idea.startswith("idea=Issue #27: demo"), idea)
+        self.assertIn(".specify/workflow-state/issues/27.md", idea)
+        self.assertIn("acceptance criteria", idea)
+
     def test_single_provider_review(self) -> None:
         which = run.shutil.which
         self.engine["scenario"] = self.publishable

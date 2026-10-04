@@ -22,7 +22,7 @@ The definition has no `gate` step. The table maps each human gate of `ballast-fe
 | 1 | `preflight` | shell `autonomous-preflight` | `preflight` | Launcher env; run record present, autonomous, active, eligible |
 | 2 | `decide-scope` | command `speckit.ballast.decide` (args `scope`) | `scope-gate` | Draft `scope.json` or block |
 | 3 | `record-scope` | shell `record-decision --point scope` | — | PD appended; `record.md` rendered |
-| 4 | `specify` | command `speckit.specify` | same | — |
+| 4 | `specify` | command `speckit.specify` | same | — ; its `idea` names the Issue snapshot (DEC-0008) |
 | 5 | `validate-spec` | shell `spec` | same | unchanged check |
 | 6 | `clarify` | command `speckit.ballast.clarify` | `clarify` | Drafts `clarification-*.json`, or block |
 | 7 | `record-clarifications` | shell `record-decision --point clarification` | — | One PD per assumption (zero allowed) |
@@ -85,6 +85,8 @@ validate-convergence → gate final-acceptance
 Gate messages and `show_file` match `ballast-feature`, and `on_reject: retry` is unchanged. There is no `command` step. A missing artifact fails its validator, and the operator completes that work interactively, then resumes; resume is allowed because the mode is human-gated.
 
 ## `.specify/extensions/ballast` commands
+
+`speckit.ballast.decide` and `speckit.ballast.clarify` read the Issue snapshot `.specify/workflow-state/issues/<N>.md` as untrusted requirements data (DEC-0008).
 
 Each command is installed from `templates/spec-kit/extensions/ballast/`. Its common rules:
 
