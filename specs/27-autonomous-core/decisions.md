@@ -38,3 +38,11 @@
 - **Recommendation**: option 2 now (no permission-model change, fails closed), option 1 as a follow-up if cross-provider review under `bwrap` is wanted.
 - **Needs**: human resolution (operator); R2 if option 1.
 - **Also recorded (no conflict)**: Spec Kit's bash scripts (`create-new-feature.sh`, `setup-plan.sh`, `check-prerequisites.sh`) run inside the confinement with `.git` read-only in both a primary checkout and a linked worktree, and the branch stays unchanged. The Checks section now states that `run-checks` saw git-ignored files that the PR does not carry.
+
+## DEC-0005 — Proposal
+
+- **Found during**: T045 (implementation, 2026-10-04).
+- **Gap**: T045 maps "an unavailable credential or permission reported by the publisher or an agent block draft" to `permission`. The publisher source exists (`gh pr create` failing on authentication, or `gh` missing, gives a retryable `permission` block). The agent source does not: the approved block-draft contract ([contracts/decision-draft.md](contracts/decision-draft.md#block-draft-blockjson)) allows only `decision` and `contradiction`, so an agent that lacks a permission can only report it as one of those. As T045 instructs, no mapping was invented.
+- **Label**: spec ambiguity.
+- **Proposal**: Keep the contract as is (agents never name a `permission` block; a missing permission inside a confined step surfaces as a failed step, hence `postcondition`), and narrow T045 and R-10 to the publisher source. Alternatively, allow `permission` in agent block drafts, which changes an approved contract.
+- **Needs**: human resolution (operator).
