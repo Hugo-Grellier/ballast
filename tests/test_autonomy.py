@@ -49,6 +49,19 @@ GITHUB_URL = "https://github.com/acme/demo.git"
 GITHUB_PIN = '[github]\nrepository = "acme/demo"\n'
 
 
+def listed_pr(number: int, body: str, **changes: object) -> dict:
+    """One `gh pr list --json` entry for a PR from acme/demo's own branch."""
+    return {
+        "number": number,
+        "url": f"https://github.com/acme/demo/pull/{number}",
+        "body": body,
+        "isCrossRepository": False,
+        "headRepository": {"name": "demo"},
+        "headRepositoryOwner": {"login": "acme"},
+        **changes,
+    }
+
+
 def _install(source: Path, target: Path) -> None:
     shutil.copyfile(source, target)
     target.chmod(0o755)
@@ -1422,7 +1435,13 @@ class PublisherTests(AutonomyCase):
             call[4] for call in git_calls if call[:4] == list(autonomy.GIT_HARDENING)
         ]
         self.assertEqual(len(commands), len(git_calls), "every git call is hardened")
-        self.assertIn(["push", "-u", "origin", "HEAD"], [c[4:8] for c in git_calls])
+        # DEC-0007: to the pinned URL, never through origin's pushurl.
+        push = [
+            "push",
+            "https://github.com/acme/demo.git",
+            "HEAD:refs/heads/27-demo-run",
+        ]
+        self.assertIn(push, [c[4:7] for c in git_calls])
         self.assertTrue({"add", "commit", "push"} <= set(commands))
         forbidden = ("merge", "ready", "--force", "-f", "release", "deploy", "rebase")
         for call in [*git_calls, *self.gh_calls()]:
@@ -1620,16 +1639,7 @@ class PublisherTests(AutonomyCase):
 
     def test_adopts_the_checkpoints_pr_and_keeps_its_section(self) -> None:
         section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
-        self.gh_data(
-            "pr-list.json",
-            [
-                {
-                    "number": 9,
-                    "url": "https://github.com/acme/demo/pull/9",
-                    "body": f"Template\n\n{section}\n",
-                }
-            ],
-        )
+        self.gh_data("pr-list.json", [listed_pr(9, f"Template\n\n{section}\n")])
         result = autonomy.publish(self.root, "run42")
         self.assertEqual(result["url"], "https://github.com/acme/demo/pull/9", result)
         calls = [c[:2] for c in self.gh_calls()]
@@ -1639,6 +1649,87 @@ class PublisherTests(AutonomyCase):
         self.assertIn("Refs #27", body)
         self.assertEqual(body.count(draft_pr.MARK_BEGIN), 1)
         self.assertTrue(body.endswith(section + "\n"))
+
+    def test_pr_from_another_head_repository_is_never_adopted(self) -> None:
+        """Same branch name and section, but not acme/demo's own branch."""
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        for changes in (
+            {"isCrossRepository": True},
+            {"headRepository": {"name": "demo-fork"}, "isCrossRepository": True},
+            {"headRepositoryOwner": {"login": "evil"}},
+            {"headRepository": {"name": "other"}},
+            {"url": "https://github.com/evil/demo/pull/9"},
+        ):
+            with self.subTest(changes=changes):
+                self.gh_data("pr-list.json", [listed_pr(9, section, **changes)])
+                self.refused("postcondition", "reuse is #17")
+                calls = [c[:2] for c in self.gh_calls()]
+                self.assertNotIn(["pr", "edit"], calls)
+
+    def test_head_repository_matches_case_insensitively(self) -> None:
+        section = f"{draft_pr.MARK_BEGIN}\n- Feature: `{FEATURE}/`\n{draft_pr.MARK_END}"
+        pr = listed_pr(
+            9,
+            section,
+            headRepository={"name": "Demo"},
+            headRepositoryOwner={"login": "ACME"},
+            url="https://github.com/ACME/Demo/pull/9",
+        )
+        self.gh_data("pr-list.json", [pr])
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+
+    def bare(self, name: str) -> Path:
+        path = self.base / name
+        subprocess.run(  # noqa: S603
+            ["git", "init", "-q", "--bare", str(path)],  # noqa: S607
+            check=True,
+            capture_output=True,
+        )
+        return path
+
+    def branches(self, bare: Path) -> str:
+        return subprocess.run(  # noqa: S603
+            ["git", "--git-dir", str(bare), "branch", "--list"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    def snapshot(self) -> None:
+        """Treat the current local Git configuration as the run's start state."""
+        autonomy.write_json(
+            autonomy.run_dir(self.root, "run42") / "git-config.json",
+            autonomy.config_snapshot(self.root),
+        )
+
+    def test_pushurl_never_redirects_the_push(self) -> None:
+        evil = self.bare("evil.git")
+        self.git("config", "remote.origin.pushurl", str(evil))
+        self.snapshot()
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        self.assertEqual(self.branches(evil), "")
+        self.assertIn("27-demo-run", self.branches(self.base / "origin.git"))
+
+    def test_local_url_rewrite_of_the_pinned_repository_blocks(self) -> None:
+        evil = self.bare("evil.git")
+        for key in ("pushInsteadOf", "insteadOf"):
+            with self.subTest(key=key):
+                self.git("config", f"url.{evil}.{key}", "https://github.com/acme/")
+                self.snapshot()
+                self.refused("postcondition", "rewrites")
+                self.assertEqual(self.branches(evil), "")
+                self.git("config", "--unset", f"url.{evil}.{key}")
+
+    def test_hooks_path_pre_push_never_runs(self) -> None:
+        marker = self.base / "hook-ran"
+        hooks = self.base / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-push").write_text(f"#!/bin/sh\ntouch {marker}\n")
+        (hooks / "pre-push").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        self.snapshot()
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        self.assertFalse(marker.exists())
 
     def test_eligibility_needs_the_pin(self) -> None:
         (self.root / "ballast.toml").write_text('[checks]\ncommands = ["true"]\n')

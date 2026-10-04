@@ -30,6 +30,7 @@ from test_autonomy import (
     TOOLS,
     AutonomyCase,
     autonomy,
+    listed_pr,
 )
 
 sys.path.pop(0)
@@ -1151,7 +1152,7 @@ class PublisherCheckpointTests(RunCase):
         section = (self.gh_dir / "pr-body.md").read_text()
         self.gh_data(
             "pr-list.json",
-            [{"number": 7, "url": self.PR["html_url"], "body": "Intro\n" + section}],
+            [listed_pr(7, "Intro\n" + section)],
         )
         before = len(self.gh_calls())
         code, out, err = self.main("publish", run_id)

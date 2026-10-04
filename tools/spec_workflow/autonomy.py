@@ -2218,8 +2218,16 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         if branch in {"", "HEAD", default_branch}:
             return refuse("postcondition", BRANCH_REFUSAL)
+        rewrites = _local_rewrites(root, repo)
+        if rewrites:
+            return refuse(
+                "postcondition",
+                f"repository Git configuration rewrites {repo}'s URL: "
+                + ", ".join(rewrites),
+            )
         if not _origin_is(root, repo):
             return refuse("postcondition", ORIGIN_REFUSAL)
+        push_url = _push_url(root, repo)
         prs = _gh(
             root,
             "pr",
@@ -2231,10 +2239,10 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
             "--state",
             "open",
             "--json",
-            "number,url,body",
+            "number,url,body,isCrossRepository,headRepository,headRepositoryOwner",
             category="forge",
         )
-        adopted = _adoptable(prs, run["feature"])
+        adopted = _adoptable(prs, run["feature"], repo)
         if prs and adopted is None:
             return refuse("postcondition", f"{BRANCH_REFUSAL}; reuse is #17")
         checked = run.get("checked_tree")
@@ -2292,7 +2300,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
                 "-m",
                 f"Autonomous-Run: {run_id}",
             )
-        pushed = git(root, "push", "-u", "origin", "HEAD", check=False)
+        pushed = _push(root, push_url, branch)
         if pushed.returncode != 0:
             return refuse("forge", f"git push failed: {pushed.stderr.strip()[:500]}")
         body = render_pr_body(
@@ -2338,7 +2346,80 @@ def _origin_is(root: Path, repo: str) -> bool:
     )
 
 
-def _adoptable(prs: object, feature: str) -> tuple[int, str, str] | None:
+def _push_url(root: Path, repo: str) -> str:
+    """Return the pinned repository's URL, in the scheme `origin` uses.
+
+    Pushing to it, not to `origin`, keeps `remote.origin.pushurl` out of play.
+    """
+    origin = git(root, "remote", "get-url", "origin").stdout.strip()
+    if origin.startswith("https://"):
+        return f"https://github.com/{repo}.git"
+    return f"ssh://git@github.com/{repo}.git"
+
+
+def _local_rewrites(root: Path, repo: str) -> list[str]:
+    """`url.*.insteadOf`/`pushInsteadOf` keys an agent could write for repo.
+
+    Either URL form `_push_url` builds counts. Repository and command-line
+    scopes only: global and system configuration belong to the operator.
+    """
+    listed = git(
+        root,
+        "config",
+        "--show-scope",
+        "--get-regexp",
+        r"^url\..*\.(push)?insteadof$",
+        check=False,
+    ).stdout
+    urls = (f"https://github.com/{repo}.git", f"ssh://git@github.com/{repo}.git")
+    found = []
+    for line in listed.splitlines():
+        scope, _, rest = line.partition("\t")
+        key, _, value = rest.partition(" ")
+        if (
+            scope in {"local", "worktree", "command"}
+            and value
+            and any(url.startswith(value) for url in urls)
+        ):
+            found.append(f"{scope} {key}")
+    return found
+
+
+def _push(root: Path, url: str, branch: str) -> subprocess.CompletedProcess[str]:
+    """Push HEAD to the pinned URL with draft_pr's environment, then track it."""
+    draft_pr = _trusted()
+    env = {
+        **{k: v for k, v in os.environ.items() if k not in draft_pr.GIT_LOCATION},
+        "PATH": draft_pr._child_path(root),  # noqa: SLF001
+    }
+    pushed = git(root, "push", url, f"HEAD:refs/heads/{branch}", env=env, check=False)
+    if pushed.returncode == 0:
+        # What `push -u origin` recorded; the #17 checkpoint reads it.
+        git(root, "config", f"branch.{branch}.remote", "origin")
+        git(root, "config", f"branch.{branch}.merge", f"refs/heads/{branch}")
+    return pushed
+
+
+def _own_head(pr: dict, repo: str) -> bool:
+    """Whether a `gh pr list` entry's head is a branch of repo itself.
+
+    The rule of draft_pr._pull_request, on `gh pr list --json` fields.
+    """
+    owner, _, name = repo.lower().partition("/")
+    head = pr.get("headRepository")
+    login = pr.get("headRepositoryOwner")
+    return (
+        pr.get("isCrossRepository") is False
+        and isinstance(head, dict)
+        and str(head.get("name")).lower() == name
+        and isinstance(login, dict)
+        and str(login.get("login")).lower() == owner
+        and str(pr.get("url")).lower()
+        == f"https://github.com/{repo}/pull/{pr.get('number')}".lower()
+    )
+
+
+def _adoptable(prs: object, feature: str, repo: str) -> tuple[int, str, str] | None:
     """Return the one open PR the #17 checkpoint opened for this feature.
 
     That is (number, url, managed section), or None: any other open PR, or
@@ -2346,6 +2427,8 @@ def _adoptable(prs: object, feature: str) -> tuple[int, str, str] | None:
     """
     draft_pr = _trusted()
     if not isinstance(prs, list) or len(prs) != 1 or not isinstance(prs[0], dict):
+        return None
+    if not _own_head(prs[0], repo):
         return None
     number, url, body = (prs[0].get(key) for key in ("number", "url", "body"))
     if type(number) is not int or not isinstance(url, str) or not isinstance(body, str):
