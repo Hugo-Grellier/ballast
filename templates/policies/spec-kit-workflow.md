@@ -282,8 +282,8 @@ below) and refuses unless systemd confirms it is gone, so no surviving agent
 process can rewrite state afterwards; only then does it delete the local run
 state (the archived copy in the Git common directory remains). It never follows
 a link on the way to that state. A primary checkout's `.git` directory is not hashed; it
-relies on the agent sandbox keeping it read-only. They run `run.py`
-under the launcher's own `/usr/bin/python3 -I` and `ledger.py` under `-I -S`.
+relies on the agent sandbox keeping it read-only. They run `run.py` and
+`ledger.py` under the launcher's own `/usr/bin/python3 -I -S`.
 Bytecode is excluded from the baseline because no workflow tool reads it.
 
 **Headless permissions.** Start and resume runs only with

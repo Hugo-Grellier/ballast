@@ -915,7 +915,9 @@ def main(argv: list[str]) -> int:
             fetch(ref, standard)
     if argv[0] == "setup":
         tool = standard / "tools/setup"
-        os.execv(PYTHON, [PYTHON, str(tool), "--project", str(root), *argv[1:]])  # noqa: S606
+        os.execv(  # noqa: S606
+            PYTHON, [PYTHON, "-IS", str(tool), "--project", str(root), *argv[1:]]
+        )
     launcher = standard / "tools/spec_workflow/launcher.py"
     if not launcher.is_file():
         fail(f"{standard} has no launcher{DOCTOR_HINT}")
