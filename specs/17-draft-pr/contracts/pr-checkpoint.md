@@ -41,7 +41,7 @@ All run with a list argv, `shell=False`, `cwd=root`, a 30 s timeout and the envi
 | Purpose | Command |
 | --- | --- |
 | Local branch | `<git> symbolic-ref --quiet --short HEAD` |
-| Branch pin | written by `run.py` at `ballast run start`, before the engine: `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch`; every checkpoint requires the local branch and its published name to both equal it → `blocked-unlinked/branch-unpinned` or `branch-mismatch` before any `gh` call (DEC-0006, DEC-0010) |
+| Branch pin | written by `run.py` at `ballast run start`, before the engine: `$XDG_STATE_HOME/ballast/<key>/draft-pr/<run>.json` with `branch`; every checkpoint requires the local branch to equal it (`blocked-unlinked/branch-mismatch`) and its published name to equal it (`pending/not-published`); no pin → `blocked-unlinked/branch-unpinned`; all before any `gh` call (DEC-0006, DEC-0010) |
 | Upstream | `<git> for-each-ref --format=%(upstream:remotename)%00%(upstream:remoteref) refs/heads/<branch>` |
 | Remote URL | `<git> remote get-url <remote>` |
 | Repository and base | `<gh> api repos/<owner>/<repo>` |

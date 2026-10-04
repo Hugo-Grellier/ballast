@@ -98,7 +98,7 @@
 
 ## DEC-0009 — Resolution
 
-- Accepted by the operator (2026-10-04): fix in its own bugfix PR, not in #17. No change on this branch.
+- Accepted by the operator (2026-10-04): fix in its own bugfix PR, not in #17. Merged as PR #31 (`run.py` and `tools/setup` start with `-I -S`).
 
 ## DEC-0010 — Proposal
 
@@ -108,6 +108,7 @@
 ## DEC-0010 — Resolution
 
 - Provisional, under the operator's standing authority; confirm at merge): pin only the branch; the checkpoint requires the local branch and its published name to both equal it. An upstream under another name is refused as `blocked-unlinked/branch-mismatch` (narrows research R4, which followed a renamed upstream). Implemented in T043.
+- Refined by the T038 live check (2026-10-04): a branch that matches the pin but tracks another name (a worktree branch created from `origin/main` tracks `main`) is `pending/not-published` with `git push -u <remote> <branch>`, not `branch-mismatch`; only a different local branch is `branch-mismatch`. Neither path calls `gh`.
 
 ## DEC-0011 — Proposal
 

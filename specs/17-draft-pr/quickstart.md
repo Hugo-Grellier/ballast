@@ -33,7 +33,7 @@ uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_dr
 | Empty `files` in the compare | `pending/no-meaningful-change` | AC-003, AC-004 |
 | Only `specs/<feature>/` files in the compare | `pending/no-meaningful-change` | AC-005 |
 | 300 or more files listed, all under `specs/<feature>/` (even if a later file is outside) | `pending/diff-unclassified` | FR-003, DEC-0008 |
-| Upstream configured under another name | `blocked-unlinked/branch-mismatch` | DEC-0010 |
+| Upstream configured under another name (e.g. a worktree branch tracking `main`) | `pending/not-published` with `git push -u <remote> <branch>` | DEC-0010 |
 | `gh` or `git` only in `/tmp`, `/var/tmp`, `/dev/shm` or `$TMPDIR` | `failed-retryable/gh-untrusted` / `git-untrusted` | DEC-0011 |
 | Branch switched or upstream redirected after start; no pin | `blocked-unlinked/branch-mismatch` / `branch-unpinned`, no `gh` call | DEC-0006 |
 | PR body changed between list and edit | `reused/body-changed`, no edit | FR-007, DEC-0007 |
