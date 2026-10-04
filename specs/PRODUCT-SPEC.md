@@ -1367,7 +1367,7 @@ production access policy
 
 ```
 
-Requires explicit human approval.
+Requires explicit human approval. In a human-gated run it comes before the change and before merge; in an Autonomous run the pre-change decision is agent-provisional and the merge decision is the human approval.
 
 ---
 
