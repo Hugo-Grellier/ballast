@@ -33,3 +33,10 @@
 - Classification: architecture issue (security boundary; R2).
 - Proposal: in `_command`, replace `PATH` for every `gh` and `git` call with only the absolute `PATH` entries that lie outside every Git working tree (the entries `resolve_program` keeps), and add a test where a checkout-local `git` first on `PATH` is not reachable through the environment given to `gh`. Update the contract's Environment boundary and ADR-0003 to match.
 - Not implemented: it changes the approved environment contract and a security boundary, so it waits for human resolution. T039's security review should consider it.
+
+## DEC-0005 — Proposal
+
+- Source: background security review of commit 832da86 (confused deputy). The checkpoint derives the target repository from `<git> remote get-url <upstream remote>` and the branch upstream from `for-each-ref`, both read from `.git/config`. The launcher leaves the `.git` directory writable by the agent (`launcher.py`, protected-path docstring), so an agent can run `git remote set-url` / `git branch --set-upstream-to` and steer the operator's `gh` credentials to create a Draft PR, or rewrite the Ballast section of a PR body, in any other repository the operator can write.
+- Classification: architecture issue (security boundary; R2).
+- Proposal: pin the GitHub repository in operator-controlled state rather than reading it from agent-writable Git config. Options: (a) record `owner/repo` in the run's protected `inputs.json` at `ballast run start` and refuse (`blocked-…`) when the upstream remote later resolves elsewhere; (b) record it in the trust baseline at `ballast trust`; (c) declare it in `ballast.toml`. Option (a) still trusts `.git/config` at start time, which an earlier run's agent could have changed, so (b) or (c) is stronger. Add a test where the remote URL is changed between trust and checkpoint and no `gh` write call is made.
+- Not implemented: it changes the approved data sources and a security boundary, so it waits for human resolution. T039's security review should consider it together with DEC-0004.
