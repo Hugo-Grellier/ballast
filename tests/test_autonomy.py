@@ -166,9 +166,7 @@ class AutonomyCase(unittest.TestCase):
             },
         )
         self.gh_data(f"repos_acme_demo_issues_{ISSUE}_sub_issues.json", [])
-        self.gh_data(
-            f"repos_acme_demo_issues_{ISSUE}_dependencies_blocked_by.json", []
-        )
+        self.gh_data(f"repos_acme_demo_issues_{ISSUE}_dependencies_blocked_by.json", [])
         self.gh_data(
             f"repos_acme_demo_issues_{ISSUE}_comments.json",
             [
@@ -367,7 +365,9 @@ def golden_decisions(*, cross: bool = True) -> list[dict]:
     ]
 
 
-GOLDEN_CHECKS = [{"command": "true", "exit": 0, "seconds": 0.25, "provenance": "runner"}]
+GOLDEN_CHECKS = [
+    {"command": "true", "exit": 0, "seconds": 0.25, "provenance": "runner"}
+]
 
 
 class RunRecordTests(AutonomyCase):
@@ -558,8 +558,9 @@ class BlockRecordTests(AutonomyCase):
             ({**good, "category": "limit"}, "category"),
             ({**good, "recovery": "approved by the human"}, "human approval"),
         ):
-            with self.subTest(reason=reason), self.assertRaisesRegex(
-                autonomy.AutonomyError, reason
+            with (
+                self.subTest(reason=reason),
+                self.assertRaisesRegex(autonomy.AutonomyError, reason),
             ):
                 autonomy.validate_block_draft(broken)
         contradiction = {**good, "category": "contradiction"}
@@ -591,8 +592,12 @@ class PolicyTests(AutonomyCase):
         )
         self.assertEqual(policy["risk"], ["R0", "R1"])
         self.assertEqual(policy["excluded_boundaries"], ["agent authority"])
-        self.assertEqual(policy["authorized_privileged_actions"], ["secret provisioning"])
-        self.assertIn("ignored [autonomous] allow_epics: cannot widen eligibility", warnings)
+        self.assertEqual(
+            policy["authorized_privileged_actions"], ["secret provisioning"]
+        )
+        self.assertIn(
+            "ignored [autonomous] allow_epics: cannot widen eligibility", warnings
+        )
         self.assertTrue(any("'R3'" in w for w in warnings))
         self.assertTrue(any("'deploy'" in w for w in warnings))
         self.assertTrue(any("'merge'" in w for w in warnings))
@@ -602,10 +607,16 @@ class PolicyTests(AutonomyCase):
             "[autonomous]\nwall_time_minutes = 120\nmax_agent_steps = 24\n"
         )
         project = autonomy.resolve_limits(defaults)
-        self.assertEqual((project["wall_time_minutes"], project["source"]), (120, "project"))
+        self.assertEqual(
+            (project["wall_time_minutes"], project["source"]), (120, "project")
+        )
         operator = autonomy.resolve_limits(defaults, wall_time=5)
         self.assertEqual(
-            (operator["wall_time_minutes"], operator["max_agent_steps"], operator["source"]),
+            (
+                operator["wall_time_minutes"],
+                operator["max_agent_steps"],
+                operator["source"],
+            ),
             (5, 24, "operator"),
         )
         start = datetime(2026, 10, 3, 12, tzinfo=UTC)
@@ -613,7 +624,11 @@ class PolicyTests(AutonomyCase):
         self.assertEqual(
             datetime.fromisoformat(limits["deadline"]), start + timedelta(minutes=1)
         )
-        for table in ("wall_time_minutes = 0", "max_agent_steps = 201", "max_agent_steps = true"):
+        for table in (
+            "wall_time_minutes = 0",
+            "max_agent_steps = 201",
+            "max_agent_steps = true",
+        ):
             with self.subTest(table=table), self.assertRaises(autonomy.AutonomyError):
                 self.policy(f"[autonomous]\n{table}\n")
         for bad in ((0, None), (1441, None), (None, 0), (None, 201)):
@@ -623,11 +638,14 @@ class PolicyTests(AutonomyCase):
     def test_checks_table(self) -> None:
         import tomllib  # noqa: PLC0415
 
-        checks = autonomy.parse_checks(tomllib.loads('[checks]\ncommands = ["a", "b"]\n'))
+        checks = autonomy.parse_checks(
+            tomllib.loads('[checks]\ncommands = ["a", "b"]\n')
+        )
         self.assertEqual(checks, {"commands": ["a", "b"], "timeout_minutes": 30})
         for table in ("", "[checks]\n", "[checks]\ncommands = []\n"):
-            with self.subTest(table=table), self.assertRaisesRegex(
-                autonomy.AutonomyError, r"\[checks\]"
+            with (
+                self.subTest(table=table),
+                self.assertRaisesRegex(autonomy.AutonomyError, r"\[checks\]"),
             ):
                 autonomy.parse_checks(tomllib.loads(table))
         with self.assertRaises(autonomy.AutonomyError):
@@ -663,7 +681,9 @@ class GitHelperTests(AutonomyCase):
 
     def test_credential_findings(self) -> None:
         self.assertEqual(autonomy.credential_findings(self.root), [])
-        self.git("remote", "set-url", "origin", "https://user:secret@example.test/r.git")
+        self.git(
+            "remote", "set-url", "origin", "https://user:secret@example.test/r.git"
+        )
         self.git("config", "http.https://example.test/.extraheader", "AUTH: x")
         findings = autonomy.credential_findings(self.root)
         self.assertTrue(any("remote.origin.url" in f for f in findings))
@@ -727,12 +747,19 @@ class ConfinementTests(AutonomyCase):
             self.assertIn(f"--ro-bind {path} {path}", joined)
         feature_json = self.root / ".specify/feature.json"
         self.assertIn(f"--bind {feature_json} {feature_json}", joined)
-        self.assertEqual(json.loads(feature_json.read_text()), {"feature_directory": FEATURE})
+        self.assertEqual(
+            json.loads(feature_json.read_text()), {"feature_directory": FEATURE}
+        )
         self.assertLess(
             joined.index(f"--ro-bind {self.root / '.specify'}"),
             joined.index(f"--bind {feature_json}"),
         )
-        for flag in ("--unshare-pid", "--unshare-ipc", "--new-session", "--die-with-parent"):
+        for flag in (
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--new-session",
+            "--die-with-parent",
+        ):
             self.assertIn(flag, argv)
         self.assertIn("--tmpfs /run/user/1000", joined)
         self.assertIn(f"--tmp-overlay {home / '.claude'}", joined)
@@ -742,7 +769,9 @@ class ConfinementTests(AutonomyCase):
             joined.index(f"--tmp-overlay {home / '.codex'}"),
         )
         self.assertIn(f"--ro-bind /dev/null {home / '.netrc'}", joined)
-        self.assertIn(f"{self.base / 'private/claude.json'} {home / '.claude.json'}", joined)
+        self.assertIn(
+            f"{self.base / 'private/claude.json'} {home / '.claude.json'}", joined
+        )
         self.assertEqual(argv[-2:], ["--", "true"])
 
     def test_secret_variables_removed_except_integration_key(self) -> None:
@@ -794,7 +823,9 @@ class ConfinementTests(AutonomyCase):
 class RealConfinementTests(AutonomyCase):
     """Probes from inside a real bubblewrap sandbox."""
 
-    def confined(self, *command: str, root: Path | None = None) -> subprocess.CompletedProcess[str]:
+    def confined(
+        self, *command: str, root: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
         root = root or self.root
         private = self.base / "private"
         private.mkdir(exist_ok=True)
@@ -926,11 +957,15 @@ class EligibilityTests(AutonomyCase):
                 self.eligible_issue(**kwargs)
                 reasons = self.reasons()
                 self.assertTrue(
-                    any(r.startswith(autonomy.REFUSAL + "scope gate:") for r in reasons),
+                    any(
+                        r.startswith(autonomy.REFUSAL + "scope gate:") for r in reasons
+                    ),
                     reasons,
                 )
         self.eligible_issue()
-        self.gh_data(f"repos_acme_demo_issues_{ISSUE}_sub_issues.json", [{"number": 30}])
+        self.gh_data(
+            f"repos_acme_demo_issues_{ISSUE}_sub_issues.json", [{"number": 30}]
+        )
         self.assertTrue(any("Epic or has sub-issues" in r for r in self.reasons()))
         self.eligible_issue()
         self.gh_data(
@@ -944,7 +979,8 @@ class EligibilityTests(AutonomyCase):
             with self.subTest(kwargs=kwargs):
                 self.eligible_issue(**kwargs)
                 self.assertIn(
-                    autonomy.REFUSAL + "issue has no recorded scope gate", self.reasons()
+                    autonomy.REFUSAL + "issue has no recorded scope gate",
+                    self.reasons(),
                 )
         self.eligible_issue()
         self.gh_data(f"repos_acme_demo_issues_{ISSUE}_comments.json", [])
@@ -972,7 +1008,9 @@ class EligibilityTests(AutonomyCase):
             autonomy.REFUSAL + "privileged action secret provisioning before merge",
             self.reasons(),
         )
-        table = '[autonomous]\nauthorized_privileged_actions = ["secret provisioning"]\n'
+        table = (
+            '[autonomous]\nauthorized_privileged_actions = ["secret provisioning"]\n'
+        )
         self.assertEqual(self.reasons(table), [])
         self.eligible_issue(actions="deploy")
         self.assertIn(
@@ -1004,7 +1042,10 @@ class EligibilityTests(AutonomyCase):
     def test_branch_feature_and_credentials(self) -> None:
         self.eligible_issue()
         self.assertTrue(
-            any("other issue" in r or "is not for issue" in r for r in self.reasons(feature="specs/28-other"))
+            any(
+                "other issue" in r or "is not for issue" in r
+                for r in self.reasons(feature="specs/28-other")
+            )
         )
         self.gh_data("pr-list.json", [{"number": 3}])
         self.assertIn(autonomy.REFUSAL + autonomy.BRANCH_REFUSAL, self.reasons())
@@ -1032,7 +1073,11 @@ class EligibilityTests(AutonomyCase):
             side_effect=autonomy.AutonomyError("confinement unavailable: x"),
         ):
             result = autonomy.check_eligibility(
-                self.root, issue=ISSUE, feature=FEATURE, policy=policy, warnings=warnings
+                self.root,
+                issue=ISSUE,
+                feature=FEATURE,
+                policy=policy,
+                warnings=warnings,
             )
         self.assertIn(
             autonomy.REFUSAL + "confinement unavailable: x",
@@ -1082,7 +1127,9 @@ class RecordRenderTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 record = autonomy.render_record(run, decisions, GOLDEN_CHECKS)
-                self.assertEqual(record, autonomy.render_record(run, decisions, GOLDEN_CHECKS))
+                self.assertEqual(
+                    record, autonomy.render_record(run, decisions, GOLDEN_CHECKS)
+                )
                 self.assertGolden(f"record-{name}.md", record)
                 body = self.body(run, decisions)
                 self.assertGolden(f"pr-body-{name}.md", body)
@@ -1100,13 +1147,15 @@ class RecordRenderTests(unittest.TestCase):
         self.assertIn("| PD-0002 | intent |", record)
         self.assertIn("| PD-0008 |", record)
         self.assertRegex(record, r"\| PD-0002 .*\| PD-0008 \|")
-        self.assertIn("Intent \\| accepted @​team", record)
+        self.assertIn("Intent \\| accepted @\u200bteam", record)
         self.assertIn("F-001 (medium, missing-test, accepted-provisionally)", record)
         self.assertNotIn("Reduced independence", record)
         single = autonomy.render_record(
             fixed_run(cross=False), golden_decisions(cross=False), None
         )
-        self.assertIn("Reduced independence: reviews used the authoring provider.", single)
+        self.assertIn(
+            "Reduced independence: reviews used the authoring provider.", single
+        )
 
     def test_r2_notice_only_for_r2(self) -> None:
         notice = "This is an R2 change. It was made without any prior human approval"
@@ -1116,7 +1165,9 @@ class RecordRenderTests(unittest.TestCase):
         self.assertIn("- agent authority\n- trust model", r2)
         for level in ("R0", "R1"):
             run = fixed_run(risk=level)
-            self.assertNotIn(notice, autonomy.render_record(run, golden_decisions(), None))
+            self.assertNotIn(
+                notice, autonomy.render_record(run, golden_decisions(), None)
+            )
             self.assertNotIn(notice, self.body(run, golden_decisions()))
         self.assertIn(notice, self.body(fixed_run(risk="R2"), golden_decisions()))
 
@@ -1129,7 +1180,9 @@ class RecordRenderTests(unittest.TestCase):
         body = self.body(fixed_run(), decisions)
         self.assertLessEqual(len(body), autonomy.MAX_BODY)
         self.assertIn("Full decision rows:", body)
-        self.assertEqual(len([l for l in body.splitlines() if l.startswith("| PD-")]), 119)
+        self.assertEqual(
+            len([l for l in body.splitlines() if l.startswith("| PD-")]), 119
+        )
 
 
 class PublisherTests(AutonomyCase):
@@ -1140,7 +1193,9 @@ class PublisherTests(AutonomyCase):
         self.eligible_issue()
         (self.gh_dir / "auth.ok").write_text("")
         head = self.git("rev-parse", "HEAD").strip()
-        self.run_record = self.make_run(head=head, issue_title="Demo run", status="completed")
+        self.run_record = self.make_run(
+            head=head, issue_title="Demo run", status="completed"
+        )
         autonomy.write_json(
             autonomy.run_dir(self.root, "run42") / "git-config.json",
             autonomy.config_snapshot(self.root),
@@ -1186,9 +1241,12 @@ class PublisherTests(AutonomyCase):
         os.environ["FAKE_REAL_GIT"] = shutil.which("git", path=self.real_path) or "git"
         self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
         git_calls = [
-            json.loads(line) for line in (self.base / "git.log").read_text().splitlines()
+            json.loads(line)
+            for line in (self.base / "git.log").read_text().splitlines()
         ]
-        commands = [call[4] for call in git_calls if call[:4] == list(autonomy.GIT_HARDENING)]
+        commands = [
+            call[4] for call in git_calls if call[:4] == list(autonomy.GIT_HARDENING)
+        ]
         self.assertEqual(len(commands), len(git_calls), "every git call is hardened")
         self.assertIn(["push", "-u", "origin", "HEAD"], [c[4:8] for c in git_calls])
         self.assertTrue({"add", "commit", "push"} <= set(commands))

@@ -15,13 +15,10 @@ import time
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_autonomy import (  # noqa: E402
+from test_autonomy import (
     FEATURE,
-    ISSUE,
     ROOT,
     TOOLS,
     AutonomyCase,
@@ -31,7 +28,7 @@ from test_autonomy import (  # noqa: E402
 sys.path.pop(0)
 sys.path.insert(0, str(TOOLS))
 try:
-    import run
+    pass
 finally:
     sys.path.pop(0)
 
@@ -163,7 +160,8 @@ class AgentWrapperAutonomousTests(WrapperCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(autonomy.read_run(self.root, "run42")["agent_steps"], 1)
         (bwrap,) = [
-            json.loads(line) for line in (self.base / "bwrap.log").read_text().splitlines()
+            json.loads(line)
+            for line in (self.base / "bwrap.log").read_text().splitlines()
         ]
         self.assertEqual(bwrap[:3], ["--ro-bind", "/", "/"])
         self.assertIn("--unshare-pid", bwrap)
@@ -171,12 +169,16 @@ class AgentWrapperAutonomousTests(WrapperCase):
         self.assertNotIn("GH_TOKEN", env)
         self.assertIn("ANTHROPIC_API_KEY", env)
         (step,) = self.steps()
-        self.assertEqual((step["role"], step["exit_code"], step["ran"]), ("author", 0, True))
+        self.assertEqual(
+            (step["role"], step["exit_code"], step["ran"]), ("author", 0, True)
+        )
         self.assertRegex(step["tree_before"], r"^[0-9a-f]{40}$")
 
     def test_reviewer_role(self) -> None:
         self.make_run()
-        self.assertEqual(self.wrapper(prompt="/speckit-ballast-review plan").returncode, 0)
+        self.assertEqual(
+            self.wrapper(prompt="/speckit-ballast-review plan").returncode, 0
+        )
         self.assertEqual(self.steps()[0]["role"], "reviewer")
 
     def test_expired_deadline_refuses_before_spawn(self) -> None:
@@ -212,7 +214,9 @@ class AgentWrapperAutonomousTests(WrapperCase):
         result = self.wrapper(FAKE_SLEEP="60")
         self.assertEqual(result.returncode, 5, result.stderr)
         self.assertLess(time.monotonic() - started, 40)
-        self.assertEqual(self.steps()[-1]["reason"], "wall-time limit exhausted during the step")
+        self.assertEqual(
+            self.steps()[-1]["reason"], "wall-time limit exhausted during the step"
+        )
         logs = list((self.root / ".specify/workflow-state/run42/agents").iterdir())
         self.assertEqual(len(logs), 1)
         self.assertTrue((logs[0] / "meta.json").exists())
@@ -235,10 +239,14 @@ class AgentWrapperAutonomousTests(WrapperCase):
             step["drafts"],
             {"plan-review.json": __import__("hashlib").sha256(content).hexdigest()},
         )
-        copy = autonomy.snapshot_draft(self.root, "run42", step["step"], "plan-review.json")
+        copy = autonomy.snapshot_draft(
+            self.root, "run42", step["step"], "plan-review.json"
+        )
         self.assertEqual(copy.read_bytes(), content)
         aside = autonomy.run_dir(self.root, "run42") / "set-aside" / step["step"]
-        self.assertEqual(json.loads((aside / "plan-review.json").read_text()), {"planted": True})
+        self.assertEqual(
+            json.loads((aside / "plan-review.json").read_text()), {"planted": True}
+        )
         meta = json.loads(
             next((self.root / ".specify/workflow-state/run42/agents").iterdir())
             .joinpath("meta.json")

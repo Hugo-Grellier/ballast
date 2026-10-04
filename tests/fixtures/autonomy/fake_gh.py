@@ -31,7 +31,9 @@ def serve(name: str, default: str | None = None) -> None:
         sys.exit(1)
 
 
-if (data / f"FAIL_{args[0]}").exists() or (data / f"FAIL_{'_'.join(args[:2])}").exists():
+if (data / f"FAIL_{args[0]}").exists() or (
+    data / f"FAIL_{'_'.join(args[:2])}"
+).exists():
     sys.stderr.write("simulated failure\n")
     sys.exit(1)
 if args[:1] == ["api"]:

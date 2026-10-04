@@ -40,8 +40,13 @@ from pathlib import Path
 sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import autonomy  # noqa: E402
-from launcher import digests, input_bases  # noqa: E402
+try:
+    import autonomy
+    from launcher import digests, input_bases
+except ImportError:  # pragma: no cover - only the ledger's isolated copy
+    # ledger.py imports this file for its patterns alone. Every check that
+    # names a workflow run fails closed below without the Autonomous module.
+    autonomy = None
 
 FEATURE_PATTERN = re.compile(r"specs/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*")
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -538,10 +543,13 @@ RUNNER_FIELDS = ("id", "prev", "at", "provider", "step_id", "role", "agent")
 POINT_KINDS = {
     "plan-review": ("plan",),
     "implementation-review": ("engineering",),
-    "specialist-review": tuple(
-        kind
-        for kind in autonomy.REVIEW_KINDS
-        if kind not in {"plan", "engineering", "spec-reconciliation"}
+    "specialist-review": (
+        "test",
+        "security",
+        "documentation",
+        "architecture",
+        "dependency",
+        "database-migration",
     ),
     "spec-reconciliation": ("spec-reconciliation",),
 }
@@ -579,6 +587,9 @@ def load_run(feature: Feature) -> None:
     """Attach the operator run record of a workflow run, if any."""
     if feature.run_id is None:
         return
+    if autonomy is None:
+        message = "the Autonomous module autonomy.py is missing; reinstall Ballast"
+        raise ContractError(message)
     try:
         record = autonomy.find_run(feature.root, feature.run_id)
     except autonomy.AutonomyError as error:
@@ -615,9 +626,7 @@ def _require_run(feature: Feature) -> dict:
 def _block(feature: Feature, category: str, condition: str, **fields: object) -> None:
     """Record a block for the run, then fail the step."""
     run = _require_run(feature)
-    block = autonomy.make_block(
-        category, condition, run_id=run["run_id"], **fields
-    )
+    block = autonomy.make_block(category, condition, run_id=run["run_id"], **fields)
     autonomy.record_block(feature.root, run["run_id"], block)
     raise BlockedError(f"{category} block: {condition}")
 
@@ -806,9 +815,7 @@ def _string_list(value: object, name: str, limit: int = 20) -> list[str]:
     return sorted({" ".join(v.lower().split()) for v in value})
 
 
-def _validate_review(
-    feature: Feature, review: object, point: str, step: dict
-) -> dict:
+def _validate_review(feature: Feature, review: object, point: str, step: dict) -> dict:
     run = _require_run(feature)
     if not isinstance(review, dict):
         message = f"{point} draft needs a review entry"
@@ -889,7 +896,9 @@ def _validate_draft(  # noqa: C901, PLR0912
         message = f"{point} draft must be a JSON object"
         raise ContractError(message)
     notes = [
-        f"ignored runner-owned field {key}" for key in sorted(data) if key in RUNNER_FIELDS
+        f"ignored runner-owned field {key}"
+        for key in sorted(data)
+        if key in RUNNER_FIELDS
     ] + [
         f"ignored unknown field {key}"
         for key in sorted(data)
@@ -1092,7 +1101,9 @@ def _render_findings(feature: Feature, review: dict) -> None:
 
 
 def _check_narrative(feature: Feature, review: dict) -> None:
-    text = _strip_findings((feature.root / review["report"]).read_text(encoding="utf-8"))
+    text = _strip_findings(
+        (feature.root / review["report"]).read_text(encoding="utf-8")
+    )
     if FINDINGS_HEADING.search(text) or SEVERITY_TAG.search(text):
         message = (
             f"{review['report']} carries findings or severity tags in its narrative; "
@@ -1174,7 +1185,10 @@ def _frozen_check(feature: Feature) -> None:
 
 def _reviewer_tree_check(feature: Feature, steps: list[dict]) -> None:
     before = steps[0].get("tree_before") if steps else None
-    exclusions = (f"{feature.relative}/reviews", f"{feature.relative}/autonomous/drafts")
+    exclusions = (
+        f"{feature.relative}/reviews",
+        f"{feature.relative}/autonomous/drafts",
+    )
     if before and autonomy.tree_digest(feature.root, exclusions) != before:
         _block(
             feature,
@@ -1226,7 +1240,10 @@ def _final_check(feature: Feature, entry: dict) -> None:
             raise ContractError(message)
     check_intent(feature)
     checked = run.get("checked_tree")
-    if not checked or autonomy.checked_digest(feature.root, feature.relative) != checked:
+    if (
+        not checked
+        or autonomy.checked_digest(feature.root, feature.relative) != checked
+    ):
         _block(
             feature,
             "postcondition",
@@ -1323,7 +1340,9 @@ def _expected_drafts(point: str, drafts: list[tuple]) -> None:
 def record_decision(feature: Feature, point: str) -> None:  # noqa: C901, PLR0912
     """Validate the preceding step's drafts and append provisional decisions."""
     run = _require_run(feature)
-    points = [point, "specialist-review"] if point == "implementation-review" else [point]
+    points = (
+        [point, "specialist-review"] if point == "implementation-review" else [point]
+    )
     drafts, steps = _collect_drafts(feature, points)
     _expected_drafts(point, drafts)
     entries = [
@@ -1355,7 +1374,9 @@ def record_decision(feature: Feature, point: str) -> None:  # noqa: C901, PLR091
     for review in reviews:
         _check_dispositions(review)
     if point == "implementation-review":
-        missing = sorted(required_kinds(feature, reviews) - {r["kind"] for r in reviews})
+        missing = sorted(
+            required_kinds(feature, reviews) - {r["kind"] for r in reviews}
+        )
         if missing:
             message = f"required reviews missing: {', '.join(missing)}"
             raise ContractError(message)
@@ -1468,7 +1489,11 @@ def renew_intent(feature: Feature) -> None:
     }
     stored = autonomy.append_decision(feature.root, run["run_id"], entry)
     _write_intent_block(
-        feature, spec, _intent_block(feature, stored), PROVISIONAL_START, PROVISIONAL_END
+        feature,
+        spec,
+        _intent_block(feature, stored),
+        PROVISIONAL_START,
+        PROVISIONAL_END,
     )
     write_record(feature)
     check_intent(feature)
@@ -1549,10 +1574,16 @@ def run_checks(feature: Feature) -> None:
         autonomy.run_dir(feature.root, run["run_id"]) / "checks.json", results
     )
     after = _protected_digests(feature.root)
-    changed = sorted(n for n in before.keys() | after.keys() if before.get(n) != after.get(n))
+    changed = sorted(
+        n for n in before.keys() | after.keys() if before.get(n) != after.get(n)
+    )
     if changed:
         _mark_tampered(feature.root, changed)
-        _block(feature, "tamper", "a check command changed protected inputs: " + ", ".join(changed[:10]))
+        _block(
+            feature,
+            "tamper",
+            "a check command changed protected inputs: " + ", ".join(changed[:10]),
+        )
     write_record(feature)
     failed = [r for r in results if r["exit"] != 0]
     if failed:
@@ -1690,6 +1721,9 @@ def _run_check(feature: Feature, arguments: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Run one check and report the result."""
+    if autonomy is None:
+        sys.stderr.write("workflow contract failed: autonomy.py is missing\n")
+        return 1
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("check", choices=sorted(CHECKS))
     target = parser.add_mutually_exclusive_group(required=True)
@@ -1718,7 +1752,9 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(error, autonomy.AutonomyError)
                 else "postcondition"
             )
-            step = arguments.check + (f" --point {arguments.point}" if arguments.point else "")
+            step = arguments.check + (
+                f" --point {arguments.point}" if arguments.point else ""
+            )
             try:
                 autonomy.record_block(
                     feature.root,

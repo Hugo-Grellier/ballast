@@ -139,8 +139,7 @@ RESUME_REFUSAL = (
     "human-gated: ballast run continue {run_id} --reason block-resolved --ref TEXT"
 )
 HUMAN_GATED_ALTERNATIVE = (
-    "Run it human-gated instead: ballast run start -i idea=... "
-    "-i feature_directory=..."
+    "Run it human-gated instead: ballast run start -i idea=... -i feature_directory=..."
 )
 WIDENING = "ignored [autonomous] {key}: cannot widen eligibility"
 
@@ -457,7 +456,9 @@ def effective_mode(record: dict) -> str:
 def set_status(record: dict, status: str) -> dict:
     """Move a run along its legal transitions only."""
     if status not in TRANSITIONS.get(record["status"], set()):
-        message = f"run {record['run_id']} cannot go from {record['status']} to {status}"
+        message = (
+            f"run {record['run_id']} cannot go from {record['status']} to {status}"
+        )
         raise AutonomyError(message)
     record["status"] = status
     return record
@@ -709,8 +710,7 @@ RECOVERY = {
     "postcondition": "Fix the failed contract, then continue human-gated.",
     "tamper": "Restore the protected files and recreate .venv, delete the "
     "marker, review the checkout, then discard the run state and trust again.",
-    "unfinished-step": "Review the checkout, discard the run state, then start "
-    "again.",
+    "unfinished-step": "Review the checkout, discard the run state, then start again.",
     "trust": "Review the changed workflow inputs and run `ballast trust`, then "
     "continue human-gated.",
     "permission": "Restore the missing permission or credential, then retry.",
@@ -1082,7 +1082,9 @@ def effective_config(root: Path) -> list[tuple[str, str, str, str]]:
         return []
     tokens = result.stdout.split("\0")
     entries = []
-    for scope, origin, pair in zip(tokens[::3], tokens[1::3], tokens[2::3], strict=False):
+    for scope, origin, pair in zip(
+        tokens[::3], tokens[1::3], tokens[2::3], strict=False
+    ):
         key, _, value = pair.partition("\n")
         entries.append((scope, origin, key.lower(), value))
     return entries
@@ -1183,6 +1185,7 @@ def attribute_drivers(root: Path) -> list[str]:
 
 def config_snapshot(root: Path) -> dict:
     """Repository-local Git configuration, its includes and the hooks listing."""
+
     def listed(scope: str) -> list[str]:
         out = git(root, "config", scope, "--list", "-z", check=False).stdout
         # Branch tracking runs no program; the publisher's own `push -u` sets it.
@@ -1278,7 +1281,9 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     stay visible, read-only, when they live under /tmp or /run.
     """
     paths = []
-    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    common = git(
+        root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False
+    )
     if common.returncode == 0:
         paths.append(Path(common.stdout.strip()))
     executable = shutil.which(command[0]) if command else None
@@ -1306,7 +1311,7 @@ def confined_argv(  # noqa: PLR0913 - every input is explicit
     env: dict[str, str] | None = None,
     home: Path | None = None,
 ) -> list[str]:
-    """bwrap argv: read-only host, writable worktree minus protected inputs.
+    """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
     `private` is a wrapper-owned temporary directory for the per-step copy of
     `~/.claude.json`. Agent homes and caches get throwaway overlays,
@@ -1565,9 +1570,7 @@ def _scope_problems(issue: dict, children: list, blockers: list) -> list[str]:
 def unauthorized_actions(actions: list[str], policy: dict) -> list[str]:
     """Declared privileged actions the narrowed policy does not authorize."""
     allowed = set(policy.get("authorized_privileged_actions", []))
-    return sorted(
-        {a for a in actions if a in NEVER_AUTHORIZED or a not in allowed}
-    )
+    return sorted({a for a in actions if a in NEVER_AUTHORIZED or a not in allowed})
 
 
 def risk_reasons(level: str, boundaries: list[str], policy: dict) -> list[str]:
@@ -1583,7 +1586,7 @@ def risk_reasons(level: str, boundaries: list[str], policy: dict) -> list[str]:
     return reasons
 
 
-def check_eligibility(  # noqa: C901, PLR0912, PLR0913 - one list of independent rules
+def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
     root: Path,
     *,
     issue: int,
@@ -1613,16 +1616,16 @@ def check_eligibility(  # noqa: C901, PLR0912, PLR0913 - one list of independent
         if SCOPE_COMMENT.format(issue=issue) in (c.get("body") or "")
     ]
     scope = {"risk": None, "privileged_actions": None, "boundaries": []}
-    if "ready-for-agent" not in _label_names(data) or len(comments) != 1:
-        reasons.append(f"{REFUSAL}issue has no recorded scope gate")
-    elif comments[0].get("author_association") not in SCOPE_AUTHORS:
+    if "ready-for-agent" not in _label_names(data) or len(comments) != 1 or comments[0].get("author_association") not in SCOPE_AUTHORS:
         reasons.append(f"{REFUSAL}issue has no recorded scope gate")
     else:
         scope = parse_scope(comments[0].get("body") or "")
         if scope["risk"] is None:
             reasons.append(f"{REFUSAL}scope record lacks Risk:")
         if scope["privileged_actions"] is None:
-            reasons.append(f"{REFUSAL}scope record lacks Privileged actions before merge:")
+            reasons.append(
+                f"{REFUSAL}scope record lacks Privileged actions before merge:"
+            )
     actions = scope["privileged_actions"] or []
     if scope["risk"]:
         reasons += risk_reasons(scope["risk"], scope["boundaries"], policy)
@@ -1632,7 +1635,9 @@ def check_eligibility(  # noqa: C901, PLR0912, PLR0913 - one list of independent
     ]
     match = FEATURE.fullmatch(feature)
     if match is None or int(match.group(1)) != issue:
-        reasons.append(f"{REFUSAL}feature directory {feature} is not for issue #{issue}")
+        reasons.append(
+            f"{REFUSAL}feature directory {feature} is not for issue #{issue}"
+        )
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
     if not branch or branch == "HEAD" or branch == default_branch:
         reasons.append(f"{REFUSAL}{BRANCH_REFUSAL}")
@@ -1693,14 +1698,12 @@ MENTION = re.compile(r"@(?=[A-Za-z0-9_-])")
 def neutralize(text: str) -> str:
     """Escape agent text for Markdown: no HTML, markers or mentions."""
     text = html.escape(" ".join(str(text).split()), quote=False)
-    return MENTION.sub("@​", text).replace("|", "\\|")
+    return MENTION.sub("@\u200b", text).replace("|", "\\|")
 
 
 def _quote_block(text: str) -> list[str]:
     lines = str(text).replace("\r\n", "\n").split("\n")
-    return [
-        "> " + MENTION.sub("@​", html.escape(line, quote=False)) for line in lines
-    ]
+    return ["> " + MENTION.sub("@\u200b", html.escape(line, quote=False)) for line in lines]
 
 
 def _code(value: str) -> str:
@@ -1958,7 +1961,9 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
     for short in (False, True):
         sections = _sections(run, decisions, checks, link, short=short)
         if short:
-            sections.insert(0, f"Full decision rows: {link(record_path(run['feature']))}")
+            sections.insert(
+                0, f"Full decision rows: {link(record_path(run['feature']))}"
+            )
             sections.insert(1, "")
         body = "\n".join([*header, *sections, *footer]) + "\n"
         if len(body) <= MAX_BODY:
@@ -2012,7 +2017,9 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         if branch in {"", "HEAD", default_branch}:
             return refuse("postcondition", BRANCH_REFUSAL)
         try:
-            prs = _gh("pr", "list", "--head", branch, "--state", "open", "--json", "url")
+            prs = _gh(
+                "pr", "list", "--head", branch, "--state", "open", "--json", "url"
+            )
         except AutonomyError as error:
             return refuse("forge", str(error))
         if prs:
@@ -2046,9 +2053,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         staged = git(
             root, "diff", "--cached", "--name-only", "--no-renames", head
         ).stdout.split()
-        problems = [
-            p for p in staged if _protected_path(p) or (p not in allowed)
-        ] + [
+        problems = [p for p in staged if _protected_path(p) or (p not in allowed)] + [
             p
             for p in staged
             if (root / p).is_file() and (root / p).stat().st_size > MAX_PUBLISHED_FILE
