@@ -1781,6 +1781,58 @@ class DraftPrRunTests(unittest.TestCase):
                 self.assertEqual(status, 0)
                 self.assertEqual(order, ["import", (self.repo.root, run_id)])
 
+    def test_start_pins_the_branch_before_the_engine_and_resume_never_does(
+        self,
+    ) -> None:
+        # DEC-0006: a resume must not re-record a branch an agent switched to.
+        for args, run_id, expected in (
+            (("start", "-i", f"feature_directory={FEATURE}"), "run42xxx", True),
+            (("resume", "run42"), "run42", False),
+        ):
+            pins: list[tuple[Path, str, bool]] = []
+            self.dump.unlink(missing_ok=True)
+
+            def pin(
+                root: Path, rid: str, pins: list[tuple[Path, str, bool]] = pins
+            ) -> None:
+                pins.append((root, rid, self.dump.exists()))
+
+            with (
+                self.subTest(command=args[0]),
+                patch.object(
+                    self.run.uuid, "uuid4", return_value=SimpleNamespace(hex=run_id)
+                ),
+                patch.object(self.run, "archive_policy"),
+                patch.object(self.run.draft_pr, "pin_branch", side_effect=pin),
+                patch.object(
+                    self.run.draft_pr,
+                    "checkpoint",
+                    return_value=self.run.draft_pr.Outcome("pending", "no-branch"),
+                ),
+            ):
+                self.main(0, *args)
+            self.assertEqual(
+                pins, [(self.repo.root, run_id, False)] if expected else []
+            )
+
+    def test_failing_pin_never_stops_the_start(self) -> None:
+        with (
+            patch.object(self.run, "archive_policy"),
+            patch.object(self.run.draft_pr, "pin_branch", side_effect=OSError("x")),
+            patch.object(self.run, "_summary"),
+            patch.object(self.run, "_record"),
+            patch.object(self.run, "import_run", return_value=0),
+            patch.object(
+                self.run.draft_pr,
+                "checkpoint",
+                return_value=self.run.draft_pr.Outcome(
+                    "blocked-unlinked", "branch-unpinned"
+                ),
+            ),
+        ):
+            status, _ = self.main(0, "start", "-i", f"feature_directory={FEATURE}")
+        self.assertEqual(status, 0)
+
     def test_paused_run_still_records_its_checkpoint(self) -> None:
         run_dir = self.repo.root / ".specify/workflows/runs/run42"
         (run_dir / "log.jsonl").write_text(

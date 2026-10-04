@@ -63,7 +63,7 @@ PR_REASONS: dict[str, frozenset[str]] = {
         }
     ),
     "created": frozenset(),
-    "reused": frozenset({"section-unmanaged"}),
+    "reused": frozenset({"section-unmanaged", "body-changed"}),
     "failed-retryable": frozenset(
         {
             "gh-missing",
@@ -88,6 +88,8 @@ PR_REASONS: dict[str, frozenset[str]] = {
             "not-github",
             "no-repository",
             "repository-mismatch",
+            "branch-unpinned",
+            "branch-mismatch",
         }
     ),
 }

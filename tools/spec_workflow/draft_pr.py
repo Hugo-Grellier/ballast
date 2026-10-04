@@ -62,7 +62,7 @@ TITLE_LIMIT = 256
 SCOPE_LIMIT = 500
 SCOPE_FIELDS = ("Main outcome:", "Risk:", "Scope gate:")
 SCOPE_AUTHORS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-COMPARE_FILE_CAP = 300
+COMPARE_FILE_CAP = 3000  # GitHub's own limit for a compare's file list.
 NAME = re.compile(r"[A-Za-z0-9._-]{1,100}")
 ISSUE = re.compile(r"specs/([1-9][0-9]{0,8})-")
 HTTP_STATUS = re.compile(r"HTTP ([0-9]{3})")
@@ -90,6 +90,9 @@ REMEDIES: dict[tuple[str, str | None], str] = {
     ),
     ("pending", "diff-unclassified"): "open the PR by hand; Ballast will adopt it",
     ("reused", "section-unmanaged"): "keep one Ballast section in the PR body",
+    ("reused", "body-changed"): (
+        "none: the PR body changed during the check; the next run refreshes the section"
+    ),
     ("failed-retryable", "gh-missing"): (
         "install the GitHub CLI; ballast doctor checks it"
     ),
@@ -142,6 +145,13 @@ REMEDIES: dict[tuple[str, str | None], str] = {
         "create the Issue, or fix the number in the feature directory"
     ),
     ("blocked-unlinked", "not-github"): "none: Draft PRs need a GitHub upstream",
+    ("blocked-unlinked", "branch-unpinned"): (
+        "start a new run with ballast run start on the feature branch"
+    ),
+    ("blocked-unlinked", "branch-mismatch"): (
+        "check out {branch}, the branch this run started on, with its upstream, "
+        "then resume"
+    ),
     ("blocked-unlinked", "no-repository"): (
         'declare [github] repository = "OWNER/NAME" in ballast.toml, then run '
         "ballast trust"
@@ -262,6 +272,55 @@ def _path_entries() -> list[str]:
 def _child_path(root: Path) -> str:
     """PATH for gh and git: gh runs git itself, so drop checkout entries too."""
     return os.pathsep.join(ledger.trusted_entries(_path_entries(), (root.resolve(),)))
+
+
+def _pin_path(root: Path, run_id: str) -> Path:
+    return state_dir(root) / "draft-pr" / f"{run_id}.json"
+
+
+def pin_branch(root: Path, run_id: str) -> None:
+    """Record the run's branch and upstream when the operator starts it.
+
+    HEAD and the upstream live in agent-writable `.git/config`; every later
+    checkpoint must still see this branch. Without an upstream yet, the branch
+    is expected to be published under its own name.
+    """
+    if not RUN_ID_PATTERN.fullmatch(run_id):
+        return
+    git, _ = _resolve("git", root)
+    if git is None:
+        return
+    head = _command([git, "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root)
+    branch = head.stdout.strip()
+    if head.returncode or not branch or branch.startswith("-"):
+        return
+    upstream = _command(
+        [git, "for-each-ref", "--format=%(upstream:remoteref)", f"refs/heads/{branch}"],
+        cwd=root,
+    )
+    ref = upstream.stdout.strip()
+    published = ref.removeprefix("refs/heads/") if ref.startswith("refs/heads/") else ""
+    path = _pin_path(root, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(
+        json.dumps({"branch": branch, "published": published or branch}),
+        encoding="utf-8",
+    )
+
+
+def _branch_pin(root: Path, run_id: str) -> tuple[str, str] | None:
+    try:
+        pin = json.loads(_pin_path(root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(pin, dict):
+        return None
+    branch, published = pin.get("branch"), pin.get("published")
+    if not (
+        isinstance(branch, str) and branch and isinstance(published, str) and published
+    ):
+        return None
+    return branch, published
 
 
 def _pinned_repository(root: Path) -> tuple[str, str] | None:
@@ -491,6 +550,7 @@ class _Checkpoint:
                 "not-published",
                 fill={"remote": remote or "origin", "branch": branch},
             )
+        self.pinned_branch(branch, published)
         run.remote, run.published = remote, published
         result = self.git("remote", "get-url", remote)
         match = GITHUB_REMOTE.fullmatch(result.stdout.strip())
@@ -518,6 +578,14 @@ class _Checkpoint:
         run.base = base
         if base == published:
             self.stop("pending", "on-base-branch")
+
+    def pinned_branch(self, branch: str, published: str) -> None:
+        """Accept only the branch and upstream recorded at `ballast run start`."""
+        pin = _branch_pin(self.run.root, self.run.run_id)
+        if pin is None:
+            self.stop("blocked-unlinked", "branch-unpinned")
+        if (branch, published) != pin:
+            self.stop("blocked-unlinked", "branch-mismatch", fill={"branch": pin[0]})
 
     def pinned(self, owner: str, repo: str) -> tuple[str, str]:
         """Accept the upstream only when it is the repository pinned in ballast.toml."""
@@ -632,6 +700,16 @@ class _Checkpoint:
             if body[start:end] == section:
                 return reused
             updated = body[:start] + section + body[end:]
+        # GitHub has no conditional update for a PR body (DEC-0007): re-read it
+        # just before writing and leave a body a human changed meanwhile.
+        result = self.api(f"repos/{run.owner}/{run.repo}/pulls/{pr.number}")
+        if result.returncode:
+            self.failed(result)
+        current = _json(result)
+        if not isinstance(current, dict) or (current.get("body") or "") != pr.body:
+            return replace(
+                reused, reason="body-changed", remedy=REMEDIES["reused", "body-changed"]
+            )
         result = self.gh(
             "pr",
             "edit",
@@ -650,7 +728,8 @@ class _Checkpoint:
         run = self.run
         result = self.api(
             f"repos/{run.owner}/{run.repo}/compare/"
-            f"{_quote(run.base)}...{_quote(run.published)}"
+            f"{_quote(run.base)}...{_quote(run.published)}?per_page=100",
+            paginate=True,
         )
         if result.returncode:
             if _status(result) == 404:  # noqa: PLR2004
@@ -660,9 +739,12 @@ class _Checkpoint:
                     fill={"remote": run.remote, "branch": run.published},
                 )
             self.failed(result)
-        data = _json(result)
-        files = data.get("files") if isinstance(data, dict) else None
-        files = [item for item in files or [] if isinstance(item, dict)]
+        files = [
+            item
+            for page in _pages(_json(result))
+            for item in page.get("files") or []
+            if isinstance(item, dict)
+        ]
         prefix = f"{run.feature}/"
         for item in files:
             for key in ("filename", "previous_filename"):

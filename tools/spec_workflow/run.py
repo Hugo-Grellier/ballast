@@ -25,6 +25,7 @@ receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -157,6 +158,9 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0912, PLR0915 - Preserve run
     }
     if argv[0] == "start":
         archive_policy(ROOT, run_id)
+        # Before any agent step can change HEAD or .git/config (DEC-0006).
+        with contextlib.suppress(Exception):  # The checkpoint reports it unpinned.
+            draft_pr.pin_branch(ROOT, run_id)
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(command, cwd=ROOT, env=env, check=False)  # noqa: S603

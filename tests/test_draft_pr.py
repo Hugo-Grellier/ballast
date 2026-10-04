@@ -8,6 +8,7 @@ import fcntl
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -205,6 +206,7 @@ class FakeGitHub:
         self.failures: dict[str, draft_pr.Result] = {}
         self.git_overrides: dict[str, draft_pr.Result] = {}
         self.on_create: Any = None
+        self.on_pull: Any = None
         self.next_number = 42
 
     def __call__(
@@ -247,6 +249,8 @@ class FakeGitHub:
         path = argv[-1]
         if "/pulls?" in path:
             return "pulls"
+        if re.search(r"/pulls/[0-9]+$", path):
+            return "pull"
         if path.endswith("/comments?per_page=100"):
             return "comments"
         if "/compare/" in path:
@@ -259,7 +263,7 @@ class FakeGitHub:
 
     def serve(self, argv: list[str], stdin: str | None) -> draft_pr.Result:  # noqa: C901, PLR0911, PLR0912
         stage = self.stage(argv)
-        if stage in {"pulls", "comments"}:
+        if stage in {"pulls", "comments", "compare"}:
             assert argv[1:4] == ["api", "--paginate", "--slurp"], argv  # noqa: S101
         if stage in self.failures:
             return self.failures[stage]
@@ -272,12 +276,22 @@ class FakeGitHub:
         if stage == "pulls":
             pages = self.pr_pages if self.pr_pages is not None else [self.prs]
             return self.ok(copy.deepcopy(pages))
+        if stage == "pull":
+            number = int(argv[-1].rsplit("/", 1)[1])
+            if self.on_pull is not None:
+                self.on_pull(number)
+            for item in self.prs:
+                if item["number"] == number:
+                    return self.ok(copy.deepcopy(item))
+            return http(404)
         if stage == "compare":
-            return (
-                self.ok({"files": self.files})
-                if self.files is not None
-                else (http(404))
-            )
+            if self.files is None:
+                return http(404)
+            pages = [
+                {"files": self.files[i : i + 100]}
+                for i in range(0, max(len(self.files), 1), 100)
+            ]
+            return self.ok(pages)
         if stage == "template":
             if self.template is None:
                 return http(404)
@@ -350,6 +364,9 @@ class CheckpointCase(unittest.TestCase):
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
+        draft_pr.pin_branch(self.repo.root, RUN)
+        self.fake.calls.clear()
+        self.fake.stdins.clear()
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -474,16 +491,49 @@ class IdentityTests(CheckpointCase):
         )
 
     def test_upstream_under_another_name_is_followed(self) -> None:
+        # The operator configures the upstream before `ballast run start` pins it.
         git(self.repo.root, "config", "branch.feat-x.merge", "refs/heads/other-name")
+        draft_pr.pin_branch(self.repo.root, RUN)
         self.fake.on_create = None
         self.assertOutcome(self.check(), "created")
         pulls = self.fake.gh_calls("pulls")[0][-1]
         self.assertIn("head=o:other-name&", pulls)
         self.assertTrue(
-            self.fake.gh_calls("compare")[0][-1].endswith("main...other-name")
+            self.fake.gh_calls("compare")[0][-1].endswith(
+                "main...other-name?per_page=100"
+            )
         )
         create = self.fake.gh_calls("create")[0]
         self.assertEqual(create[create.index("--head") + 1], "other-name")
+
+    def test_run_without_a_branch_pin_is_unlinked(self) -> None:
+        # DEC-0006: a run started before the pin existed, or whose pin failed.
+        draft_pr._pin_path(self.repo.root, RUN).unlink()  # noqa: SLF001
+        outcome = self.check()
+        self.assertOutcome(outcome, "blocked-unlinked", "branch-unpinned")
+        self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_branch_switched_after_start_is_refused(self) -> None:
+        # DEC-0006: HEAD and its upstream live in agent-writable Git state.
+        git(self.repo.root, "checkout", "-q", "-b", "victim")
+        git(self.repo.root, "config", "branch.victim.remote", "origin")
+        git(self.repo.root, "config", "branch.victim.merge", "refs/heads/victim")
+        outcome = self.check()
+        self.assertOutcome(outcome, "blocked-unlinked", "branch-mismatch")
+        self.assertIn("feat-x", outcome.remedy)
+        self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_upstream_redirected_after_start_is_refused(self) -> None:
+        git(self.repo.root, "config", "branch.feat-x.merge", "refs/heads/victim")
+        self.assertOutcome(self.check(), "blocked-unlinked", "branch-mismatch")
+        self.assertEqual(self.fake.gh_calls(), [])
+
+    def test_branch_pin_lives_outside_the_checkout(self) -> None:
+        path = draft_pr._pin_path(self.repo.root, RUN)  # noqa: SLF001
+        self.assertFalse(path.resolve().is_relative_to(self.repo.root))
+        self.assertEqual(
+            json.loads(path.read_text()), {"branch": "feat-x", "published": "feat-x"}
+        )
 
     def test_non_github_remote_is_unlinked(self) -> None:
         git(self.repo.root, "remote", "set-url", "origin", "https://gitlab.com/o/r.git")
@@ -663,9 +713,16 @@ class PendingTests(CheckpointCase):
                 self.assertOutcome(self.check(), "created")
 
     def test_capped_spec_only_list_is_unclassified(self) -> None:
-        self.fake.files = [{"filename": f"{FEATURE}/f{i}.md"} for i in range(300)]
+        # GitHub's compare lists at most 3000 files.
+        self.fake.files = [{"filename": f"{FEATURE}/f{i}.md"} for i in range(3000)]
         self.assertOutcome(self.check(), "pending", "diff-unclassified")
         self.assertNoWrite()
+
+    def test_change_beyond_the_first_page_is_meaningful(self) -> None:
+        # DEC-0008: every page is read, not only the first 300 files.
+        self.fake.files = [{"filename": f"{FEATURE}/f{i}.md"} for i in range(450)]
+        self.fake.files.append({"filename": "src/late.py"})
+        self.assertOutcome(self.check(), "created")
 
 
 class BodyTests(CheckpointCase):
@@ -833,6 +890,33 @@ class ReuseTests(CheckpointCase):
         self.fake.prs.append(pull(9, draft=False, body="Opened by hand."))
         self.assertOutcome(self.check(), "reused")
         self.assertEqual(self.fake.body_of("edit"), "Opened by hand.\n\n" + section())
+
+    def test_body_edited_during_the_check_is_left_alone(self) -> None:
+        # DEC-0007: no conditional update exists; re-read and skip on change.
+        self.fake.prs.append(pull(9, draft=False, body="Opened by hand."))
+
+        def human_edit(_number: int) -> None:
+            self.fake.prs[0]["body"] = "Opened by hand, then edited."
+
+        self.fake.on_pull = human_edit
+        outcome = self.check()
+        self.assertOutcome(outcome, "reused", "body-changed")
+        self.assertIn("next run", outcome.remedy)
+        self.assertEqual(self.fake.gh_calls("edit"), [])
+        self.assertEqual(self.fake.prs[0]["body"], "Opened by hand, then edited.")
+        self.assertEqual(self.recorded()[-1]["reason"], "body-changed")
+
+    def test_edit_rereads_the_pr_right_before_writing(self) -> None:
+        self.fake.prs.append(pull(9, body="Opened by hand."))
+        self.assertOutcome(self.check(), "reused")
+        stages = [self.fake.stage(argv) for argv in self.fake.gh_calls()]
+        self.assertEqual(stages[-2:], ["pull", "edit"])
+
+    def test_failed_reread_is_retryable_and_writes_nothing(self) -> None:
+        self.fake.prs.append(pull(9, body="Opened by hand."))
+        self.fake.failures["pull"] = http(502)
+        self.assertOutcome(self.check(), "failed-retryable", "github-error")
+        self.assertEqual(self.fake.gh_calls("edit"), [])
 
     def test_hand_opened_pr_already_referencing_the_issue_is_untouched(self) -> None:
         for body in (
