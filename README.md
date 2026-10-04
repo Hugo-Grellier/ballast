@@ -81,6 +81,36 @@ ballast ledger snapshot|check|report ...
 
 Only `setup` downloads; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
+### Autonomous runs
+
+An eligible feature can run unattended to a Draft PR. Every gate decision is then recorded as agent-provisional, and merging the PR is the single human approval. Eligible means a scoped leaf Issue (its intake scope comment has `Risk: R0|R1|R2` and `Privileged actions before merge: none` or an authorized action), started from a feature branch with no open PR. Autonomous needs `bwrap` (bubblewrap) with user namespaces on the host, because every agent step and check runs confined; a missing `bwrap` refuses the start.
+
+```bash
+ballast run start --mode autonomous [--wall-time MINUTES] [--max-agent-steps N] \
+    -i issue=N -i idea="Issue #N: OUTCOME" -i feature_directory=specs/N-slug [-i integration=auto]
+ballast run continue RUN_ID --reason block-resolved|changes-requested --ref TEXT
+ballast run publish RUN_ID
+```
+
+`--wall-time` (1–1440 minutes, default 240) and `--max-agent-steps` (1–200, default 30) are accepted only with `--mode autonomous`. An ineligible start is refused before any agent step and prints the human-gated command instead. A run ends with a Draft PR or with a block that names its reason and the recovery command. `ballast run resume` refuses an Autonomous run; `continue` records the operator's decision, lowers the run to human-gated and starts the remaining human gates. `publish` retries a failed publication without running an agent. Nothing in an Autonomous run merges, marks a PR ready, releases or deploys.
+
+Two `ballast.toml` tables configure it:
+
+```toml
+[autonomous]                              # optional; can only narrow eligibility
+risk = ["R0", "R1"]
+excluded_boundaries = ["agent authority"]
+authorized_privileged_actions = ["secret provisioning"]
+wall_time_minutes = 120
+max_agent_steps = 24
+
+[checks]                                  # required for Autonomous
+commands = ["uvx ruff check", "uv run python -m unittest"]
+timeout_minutes = 30
+```
+
+Keys that would widen eligibility, and `merge`, `release`, `deploy` or `mark ready` as authorized actions, are ignored with a warning. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Run `ballast trust` after changing either table.
+
 ## Dogfooding
 
 This repository installs Ballast like any project: `ballast.toml` pins a released version, `AGENTS.md` comes from the template, and Ballast-specific rules live in `docs/policies/project/` and `.specify/memory/constitution.md`. CI installs the working copy into the repository on every PR and fails if the install leaves any file that is not ignored.
