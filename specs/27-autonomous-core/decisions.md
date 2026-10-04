@@ -94,3 +94,7 @@
 - **Recommendation**: option 1 for #27 (smallest change, no new agent authority); option 2 as a follow-up if spec-changing resolutions turn out to be common.
 - **Needs**: human resolution (operator).
 
+## DEC-0006 — Resolution
+
+- Option 1, provisional under the operator's standing authority for Epic #11 children (2026-10-04); confirm at merge. A `spec.md` change made by resolutions blocks the Autonomous run as stale intent; the operator continues human-gated, where `approve-intent` decides. It fails closed, satisfies FR-012 without a new agent step, and keeps a deciding identity for every intent decision (FR-010).
+
