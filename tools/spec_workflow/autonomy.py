@@ -2218,13 +2218,6 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         if branch in {"", "HEAD", default_branch}:
             return refuse("postcondition", BRANCH_REFUSAL)
-        rewrites = _local_rewrites(root, repo)
-        if rewrites:
-            return refuse(
-                "postcondition",
-                f"repository Git configuration rewrites {repo}'s URL: "
-                + ", ".join(rewrites),
-            )
         if not _origin_is(root, repo):
             return refuse("postcondition", ORIGIN_REFUSAL)
         push_url = _push_url(root, repo)
@@ -2357,44 +2350,55 @@ def _push_url(root: Path, repo: str) -> str:
     return f"ssh://git@github.com/{repo}.git"
 
 
-def _local_rewrites(root: Path, repo: str) -> list[str]:
-    """`url.*.insteadOf`/`pushInsteadOf` keys an agent could write for repo.
-
-    Either URL form `_push_url` builds counts. Repository and command-line
-    scopes only: global and system configuration belong to the operator.
-    """
-    listed = git(
-        root,
-        "config",
-        "--show-scope",
-        "--get-regexp",
-        r"^url\..*\.(push)?insteadof$",
-        check=False,
-    ).stdout
-    urls = (f"https://github.com/{repo}.git", f"ssh://git@github.com/{repo}.git")
-    found = []
-    for line in listed.splitlines():
-        scope, _, rest = line.partition("\t")
-        key, _, value = rest.partition(" ")
-        if (
-            scope in {"local", "worktree", "command"}
-            and value
-            and any(url.startswith(value) for url in urls)
-        ):
-            found.append(f"{scope} {key}")
-    return found
-
-
 def _push(root: Path, url: str, branch: str) -> subprocess.CompletedProcess[str]:
-    """Push HEAD to the pinned URL with draft_pr's environment, then track it."""
+    """Push HEAD to the pinned URL without reading the checkout's configuration.
+
+    The checkout's config is agent-writable: `core.sshCommand`,
+    `credential.helper`, includes, URL rewrites and hooks could run commands
+    with the operator's credentials or redirect the push, and no list of them
+    is complete. So the push runs from a throwaway bare repository with an
+    empty config that borrows the checkout's objects; only the operator's
+    global and system configuration apply. On success it records `origin`
+    as the branch's upstream, which the #17 checkpoint reads.
+    """
     draft_pr = _trusted()
+    head = git(root, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+    objects = git_path(root, "--git-common-dir") / "objects"
+    executable, _ = draft_pr._resolve("git", root)  # noqa: SLF001
+    if executable is None:
+        message = "git not found outside working trees"
+        raise AutonomyError(message)
     env = {
-        **{k: v for k, v in os.environ.items() if k not in draft_pr.GIT_LOCATION},
-        "PATH": draft_pr._child_path(root),  # noqa: SLF001
+        key: value
+        for key, value in os.environ.items()
+        if key not in draft_pr.GIT_LOCATION
+        and not key.startswith(("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"))
+        and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
     }
-    pushed = git(root, "push", url, f"HEAD:refs/heads/{branch}", env=env, check=False)
+    env["PATH"] = draft_pr._child_path(root)  # noqa: SLF001
+    state = state_dir(root)
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix="ballast-push-", dir=state) as away:
+        bare = Path(away) / "push.git"
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(  # noqa: S603 - trusted git, argument list
+                [executable, *GIT_HARDENING, *args],
+                cwd=away,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+
+        made = run("init", "-q", "--bare", str(bare))
+        if made.returncode != 0:
+            return made
+        alternates = bare / "objects/info/alternates"
+        alternates.write_text(f"{objects}\n", encoding="utf-8")
+        pushed = run(f"--git-dir={bare}", "push", url, f"{head}:refs/heads/{branch}")
     if pushed.returncode == 0:
-        # What `push -u origin` recorded; the #17 checkpoint reads it.
         git(root, "config", f"branch.{branch}.remote", "origin")
         git(root, "config", f"branch.{branch}.merge", f"refs/heads/{branch}")
     return pushed

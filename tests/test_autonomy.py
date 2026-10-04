@@ -108,8 +108,10 @@ class AutonomyCase(unittest.TestCase):
         gitconfig.write_text(
             "[user]\n\tname = t\n\temail = t@example.test\n"
             "[init]\n\tdefaultBranch = main\n"
-            f'[url "{origin}"]\n\tpushInsteadOf = {GITHUB_URL}\n'
+            f'[url "{self.base}/gh/"]\n\tpushInsteadOf = https://github.com/\n'
         )
+        (self.base / "gh/acme").mkdir(parents=True)
+        (self.base / "gh/acme/demo.git").symlink_to(origin)
         _install(FIXTURES / "fake_gh.py", self.bin / "gh")
         self.real_path = os.environ["PATH"]
         self.env = {
@@ -1432,16 +1434,20 @@ class PublisherTests(AutonomyCase):
             for line in (self.base / "git.log").read_text().splitlines()
         ]
         commands = [
-            call[4] for call in git_calls if call[:4] == list(autonomy.GIT_HARDENING)
+            next(word for word in call[4:] if not word.startswith("--git-dir="))
+            for call in git_calls
+            if call[:4] == list(autonomy.GIT_HARDENING)
         ]
         self.assertEqual(len(commands), len(git_calls), "every git call is hardened")
-        # DEC-0007: to the pinned URL, never through origin's pushurl.
-        push = [
-            "push",
-            "https://github.com/acme/demo.git",
-            "HEAD:refs/heads/27-demo-run",
-        ]
-        self.assertIn(push, [c[4:7] for c in git_calls])
+        # DEC-0007: HEAD's commit to the pinned URL, from a bare repository
+        # with an empty config, never through origin or the checkout's config.
+        head = self.git("rev-parse", "HEAD").strip()
+        ((push,),) = [[c[4:]] for c in git_calls if "push" in c[4:6]]
+        self.assertTrue(push[0].startswith("--git-dir="), push)
+        self.assertFalse(Path(push[0][10:]).is_relative_to(self.root))
+        self.assertEqual(
+            push[1:], ["push", GITHUB_URL, f"{head}:refs/heads/27-demo-run"]
+        )
         self.assertTrue({"add", "commit", "push"} <= set(commands))
         forbidden = ("merge", "ready", "--force", "-f", "release", "deploy", "rebase")
         for call in [*git_calls, *self.gh_calls()]:
@@ -1710,15 +1716,74 @@ class PublisherTests(AutonomyCase):
         self.assertEqual(self.branches(evil), "")
         self.assertIn("27-demo-run", self.branches(self.base / "origin.git"))
 
-    def test_local_url_rewrite_of_the_pinned_repository_blocks(self) -> None:
+    def assert_pushed_to_origin_only(self, evil: Path) -> None:
+        self.assertEqual(self.branches(evil), "")
+        head = self.git("rev-parse", "HEAD").strip()
+        origin = str(self.base / "origin.git")
+        pushed = subprocess.run(  # noqa: S603
+            ["git", "--git-dir", origin, "rev-parse", "refs/heads/27-demo-run"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(pushed, head)
+
+    def test_local_push_rewrite_never_redirects_the_push(self) -> None:
         evil = self.bare("evil.git")
-        for key in ("pushInsteadOf", "insteadOf"):
-            with self.subTest(key=key):
-                self.git("config", f"url.{evil}.{key}", "https://github.com/acme/")
-                self.snapshot()
-                self.refused("postcondition", "rewrites")
-                self.assertEqual(self.branches(evil), "")
-                self.git("config", "--unset", f"url.{evil}.{key}")
+        self.git("config", f"url.{evil}.pushInsteadOf", "https://github.com/acme/")
+        self.snapshot()
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        self.assert_pushed_to_origin_only(evil)
+
+    def test_local_fetch_rewrite_is_refused_and_never_pushed_to(self) -> None:
+        evil = self.bare("evil.git")
+        self.git("config", f"url.{evil}.insteadOf", "https://github.com/acme/")
+        self.snapshot()
+        self.refused("postcondition", autonomy.ORIGIN_REFUSAL)
+        self.assertEqual(self.branches(evil), "")
+
+    def test_rewrite_key_with_spaces_never_redirects_the_push(self) -> None:
+        spaced = self.base / "e v"
+        spaced.mkdir()
+        evil = self.bare("e v/demo.git")
+        # As long as the operator's own rewrite, and later: it would win.
+        self.git("config", f"url.{spaced}/.pushInsteadOf", "https://github.com/acme/")
+        self.snapshot()
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        self.assert_pushed_to_origin_only(evil)
+
+    def test_included_config_never_redirects_the_push(self) -> None:
+        evil = self.bare("evil.git")
+        included = self.root / ".git/evil.inc"
+        included.write_text(
+            f'[url "{evil}"]\n\tpushInsteadOf = https://github.com/acme/\n'
+        )
+        self.git("config", "include.path", str(included))
+        self.snapshot()
+        self.assertTrue(autonomy.publish(self.root, "run42")["ok"])
+        self.assert_pushed_to_origin_only(evil)
+
+    def test_local_ssh_command_and_credential_helper_never_run(self) -> None:
+        """The push reads none of the checkout's configuration."""
+        marker = self.base / "local-ran"
+        script = self.root / ".git/evil.sh"
+        script.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        script.chmod(0o755)
+        # Over ssh, with the operator's own (failing) ssh: only the local
+        # core.sshCommand could run the sentinel.
+        self.git("remote", "set-url", "origin", "ssh://git@github.com/acme/demo.git")
+        operator = self.base / "gitconfig"
+        for key, value in (("core.sshCommand", "false"),):
+            subprocess.run(  # noqa: S603
+                ["git", "config", "--file", str(operator), key, value],  # noqa: S607
+                check=True,
+            )
+        self.git("config", "core.sshCommand", str(script))
+        self.git("config", "credential.helper", f"!{script}")
+        self.snapshot()
+        result = autonomy.publish(self.root, "run42")
+        self.assertEqual(result["category"], "forge", result)
+        self.assertFalse(marker.exists())
 
     def test_hooks_path_pre_push_never_runs(self) -> None:
         marker = self.base / "hook-ran"
