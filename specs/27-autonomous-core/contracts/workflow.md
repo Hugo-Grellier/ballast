@@ -33,7 +33,7 @@ The definition has no `gate` step. The table maps each human gate of `ballast-fe
 | 12 | `plan` | command `speckit.plan` | same | — |
 | 13 | `validate-plan` | shell `plan` | same | — |
 | 14 | `review-plan` | command `speckit.ballast.review` (args `plan`), `integration: {{ inputs.review_integration }}` | `review-plan` gate (manual review) | `reviews/plan.md` + draft |
-| 15 | `record-plan-review` | shell `record-decision --point plan-review` | — | Blocks on every high or critical finding, whatever its proposed disposition (FR-019) |
+| 15 | `record-plan-review` | shell `record-decision --point plan-review` | — | Blocks on every high or critical finding, whatever its proposed disposition (FR-019), and on any verdict other than `approved` (every review recorder) |
 | 16 | `decide-plan` | command `speckit.ballast.decide` (args `plan`) | `review-plan` approval | Draft |
 | 17 | `record-plan` | shell `record-decision --point plan` | — | — |
 | 18 | `tasks` | command `speckit.tasks` | same | — |
@@ -49,13 +49,13 @@ The definition has no `gate` step. The table maps each human gate of `ballast-fe
 | 28 | `record-implementation-review` | shell `record-decision --point implementation-review` | — | Required-kind coverage (R-08); severity block; risk re-check |
 | 29 | `resolve-decisions` | command `speckit.ballast.resolve` | `reconcile-intent` | Provisional `DEC-NNNN — Resolution` records + drafts |
 | 30 | `record-resolutions` | shell `record-decision --point decision-resolution` | — | — |
-| 30a | `renew-intent` | shell `record-provisional-intent --renew` | — | When `spec.md`'s digest differs from the current intent PD, appends a superseding provisional intent decision attributed to `runner` (no deciding agent), referencing the resolutions that changed it, marked material, with the merge summary stating that the renewed spec was not re-reviewed; otherwise a no-op. `converge` (32) then reconciles plan-derived tasks against the renewed spec. |
+| 30a | `renew-intent` | shell `record-provisional-intent --renew` | — | When `spec.md`'s digest differs from the current intent PD, records a `postcondition` block (stale intent) naming the resolutions that changed it: the runner never decides intent (FR-010, FR-012; implementation review codex-1 F4, DEC-0006), and the continuation's `approve-intent` gate decides the changed spec. Otherwise a no-op. |
 | 31 | `validate-decisions` | shell `decisions` | same | Mode-aware: provisional resolutions accepted only in Autonomous mode |
 | 32 | `converge` | command `speckit.converge` | same | — |
 | 33 | `reconcile-spec` | command `speckit.ballast.review` (args `spec-reconciliation`), review integration | `spec-reconciliation` gate | `reviews/convergence.md` with `- Verdict:` |
 | 34 | `record-reconciliation` | shell `record-decision --point spec-reconciliation` | — | — |
 | 35 | `validate-convergence` | shell `convergence` | same | Pending tasks block (no fix loop) |
-| 35a | `run-checks` | shell `run-checks` (trusted, bubblewrap-confined) | — (agent-reported today) | Runs `[checks] commands` from `ballast.toml`; non-zero, timeout or missing table blocks (research R-12). Then records the tree digest (`git write-tree` of the index after `git add --all` in a private index file, excluding protected inputs) in the run record |
+| 35a | `run-checks` | shell `run-checks` (trusted, bubblewrap-confined) | — (agent-reported today) | Refuses before any check unless the code outside `specs/<f>/` still equals `frozen_tree` (review codex-1 F3). Runs `[checks] commands` from `ballast.toml`; non-zero, timeout or missing table blocks (research R-12), and so does a check that changes the checked tree. Records the tree digest taken before the checks (`git write-tree` of the index after `git add --all` in a private index file, excluding protected inputs) in the run record |
 | 36 | `decide-final` | command `speckit.ballast.decide` (args `final-acceptance`) | `final-acceptance` | Draft |
 | 37 | `record-final` | shell `record-decision --point final-acceptance` | — | Requires one current PD for every point (SC-002); re-hashes every current PD's `artifact` and re-runs `check_intent`; requires the tree digest recorded at `run-checks` to be unchanged |
 

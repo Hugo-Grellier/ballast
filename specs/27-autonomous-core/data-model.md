@@ -93,7 +93,7 @@ Invariants:
 
 `{ "kind": "plan"|"engineering"|"test"|"security"|"documentation"|"architecture"|"dependency"|"database-migration"|"spec-reconciliation", "verdict": "approved"|"changes-requested"|"partial"|"failed", "report": "specs/<f>/reviews/<kind>.md", "cross_provider": bool, "author_provider": str, "findings": [{ "id": "F-NNN", "severity": "critical"|"high"|"medium"|"low"|"info", "label": "spec-violation"|"implementation-bug"|"architecture-issue"|"missing-test"|"spec-ambiguity"|"proposed-product-change", "disposition": "resolved"|"accepted-provisionally"|"open", "reason": str|null, "evidence": [path|url] }] }`
 
-`resolved` and `accepted-provisionally` are valid only for `medium` and below; `accepted-provisionally` also needs a `reason`. `open` is valid only for `low` and `info`.
+`resolved` and `accepted-provisionally` are valid only for `medium` and below; `accepted-provisionally` also needs a `reason`. `open` is valid only for `low` and `info`. Only the verdict `approved` lets the run proceed: `changes-requested`, `partial` and `failed` record a `review-finding` block, with or without findings (implementation review codex-1 F5).
 
 ## Block: `block.json`
 
@@ -130,4 +130,4 @@ The draft is untrusted input, validated by the recorder against [contracts/decis
   <!-- workflow-provisional: end -->
   ```
 
-  The block is stale as soon as `spec_digest(spec.md)` differs (FR-012, AC-008). A spec change made by a later provisional decision needs a new `intent` decision that supersedes the old one.
+  The block is stale as soon as `spec_digest(spec.md)` differs (FR-012, AC-008). A spec change made by a later provisional decision needs a new `intent` decision that supersedes the old one, by a deciding agent or a human; the runner never records one, so `renew-intent` blocks the run as stale intent (DEC-0006).

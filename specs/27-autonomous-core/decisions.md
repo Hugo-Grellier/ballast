@@ -81,3 +81,16 @@
 - **Resolution**: Only the publisher reports a `permission` block (`gh` missing or unauthenticated at publication). The block-draft contract is unchanged: agents report only `decision` or `contradiction`, and a missing permission inside a confined step fails the step.
 - **Changed**: T045 and research R-10 narrowed to the publisher source; `contracts/decision-draft.md` states that agents never report `permission`.
 - **Tests**: `RunBlockTests.test_publisher_permission_failure` (`tests/test_autonomous_run.py`), `AutonomousBlockEngineTests.test_permission` (`tests/test_spec_workflow.py`), and a new `permission` case in `BlockRecordTests.test_agent_block_draft_rules` (`tests/test_autonomy.py`) refusing it in an agent draft. T045 ticked.
+
+## DEC-0006 — Proposal
+
+- **Found during**: implementation review codex-1, finding F4 (2026-10-04).
+- **Conflict**: [contracts/workflow.md](contracts/workflow.md) step 30a, as approved, had `renew-intent` append a superseding intent decision attributed to `runner` (no deciding agent) when a resolution changed `spec.md`. FR-010 requires every provisional decision to name the deciding agent (provider, model, role), and FR-012 requires a stale intent to stop the run. The approved spec wins over the contract.
+- **Label**: spec violation (implementation and contract against FR-010 and FR-012).
+- **Changed (fail-closed, pending this resolution)**: `renew_intent()` in `tools/spec_workflow/artifacts.py` no longer records an intent decision. When the spec digest differs from the current intent decision, it records a `postcondition` block naming the resolutions that changed the spec; the operator continues human-gated and `approve-intent` decides the changed spec. Step 30a, `data-model.md` and the plan's acceptance row are updated; `spec.md` is unchanged. Test: `ProvisionalIntentTests.test_renew_blocks_stale_intent_after_a_spec_change` (task T069d).
+- **Options**:
+  1. Keep the block (current code): any spec-changing resolution ends the Autonomous part of the run.
+  2. Add an agent step to `ballast-autonomous` after `record-resolutions` (for example `speckit.ballast.decide` with args `intent`, recorded by `record-decision --point intent`) so a deciding agent supersedes the stale intent and the run continues; `--renew` then only verifies that the current intent matches the spec.
+- **Recommendation**: option 1 for #27 (smallest change, no new agent authority); option 2 as a follow-up if spec-changing resolutions turn out to be common.
+- **Needs**: human resolution (operator).
+
