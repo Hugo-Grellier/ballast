@@ -32,7 +32,7 @@ Spec Kit artifacts and accepted product/technical documents are authoritative fo
 
 ## Risk and conditional guidance
 
-Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval. All feature PRs require human merge approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
+Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval: before the change in a human-gated run; in an eligible Autonomous run (`ballast run start --mode autonomous`), every intermediate decision is agent-provisional and the merge decision is the single human approval, including for R2. A provisional decision is never human approval. All feature PRs require human merge approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
 
 | When changing | Read and use |
 | --- | --- |

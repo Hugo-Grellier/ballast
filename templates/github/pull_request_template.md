@@ -14,7 +14,7 @@ For a feature, link `intent.md`, `spec.md`, `plan.md`, `tasks.md`, any `decision
 
 - [ ] R0
 - [ ] R1
-- [ ] R2 — link explicit human approval
+- [ ] R2 — human-gated: link explicit human approval; Autonomous run: the pre-change approval was agent-provisional, and merging this PR is the human approval
 
 ## Affected areas
 
