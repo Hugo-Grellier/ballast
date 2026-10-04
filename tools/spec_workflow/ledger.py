@@ -48,6 +48,52 @@ MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,63}")
 POLICY_ROW = re.compile(r"[A-Za-z0-9`][A-Za-z0-9`_./:+,() -]{0,127}")
 AC = re.compile(r"AC-[0-9]{3}")
 SHA = re.compile(r"[0-9a-f]{64}")
+PR_URL = re.compile(
+    r"https://github\.com/[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}"
+    r"/pull/[1-9][0-9]{0,9}"
+)
+# Draft PR checkpoint outcomes and the reasons each may carry (draft_pr.py).
+PR_REASONS: dict[str, frozenset[str]] = {
+    "pending": frozenset(
+        {
+            "no-branch",
+            "not-published",
+            "on-base-branch",
+            "no-meaningful-change",
+            "diff-unclassified",
+        }
+    ),
+    "created": frozenset(),
+    "reused": frozenset({"section-unmanaged", "body-changed"}),
+    "failed-retryable": frozenset(
+        {
+            "gh-missing",
+            "gh-unauthenticated",
+            "gh-forbidden",
+            "github-unreachable",
+            "github-error",
+            "lock-busy",
+            "internal-error",
+            "gh-untrusted",
+            "git-untrusted",
+        }
+    ),
+    "blocked-ambiguous": frozenset(
+        {"several-open", "base-mismatch", "create-unverified"}
+    ),
+    "blocked-closed": frozenset({"closed", "merged"}),
+    "blocked-unlinked": frozenset(
+        {
+            "no-issue-number",
+            "issue-not-found",
+            "not-github",
+            "no-repository",
+            "repository-mismatch",
+            "branch-unpinned",
+            "branch-mismatch",
+        }
+    ),
+}
 SOURCES = {"runner", "client-counter", "operator-attested", "agent-reported"}
 RANK = {"economy": 0, "standard": 1, "senior": 2, "critical": 3}
 EFFORT_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
@@ -135,6 +181,10 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
             "product_decision",
             "final_acceptance",
         },
+    },
+    "pull_request": {
+        "outcome": set(PR_REASONS),
+        "reason": set().union(*PR_REASONS.values()),
     },
 }
 
@@ -253,7 +303,17 @@ FIELDS: dict[str, dict[str, str]] = {
         "tasks_digest?": "sha",
         "manifest_digest?": "sha",
     },
+    "pull_request": {
+        "outcome": "label",
+        "reason?": "label",
+        "issue?": "int",
+        "pr_number?": "int",
+        "pr_url?": "url",
+        "matches?": "int",
+    },
 }
+# Written only by the runner or its Draft PR checkpoint, never by `record`.
+RUNNER_ONLY = frozenset({"run", "step", "gate", "snapshot", "pull_request"})
 
 
 class LedgerError(ValueError):
@@ -265,10 +325,75 @@ def fail(message: str) -> NoReturn:
     raise LedgerError(message)
 
 
+def in_working_tree(path: Path, roots: tuple[Path, ...] = ()) -> bool:
+    """Whether a resolved path lies in one of roots or under a `.git` parent."""
+    return any(path.is_relative_to(root) for root in roots) or any(
+        os.path.lexists(parent / ".git") for parent in (path, *path.parents)
+    )
+
+
+def resolve_program(
+    name: str, entries: list[str], excluded: tuple[Path, ...] = ()
+) -> tuple[str | None, bool]:
+    """Find a program outside every Git working tree, as `ballast doctor` does.
+
+    Returns the resolved absolute path, or None and whether a copy was found
+    only in a working tree or a relative PATH entry.
+    """
+    kept = trusted_entries(entries, excluded)
+    dropped = [entry or "." for entry in entries if entry not in kept]
+    shadowed = False
+    for entry in kept:
+        found = _executable(Path(entry) / name)
+        if found is None:
+            continue
+        program = found.resolve()
+        if not in_working_tree(program, excluded):
+            return str(program), False
+        shadowed = True
+    return None, shadowed or any(_executable(Path(e) / name) for e in dropped)
+
+
+TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")  # noqa: S108 - Refused, never used.
+
+
+def agent_temp_roots() -> tuple[Path, ...]:
+    """Directories an agent may write outside the checkout.
+
+    Codex's workspace-write sandbox allows /tmp and $TMPDIR; a program found
+    there is as untrusted as one in a working tree.
+    """
+    names = {*TEMP_ROOTS, os.environ.get("TMPDIR", "")} - {""}
+    return tuple(Path(name).resolve() for name in sorted(names))
+
+
+def trusted_entries(entries: list[str], excluded: tuple[Path, ...] = ()) -> list[str]:
+    """Return the absolute PATH entries that lie outside every Git working tree."""
+    return [
+        entry
+        for entry in entries
+        if entry
+        and Path(entry).is_absolute()
+        and not in_working_tree(Path(entry).resolve(), excluded)
+    ]
+
+
+def _executable(path: Path) -> Path | None:
+    return path if path.is_file() and os.access(path, os.X_OK) else None
+
+
 def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    # Never a bare `git`: a checkout-local one could be agent-written.
+    git, _ = resolve_program(
+        "git",
+        os.environ.get("PATH", "").split(os.pathsep),
+        (root.resolve(), *agent_temp_roots()),
+    )
+    if git is None:
+        fail("git not found outside working trees")
     # No filter driver runs, whatever .gitattributes an agent added.
-    listed = subprocess.run(
-        ["git", "config", "--list", "--name-only", "-z"],  # noqa: S607
+    listed = subprocess.run(  # noqa: S603
+        [git, "config", "--list", "--name-only", "-z"],
         cwd=root,
         env=env,
         capture_output=True,
@@ -282,7 +407,7 @@ def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     except AutonomyError as error:
         fail(str(error))
     result = subprocess.run(  # noqa: S603
-        ["git", *filters, *args],  # noqa: S607 - Git is required local tooling.
+        [git, *filters, *args],
         cwd=root,
         env=env,
         capture_output=True,
@@ -354,6 +479,7 @@ def _valid_value(kind: str, value: object) -> bool:
         "id": ID,
         "ac": AC,
         "sha": SHA,
+        "url": PR_URL,
     }[kind]
     return bool(pattern.fullmatch(value))
 
@@ -422,10 +548,19 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912 - Explicit schema ch
             fail(f"unknown {key}")
     if event["kind"] == "run" and data["action"] == "ended" and "status" not in data:
         fail("run end needs status")
+    if event["kind"] == "pull_request":
+        if data["outcome"] in {"created", "reused"}:
+            if "pr_number" not in data or "pr_url" not in data:
+                fail(f"{data['outcome']} needs pr_number and pr_url")
+        elif "reason" not in data:
+            fail(f"{data['outcome']} needs reason")
+        if "reason" in data and data["reason"] not in PR_REASONS[data["outcome"]]:
+            fail(f"reason does not apply to {data['outcome']}")
     required_source = {
         "run": "runner",
         "step": "runner",
         "gate": "runner",
+        "pull_request": "runner",
         "usage": "client-counter",
         "human_action": "operator-attested",
     }.get(event["kind"])
@@ -1666,6 +1801,12 @@ def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share thi
     if problems:
         result["status"] = "invalid"
         return result
+    checkpoints = [event for event in events if event["kind"] == "pull_request"]
+    result["pull_request"] = (
+        {**checkpoints[-1]["data"], "observed_at": checkpoints[-1]["observed_at"]}
+        if checkpoints
+        else {"available": False, "reason": "no checkpoint recorded"}
+    )
     runs = [event for event in events if event["kind"] == "run"]
     result["status"] = (
         runs[-1]["data"].get("status", "incomplete") if runs else "incomplete"
@@ -2226,7 +2367,14 @@ def _text_report(data: dict[str, Any]) -> str:
     lines = [f"Run {data['run_id']}: {data['status']}"]
     if data.get("problems"):
         lines.extend(f"Problem: {problem}" for problem in data["problems"])
-    for name in ("outcome", "workflow", "routing", "efficiency", "human_effort"):
+    for name in (
+        "outcome",
+        "workflow",
+        "routing",
+        "efficiency",
+        "human_effort",
+        "pull_request",
+    ):
         if name in data:
             lines.append(f"{name}: {json.dumps(data[name], sort_keys=True)}")
     return "\n".join(lines)
@@ -2256,7 +2404,7 @@ def _record(  # noqa: C901, PLR0913, PLR0917 - Validate fixed observation fields
 ) -> None:
     if not isinstance(data, dict):
         fail("observation data must be an object")
-    if kind in {"run", "step", "gate", "snapshot"}:
+    if kind in RUNNER_ONLY:
         fail("this observation must come from the runner or snapshot command")
     if kind == "verification" and data.get("ac_id"):
         fail("AC verification must use the check command")
@@ -2334,9 +2482,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0915 - CLI bra
     importer.add_argument("run_id")
     recorder = sub.add_parser("record", help="Append bounded explicit evidence")
     recorder.add_argument("run_id")
-    recorder.add_argument(
-        "kind", choices=sorted(FIELDS.keys() - {"run", "step", "gate", "snapshot"})
-    )
+    recorder.add_argument("kind", choices=sorted(FIELDS.keys() - RUNNER_ONLY))
     recorder.add_argument(
         "--source", required=True, choices=sorted(SOURCES - {"runner"})
     )

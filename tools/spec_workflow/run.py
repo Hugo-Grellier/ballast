@@ -31,10 +31,17 @@ After every start or resume it archives the run under
 `<git common dir>/speckit-runs/<run>/`, local to the clone and shared by its
 worktrees, with an Autonomous run's operator records under `autonomous/`. The
 full run state and agent logs stay outside Git tracking.
+
+Then, once per invocation and after any Autonomous publication, it runs the
+Draft PR checkpoint (draft_pr.py, imported here before any agent step) and
+prints its one-line outcome; nothing the checkpoint does changes the exit
+status. The workflow engine, and so every agent step, never
+receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -62,6 +69,7 @@ sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import autonomy  # noqa: E402
+import draft_pr  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
 BIN = ROOT / ".ballast/spec_workflow/bin"
@@ -147,7 +155,11 @@ def _refuse(message: str, *, alternative: bool = False) -> int:
 
 def _environment(run_id: str) -> dict[str, str]:
     return {
-        **os.environ,
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in draft_pr.TOKEN_VARIABLES
+        },
         "BALLAST_SPEC_WORKFLOW": "1",
         "SPECKIT_WORKFLOW_RUN_ID": run_id,
         "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(BIN / "claude"),
@@ -159,6 +171,12 @@ def _launch(command: list[str], run_id: str, *, start: bool) -> int:
     """Run Spec Kit, then summarize, archive and import the run."""
     if start:
         archive_policy(ROOT, run_id)
+        # Before any agent step can change HEAD or .git/config (DEC-0006).
+        with contextlib.suppress(Exception):  # The checkpoint reports it unpinned.
+            pinned = draft_pr.pin_branch(ROOT, run_id)
+            if pinned:
+                # The operator sees which branch the run's PR will follow.
+                sys.stdout.write(f"Draft PR: branch pinned: {pinned}\n")
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(  # noqa: S603
@@ -208,6 +226,19 @@ def _launch(command: list[str], run_id: str, *, start: bool) -> int:
             if status == 0:
                 status = 1
     return status
+
+
+def _checkpoint(run_id: str) -> None:
+    """Run the Draft PR checkpoint once, last in the invocation (DEC-0007).
+
+    Never assigns status: a PR failure must not change the run's result.
+    After an Autonomous publication it finds and reuses the publisher's PR.
+    """
+    try:
+        line = draft_pr.format_line(draft_pr.checkpoint(ROOT, run_id))
+    except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
+        line = f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
+    sys.stdout.write(line + "\n")
 
 
 def _archive_operator(run_id: str) -> None:
@@ -405,6 +436,7 @@ def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
         return _finish(run_id, status)
     finally:
         _archive_operator(run_id)
+        _checkpoint(run_id)
 
 
 def _engine_state(run_id: str) -> dict:
@@ -680,9 +712,12 @@ def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, P
         f"integration={source['integration']}",
     ]
     status = _launch(command, new_id, start=True)
-    _complete_continuation(new_id, status)
-    _archive_operator(run_id)
-    _archive_operator(new_id)
+    try:
+        _complete_continuation(new_id, status)
+        _archive_operator(run_id)
+        _archive_operator(new_id)
+    finally:
+        _checkpoint(new_id)
     return status
 
 
@@ -796,7 +831,10 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
     else:
         run_id = options[0]
         command = [specify, "workflow", "resume", *options]
-    return _launch(command, run_id, start=argv[0] == "start")
+    try:
+        return _launch(command, run_id, start=argv[0] == "start")
+    finally:
+        _checkpoint(run_id)
 
 
 if __name__ == "__main__":

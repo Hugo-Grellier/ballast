@@ -53,6 +53,7 @@
 - **Resolution**: Keep `docs/adr/0003-autonomous-provisional-decisions.md` on this branch. The final ADR number is settled at merge against `feat-github-draft-pr`'s `0003-launcher-github-authority.md`: whichever branch merges second renumbers its ADR and updates its references in `plan.md`, `tasks.md` and the ADR.
 - **Changed now**: nothing.
 - **Tests**: none (artifact numbering only).
+- **Settled at merge (2026-10-04)**: `feat-github-draft-pr` (#17, PR #33) merged to `main` first with `docs/adr/0003-launcher-github-authority.md`, so this branch renamed its ADR to `docs/adr/0004-autonomous-provisional-decisions.md` (title `ADR-0004`) when it merged `origin/main`, and updated the references in `plan.md` and `tasks.md` (T004, T071, T073).
 
 ## DEC-0002 — Resolution
 

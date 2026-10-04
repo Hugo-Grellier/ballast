@@ -81,6 +81,8 @@ ballast ledger snapshot|check|report ...
 
 Only `setup` downloads; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
+At the end of every `ballast run` invocation the launcher makes sure one Draft PR shows an issue-linked feature once its published branch holds a change outside `specs/<feature>/`, and reuses that PR afterwards. It needs `[github] repository = "OWNER/NAME"` in `ballast.toml`, uses your authenticated `gh` 2.48 or later, never pushes, and never marks a PR ready, merges or closes it. The [Draft PR section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#draft-pr) lists the reported states and their remedies.
+
 ### Autonomous runs
 
 An eligible feature can run unattended to a Draft PR. Every gate decision is then recorded as agent-provisional, and merging the PR is the single human approval. Eligible means a scoped leaf Issue (its intake scope comment has `Risk: R0|R1|R2` and `Privileged actions before merge: none` or an authorized action), started from a feature branch with no open PR. Autonomous needs `bwrap` (bubblewrap) with user namespaces on the host, because every agent step and check runs confined; a missing `bwrap` refuses the start.

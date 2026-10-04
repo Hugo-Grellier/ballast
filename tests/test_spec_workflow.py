@@ -2092,7 +2092,8 @@ class AutonomousEngineCase(AutonomyCase):
         block = autonomy.read_block(self.root, run_id)
         self.assertIn(f"Next: {block['command']}", out)
         self.assertIn(f"Autonomous run blocked ({block['category']})", out)
-        self.assertNotIn("Draft PR", out)
+        # DEC-0007: the #17 checkpoint line is printed, but no PR is published.
+        self.assertNotRegex(out, r"Draft PR: (https://|created|reused)")
         if block["category"] not in autonomy.PUBLISH_RETRY:
             self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
         return run_id, block, out
@@ -2524,3 +2525,221 @@ class AutonomousConfinementEngineTests(AutonomousEngineCase):
         self.assertEqual(block["category"], "postcondition")
         self.assertIn("intent", block["condition"])
         self.assertEqual(self.agent_commands(run_id)[-1], "speckit-plan")
+
+
+FAKE_SPECIFY = """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_ENV_DUMP"], "w") as handle:
+    json.dump(dict(os.environ), handle)
+sys.exit(int(os.environ["FAKE_EXIT"]))
+"""
+TOKENS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+
+
+def _run_module() -> object:
+    sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+    try:
+        import run  # noqa: PLC0415
+    finally:
+        sys.path.pop(0)
+    return run
+
+
+class DraftPrRunTests(unittest.TestCase):
+    """run.py reaches the Draft PR checkpoint once and never lets it change a run."""
+
+    def setUp(self) -> None:
+        RunHistoryTests.setUp(self)  # type: ignore[arg-type]
+        RunHistoryTests._make_importable_run(self)  # type: ignore[arg-type]  # noqa: SLF001
+        self.specify = self.repo.root / "fake-specify"
+        self.specify.write_text(FAKE_SPECIFY)
+        self.specify.chmod(0o755)
+        self.dump = self.repo.root / "engine-env.json"
+        self.run = _run_module()
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def main(self, code: int, *args: str, **env: str) -> tuple[int, str]:
+        output = io.StringIO()
+        with (
+            patch.object(self.run, "ROOT", self.repo.root),
+            patch.object(self.run.shutil, "which", return_value=str(self.specify)),
+            patch.dict(
+                os.environ,
+                {"FAKE_EXIT": str(code), "FAKE_ENV_DUMP": str(self.dump), **env},
+            ),
+            redirect_stdout(output),
+        ):
+            status = self.run.main(list(args or ("resume", "run42")))
+        return status, output.getvalue()
+
+    def test_raising_checkpoint_never_changes_the_exit_status(self) -> None:
+        for error in (RuntimeError("boom"), KeyboardInterrupt()):
+            for code in (0, 1):
+                with (
+                    self.subTest(error=type(error).__name__, code=code),
+                    patch.object(self.run.draft_pr, "checkpoint", side_effect=error),
+                ):
+                    status, output = self.main(code)
+                    self.assertEqual(status, code)
+                    self.assertIn(
+                        "Draft PR: failed-retryable (internal-error) "
+                        f"({type(error).__name__})",
+                        output,
+                    )
+                    self.assertNotIn("boom", output)
+            with (
+                self.subTest(error=type(error).__name__, code=130),
+                patch.object(self.run.draft_pr, "checkpoint", side_effect=error),
+                patch.object(
+                    self.run,
+                    "subprocess",
+                    SimpleNamespace(run=Mock(side_effect=KeyboardInterrupt)),
+                ),
+            ):
+                status, output = self.main(0)
+                self.assertEqual(status, 130)
+                self.assertIn("Draft PR: failed-retryable (internal-error)", output)
+
+    def test_engine_never_receives_github_tokens_but_checkpoint_does(self) -> None:
+        seen: dict[str, str] = {}
+
+        def checkpoint(root: Path, _run_id: str) -> object:
+            result = self.run.draft_pr._command(  # noqa: SLF001
+                [
+                    sys.executable,
+                    "-c",
+                    "import json, os; print(json.dumps(dict(os.environ)))",
+                ],
+                cwd=root,
+            )
+            seen.update(json.loads(result.stdout))
+            return self.run.draft_pr.Outcome("pending", "no-branch")
+
+        tokens = {name: f"secret-{name}" for name in TOKENS}
+        with patch.object(self.run.draft_pr, "checkpoint", side_effect=checkpoint):
+            status, output = self.main(0, **tokens)
+        self.assertEqual(status, 0)
+        engine = json.loads(self.dump.read_text())
+        self.assertEqual(engine["BALLAST_SPEC_WORKFLOW"], "1")
+        for name in TOKENS:
+            self.assertNotIn(name, engine)
+            self.assertEqual(seen[name], tokens[name])
+        self.assertEqual(self.run.draft_pr.TOKEN_VARIABLES, TOKENS)
+        self.assertIn("Draft PR: pending (no-branch)", output)
+
+    def test_checkpoint_runs_once_after_import_for_start_and_resume(self) -> None:
+        for args, run_id in (
+            (("start", "-i", f"feature_directory={FEATURE}"), "run42xxx"),
+            (("resume", "run42"), "run42"),
+        ):
+            order: list[object] = []
+
+            def importer(_root: Path, _rid: str, order: list[object] = order) -> int:
+                order.append("import")
+                return 0
+
+            def checkpoint(root: Path, rid: str, order: list[object] = order) -> object:
+                order.append((root, rid))
+                return self.run.draft_pr.Outcome("pending", "no-branch")
+
+            with (
+                self.subTest(command=args[0]),
+                patch.object(
+                    self.run.uuid, "uuid4", return_value=SimpleNamespace(hex=run_id)
+                ),
+                patch.object(self.run, "archive_policy"),
+                patch.object(self.run, "_summary"),
+                patch.object(self.run, "_record"),
+                patch.object(self.run, "import_run", side_effect=importer),
+                patch.object(self.run.draft_pr, "checkpoint", side_effect=checkpoint),
+            ):
+                status, _ = self.main(0, *args)
+                self.assertEqual(status, 0)
+                self.assertEqual(order, ["import", (self.repo.root, run_id)])
+
+    def test_start_pins_the_branch_before_the_engine_and_resume_never_does(
+        self,
+    ) -> None:
+        # DEC-0006: a resume must not re-record a branch an agent switched to.
+        for args, run_id, expected in (
+            (("start", "-i", f"feature_directory={FEATURE}"), "run42xxx", True),
+            (("resume", "run42"), "run42", False),
+        ):
+            pins: list[tuple[Path, str, bool]] = []
+            self.dump.unlink(missing_ok=True)
+
+            def pin(
+                root: Path, rid: str, pins: list[tuple[Path, str, bool]] = pins
+            ) -> str:
+                pins.append((root, rid, self.dump.exists()))
+                return "feat-x"
+
+            with (
+                self.subTest(command=args[0]),
+                patch.object(
+                    self.run.uuid, "uuid4", return_value=SimpleNamespace(hex=run_id)
+                ),
+                patch.object(self.run, "archive_policy"),
+                patch.object(self.run.draft_pr, "pin_branch", side_effect=pin),
+                patch.object(
+                    self.run.draft_pr,
+                    "checkpoint",
+                    return_value=self.run.draft_pr.Outcome("pending", "no-branch"),
+                ),
+            ):
+                _, output = self.main(0, *args)
+            self.assertEqual(
+                pins, [(self.repo.root, run_id, False)] if expected else []
+            )
+            # The operator sees which branch the run's PR will follow.
+            self.assertEqual("Draft PR: branch pinned: feat-x" in output, expected)
+
+    def test_failing_pin_never_stops_the_start(self) -> None:
+        with (
+            patch.object(self.run, "archive_policy"),
+            patch.object(self.run.draft_pr, "pin_branch", side_effect=OSError("x")),
+            patch.object(self.run, "_summary"),
+            patch.object(self.run, "_record"),
+            patch.object(self.run, "import_run", return_value=0),
+            patch.object(
+                self.run.draft_pr,
+                "checkpoint",
+                return_value=self.run.draft_pr.Outcome(
+                    "blocked-unlinked", "branch-unpinned"
+                ),
+            ),
+        ):
+            status, _ = self.main(0, "start", "-i", f"feature_directory={FEATURE}")
+        self.assertEqual(status, 0)
+
+    def test_paused_run_still_records_its_checkpoint(self) -> None:
+        run_dir = self.repo.root / ".specify/workflows/runs/run42"
+        (run_dir / "log.jsonl").write_text(
+            '{"event":"step_started","step_id":"scope-gate","type":"gate"}\n'
+            '{"event":"step_completed","step_id":"scope-gate","status":"paused"}\n'
+            '{"event":"workflow_finished","status":"paused"}\n'
+        )
+        status, output = self.main(0)
+        self.assertEqual(status, 0)
+        self.assertIn("Draft PR: pending (not-published)", output)
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import ledger  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        events, problems = ledger.read(self.repo.root, "run42")
+        self.assertEqual(problems, [])
+        checkpoints = [event for event in events if event["kind"] == "pull_request"]
+        self.assertEqual(len(checkpoints), 1)
+        self.assertEqual(checkpoints[0]["data"]["outcome"], "pending")
+
+    def test_agents_are_still_denied_push_and_gh(self) -> None:
+        settings = json.loads(
+            (ROOT / "tools/spec_workflow/claude-settings.json").read_text()
+        )
+        self.assertIn("Bash(git push*)", settings["permissions"]["deny"])
+        self.assertIn("Bash(gh *)", settings["permissions"]["deny"])
+        for rule in settings["permissions"]["allow"]:
+            self.assertFalse(rule.startswith(("Bash(gh", "Bash(git push")), rule)

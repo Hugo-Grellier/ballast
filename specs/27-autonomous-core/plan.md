@@ -88,7 +88,7 @@ Full rationale: [research.md](research.md).
   - The roadmap, [Priority 4](../../docs/plans/2026-10-02-product-roadmap.md#priority-4--let-the-operator-choose-the-level-of-supervision).
   - `templates/policies/spec-kit-workflow.md`, "Workflow runner contract".
   - [Constitution](../../.specify/memory/constitution.md).
-- **Proposed architecture decisions**: Record ADR `docs/adr/0001-autonomous-provisional-decisions.md`, the first ADR in this repository. It covers:
+- **Proposed architecture decisions**: Record ADR `docs/adr/0004-autonomous-provisional-decisions.md`. It covers:
   - the separate gate-less workflow, instead of conditional gates;
   - the operator-state, hash-chained decision log with committed projections;
   - publication by the trusted runner;
@@ -118,7 +118,7 @@ New files:
 - `templates/spec-kit/workflows/autonomous/workflow.yml` and `templates/spec-kit/workflows/continue/workflow.yml` (contract: [workflow.md](contracts/workflow.md)).
 - `templates/spec-kit/extensions/ballast/extension.yml` and `commands/speckit.ballast.{decide,clarify,review,resolve}.md`.
 - `tests/test_autonomy.py`.
-- `docs/adr/0001-autonomous-provisional-decisions.md`.
+- `docs/adr/0004-autonomous-provisional-decisions.md`.
 
 Changed files:
 
