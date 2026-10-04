@@ -459,7 +459,8 @@ class CompatibilityTests(unittest.TestCase):
         shutil.copytree(ROOT / "tools", standard / "tools")
         (standard / "tools/cli.toml").unlink()
         (standard / "tools/setup").write_text(
-            "import sys; print('setup', *sys.argv[1:])\n"
+            "import sys; print('setup', *sys.argv[1:], "
+            "sys.flags.isolated, sys.flags.no_site)\n"
         )
         self.env = {
             **os.environ,
@@ -485,7 +486,7 @@ class CompatibilityTests(unittest.TestCase):
         setup = self.ballast("setup", "--extra")
         self.assertEqual(
             (setup.returncode, setup.stdout),
-            (0, f"setup --project {self.project} --extra\n"),
+            (0, f"setup --project {self.project} --extra 1 1\n"),
         )
         refused = self.ballast("run", "start")
         self.assertEqual(refused.returncode, 2)

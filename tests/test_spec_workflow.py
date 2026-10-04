@@ -1193,6 +1193,33 @@ class InterpreterStartupTests(unittest.TestCase):
             subprocess.run([python, "-I", "-S", "-c", "pass"], check=True)  # noqa: S603
             self.assertFalse(marker.exists())
 
+    def test_launcher_starts_every_tool_with_isolation_and_no_site(self) -> None:
+        # run.py holds the operator's GitHub credentials; site-packages .pth
+        # code must never run before it (constitution: python3 -I -S).
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import launcher  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".ballast/spec_workflow").mkdir(parents=True)
+            (root / ".ballast/spec_workflow/run.py").write_text("")
+            for command in ("run", "ledger"):
+                calls: list[list[str]] = []
+                with (
+                    self.subTest(command=command),
+                    patch.object(launcher.Path, "cwd", return_value=root),
+                    patch.object(launcher, "_refusal", return_value=None),
+                    patch.object(
+                        launcher.os,
+                        "execv",
+                        side_effect=lambda _p, a, calls=calls: calls.append(a),
+                    ),
+                ):
+                    launcher.main([command, "x"])
+                self.assertEqual(calls[0][1], "-IS", calls)
+
 
 FAKE_INTEGRATION = """#!/usr/bin/env python3
 import os, shutil, sys
