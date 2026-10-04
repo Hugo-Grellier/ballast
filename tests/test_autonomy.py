@@ -540,6 +540,14 @@ class BlockRecordTests(AutonomyCase):
         with self.assertRaisesRegex(autonomy.AutonomyError, "recovery command"):
             autonomy.validate_block(block)
 
+    def test_no_trust_block(self) -> None:
+        """DEC-0002: a changed trusted input is a launcher refusal, not a block."""
+        self.assertNotIn("trust", autonomy.BLOCK_CATEGORIES)
+        block = autonomy.make_block("limit", "x", run_id="run42")
+        block["category"] = "trust"
+        with self.assertRaisesRegex(autonomy.AutonomyError, "category"):
+            autonomy.validate_block(block)
+
     def test_agent_block_draft_rules(self) -> None:
         good = {
             "category": "decision",
@@ -558,6 +566,8 @@ class BlockRecordTests(AutonomyCase):
             ({**good, "options": good["options"][:1]}, "two options"),
             ({**good, "no_safe_default": ""}, "no_safe_default"),
             ({**good, "category": "limit"}, "category"),
+            # DEC-0005: only the publisher reports a permission block.
+            ({**good, "category": "permission"}, "category"),
             ({**good, "recovery": "approved by the human"}, "human approval"),
         ):
             with (

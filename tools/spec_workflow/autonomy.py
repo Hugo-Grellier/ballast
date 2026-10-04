@@ -99,7 +99,6 @@ BLOCK_CATEGORIES = (
     "postcondition",
     "tamper",
     "unfinished-step",
-    "trust",
     "permission",
     "ineligible",
     "forge",
@@ -715,8 +714,6 @@ RECOVERY = {
     "tamper": "Restore the protected files and recreate .venv, delete the "
     "marker, review the checkout, then discard the run state and trust again.",
     "unfinished-step": "Review the checkout, discard the run state, then start again.",
-    "trust": "Review the changed workflow inputs and run `ballast trust`, then "
-    "continue human-gated.",
     "permission": "Restore the missing permission or credential, then retry.",
     "ineligible": "Run the feature human-gated instead.",
     "forge": "Fix forge access, then retry publication.",
