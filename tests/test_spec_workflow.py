@@ -1238,6 +1238,103 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertEqual(self.launch("trust").returncode, 0)
         self.assertEqual(self.launch("run", "start").returncode, 0)
 
+    def trusted_state(self) -> Path:
+        self.assertEqual(self.launch("trust").returncode, 0)
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
+        return state
+
+    def hold(self, state: Path, mode: str) -> subprocess.Popen[str]:
+        holder = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-c", HOLD_LOCK, str(state / "checkout.lock"), mode],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline(), "held\n")
+        return holder
+
+    def test_unfinished_setup_is_refused(self) -> None:
+        # AC-005: every launcher command names `ballast setup` as the recovery.
+        state = self.trusted_state()
+        (state / "setup-attempt.json").write_text("{}\n")
+        unfinished = "setup did not finish in this checkout; run `ballast setup`"
+        for args in (
+            ("run", "resume", "r1"),
+            ("ledger", "check", "r1"),
+            ("intake", "--repo", "o/r"),
+            ("trust",),
+            ("discard-runs",),
+        ):
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(unfinished, result.stderr)
+        self.assertFalse(self.ran.exists())
+        self.assertTrue((self.root / ".specify/workflows/runs/r1").is_dir())
+        self.assertIn(unfinished, self.status()["refusal"])
+        # A switch killed after moving the workflow tools out still names setup.
+        (self.tools / "run.py").unlink()
+        result = self.launch("run", "resume", "r1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(unfinished, result.stderr)
+        self.assertIn(unfinished, self.status()["refusal"])
+
+    def test_running_setup_is_reported_as_running(self) -> None:
+        # F-005, F-006: the lock is checked before the journal, also for trust.
+        state = self.trusted_state()
+        (state / "setup-attempt.json").write_text("{}\n")
+        self.hold(state, "exclusive")
+        for args in (("run", "resume", "r1"), ("trust",), ("discard-runs",)):
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(
+                    "ballast setup is running in this checkout", result.stderr
+                )
+        self.assertFalse(self.ran.exists())
+
+    def test_workflow_tool_keeps_the_shared_lock(self) -> None:
+        # FR-014: a setup started while `run` works must see the checkout held.
+        state = self.trusted_state()
+        (self.tools / "run.py").write_text(
+            "import fcntl, os, sys\n"
+            f"fd = os.open({str(state / 'checkout.lock')!r}, os.O_RDWR)\n"
+            "try:\n    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "    held = 'free'\nexcept BlockingIOError:\n    held = 'held'\n"
+            f"open({str(self.ran)!r}, 'w').write(held)\n"
+        )
+        self.assertEqual(self.launch("trust").returncode, 0)
+        result = self.launch("run", "resume", "r1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ran.read_text(), "held")
+
+    def test_pinned_and_installed_versions_differ(self) -> None:
+        # AC-008, F-003: a valid record names both versions; a stale one is ignored.
+        (self.root / "ballast.toml").write_text('[standard]\nref = "vB"\n')
+        (self.root / ".ballast/.setup-version").write_text("fp A\n")
+        state = self.trusted_state()
+        record = {"schema": 1, "ref": "vA", "fingerprint": "fp A", "files": {}}
+        (state / "installation.json").write_text(json.dumps(record))
+        message = (
+            'pinned vB, installed vA: restore ref = "vA" in ballast.toml, '
+            "or fix the cause and rerun `ballast setup`"
+        )
+        self.assert_refused(message)
+        self.assertEqual(self.status()["refusal"], message)
+        (self.root / ".ballast/.setup-version").write_text("fp older\n")
+        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+
+
+HOLD_LOCK = """\
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX if sys.argv[2] == "exclusive" else fcntl.LOCK_SH)
+print("held", flush=True)
+time.sleep(120)
+"""
+
 
 class LauncherTests(unittest.TestCase):
     """The launcher validates resume input before touching run state."""

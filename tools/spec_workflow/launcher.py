@@ -17,6 +17,12 @@ can write. From the checkout root:
 refuse, as `{"installed": bool, "refusal": null | "<reason>"}`; it writes
 nothing, so `ballast doctor` can call it before trust.
 
+Every command except `status` takes the checkout lock shared, and refuses
+while `ballast setup` holds it or left an unfinished attempt (its journal in
+the state directory); `run`, `ledger` and `intake` keep the lock for as long
+as the workflow tool runs, so setup never switches the installation under
+them. They also refuse while the pin differs from the installed version.
+
 `trust` records digests of every executable workflow input in your state
 directory. `run`, `ledger` and `intake` refuse unless those inputs still match, no
 tamper marker exists, and no agent step was left unfinished. This file uses
@@ -26,6 +32,7 @@ imports its digest helpers.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -34,11 +41,20 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 TAMPER_MARKER = "BALLAST_TAMPERED"
 IN_PROGRESS = "in-progress"
 TRUSTED = "trusted.json"
+# Written by tools/setup in the state directory: its journal while an attempt
+# is unfinished, its record of the installed content, and the checkout lock.
+SETUP_ATTEMPT = "setup-attempt.json"
+INSTALLATION = "installation.json"
+CHECKOUT_LOCK = "checkout.lock"
+STAMP = ".ballast/.setup-version"
+UNFINISHED = "setup did not finish in this checkout; run `ballast setup` to recover"
+SETUP_RUNNING = "ballast setup is running in this checkout; wait for it to finish"
 # Executable workflow inputs: the launcher's own tools, Spec Kit's engine
 # configuration, extensions and scripts, and the environment validators and
 # operator checks may run.
@@ -173,11 +189,78 @@ def trusted_inputs(root: Path) -> dict[str, str]:
     return {name: v for name, v in state.items() if "__pycache__" not in name}
 
 
+def read_record(root: Path, state: Path) -> dict | None:
+    """Return the installation record while it describes the live installation.
+
+    Every setup version writes the stamp; an older one run after a rollback
+    rewrites it but not this record, which is then stale and ignored.
+    """
+    try:
+        record = json.loads((state / INSTALLATION).read_text(encoding="utf-8"))
+        stamp = (root / STAMP).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    valid = (
+        isinstance(record, dict)
+        and record.get("schema") == 1
+        and isinstance(record.get("ref"), str)
+        and isinstance(record.get("files"), dict)
+        and record.get("fingerprint") == stamp
+    )
+    return record if valid else None
+
+
+def checkout_lock(state: Path, *, shared: bool) -> int | None:
+    """Take the checkout lock without waiting; None while another holds it.
+
+    The kernel releases an flock when its holder dies, so a killed setup or
+    run never blocks the next one.
+    """
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(state / CHECKOUT_LOCK, flags, 0o600)
+    try:
+        fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def pinned_ref(root: Path) -> str | None:
+    """Return the `[standard] ref` of the checkout's ballast.toml, as data."""
+    try:
+        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    standard = config.get("standard")
+    ref = standard.get("ref") if isinstance(standard, dict) else None
+    return ref if isinstance(ref, str) else None
+
+
+def _setup_refusal(root: Path, state: Path) -> str | None:
+    """Name an unfinished setup attempt, or a pin that differs from the installation."""
+    if os.path.lexists(state / SETUP_ATTEMPT):
+        return UNFINISHED
+    record = read_record(root, state)
+    pin = pinned_ref(root)
+    if record is not None and pin is not None and record["ref"] != pin:
+        installed = record["ref"]
+        return (
+            f'pinned {pin}, installed {installed}: restore ref = "{installed}" in '
+            "ballast.toml, or fix the cause and rerun `ballast setup`"
+        )
+    return None
+
+
 def _refusal(root: Path) -> str | None:
     try:
         state = state_dir(root)
     except OSError as error:
         return str(error)
+    return _setup_refusal(root, state) or _trust_refusal(root, state)
+
+
+def _trust_refusal(root: Path, state: Path) -> str | None:
     if os.path.lexists(root / TAMPER_MARKER):
         return f"{TAMPER_MARKER} exists: an agent changed protected files"
     if os.path.lexists(state / IN_PROGRESS):
@@ -266,34 +349,54 @@ def _trust(root: Path, state: Path) -> int:
     return 0
 
 
-def _operator(root: Path, command: str) -> int:
-    """Run `trust` or `discard-runs` against a state directory agents cannot write."""
+def _hold(root: Path) -> str | None:
+    """Hold the checkout lock shared until exit, or say why not.
+
+    Inheritable, so it lasts through `execv` for as long as the workflow tool
+    runs. Without a state directory no setup has ever run here, and the trust
+    check refuses anyway; nothing is created then.
+    """
     try:
         state = state_dir(root)
+        fd = checkout_lock(state, shared=True) if state.is_dir() else -1
     except OSError as error:
-        sys.stderr.write(f"ballast: refusing: {error}\n")
-        return EXIT_REFUSED
-    return _trust(root, state) if command == "trust" else _discard(root, state)
+        return str(error)
+    if fd is None:
+        return SETUP_RUNNING
+    if fd >= 0:
+        os.set_inheritable(fd, True)  # noqa: FBT003 - positional-only
+    if os.path.lexists(state / SETUP_ATTEMPT):
+        return UNFINISHED
+    return None
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
     """Verify the checkout, then run a workflow tool or record a baseline."""
     root = Path.cwd()
     installed = (root / ".ballast/spec_workflow/run.py").is_file()
     if argv == ["status", "--json"]:
-        refusal = _refusal(root) if installed else None
+        try:
+            unfinished = os.path.lexists(state_dir(root) / SETUP_ATTEMPT)
+        except OSError:
+            unfinished = False
+        refusal = _refusal(root) if installed or unfinished else None
         sys.stdout.write(
             json.dumps({"installed": installed, "refusal": refusal}) + "\n"
         )
         return 0
-    if not installed or not argv:
+    if not argv or argv[0] not in {*COMMANDS, "intake", "trust", "discard-runs"}:
+        sys.stderr.write(__doc__ or "")
+        return EXIT_REFUSED
+    held = _hold(root)
+    if held:
+        sys.stderr.write(f"ballast: refusing: {held}\n")
+        return EXIT_REFUSED
+    if not installed:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
     if argv[0] in {"trust", "discard-runs"}:
-        return _operator(root, argv[0])
-    if argv[0] not in {*COMMANDS, "intake"}:
-        sys.stderr.write(__doc__ or "")
-        return EXIT_REFUSED
+        state = state_dir(root)
+        return _trust(root, state) if argv[0] == "trust" else _discard(root, state)
     reason = _refusal(root)
     if reason:
         sys.stderr.write(f"ballast: refusing: {reason}\n")

@@ -36,11 +36,13 @@ if sys.version_info < (3, 11):  # noqa: UP036 - the guard is the point
     sys.exit(1)
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 import queue
 import re
+import secrets
 import shutil
 import subprocess
 import tarfile
@@ -51,11 +53,13 @@ import tomllib
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 REPOSITORY = "Hugo-Grellier/ballast"
 VERSION = "0.6.0"  # x-release-please-version
@@ -150,10 +154,90 @@ def trusted_standard_dir(root: Path, ref: str) -> Path:
     return standard
 
 
+# --- the per-machine cache (#14) ---------------------------------------------
+
+# Each cached version holds the record of its content, published with it.
+CACHE_RECORD = ".ballast-cache.json"
+FETCH_WAIT_SECONDS = 600
+CACHE_FAILURES = (OSError, ValueError, EOFError, tarfile.TarError)
+
+
+def cache_record(tree: Path, ref: str) -> dict:
+    """Describe every file and link of an extracted version.
+
+    Bytecode is skipped: Python may write it next to a module it imports.
+    """
+    files: dict[str, dict] = {}
+    for path in sorted(tree.rglob("*")):
+        relative = path.relative_to(tree)
+        if str(relative) == CACHE_RECORD or "__pycache__" in relative.parts:
+            continue
+        if path.is_symlink():
+            files[relative.as_posix()] = {"link": str(path.readlink())}
+        elif path.is_file():
+            executable = bool(path.stat().st_mode & 0o111)
+            files[relative.as_posix()] = {"sha256": digest(path), "exec": executable}
+    fetched = datetime.now(UTC).isoformat(timespec="seconds")
+    return {"schema": 1, "ref": ref, "fetched": fetched, "files": files}
+
+
+def damage(tree: Path) -> str | None:
+    """Return the first path where a cached version differs from its record."""
+    try:
+        record = json.loads((tree / CACHE_RECORD).read_text(encoding="utf-8"))
+        expected = record["files"]
+        if record.get("schema") != 1 or not isinstance(expected, dict):
+            return CACHE_RECORD
+    except (OSError, ValueError, KeyError, TypeError):
+        return CACHE_RECORD
+    found = cache_record(tree, "")["files"]
+    differing = [
+        n for n in expected.keys() | found.keys() if expected.get(n) != found.get(n)
+    ]
+    return min(differing) if differing else None
+
+
+@contextmanager
+def fetch_lock(ref: str) -> Iterator[None]:
+    """Serialize work on one cached version; the kernel frees it on death."""
+    locks = standard_dir(ref).parent / ".locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(locks / f"{ref}.lock", flags, 0o600)
+    try:
+        deadline = time.monotonic() + FETCH_WAIT_SECONDS
+        told = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    sys.stderr.write(
+                        f"ballast: refusing: another fetch of {ref} still holds "
+                        f"{locks / f'{ref}.lock'}; retry when it ends\n"
+                    )
+                    sys.exit(EXIT_REFUSED)
+                if not told:
+                    sys.stderr.write(f"ballast: waiting for another fetch of {ref}\n")
+                    told = True
+                time.sleep(0.1)
+        yield
+    finally:
+        os.close(fd)
+
+
 def fetch(ref: str, target: Path) -> None:
-    """Download and extract one version."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=target.parent) as directory:
+    """Download and extract one version, published with its record by one rename.
+
+    The caller holds the version's fetch lock, so any extraction of this
+    version left in the cache belongs to a dead fetch.
+    """
+    parent = target.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    for stale in [*parent.glob(f".fetch-{ref}+*"), *parent.glob(f".damaged-{ref}+*")]:
+        shutil.rmtree(stale, ignore_errors=True)
+    with tempfile.TemporaryDirectory(dir=parent, prefix=f".fetch-{ref}+") as directory:
         archive = Path(directory) / "standard.tar.gz"
         url = ARCHIVE.format(repository=REPOSITORY, ref=ref)
         urllib.request.urlretrieve(url, archive)  # noqa: S310 - fixed https URL
@@ -161,7 +245,76 @@ def fetch(ref: str, target: Path) -> None:
         with tarfile.open(archive, "r:gz") as contents:
             contents.extractall(extracted, filter="data")
         (top,) = extracted.iterdir()
+        record = cache_record(top, ref)
+        (top / CACHE_RECORD).write_text(json.dumps(record, indent=1) + "\n")
         top.rename(target)
+
+
+def ensure_standard(root: Path, ref: str) -> Path:
+    """Return a verified copy of the version, fetching it once if needed (FR-012)."""
+    target = trusted_standard_dir(root, ref)
+    if target.is_dir() and damage(target) is None:
+        return target
+    with fetch_lock(ref):
+        damaged = damage(target) if os.path.lexists(target) else None
+        if os.path.lexists(target) and damaged is None:
+            return target  # another fetch finished while this one waited
+        if os.path.lexists(target):
+            aside = target.with_name(f".damaged-{ref}+{secrets.token_hex(4)}")
+            target.rename(aside)
+            shutil.rmtree(aside, ignore_errors=True)
+        try:
+            fetch(ref, target)
+        except CACHE_FAILURES as error:
+            if damaged:
+                sys.stderr.write(
+                    f"ballast: refusing: the cached standard {ref} is damaged at "
+                    f"{damaged} and could not be fetched again: {error}\n"
+                )
+                sys.exit(EXIT_REFUSED)
+            fail(
+                f"cannot fetch standard {ref}: {error}; the cache and the checkout "
+                "are unchanged. Next: check network access (`ballast doctor`), "
+                "then rerun the command"
+            )
+        if damaged:
+            sys.stderr.write(
+                f"ballast: the cached standard {ref} was damaged ({damaged}); "
+                "fetched it again\n"
+            )
+    return target
+
+
+def installed_ref(root: Path) -> str | None:
+    """Return the version setup recorded for this checkout, read as data.
+
+    Mirrors launcher.state_dir and launcher.read_record (a test keeps them
+    equal): only a record whose fingerprint matches the live stamp counts.
+    """
+    base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    try:
+        record = json.loads(
+            (base / "ballast" / key / "installation.json").read_text(encoding="utf-8")
+        )
+        stamp = (root / ".ballast/.setup-version").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("fingerprint") != stamp:
+        return None
+    ref = record.get("ref")
+    return ref if isinstance(ref, str) else None
+
+
+def installed_detail(root: Path, pin: str) -> str:
+    """`installed A, pinned B` and both recoveries, when they differ (AC-008)."""
+    installed = installed_ref(root)
+    if installed is None or installed == pin:
+        return ""
+    return (
+        f'installed {installed}, pinned {pin}: restore ref = "{installed}" in '
+        "ballast.toml, or fix the cause and rerun `ballast setup`"
+    )
 
 
 def install_line(tag: str) -> str:
@@ -855,6 +1008,13 @@ def _trust(context: Context, probes: set[str]) -> Outcome:
     remedy = TRUST
     if "BALLAST_TAMPERED" in refusal:
         remedy = "restore the checkout and delete BALLAST_TAMPERED, then " + TRUST
+    elif refusal.startswith("pinned "):
+        remedy = (
+            "restore the previous pin in ballast.toml, or fix the cause and rerun "
+            "`ballast setup`"
+        )
+    elif "ballast setup" in refusal:
+        remedy = "ballast setup"
     elif "did not finish" in refusal:
         remedy = "review the checkout, run `ballast discard-runs`, then `ballast trust`"
     return "missing", f"launcher will refuse: {refusal}", remedy
@@ -891,6 +1051,8 @@ def project_checks(context: Context) -> list[Check]:
         )
     elif not context.standard.is_dir():
         detail = f"standard {context.ref} is not fetched"
+        installed = installed_detail(context.root, context.ref)
+        detail += f"; {installed}" if installed else ""
         results["standard-fetched"] = ("missing", detail, "ballast setup")
         return finish("after `ballast setup`")
     else:
@@ -1021,11 +1183,17 @@ def main(argv: list[str]) -> int:
         sys.stderr.write(f"ballast: using local standard {standard}\n")
     else:
         ref = pinned_ref(root)
-        standard = trusted_standard_dir(root, ref)
+        if argv[0] == "setup":
+            standard = ensure_standard(root, ref)
+        else:
+            standard = trusted_standard_dir(root, ref)
         if not standard.is_dir():
-            if argv[0] != "setup":
-                fail(f"standard {ref} is not fetched; run `ballast setup`{DOCTOR_HINT}")
-            fetch(ref, standard)
+            installed = installed_detail(root, ref)
+            fail(
+                f"standard {ref} is not fetched; run `ballast setup`"
+                + (f"; {installed}" if installed else "")
+                + DOCTOR_HINT
+            )
     if argv[0] == "setup":
         tool = standard / "tools/setup"
         os.execv(  # noqa: S606

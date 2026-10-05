@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import types
 import unittest
 import uuid
@@ -141,6 +143,239 @@ class ShimTests(unittest.TestCase):
         self.pin("v0.1.0")
         result = self.shim("run", "start")
         self.assertEqual(result.stdout, "launcher run start\n", result.stderr)
+
+
+class NotFetchedTests(ShimTests):
+    """An unfetched pin names the installed version and both recoveries (AC-008)."""
+
+    def record(self, ref: str, stamp: str) -> None:
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import launcher  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        self.env["XDG_STATE_HOME"] = str(operator_state(self))
+        with patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            state = launcher.state_dir(self.project)
+        state.mkdir(parents=True)
+        record = {"schema": 1, "ref": ref, "fingerprint": "fp", "files": {}}
+        (state / "installation.json").write_text(json.dumps(record))
+        (self.project / ".ballast").mkdir()
+        (self.project / ".ballast/.setup-version").write_text(stamp + "\n")
+
+    def test_installed_version_is_named(self) -> None:
+        self.pin("v0.2.0")
+        self.record("v0.1.0", "fp")
+        self.assertEqual(
+            self.shim("run", "start").stderr,
+            "ballast: standard v0.2.0 is not fetched; run `ballast setup`; "
+            'installed v0.1.0, pinned v0.2.0: restore ref = "v0.1.0" in '
+            f"ballast.toml, or fix the cause and rerun `ballast setup`{DOCTOR_HINT}\n",
+        )
+
+    def test_stale_record_is_not_named(self) -> None:
+        # F-003: an older setup rewrote the stamp after this record.
+        self.pin("v0.2.0")
+        self.record("v0.1.0", "older")
+        self.assertEqual(
+            self.shim("run", "start").stderr,
+            "ballast: standard v0.2.0 is not fetched; run `ballast setup`"
+            f"{DOCTOR_HINT}\n",
+        )
+
+
+def standard_archive(path: Path, ref: str, files: dict[str, bytes]) -> Path:
+    """Write a GitHub-style archive of a standard version."""
+    with tarfile.open(path, "w:gz") as contents:
+        for name, data in files.items():
+            info = tarfile.TarInfo(f"ballast-{ref}/{name}")
+            info.size = len(data)
+            info.mode = 0o755 if name.endswith("setup") else 0o644
+            contents.addfile(info, io.BytesIO(data))
+    return path
+
+
+# Fetches one ref in a child process with a counted, slow download.
+FETCHER = """\
+import os, sys, time, urllib.request
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+loader = SourceFileLoader("ballast", sys.argv[1])
+shim = module_from_spec(spec_from_loader("ballast", loader))
+loader.exec_module(shim)
+shim.ARCHIVE = sys.argv[2]
+retrieve = urllib.request.urlretrieve
+def counted(url, path):
+    with open(sys.argv[3], "a") as count:
+        count.write("download\\n")
+    time.sleep(float(sys.argv[5]))
+    return retrieve(url, path)
+urllib.request.urlretrieve = counted
+from pathlib import Path
+shim.ensure_standard(Path.cwd(), sys.argv[4])
+"""
+
+
+class CacheTests(unittest.TestCase):
+    """Each cached version is complete, recorded and verified (US2)."""
+
+    REF = "v0.6.0"
+    FILES: dict[str, bytes] = {  # noqa: RUF012
+        "tools/setup": b"print('setup')\n",
+        "tools/cli.toml": b"[cli]\nminimum = '0.1.0'\n",
+        "templates/policies/a.md": b"policy\n",
+    }
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory(dir=outside_temp())
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name)
+        self.project = self.base / "project"
+        self.project.mkdir()
+        self.archive = standard_archive(self.base / "a.tar.gz", self.REF, self.FILES)
+        self.count = self.base / "downloads"
+        self.cache = self.base / "data/ballast/standard"
+        for patcher in (
+            patch.dict(os.environ, {"XDG_DATA_HOME": str(self.base / "data")}),
+            patch.object(shim, "ARCHIVE", self.archive.as_uri()),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def ensure(self) -> tuple[int, str]:
+        stderr = io.StringIO()
+        try:
+            with redirect_stderr(stderr):
+                shim.ensure_standard(self.project, self.REF)
+        except SystemExit as error:
+            if isinstance(error.code, str):
+                return 1, stderr.getvalue() + error.code
+            return error.code, stderr.getvalue()
+        return 0, stderr.getvalue()
+
+    def leftovers(self) -> list[str]:
+        if not self.cache.is_dir():
+            return []
+        return sorted(
+            p.name
+            for p in self.cache.iterdir()
+            if p.name.startswith(".") and p.name != ".locks"
+        )
+
+    def test_fetch_publishes_the_tree_with_its_record(self) -> None:
+        self.assertEqual(self.ensure(), (0, ""))
+        tree = self.cache / self.REF
+        record = json.loads((tree / shim.CACHE_RECORD).read_text())
+        self.assertEqual(record["ref"], self.REF)
+        self.assertEqual(
+            record["files"]["tools/setup"],
+            {
+                "sha256": hashlib.sha256(self.FILES["tools/setup"]).hexdigest(),
+                "exec": True,
+            },
+        )
+        self.assertEqual(sorted(record["files"]), sorted(self.FILES))
+        self.assertIsNone(shim.damage(tree))
+        self.assertEqual(self.leftovers(), [])
+        # A verified copy is used again without a download (AC-012, AC-022).
+        with patch.object(shim, "ARCHIVE", (self.base / "absent.tar.gz").as_uri()):
+            self.assertEqual(self.ensure(), (0, ""))
+
+    def test_failed_download_leaves_nothing(self) -> None:
+        # AC-001: no partial copy in the cache.
+        truncated = self.base / "truncated.tar.gz"
+        truncated.write_bytes(self.archive.read_bytes()[:40])
+        for url in ((self.base / "absent.tar.gz").as_uri(), truncated.as_uri()):
+            with self.subTest(url=url), patch.object(shim, "ARCHIVE", url):
+                code, message = self.ensure()
+                self.assertEqual(code, 1)
+                self.assertIn(f"cannot fetch standard {self.REF}: ", message)
+                self.assertIn(
+                    "the cache and the checkout are unchanged. Next: check network "
+                    "access (`ballast doctor`), then rerun the command",
+                    message,
+                )
+                self.assertFalse((self.cache / self.REF).exists())
+                self.assertEqual(self.leftovers(), [])
+
+    def test_damage_is_detected_and_refetched(self) -> None:
+        # AC-013, SC-005: a missing, added or altered file, or no record.
+        damages = {
+            "tools/setup": lambda tree: (tree / "tools/setup").unlink(),
+            "tools/extra.py": lambda tree: (tree / "tools/extra.py").write_text("x"),
+            "templates/policies/a.md": lambda tree: (
+                tree / "templates/policies/a.md"
+            ).write_text("edited\n"),
+            "tools/cli.toml": lambda tree: (tree / "tools/cli.toml").chmod(0o755),
+            shim.CACHE_RECORD: lambda tree: (tree / shim.CACHE_RECORD).unlink(),
+        }
+        for path, damage in damages.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.ensure()[0], 0)
+                tree = self.cache / self.REF
+                damage(tree)
+                self.assertEqual(shim.damage(tree), path)
+                code, message = self.ensure()
+                self.assertEqual(code, 0, message)
+                self.assertIn(
+                    f"the cached standard {self.REF} was damaged ({path}); "
+                    "fetched it again",
+                    message,
+                )
+                self.assertIsNone(shim.damage(tree))
+                self.assertEqual(self.leftovers(), [])
+        (self.cache / self.REF / "tools/setup").write_text("edited\n")
+        with patch.object(shim, "ARCHIVE", (self.base / "absent.tar.gz").as_uri()):
+            code, message = self.ensure()
+        self.assertEqual(code, 2)
+        self.assertIn(
+            f"the cached standard {self.REF} is damaged at tools/setup and could "
+            "not be fetched again: ",
+            message,
+        )
+
+    def fetcher(self, delay: float) -> subprocess.Popen[bytes]:
+        process = subprocess.Popen(  # noqa: S603
+            [
+                sys.executable,
+                "-c",
+                FETCHER,
+                *(str(SHIM), self.archive.as_uri(), str(self.count), self.REF),
+                str(delay),
+            ],
+            cwd=self.project,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        return process
+
+    def test_concurrent_fetches_download_once(self) -> None:
+        # AC-010, SC-004: 20 races between two fetches of one version.
+        for _ in range(20):
+            shutil.rmtree(self.cache, ignore_errors=True)
+            self.count.unlink(missing_ok=True)
+            first, second = self.fetcher(0.2), self.fetcher(0.2)
+            for process in (first, second):
+                _, stderr = process.communicate(timeout=60)
+                self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(self.count.read_text().count("download"), 1)
+            self.assertIsNone(shim.damage(self.cache / self.REF))
+            self.assertEqual(self.leftovers(), [])
+
+    def test_dead_fetch_holder_does_not_block(self) -> None:
+        # AC-011
+        holder = self.fetcher(60)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not self.leftovers():
+            time.sleep(0.05)
+        self.assertTrue(self.leftovers())
+        holder.kill()
+        holder.communicate()
+        self.assertEqual(self.ensure(), (0, ""))
+        self.assertIsNone(shim.damage(self.cache / self.REF))
+        self.assertEqual(self.leftovers(), [])
 
 
 class VersionTests(unittest.TestCase):
@@ -501,6 +736,8 @@ class CompatibilityTests(unittest.TestCase):
             "import sys; print('setup', *sys.argv[1:], "
             "sys.flags.isolated, sys.flags.no_site)\n"
         )
+        record = shim.cache_record(standard, "v0.1.0")
+        (standard / shim.CACHE_RECORD).write_text(json.dumps(record))
         self.env = {
             **os.environ,
             "XDG_DATA_HOME": str(base / "data"),
