@@ -88,7 +88,7 @@ the coordination record.
 
 The [feature-intake skill](../../.agents/skills/ballast-feature-intake/SKILL.md) applies
 this gate before the existing workflow. It uses
-`.ballast/feature_intake.py --repo OWNER/REPO preflight N` as a read-only leaf
+`ballast intake --repo OWNER/REPO preflight N` as a read-only leaf
 check before feature handoff. The helper rejects explicit Epic signals, closed
 or blocked issues, and missing acceptance criteria. Scope judgment still
 requires the issue and its accepted context; a mechanical check cannot decide

@@ -10,6 +10,7 @@ can write. From the checkout root:
     ballast trust              # after reviewing the checkout
     ballast run start|resume ...
     ballast ledger snapshot|check|record ...
+    ballast intake --repo OWNER/REPO ...   # the feature-intake helper
     ballast discard-runs       # after an unfinished agent step
 
 `status --json` prints whether the workflow is installed and why `run` would
@@ -17,7 +18,7 @@ refuse, as `{"installed": bool, "refusal": null | "<reason>"}`; it writes
 nothing, so `ballast doctor` can call it before trust.
 
 `trust` records digests of every executable workflow input in your state
-directory. `run` and `ledger` refuse unless those inputs still match, no
+directory. `run`, `ledger` and `intake` refuse unless those inputs still match, no
 tamper marker exists, and no agent step was left unfinished. This file uses
 only the standard library and imports nothing from the checkout; agent.py
 imports its digest helpers.
@@ -63,6 +64,9 @@ UNIT_NOT_ACTIVE = frozenset({3, 4})
 RUN_STATE = (".specify/workflows/runs", ".specify/workflow-state")
 EXIT_REFUSED = 2
 COMMANDS = {"run": ("-IS", "run.py"), "ledger": ("-IS", "ledger.py")}
+# The intake helper acts with the operator's `gh` authority before any run, so
+# it runs from this pinned standard, never from a checkout copy.
+INTAKE = Path(__file__).resolve().parents[1] / "feature_intake.py"
 
 
 def state_dir(root: Path) -> Path:
@@ -248,15 +252,18 @@ def main(argv: list[str]) -> int:
     if argv[0] in {"trust", "discard-runs"}:
         state = state_dir(root)
         return _trust(root, state) if argv[0] == "trust" else _discard(root, state)
-    if argv[0] not in COMMANDS:
+    if argv[0] not in {*COMMANDS, "intake"}:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
     reason = _refusal(root)
     if reason:
         sys.stderr.write(f"ballast: refusing: {reason}\n")
         return EXIT_REFUSED
-    flags, script = COMMANDS[argv[0]]
-    tool = str(root / ".ballast/spec_workflow" / script)
+    if argv[0] == "intake":
+        flags, tool = "-IS", str(INTAKE)
+    else:
+        flags, script = COMMANDS[argv[0]]
+        tool = str(root / ".ballast/spec_workflow" / script)
     os.execv(sys.executable, [sys.executable, flags, tool, *argv[1:]])  # noqa: S606
     return EXIT_REFUSED  # unreachable
 
