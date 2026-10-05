@@ -44,6 +44,7 @@ Success, one line on stdout:
 ```text
 Branch sync: up-to-date feat/18-x with main (a1b2c3d4e5f6)
 Branch sync: up-to-date feat/18-x with main (a1b2c3d4e5f6); published branch is ahead; not fast-forwarded: uncommitted changes
+Branch sync: up-to-date feat/18-x with main (a1b2c3d4e5f6); fast-forwarded to the published branch
 Branch sync: synchronized feat/18-x onto main (a1b2c3d4e5f6..0f9e8d7c6b5a), HEAD 111111111111 -> 222222222222, pushed
 Branch sync: synchronized ... ; completed the interrupted synchronization from run 1a2b3c4d
 Branch sync: synchronized ... ; plan and review evidence may be stale: 3 files changed on both sides (see the Draft PR)
@@ -65,7 +66,7 @@ Exactly one recovery action per cause and detail (SC-003). `{…}` are quoted va
 | Cause | Detail | Recovery |
 | --- | --- | --- |
 | `busy` | — | "another ballast run is synchronizing {branch}; retry when it finishes" |
-| `git-unavailable` | "git not found outside working trees" or "git {v} is older than 2.41" | "put a system git 2.41 or later on PATH ahead of any checkout directory" |
+| `git-unavailable` | "git not found outside working trees", "git {v} is older than 2.41" or "git version unknown" (unparsable `git version` output) | "put a system git 2.41 or later on PATH ahead of any checkout directory" |
 | `git-unavailable` | "shallow checkout" | "git fetch --unshallow, then rerun" |
 | `git-unavailable` | "partial clone" (DEC-0007) | "clone the repository again without --filter, then rerun" |
 | `git-unavailable` | "alternate object store" (SEC-005: `objects/info/alternates` exists) | "clone the repository again without alternates, then rerun" |

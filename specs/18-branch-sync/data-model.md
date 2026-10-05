@@ -140,4 +140,4 @@ The run status becomes `stopped` (`run._stop`). No decision record is written (F
  "paths": ["tools/x.py", "…"], "truncated": false}
 ```
 
-`paths` holds at most 200 entries. The Draft PR section reads the feature's directory: it skips a file that is not regular, is over 16 KiB or does not parse, or whose `feature` does not match, and shows the newest 20 entries oldest first, with "and N earlier" before them, each path as a code span with backticks removed. Keyed by feature, not run, so a continuation keeps its source run's staleness visible.
+`paths` holds at most 200 entries. The Draft PR section reads the feature's directory: it skips a file that is not regular, is over 16 KiB or does not parse, or whose `feature` does not match, and shows the newest 20 entries oldest first, with "and N earlier" before them, each path as a code span with backticks removed and `<!--` broken up, so no path can spell the section's markers (SEC-007). Keyed by feature, not run, so a continuation keeps its source run's staleness visible.
