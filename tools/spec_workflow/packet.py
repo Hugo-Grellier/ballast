@@ -756,8 +756,10 @@ class _Step:
         if not isinstance(data, dict):
             self.fail("failed-retryable", "github-error")
         pr = draft_pr._pull_request(data, self.run)  # noqa: SLF001
-        head = (data.get("head") or {}).get("sha")
-        base = (data.get("base") or {}).get("sha")
+        head, base = (
+            data[key].get("sha") if isinstance(data.get(key), dict) else None
+            for key in ("head", "base")
+        )
         if (
             pr is None
             or pr.number != self.number
