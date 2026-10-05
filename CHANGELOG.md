@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/Hugo-Grellier/ballast/compare/v0.4.2...v0.5.0) (2026-10-05)
+
+
+### Features
+
+* **agent:** let confined Claude steps read files and report uncovered checks ([#52](https://github.com/Hugo-Grellier/ballast/issues/52)) ([e26906d](https://github.com/Hugo-Grellier/ballast/commit/e26906db4b3e5bae97e154443700b95bcaeb8743))
+* **run:** synchronize stale feature branches before run start and resume ([#54](https://github.com/Hugo-Grellier/ballast/issues/54)) ([f683454](https://github.com/Hugo-Grellier/ballast/commit/f68345460ea2a00f0699d161f8cd4b2d568e0cda))
+
 ## [0.4.2](https://github.com/Hugo-Grellier/ballast/compare/v0.4.1...v0.4.2) (2026-10-05)
 
 
