@@ -86,14 +86,19 @@ def served_pr(number: int, body: str, **changes: object) -> dict:
 STATE_PARENT = Path.home() / ".local/state/ballast-tests"
 
 
+def outside_temp() -> Path:
+    """Return a parent for test directories that must not be agent-writable."""
+    STATE_PARENT.mkdir(parents=True, exist_ok=True)
+    return STATE_PARENT
+
+
 def operator_state(case: unittest.TestCase | None = None) -> Path:
     """Return a fresh XDG_STATE_HOME, removed after the test (or module).
 
     Never under a temp root or a checkout: state_dir refuses those, because an
     agent could write them (#34).
     """
-    STATE_PARENT.mkdir(parents=True, exist_ok=True)
-    state = TemporaryDirectory(dir=STATE_PARENT)
+    state = TemporaryDirectory(dir=outside_temp())
     (case.addCleanup if case else unittest.addModuleCleanup)(state.cleanup)
     return Path(state.name)
 
