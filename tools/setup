@@ -197,7 +197,8 @@ class StageFailedError(Exception):
     def __init__(self, stage: str, cause: object, action: str = RETRY) -> None:
         """Name the stage, its cause and the operator's next action."""
         super().__init__(
-            f"{stage} failed: {cause}. The previous installation was kept. "
+            f"{stage} failed: {str(cause).rstrip('.')}. The previous installation "
+            "was kept. "
             f"Next: {action}"
         )
 
