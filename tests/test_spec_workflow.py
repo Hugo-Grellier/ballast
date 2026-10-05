@@ -2156,8 +2156,8 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
 
 sys.path.insert(0, str(ROOT / "tests"))
 import discovery_fixtures  # noqa: E402
-from discovery_fixtures import brief_text, decision, metrics  # noqa: E402
 import test_branch_sync  # noqa: E402
+from discovery_fixtures import brief_text, decision, metrics  # noqa: E402
 from test_autonomy import (  # noqa: E402
     AutonomyCase,
     _bwrap_works,
