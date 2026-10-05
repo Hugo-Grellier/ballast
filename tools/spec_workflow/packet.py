@@ -10,7 +10,10 @@ canonical source pinned to that commit.
 - `collect` reads: the PR (head and base commits), the feature artifacts from
   the local object store at head, the run ledger, the operator's Autonomous
   records, GitHub check runs at head, and an optional OpenAPI document.
-  Every command goes through the checkpoint's `git`/`gh` and `_command`.
+  Every command goes through the checkpoint's `git`/`gh` and `_command`,
+  except `ledger.commit_tree`, which needs a private `GIT_INDEX_FILE` that
+  `_command` strips: it runs ledger's resolved Git with filters, hooks and
+  fsmonitor off.
 - `render` is pure: the same sources give the same text apart from the
   `Generated:` line. Every value from an agent-writable source goes through
   `inert`; every link is built here from validated parts.
@@ -80,7 +83,8 @@ TOKEN = re.compile(r"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+")
 AUTHORIZATION = re.compile(
     r"(?i)\b(?:authorization\s*:\s*(?:(?:bearer|token|basic)\s+)?|bearer\s+)\S+"
 )
-CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# C0 controls, zero-width and bidirectional formatting characters.
+CONTROL = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
 MARKDOWN = re.compile(r"([\\`*_\[\]()#|!~])")
 WWW = re.compile(r"(?i)(www)\.")
 SUMMARY = (
@@ -349,7 +353,8 @@ def inert(text: object, limit: int = 200) -> str:
         lambda match: match.group(0)[0] + "\u200b" + match.group(0)[1:], text
     )
     text = html.escape(text, quote=False)
-    text = MARKDOWN.sub(r"\\\1", text).replace("://", ":\u200b//")
+    # `$` as an entity: GitHub renders `$...$` as LaTeX, which can restyle text.
+    text = MARKDOWN.sub(r"\\\1", text).replace("://", ":\u200b//").replace("$", "&#36;")
     return autonomy.MENTION.sub("@\u200b", WWW.sub("\\1\u200b.", text))
 
 
@@ -854,7 +859,8 @@ class _Step:
                     (
                         path
                         for size in range(len(parts), 0, -1)
-                        if self.exists(head, path := "/".join(parts[:size]) + ".py")
+                        if safe_path(path := "/".join(parts[:size]) + ".py")
+                        and self.exists(head, path)
                     ),
                     None,
                 )
@@ -1181,11 +1187,10 @@ def _request(document: dict, operation: dict) -> tuple[bool, set[str], set[str]]
     )
 
 
-def _causes(old: dict, new: dict, key: tuple[str, str]) -> tuple[str, ...]:
-    (old_op, old_item), (new_op, new_item) = (
-        _operations(old)[key],
-        _operations(new)[key],
-    )
+def _causes(
+    old: dict, new: dict, before: tuple[dict, dict], after: tuple[dict, dict]
+) -> tuple[str, ...]:
+    (old_op, old_item), (new_op, new_item) = before, after
     causes = set()
     old_params = _parameters(old, old_op, old_item)
     new_params = _parameters(new, new_op, new_item)
@@ -1219,7 +1224,7 @@ def compare_documents(old: dict, new: dict) -> ApiComparison:
     changed = []
     for key in sorted(set(before) & set(after)):
         (old_op, old_item), (new_op, new_item) = before[key], after[key]
-        causes = _causes(old, new, key)
+        causes = _causes(old, new, before[key], after[key])
         # ponytail: a response change made only inside a `$ref`'d component
         # is not seen; request-side changes are resolved through `_causes`.
         if not causes and _canonical([old_op, old_item.get("parameters")]) == (
@@ -1428,11 +1433,14 @@ def _check_lines(sources: Sources) -> list[str]:
     return [*lines, ""]
 
 
-def _capped(items: list[str], archive: bool) -> list[str]:  # noqa: FBT001
+def _capped(sources: Sources, items: list[str], archive: bool) -> list[str]:  # noqa: FBT001
     if archive or len(items) <= LIST_LIMIT:
         return items
     more = len(items) - LIST_LIMIT
-    return [*items[:LIST_LIMIT], f"- … {more} more in the complete packet"]
+    return [
+        *items[:LIST_LIMIT],
+        f"- … {more} more in the complete packet ({_archive_path(sources)})",
+    ]
 
 
 def _api_lines(sources: Sources, level: int, archive: bool) -> list[str]:  # noqa: FBT001
@@ -1470,9 +1478,9 @@ def _api_lines(sources: Sources, level: int, archive: bool) -> list[str]:  # noq
             note = " — response changed" if responses else ""
         changed.append(f"- changed: {method} {inert(path)}{note}")
     lines += [
-        *_capped(added, archive),
-        *_capped(removed, archive),
-        *_capped(changed, archive),
+        *_capped(sources, added, archive),
+        *_capped(sources, removed, archive),
+        *_capped(sources, changed, archive),
     ]
     return [*lines, ""]
 
@@ -1491,7 +1499,11 @@ def _ui_lines(sources: Sources, level: int, archive: bool) -> list[str]:  # noqa
         f"- {inert(u.name, 80)} ({', '.join(u.criteria)}): {_ui_text(sources, u)}"
         for u in sources.ui
     ]
-    return [*lines, *(_capped(items, archive) or ["None (0)."]), ""]
+    return [*lines, *(_capped(sources, items, archive) or ["None (0)."]), ""]
+
+
+def _archive_path(sources: Sources) -> str:
+    return f"speckit-runs/{sources.run_id}/acceptance-packet.md in the operator's clone"
 
 
 def _source(sources: Sources, name: str, label: str) -> str:
@@ -1558,8 +1570,7 @@ def render(sources: Sources, level: int = 1, *, archive: bool = False) -> str:
         header += [
             (
                 "Shortened to fit the PR description. Complete packet: "
-                f"speckit-runs/{sources.run_id}/acceptance-packet.md in the operator's "
-                "clone."
+                f"{_archive_path(sources)}."
             ),
             "",
         ]
@@ -1649,8 +1660,9 @@ def build(step: _Step, body: str, head: str, base: str) -> tuple[Sources, Packet
     for level in LEVELS:
         text = render(sources, level)
         if len(text) <= budget:
+            # Level 1 is shortened too when a list was capped.
             return sources, Packet(
-                text, full, _digest(text), level > 1, counts(sources)
+                text, full, _digest(text), text != full, counts(sources)
             )
     return step.fail("failed-retryable", "too-large")
 

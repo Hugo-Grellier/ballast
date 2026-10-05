@@ -18,7 +18,8 @@
     "AC-004": [
       "tests.test_packet.CriteriaTests.test_states_follow_the_quickstart_rows",
       "tests.test_packet.CriteriaTests.test_manifest_for_another_spec_makes_every_mapped_criterion_stale",
-      "tests.test_packet.CriteriaTests.test_dirty_checkout_evidence_is_never_verified"
+      "tests.test_packet.CriteriaTests.test_dirty_checkout_evidence_is_never_verified",
+      "tests.test_packet.CriteriaTests.test_mixed_results_take_the_first_state_in_order"
     ],
     "AC-005": [
       "tests.test_packet.DecisionTests.test_autonomous_records_are_labeled_provisional_with_links",
@@ -72,11 +73,13 @@
       "tests.test_packet.FailureTests.test_each_failure_is_recorded_and_retried",
       "tests.test_packet.FailureTests.test_no_pr_or_blocked_pr_makes_no_packet_call",
       "tests.test_draft_pr.PacketWiringTests.test_raising_packet_never_changes_the_pr_outcome",
-      "tests.test_spec_workflow.DraftPrRunTests.test_raising_packet_step_never_changes_the_exit_status"
+      "tests.test_spec_workflow.DraftPrRunTests.test_raising_packet_step_never_changes_the_exit_status",
+      "tests.test_packet.CriteriaTests.test_test_name_without_a_safe_path_is_named_unlinked"
     ],
     "AC-020": [
       "tests.test_packet.HostileTextTests.test_hostile_text_cannot_forge_links_markers_or_states",
-      "tests.test_packet.InertTests.test_markers_and_html_never_appear_raw"
+      "tests.test_packet.InertTests.test_markers_and_html_never_appear_raw",
+      "tests.test_packet.InertTests.test_math_and_bidi_controls_are_inert"
     ],
     "AC-021": [
       "tests.test_packet.SizeTests.test_long_body_shortens_the_packet_and_archives_it_whole",
