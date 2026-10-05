@@ -339,6 +339,9 @@ class MalformedError(ValueError):
 # --- inert text and links ---------------------------------------------------------
 
 
+ISSUE_REFERENCE = re.compile(r"(#|\bGH-)(?=\d)", re.IGNORECASE)
+
+
 def inert(text: object, limit: int = 200) -> str:
     """Render agent-written text as data: one line, no markup, link or token.
 
@@ -353,6 +356,9 @@ def inert(text: object, limit: int = 200) -> str:
         lambda match: match.group(0)[0] + "\u200b" + match.group(0)[1:], text
     )
     text = html.escape(text, quote=False)
+    # GitHub autolinks `#N`, `owner/repo#N` and `GH-N` even when `#` is escaped,
+    # and posts a backlink on that Issue: break them like a mention.
+    text = ISSUE_REFERENCE.sub("\\1\u200b", text)
     # `$` as an entity: GitHub renders `$...$` as LaTeX, which can restyle text.
     text = MARKDOWN.sub(r"\\\1", text).replace("://", ":\u200b//").replace("$", "&#36;")
     return autonomy.MENTION.sub("@\u200b", WWW.sub("\\1\u200b.", text))

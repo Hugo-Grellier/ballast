@@ -265,6 +265,12 @@ class InertTests(unittest.TestCase):
             self.assertNotRegex(out.lower(), r"www\.")
         self.assertEqual(packet.inert("@org/team"), "@\u200borg/team")
 
+    def test_issue_references_never_autolink(self) -> None:
+        """Live check SEC-003: GitHub links `#N` (even escaped), `o/r#N`, `GH-N`."""
+        for text in ("see #8", "o/r#5", "GH-12", "gh-3"):
+            self.assertNotRegex(packet.inert(text), r"(?i)(#|gh-)\d")
+        self.assertEqual(packet.inert("cost $5"), "cost &#36;5")
+
     def test_math_and_bidi_controls_are_inert(self) -> None:
         # GitHub renders $...$ as LaTeX, which can restyle or spell any text.
         out = packet.inert("$\\color{green}\\text{verified}$ and $$x$$")
