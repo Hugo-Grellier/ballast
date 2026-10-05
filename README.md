@@ -65,6 +65,8 @@ To develop the standard itself, install from a reviewed checkout of this reposit
    extra_deny = ["Edit(./private/**)"]
    ```
 
+   Headless Claude agents run only the Bash commands these rules and the standard's base list name, so list the project's checks here; Codex runs any command inside its sandbox. Rules match the command text: `*` matches anything, and a command with a leading `VAR=value` never matches, so write checks without one. Autonomous steps, which bubblewrap confines, may also run `ls`, `cat`, `head`, `tail`, `wc` and `find` without `-exec` or `-delete`.
+
 3. From the project root, run `ballast setup`. It downloads the pinned version once into `$XDG_DATA_HOME/ballast/standard/<ref>/`, then runs its `tools/setup`. On the first run, add the ignore block it prints to the project's `.gitignore`; the block keeps `.specify/memory/constitution.md` tracked. Setup needs `git`, `uvx`, `patch`, and network access to GitHub; `ballast doctor` checks them.
 
 The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `ballast-feature` workflow and its tools under `.ballast/`, the `ballast-*` skills under `.agents/skills/` (linked from `.claude/skills/`), and the standard's policies under `docs/policies/`. Project-specific additions go in `docs/policies/project/`, which setup never touches. A rerun is a no-op until this repository or `ballast.toml` changes. A new Git worktree copies the installation from its primary checkout when both match. A reinstall keeps `.specify/workflows/runs/` and the project constitution.
@@ -111,7 +113,7 @@ commands = ["uvx ruff check", "uv run python -m unittest"]
 timeout_minutes = 30
 ```
 
-Keys that would widen eligibility, and `merge`, `release`, `deploy` or `mark ready` as authorized actions, are ignored with a warning. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Run `ballast trust` after changing either table.
+Keys that would widen eligibility, and `merge`, `release`, `deploy` or `mark ready` as authorized actions, are ignored with a warning. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
 
 ## Dogfooding
 

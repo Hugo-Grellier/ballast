@@ -64,6 +64,18 @@ NOFOLLOW_WRITE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
 HERE = Path(__file__).resolve().parent
 SETTINGS = HERE / "claude-settings.json"
 GUARD = HERE / "guard"
+# Read-only commands a confined Claude step may also run (#37). Bubblewrap,
+# not these rules, bounds what they can reach; the denials only keep `find`
+# from running or deleting anything, as `ls` and `cat` cannot.
+CONFINED_ALLOW = tuple(
+    f"Bash({command}{rest})"
+    for command in ("ls", "cat", "head", "tail", "wc", "find")
+    for rest in ("", " *")
+)
+CONFINED_DENY = tuple(
+    f"Bash(find *{action}*)"
+    for action in ("-exec", "-ok", "-delete", "-fprint", "-fls")
+)
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 BLOCKING = re.compile(r"^RECONCILE_STATUS: (BLOCKED_[A-Z_]+)\s*$", re.MULTILINE)
 FORBIDDEN = (
@@ -456,6 +468,13 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
             "set_aside": _set_aside(root, record, log_dir.name),
             "tree_before": autonomy.tree_digest(root, _review_exclusions(feature)),
         }
+        if integration == "claude":
+            argv += [
+                "--allowedTools",
+                *CONFINED_ALLOW,
+                "--disallowedTools",
+                *CONFINED_DENY,
+            ]
         private = Path(tempfile.mkdtemp(prefix="ballast-agent-"))
         # The operator's environment names the credential locations to hide.
         argv = autonomy.confined_argv(

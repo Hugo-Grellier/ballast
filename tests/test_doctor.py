@@ -524,6 +524,38 @@ class ProjectTests(DoctorCase):
 
     REF = "v0.1.0"
 
+    def test_checks_claude_agents_cannot_run_are_reported(self) -> None:
+        # Issue #37: an uncovered [checks] command leaves a Claude agent unable
+        # to verify its own work; a leading VAR=value never matches a rule.
+        (self.project / "ballast.toml").write_text(
+            '[standard]\nref = "v0.1.0"\n'
+            "[agents.permissions]\n"
+            'extra_allow = ["Bash(uvx ruff check*)", "Bash(npm test:*)"]\n'
+            "[checks]\n"
+            'commands = ["uvx ruff check", "npm test -- --ci", "TOKEN=x make test"]\n'
+        )
+        _, checks = self.checks()
+        check = checks["checks-allowed"]
+        self.assert_gap(check)
+        self.assertEqual(
+            check["detail"],
+            "extra_allow does not cover: TOKEN=x make test"
+            " (a leading VAR=value never matches an allow rule)",
+        )
+        self.assertEqual(check["remedy"], shim.CHECKS_REMEDY)
+
+    def test_rule_matching(self) -> None:
+        for rule, command, allowed in (
+            ("Bash(uv run *)", "uv run pytest -q", True),
+            ("Bash(uv run *)", "uvx run", False),
+            ("Bash(make test)", "make test", True),
+            ("Bash(make test)", "make test-all", False),
+            ("Bash(npm test:*)", "npm test", True),
+            ("Read(./x)", "x", False),
+        ):
+            with self.subTest(rule=rule, command=command):
+                self.assertEqual(shim.rule_allows(rule, command), allowed)
+
     def standard(self, ref: str | None = None) -> Path:
         """Fetch this repository's tools as the pinned version, as setup would."""
         standard = self.data / "ballast/standard" / (ref or self.REF)

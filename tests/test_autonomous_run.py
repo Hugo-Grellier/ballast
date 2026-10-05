@@ -141,6 +141,7 @@ class AgentWrapperAutonomousTests(WrapperCase):
         result = self.wrapper()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.ran()["argv"][:2], ["-p", "/speckit-plan"])
+        self.assertNotIn("--allowedTools", self.ran()["argv"])
         self.assertFalse((self.base / "bwrap.log").exists())
         self.assertIn("GH_TOKEN", self.ran()["env"])
 
@@ -175,6 +176,13 @@ class AgentWrapperAutonomousTests(WrapperCase):
         ]
         self.assertEqual(bwrap[:3], ["--ro-bind", "/", "/"])
         self.assertIn("--unshare-pid", bwrap)
+        # Read-only shell commands only where bubblewrap bounds them (#37).
+        argv = self.ran()["argv"]
+        allowed = argv[
+            argv.index("--allowedTools") + 1 : argv.index("--disallowedTools")
+        ]
+        self.assertIn("Bash(ls *)", allowed)
+        self.assertIn("Bash(find *-exec*)", argv[argv.index("--disallowedTools") + 1 :])
         env = self.ran()["env"]
         self.assertNotIn("GH_TOKEN", env)
         self.assertIn("ANTHROPIC_API_KEY", env)
