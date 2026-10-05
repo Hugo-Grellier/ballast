@@ -64,9 +64,9 @@ API: not configured.   ← single line when not configured (AC-015)
 or
 API (`<path>`, base → head): 1 added, 1 removed, 1 changed; 2 potentially breaking.
 This classification is automatic and needs human review; it is not an approval.
-- added: `POST /orders`
-- removed: `DELETE /orders/{id}` — potentially breaking (operation removed)
-- changed: `GET /orders` — response changed
+- added: POST /orders
+- removed: DELETE /orders/{id} — potentially breaking (operation removed)
+- changed: GET /orders — response changed
 or
 API (`<path>`): no API change | added in this PR | removed in this PR | could not compare (not JSON)
 
