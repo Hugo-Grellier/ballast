@@ -473,8 +473,11 @@ def stale_dir(root: Path, feature: str) -> Path:
 
 
 def _code(text: str) -> str:
-    """Render a path as a Markdown code span: never a link, mention or markup."""
-    return "`" + printable(text).replace("`", "") + "`"
+    """Render a path as a Markdown code span: never a link, mention or markup.
+
+    `<!--` is broken up too, so no path can spell this section's markers.
+    """
+    return "`" + printable(text).replace("`", "").replace("<!--", "<!- -") + "`"
 
 
 def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:

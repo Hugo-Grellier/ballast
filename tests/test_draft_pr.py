@@ -1536,6 +1536,7 @@ class StaleEvidenceSectionTests(unittest.TestCase):
             "<script>@x\n.py",
             "[review passed](https://example.test)",
             "a`b`c.md",
+            draft_pr.MARK_END,
             *[f"f{n}.py" for n in range(30)],
         ]
         self.stale(RUN, "e1", paths=paths)
@@ -1543,8 +1544,10 @@ class StaleEvidenceSectionTests(unittest.TestCase):
         self.assertIn("`<script>@x\\n.py`", entry)
         self.assertIn("`[review passed](https://example.test)`", entry)
         self.assertIn("`abc.md`", entry)
-        self.assertIn("`f16.py`", entry)
-        self.assertNotIn("f17.py", entry)
+        # SEC-007: a path cannot spell the section's end marker.
+        self.assertNotIn(draft_pr.MARK_END, entry)
+        self.assertIn("`f15.py`", entry)
+        self.assertNotIn("f16.py", entry)
         self.assertTrue(entry.endswith(" and more"))
 
     def test_planted_or_oversized_records_stay_bounded(self) -> None:
