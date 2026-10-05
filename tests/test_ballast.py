@@ -12,7 +12,8 @@ import sys
 import tarfile
 import types
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+import uuid
+from contextlib import redirect_stderr, redirect_stdout, suppress
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -165,23 +166,28 @@ class InstallTests(unittest.TestCase):
         self.target = self.bin / "ballast"
         self.releases = self.base / "releases/download"
         self.env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+        # The line downloads into a fresh /tmp/tmp.* it never removes. Every
+        # release this test serves carries this marker, so tearDown removes
+        # only its own downloads, never another suite's in-flight one (#36).
+        self.marker = f"# install test {uuid.uuid4().hex}\n".encode()
         self.publish(self.TAG)
-        self.temporaries = set(Path("/tmp").glob("tmp.*"))  # noqa: S108
 
     def tearDown(self) -> None:
-        # The line leaves its verified download under /tmp; drop ours only.
-        for path in set(Path("/tmp").glob("tmp.*")) - self.temporaries:  # noqa: S108
-            if path.is_dir() and {p.name for p in path.iterdir()} <= {
-                "ballast",
-                "ballast.sha256",
-            }:
-                shutil.rmtree(path)
+        for path in Path("/tmp").glob("tmp.*/ballast"):  # noqa: S108
+            with suppress(OSError):
+                if self.marker in path.read_bytes():
+                    shutil.rmtree(path.parent)
         self.directory.cleanup()
+
+    def build(self, version: str) -> bytes:
+        """release_build, marked as this test's: the marker survives truncation."""
+        shebang, rest = release_build(version).split(b"\n", 1)
+        return shebang + b"\n" + self.marker + rest
 
     def publish(self, tag: str, content: bytes | None = None) -> Path:
         release = self.releases / tag
         release.mkdir(parents=True, exist_ok=True)
-        content = release_build(tag[1:]) if content is None else content
+        content = self.build(tag[1:]) if content is None else content
         (release / "ballast").write_bytes(content)
         checksum = hashlib.sha256(content).hexdigest()
         (release / "ballast.sha256").write_text(f"{checksum}  ballast\n")
@@ -262,7 +268,7 @@ class InstallTests(unittest.TestCase):
         self.publish("v1.0.0")
         self.assertEqual(self.install("v1.0.0").returncode, 0)
         before = self.target.read_bytes()
-        good = release_build(self.TAG[1:])
+        good = self.build(self.TAG[1:])
         other = b"something else\n"
         cases = {
             "corrupted": good + b"# tampered\n",
@@ -283,7 +289,10 @@ class InstallTests(unittest.TestCase):
             result = self.install()
             self.assertIn("checksum mismatch", result.stderr)
             self.assert_unchanged(before, "v1.0.0")
-        with self.subTest("unknown version"):
+        with self.subTest("missing download"):
+            # The first download succeeds, so tearDown finds the marked copy
+            # (an empty /tmp/tmp.* is never attributable to this test).
+            (self.publish("v7.7.7") / "ballast.sha256").unlink()
             result = self.install("v7.7.7")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
