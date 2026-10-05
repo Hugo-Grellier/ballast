@@ -29,7 +29,8 @@
             "enum": [
               "python", "cli-on-path", "git", "uvx", "patch", "network", "linux",
               "systemd-user", "systemd-run", "specify", "agent-cli", "gh",
-              "ballast-toml", "standard-fetched", "cli-version", "setup-current", "trust"
+              "ballast-toml", "standard-fetched", "cli-version", "setup-current", "trust",
+              "checks-allowed"
             ]
           },
           "scope": { "enum": ["machine", "project"] },

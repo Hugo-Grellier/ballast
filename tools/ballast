@@ -659,12 +659,66 @@ PROJECT_GATES = {
     "cli-version": EVERY,
     "setup-current": EVERY[1:],
     "trust": ("ballast run", "ballast ledger"),
+    "checks-allowed": ("Claude agents running [checks]",),
 }
+CHECKS_REMEDY = (
+    'add a rule such as "Bash(<command> *)" to [agents.permissions] extra_allow'
+    " in ballast.toml, then rerun `ballast setup`"
+)
 TRUST = "review the checkout, then run `ballast trust`"
 PIN_REMEDY = (
     'set [standard] ref = "vX.Y.Z" (a tag or commit of the standard) in ballast.toml'
 )
 PROBE_FILES = ("tools/setup", "tools/spec_workflow/launcher.py")
+
+
+def rule_allows(rule: str, command: str) -> bool:
+    """Whether a Claude `Bash(...)` permission rule matches a command.
+
+    An approximation of Claude Code's matching: `*` matches anything, and a
+    legacy `prefix:*` rule matches commands starting with the prefix.
+    """
+    match = re.fullmatch(r"Bash\((.*)\)", rule)
+    if match is None:
+        return False
+    body = match.group(1)
+    if body.endswith(":*"):
+        return command.startswith(body[:-2])
+    pattern = ".*".join(re.escape(part) for part in body.split("*"))
+    return re.fullmatch(pattern, command) is not None
+
+
+def _checks_allowed(root: Path) -> Outcome:
+    """Whether Claude agents may run the project's [checks] (#37).
+
+    Codex runs any command inside its sandbox; Claude runs only what its
+    allowlist names, so an uncovered check leaves an agent unable to verify
+    its own work.
+    """
+    try:
+        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return "inconclusive", f"cannot read ballast.toml: {error}", CHECKS_REMEDY
+    checks = config.get("checks")
+    commands = checks.get("commands") if isinstance(checks, dict) else None
+    if not commands:
+        return "passing", "no [checks] commands"
+    agents = config.get("agents")
+    permissions = agents.get("permissions") if isinstance(agents, dict) else None
+    rules = permissions.get("extra_allow") if isinstance(permissions, dict) else None
+    rules = [r for r in rules if isinstance(r, str)] if isinstance(rules, list) else []
+    uncovered = [
+        command
+        for command in commands
+        if not isinstance(command, str)
+        or not any(rule_allows(rule, command) for rule in rules)
+    ]
+    if not uncovered:
+        return "passing", f"extra_allow covers all {len(commands)} [checks] commands"
+    detail = "extra_allow does not cover: " + "; ".join(map(str, uncovered))
+    if any(re.match(r"[A-Za-z_][A-Za-z0-9_]*=", str(c)) for c in uncovered):
+        detail += " (a leading VAR=value never matches an allow rule)"
+    return "missing", detail, CHECKS_REMEDY
 
 
 def manifest(standard: Path) -> tuple[tuple[int, ...] | None, set[str], str | None]:
@@ -803,6 +857,7 @@ def project_checks(context: Context) -> list[Check]:
         results["ballast-toml"] = ("missing", context.pin_error, PIN_REMEDY)
         return finish("after fixing ballast.toml")
     results["ballast-toml"] = ("passing", f"ref {context.ref}")
+    results["checks-allowed"] = _checks_allowed(context.root)
     if context.local and not (context.standard / "tools").is_dir():
         detail = f"local standard {context.standard} is not a checkout of the standard"
         remedy = "set BALLAST_STANDARD_DIR to a checkout of the standard, or unset it"
