@@ -17,6 +17,10 @@ every check first requires the run to be active and the committed
 `record-*` checks validate agent drafts and append provisional decisions;
 `check_intent` and `check_decisions` accept only agent-provisional records
 there, and never count them as human approval in a human-gated run.
+
+`record-intent` registers each human approval block it writes in the
+operator's state directory (launcher.state_dir), which no agent can write. A
+check of a human-gated run (`--run`) refuses a block it did not register.
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     import autonomy
-    from launcher import digests, input_bases
+    from launcher import digests, input_bases, state_dir
 except ImportError:  # pragma: no cover - only the ledger's isolated copy
     # ledger.py imports this file for its patterns alone. Every check that
     # names a workflow run fails closed below without the Autonomous module.
@@ -55,6 +59,9 @@ STATE_DIR = Path(".specify/workflow-state")
 NO_CODE_CHANGE = "<!-- workflow: no-code-change -->"
 APPROVAL_START = "<!-- workflow-approval: begin -->"
 APPROVAL_END = "<!-- workflow-approval: end -->"
+APPROVAL_BLOCK = re.compile(
+    re.escape(APPROVAL_START) + r".*?" + re.escape(APPROVAL_END), re.DOTALL
+)
 INTENT_SECTIONS = (
     "## Outcome",
     "## Constraints",
@@ -231,6 +238,25 @@ def check_intent(feature: Feature) -> None:
             "is stale. Review the spec and re-approve (record-intent)"
         )
         raise ContractError(message)
+    blocks = APPROVAL_BLOCK.findall(intent)
+    if feature.run_id is not None and (
+        len(blocks) != 1 or not _approval_path(feature, blocks[0]).is_file()
+    ):
+        # An agent step can write a matching block into intent.md, but not the
+        # operator state that record-intent registers it in (#29).
+        message = (
+            f"{feature.relative}/intent.md has an approval block that record-intent "
+            "did not register in this checkout; review the spec, run "
+            f"`python3 .ballast/spec_workflow/artifacts.py record-intent --feature "
+            f"{feature.relative}`, then resume the run"
+        )
+        raise ContractError(message)
+
+
+def _approval_path(feature: Feature, block: str) -> Path:
+    """Operator-state registration of one recorded human approval block."""
+    key = hashlib.sha256(f"{feature.relative}\n{block}".encode()).hexdigest()
+    return state_dir(feature.root) / "approvals" / key
 
 
 def record_intent(feature: Feature) -> None:
@@ -259,6 +285,15 @@ def record_intent(feature: Feature) -> None:
         if path.exists():
             text = path.read_text(encoding="utf-8")
             path.write_text(PROVISIONAL_BLOCK.sub("", text), encoding="utf-8")
+    # Registered first: where operator state is unwritable, as in an agent
+    # sandbox, nothing is recorded.
+    registration = _approval_path(feature, block)
+    registration.parent.mkdir(parents=True, exist_ok=True)
+    registration.write_text(
+        json.dumps({"feature": feature.relative, "spec_digest": spec_digest(spec)})
+        + "\n",
+        encoding="utf-8",
+    )
     _write_intent_block(feature, spec, block, APPROVAL_START, APPROVAL_END)
     check_intent(feature)
 

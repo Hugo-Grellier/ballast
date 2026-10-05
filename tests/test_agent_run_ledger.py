@@ -21,6 +21,16 @@ sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
 
 import ledger  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+from test_autonomy import isolate_operator_state  # noqa: E402
+
+sys.path.pop(0)
+
+
+def setUpModule() -> None:  # noqa: D103
+    isolate_operator_state()
+
+
 FEATURE = "specs/93-agent-run-ledger"
 
 

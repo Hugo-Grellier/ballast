@@ -16,11 +16,23 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_autonomy import FEATURE, TOOLS, AutonomyCase, autonomy
+from test_autonomy import (
+    FEATURE,
+    TOOLS,
+    AutonomyCase,
+    autonomy,
+    isolate_operator_state,
+)
 
 sys.path.pop(0)
 
 ARTIFACTS = TOOLS / "artifacts.py"
+
+
+def setUpModule() -> None:  # noqa: D103
+    isolate_operator_state()
+
+
 SPEC = """# Feature Specification: Demo run
 
 **Created**: 2026-10-03
