@@ -63,6 +63,7 @@ NOFOLLOW_WRITE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
 
 HERE = Path(__file__).resolve().parent
 SETTINGS = HERE / "claude-settings.json"
+GUARD = HERE / "guard"
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 BLOCKING = re.compile(r"^RECONCILE_STATUS: (BLOCKED_[A-Z_]+)\s*$", re.MULTILINE)
 FORBIDDEN = (
@@ -434,6 +435,11 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
         return refusal.code
     log_dir, key = _log_dir(root, integration, sys.argv[2])
     env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
+    # Every `git` the agent runs goes through guard/git first (#34).
+    git, _ = autonomy.trusted_program("git", root)
+    if git is not None:
+        env["BALLAST_GIT"] = git
+        env["PATH"] = os.pathsep.join((str(GUARD), env.get("PATH", "")))
     private = None
     step_record: dict = {}
     if record is not None:

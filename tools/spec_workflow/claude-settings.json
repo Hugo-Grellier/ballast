@@ -4,12 +4,18 @@
     "allow": [
       "Bash(python3 .specify/scripts/python/*)",
       "Bash(mkdir -p specs/*)",
-      "Bash(git status*)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "Bash(git show*)",
-      "Bash(git rev-parse*)",
-      "Bash(git ls-files*)"
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show)",
+      "Bash(git show *)",
+      "Bash(git rev-parse)",
+      "Bash(git rev-parse *)",
+      "Bash(git ls-files)",
+      "Bash(git ls-files *)"
     ],
     "deny": [
       "Read(./.env)",
@@ -18,6 +24,7 @@
       "Edit(./.env)",
       "Edit(./**/.env)",
       "Edit(./*.local.md)",
+      "Edit(./.git/**)",
       "Edit(./.github/**)",
       "Edit(./.claude/**)",
       "Edit(./.codex/**)",
