@@ -833,6 +833,70 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertIn("site-packages/hook.pth", result.stderr)
 
+    def test_agent_git_refuses_writing_and_running_options(self) -> None:
+        # Issue #34: the allowlist matches command text; `--out''put=` and
+        # `git diff*` matching `difftool -x CMD` slipped past it.
+        target = self.root / "written"
+        (self.root / "fake-bin/claude").write_text(
+            "#!/usr/bin/env python3\n"
+            "import subprocess\n"
+            f"for args in (['--version'], ['diff', '--output={target}'],"
+            " ['difftool', '-y', '-x', 'true']):\n"
+            "    r = subprocess.run(['git', *args], capture_output=True, text=True)\n"
+            "    print(r.returncode, r.stdout.strip(), r.stderr.strip())\n"
+        )
+        result = self.run_wrapper("claude", "-p", "/speckit-plan")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        version, output, difftool = result.stdout.splitlines()[:3]
+        self.assertRegex(version, r"^0 git version ")
+        self.assertRegex(output, r"^128 .*`git --output=.*` is not available")
+        self.assertRegex(difftool, r"^128 .*`git difftool` is not available")
+        self.assertFalse(target.exists())
+
+    def test_git_guard_sees_arguments_after_shell_quoting(self) -> None:
+        guard = ROOT / "tools/spec_workflow/guard/git"
+        echo = shutil.which("echo")
+        env = {"PATH": "/usr/bin:/bin", "BALLAST_GIT": str(echo)}
+        refused = subprocess.run(  # noqa: S603
+            ["/bin/sh", "-c", f"{guard} diff --out''put=x"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(refused.returncode, 128, refused.stdout)
+        passed = subprocess.run(  # noqa: S603
+            [guard, "log", "-p", "--stat"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(passed.stdout, "log -p --stat\n")
+        unset = subprocess.run(  # noqa: S603
+            [guard, "status"],
+            env={"PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(unset.returncode, 0)
+        self.assertIn("no trusted git", unset.stderr)
+
+    def test_claude_git_rules_match_whole_subcommands(self) -> None:
+        settings = json.loads(
+            (ROOT / "tools/spec_workflow/claude-settings.json").read_text()
+        )
+        rules = [
+            rule[len("Bash(git ") : -1]
+            for rule in settings["permissions"]["allow"]
+            if rule.startswith("Bash(git ")
+        ]
+        self.assertTrue(rules)
+        for rule in rules:
+            self.assertRegex(rule, r"^[a-z-]+( \*)?$")
+        self.assertIn("Edit(./.git/**)", settings["permissions"]["deny"])
+
     def test_agent_python_caches_stay_out_of_the_checkout(self) -> None:
         modules = self.root / ".ballast/spec_workflow"
         modules.mkdir(parents=True)

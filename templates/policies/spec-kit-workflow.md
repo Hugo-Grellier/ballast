@@ -305,10 +305,11 @@ from `SPECKIT_INTEGRATION_*_EXTRA_ARGS`:
   prompted), `--setting-sources project`, `--strict-mcp-config`, and
   `.ballast/spec_workflow/claude-settings.json`. User settings, plugins, hooks,
   and MCP servers are not loaded. File edits are accepted inside the checkout
-  except `.env`/`*.local.md`, CI and agent configuration, `ballast.toml`, the
-  workflow machinery itself, and paths the project denies in `ballast.toml`;
-  Bash is limited to the Spec Kit scripts, read-only Git, and the commands the
-  project allows there.
+  except `.env`/`*.local.md`, `.git/`, CI and agent configuration,
+  `ballast.toml`, the workflow machinery itself, and paths the project denies
+  in `ballast.toml`; Bash is limited to the Spec Kit scripts, read-only Git
+  (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, matched as whole
+  subcommands), and the commands the project allows there.
 - **Codex** runs `codex exec --sandbox workspace-write`: writes are confined to
   the checkout and temporary directories, network access is pinned off, and
   approvals are never requested. Codex still loads the user's Codex
@@ -320,6 +321,12 @@ from `SPECKIT_INTEGRATION_*_EXTRA_ARGS`:
   including its bytecode, and the whole `.venv` before and after every agent
   call and fails the step if any of them changed. Still review the diff for CI
   changes.
+
+Both integrations run `git` through `.ballast/spec_workflow/guard/git`, first
+on the agent's `PATH`. It sees the arguments after shell quoting, which a
+permission rule matching command text cannot, and refuses `--output` (which
+writes a file anywhere), `difftool` and `mergetool` (which run a program)
+before running the trusted `git` the wrapper resolved.
 
 Both integrations get the same executable-input guard. The agent runs with
 `PYTHONPYCACHEPREFIX` outside the checkout, so a legitimate test run leaves no
