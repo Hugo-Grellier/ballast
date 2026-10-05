@@ -890,6 +890,115 @@ launcher withholds `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and
 `GITHUB_ENTERPRISE_TOKEN` from the workflow engine and every agent step. See
 ADR-0003 in the Ballast repository.
 
+### Acceptance packet
+
+When the checkpoint ends with an open Ballast Draft PR (`created` or
+`reused`), it also publishes an acceptance packet into that PR: a second
+section between `<!-- ballast:acceptance-packet:begin -->` and
+`<!-- ballast:acceptance-packet:end -->`. The packet is a derived summary for
+review, not an approval, and records none; the sources it links are
+authoritative. It is rebuilt from those sources at every checkpoint.
+
+- **Header**: the feature version (the Git tree of `specs/<feature>/` at the
+  PR's head commit), the spec's digest, the base and head commits with a diff
+  link, the run and its mode, the generation time, the recorded risk, and
+  counts of criteria per state, open findings and decisions.
+- **Criteria**: every `AC-NNN` of `spec.md` at the head commit, once, in spec
+  order, linked to its line, with one evidence state:
+
+  | State | Meaning |
+  | --- | --- |
+  | `verified` | every test `acceptance-evidence.json` maps to it passed in a `ballast ledger check` bound to the head commit, the spec at head and the manifest at head |
+  | `failed` | a mapped test failed at the head commit |
+  | `stale` | evidence exists only for another commit, spec or manifest; the packet names which |
+  | `not run` | a mapped test has no recorded check |
+  | `missing` | no `acceptance-evidence.json`, or no test mapped to the criterion |
+
+  Each test links to its file at the head commit; ledger evidence, which has
+  no URL, is named `ledger event <seq> of run <run>`. A verified row also links
+  the head commit's GitHub check runs when there are any. CI and `run-checks`
+  run whole suites, so they never change a criterion's state.
+- **Decisions, open findings and checks**: an Autonomous run's provisional
+  decisions labeled `agent-provisional` and linked to the committed run
+  record, human gate decisions and recorded human actions labeled `human`,
+  `DEC-NNNN` records of `decisions.md`, open review findings with severity and
+  report, `run-checks` results, GitHub check runs at the head commit and
+  suite-wide ledger checks. Zero counts are written as `None (0).`
+- **Sources**: intent, spec, plan, tasks, decisions, acceptance evidence,
+  review reports, run record and diff, each pinned to the head commit, or
+  `not present`.
+
+Per-criterion evidence comes only from `ballast ledger check RUN_ID AC-NNN
+tests.test_module.Class.test_method` on a clean checkout of the pushed
+commit. `run-checks` runs whole suites, so an Autonomous run's packet shows its
+mapped criteria as `not run` until you record those checks; the next
+checkpoint (`ballast run resume`, `continue` or `publish`) then shows them.
+
+Optional review sections come from the `[review]` table of `ballast.toml`,
+which agents cannot change (run `ballast trust` after editing it):
+
+```toml
+[review]
+openapi = "docs/api/openapi.json"   # a committed JSON OpenAPI document
+
+[[review.ui_states]]                 # at most 50
+name = "Login error"                 # 1-80 characters
+criteria = ["AC-003"]
+path = "docs/screens/login-error.png"   # a committed file, or instead:
+# check = "ui / login-error"            # a GitHub check run on the head commit
+```
+
+- `openapi` is compared between the base and head commits through the GitHub
+  contents API. The packet lists operations added, removed and changed by
+  method and path, and flags as potentially breaking a removed operation, a
+  removed or newly required parameter, a newly required request body, and a
+  top-level request field removed or newly required. The classification needs
+  human review. Only JSON is read; commit a JSON rendering of a YAML document.
+  Otherwise the section says `no API change`, `added in this PR`,
+  `removed in this PR` or `could not compare (<reason>)`.
+- Each UI state appears beside its criteria with a link to the file at the
+  head commit, or the check run's result (`passed`, `failed`, `not run`,
+  `not run (in progress)`), or `missing`. Ballast captures nothing itself.
+- Without the table each section is one `not configured` line; an invalid
+  value gives `configuration invalid (<reason>)` and the rest of the packet is
+  published.
+
+The packet section is replaced in place, appended again after a human deletes
+it, and left unedited when nothing but its generation time changed. When the
+PR description has no room, the packet keeps its header, every criterion not
+`verified`, every open finding and every provisional decision, and shortens the
+rest. Every checkpoint that builds a packet writes the complete text to
+`speckit-runs/<run>/acceptance-packet.md` under the clone's Git common
+directory (mode 0600). Agent-written text is shown as inert data: it cannot end
+the section, form a link or mention, or change a state or label.
+
+The run prints a second line, `Acceptance packet: <state>[ (<reason>)][
+#<number> head <commit>][: <remedy>]`, and records an `acceptance_packet`
+ledger event. A packet failure never changes the Draft PR outcome, the run's
+exit status or its step state; the next checkpoint retries.
+
+| State | Reason | Remedy |
+| --- | --- | --- |
+| `published` | | none: no packet section existed |
+| `updated` | | none: the section was replaced |
+| `unchanged` | | none: nothing changed, so the PR was not edited |
+| `pending` | `no-pr` | see the Draft PR line; the next run retries |
+| `pending` | `pr-blocked` | see the Draft PR line |
+| `pending` | `head-not-local` | fetch the feature branch, then resume |
+| `failed-retryable` | `gh-*`, `github-*` | as for the Draft PR line |
+| `failed-retryable` | `body-changed` | none: the next run retries |
+| `failed-retryable` | `section-unmanaged` | keep at most one acceptance-packet section in the PR body |
+| `failed-retryable` | `source-unreadable` | commit a readable `spec.md`; the next run retries |
+| `failed-retryable` | `manifest-malformed` | fix the manifest; `ballast ledger check` validates it |
+| `failed-retryable` | `ledger-invalid` | run `ballast ledger report --run RUN_ID` |
+| `failed-retryable` | `too-large` | shorten the PR description outside Ballast's sections |
+| `failed-retryable` | `internal-error` | report it with the run ID; the next run retries |
+
+The packet adds only read calls to the checkpoint's GitHub authority (the PR,
+check runs at the head commit, the configured OpenAPI file) and local Git reads
+of the head commit; it never fetches, pushes or commits. See ADR-0005 in the
+Ballast repository.
+
 ## Project status and component choices
 
 `speckit.status-report.show` derives a convenient overview from feature

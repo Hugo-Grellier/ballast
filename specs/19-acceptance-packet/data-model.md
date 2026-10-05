@@ -65,7 +65,7 @@ else (all passed at head) ───────────────► verif
 
 ## Manifest
 
-The existing schema 1 (`schema_version`, `spec_digest`, `criteria: {AC-NNN: [test, …]}`), validated with the same rules as `ledger.archive_manifest` except the intent-approval check, since the packet reports and does not approve. `digest` is the SHA-256 of the file bytes. IDs not in the spec go on the "unknown criteria" line.
+The existing schema 1 (`schema_version`, `spec_digest`, `criteria: {AC-NNN: [test, …]}`). The packet checks its **schema shape only** (F-001): valid JSON, exactly those keys, `schema_version` 1, a SHA-256 `spec_digest`, and for each `AC-NNN` a non-empty list of `tests.test_….test_…` names; anything else is `manifest-malformed`. A `spec_digest` that differs from the spec, an AC the spec lacks and a spec AC the manifest lacks are not malformed: they give `stale`, the unknown-criteria line and `missing` (R4). There is no intent-approval check, since the packet reports and does not approve. `digest` is the SHA-256 of the file bytes. IDs not in the spec go on the "unknown criteria" line.
 
 ## Decision lines
 

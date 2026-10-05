@@ -49,4 +49,4 @@ Validation:
 
 ## Compatibility
 
-Additive. Streams written before this feature remain valid. As with any unknown kind, a stream containing `acceptance_packet` is rejected by an older pinned Ballast; `ledger-schema.md` states this. Snapshots recorded before the `implementation_tree` change no longer match a re-snapshot of the same tree, so evidence they bind reads `stale` and needs re-checking once. The quickstart and release notes say so.
+Additive. Streams written before this feature remain valid. As with any unknown kind, a stream containing `acceptance_packet` is rejected by an older pinned Ballast; `ledger-schema.md` states this. Snapshots recorded before the `implementation_tree` change no longer match a re-snapshot of the same tree, so evidence they bind reads `stale` and needs re-checking once: per-criterion checks, and review and convergence events alike (F-003). The quickstart, `ledger-schema.md` and release notes say so.

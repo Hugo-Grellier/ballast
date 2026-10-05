@@ -72,4 +72,4 @@ uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_pa
 
 ## 3. Upgrade note to verify
 
-After upgrading, snapshots recorded by the previous `implementation_tree` no longer match, so earlier per-criterion checks read `stale` once. Re-run `ballast ledger check` for each criterion.
+After upgrading, snapshots recorded by the previous `implementation_tree` no longer match a re-snapshot of the same tree, so evidence bound to them reads `stale` once: per-criterion checks, and review and convergence events alike (F-003). Re-run `ballast ledger check` for each criterion, and re-record the affected reviews or convergence.

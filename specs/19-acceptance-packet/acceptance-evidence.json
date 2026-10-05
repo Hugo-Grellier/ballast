@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "spec_digest": "9e01600bb0caa3dab877e8ddab7b4af13eaf8d88be7840fec196acea36599b03",
+  "criteria": {
+    "AC-001": [
+      "tests.test_packet.CriteriaTests.test_every_criterion_once_in_spec_order_with_title_and_link",
+      "tests.test_packet.EndToEndTests.test_reused_pr_gets_the_packet_and_an_event",
+      "tests.test_packet.EndToEndTests.test_created_pr_gets_the_packet"
+    ],
+    "AC-002": [
+      "tests.test_packet.CriteriaTests.test_states_follow_the_quickstart_rows",
+      "tests.test_packet.CriteriaTests.test_no_ci_at_head_and_test_file_not_found"
+    ],
+    "AC-003": [
+      "tests.test_packet.CriteriaTests.test_states_follow_the_quickstart_rows",
+      "tests.test_packet.CriteriaTests.test_no_manifest_is_missing"
+    ],
+    "AC-004": [
+      "tests.test_packet.CriteriaTests.test_states_follow_the_quickstart_rows",
+      "tests.test_packet.CriteriaTests.test_manifest_for_another_spec_makes_every_mapped_criterion_stale",
+      "tests.test_packet.CriteriaTests.test_dirty_checkout_evidence_is_never_verified"
+    ],
+    "AC-005": [
+      "tests.test_packet.DecisionTests.test_autonomous_records_are_labeled_provisional_with_links",
+      "tests.test_packet.DecisionTests.test_zero_counts_are_explicit_and_the_packet_is_no_approval"
+    ],
+    "AC-006": [
+      "tests.test_packet.DecisionTests.test_human_gated_approvals_are_labeled_human",
+      "tests.test_packet.DecisionTests.test_autonomous_records_are_labeled_provisional_with_links",
+      "tests.test_packet.DecisionTests.test_zero_counts_are_explicit_and_the_packet_is_no_approval"
+    ],
+    "AC-007": [
+      "tests.test_packet.SourceTests.test_every_artifact_is_linked_at_head"
+    ],
+    "AC-008": [
+      "tests.test_packet.SourceTests.test_absent_artifacts_read_not_present"
+    ],
+    "AC-009": [
+      "tests.test_packet.SourceTests.test_every_summary_line_carries_a_link_or_a_ledger_reference",
+      "tests.test_packet.CheckTests.test_run_checks_check_runs_and_ledger_checks"
+    ],
+    "AC-010": [
+      "tests.test_packet.RepublishTests.test_same_sources_make_no_edit_and_record_unchanged"
+    ],
+    "AC-011": [
+      "tests.test_packet.RepublishTests.test_any_source_change_replaces_the_section_in_place"
+    ],
+    "AC-012": [
+      "tests.test_packet.RepublishTests.test_header_states_versions_and_time"
+    ],
+    "AC-013": [
+      "tests.test_packet.RepublishTests.test_only_the_packet_span_changes"
+    ],
+    "AC-014": [
+      "tests.test_packet.RepublishTests.test_deleted_section_is_appended_once"
+    ],
+    "AC-015": [
+      "tests.test_packet.ReviewConfigTests.test_not_configured_is_one_line_each"
+    ],
+    "AC-016": [
+      "tests.test_packet.OpenApiTests.test_changes_are_listed_and_breaking_ones_flagged",
+      "tests.test_packet.OpenApiTests.test_request_field_removed_through_a_ref_and_cycles_end"
+    ],
+    "AC-017": [
+      "tests.test_packet.OpenApiTests.test_states_without_a_comparison",
+      "tests.test_packet.OpenApiTests.test_response_without_inline_content_is_too_large"
+    ],
+    "AC-018": [
+      "tests.test_packet.UiStateTests.test_results_appear_beside_their_criteria"
+    ],
+    "AC-019": [
+      "tests.test_packet.FailureTests.test_each_failure_is_recorded_and_retried",
+      "tests.test_packet.FailureTests.test_no_pr_or_blocked_pr_makes_no_packet_call",
+      "tests.test_draft_pr.PacketWiringTests.test_raising_packet_never_changes_the_pr_outcome",
+      "tests.test_spec_workflow.DraftPrRunTests.test_raising_packet_step_never_changes_the_exit_status"
+    ],
+    "AC-020": [
+      "tests.test_packet.HostileTextTests.test_hostile_text_cannot_forge_links_markers_or_states",
+      "tests.test_packet.InertTests.test_markers_and_html_never_appear_raw"
+    ],
+    "AC-021": [
+      "tests.test_packet.SizeTests.test_long_body_shortens_the_packet_and_archives_it_whole",
+      "tests.test_packet.SizeTests.test_no_room_even_shortened_is_too_large"
+    ],
+    "AC-022": [
+      "tests.test_packet.CredentialTests.test_no_token_reaches_output_ledger_archive_or_body",
+      "tests.test_packet.InertTests.test_tokens_and_authorization_values_are_redacted"
+    ]
+  }
+}
