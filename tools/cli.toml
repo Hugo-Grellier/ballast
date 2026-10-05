@@ -9,3 +9,16 @@ minimum = "0.1.0"
 # Read-only probes this version supports: `tools/setup --check` and
 # `tools/spec_workflow/launcher.py status --json`.
 probes = ["setup-check", "launcher-status"]
+
+[setup]
+# This version's setup stages, journals and switches installations, so a
+# failed or interrupted setup keeps the previous installation (#14).
+recoverable = true
+
+[runs]
+# The saved-run format this version writes, and the formats it can resume.
+# Change `format` (and decide `resumes`) whenever saved run state stops being
+# resumable: the Spec Kit version, a shipped workflow's step IDs, or Ballast's
+# run records. `ballast preview` reads both as data.
+format = "ballast-run/1"
+resumes = ["ballast-run/1"]

@@ -36,6 +36,8 @@ if sys.version_info < (3, 11):  # noqa: UP036 - the guard is the point
     sys.exit(1)
 
 import argparse
+import ast
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -67,7 +69,8 @@ ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PYTHON = "/usr/bin/python3"
 USAGE = (
-    "usage: ballast setup | trust | run ... | ledger ... | intake ..."
+    "usage: ballast setup | preview REF [--json] | trust | run ... | ledger ..."
+    " | intake ..."
     " | doctor [--json]"
     " | self-install [--dir DIR] [--force] | --version"
 )
@@ -285,25 +288,39 @@ def ensure_standard(root: Path, ref: str) -> Path:
     return target
 
 
-def installed_ref(root: Path) -> str | None:
-    """Return the version setup recorded for this checkout, read as data.
-
-    Mirrors launcher.state_dir and launcher.read_record (a test keeps them
-    equal): only a record whose fingerprint matches the live stamp counts.
-    """
+def operator_state(root: Path) -> Path:
+    """Where setup keeps this checkout's records: launcher.state_dir's path."""
     base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
     key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    return base / "ballast" / key
+
+
+def installation(root: Path) -> dict | None:
+    """Return the installation record setup wrote for this checkout, as data.
+
+    Mirrors launcher.read_record (tests keep them equal): only a record whose
+    fingerprint matches the live stamp counts.
+    """
+    path = operator_state(root) / "installation.json"
     try:
-        record = json.loads(
-            (base / "ballast" / key / "installation.json").read_text(encoding="utf-8")
-        )
+        record = json.loads(path.read_text(encoding="utf-8"))
         stamp = (root / ".ballast/.setup-version").read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return None
-    if not isinstance(record, dict) or record.get("fingerprint") != stamp:
+    if (
+        not isinstance(record, dict)
+        or record.get("fingerprint") != stamp
+        or not isinstance(record.get("ref"), str)
+        or not isinstance(record.get("files"), dict)
+    ):
         return None
-    ref = record.get("ref")
-    return ref if isinstance(ref, str) else None
+    return record
+
+
+def installed_ref(root: Path) -> str | None:
+    """Return the version setup recorded for this checkout, if the record is valid."""
+    record = installation(root)
+    return record["ref"] if record else None
 
 
 def installed_detail(root: Path, pin: str) -> str:
@@ -1165,6 +1182,437 @@ def doctor(argv: list[str]) -> int:
     return 1 if blocked else 0
 
 
+# --- update preview (#14) ----------------------------------------------------
+
+SEEDS = ("ballast.toml", ".gitignore", ".specify/memory/constitution.md")
+PROTECTED = (".ballast/spec_workflow/", ".specify/")
+RESUME_BLOCKER = "finish or discard it before updating"
+
+
+class PreviewError(Exception):
+    """A build or read the preview needs failed; nothing is reported."""
+
+
+def declarations(standard: Path) -> tuple[bool, list[str]]:
+    """Read `[setup] recoverable` and `[runs] resumes` of a version, as data."""
+    try:
+        data = tomllib.loads((standard / "tools/cli.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, []
+    setup, runs = data.get("setup"), data.get("runs")
+    recoverable = isinstance(setup, dict) and setup.get("recoverable") is True
+    resumes = runs.get("resumes") if isinstance(runs, dict) else None
+    if not isinstance(resumes, list):
+        resumes = []
+    return recoverable, [r for r in resumes if isinstance(r, str)]
+
+
+def ignore_block(standard: Path) -> tuple[str | None, list[tuple[str, bool]]]:
+    """Read GITIGNORE and IGNORE_PROBES from a version's setup without running it."""
+    try:
+        tree = ast.parse((standard / "tools/setup").read_text(encoding="utf-8"))
+    except (OSError, ValueError, SyntaxError):
+        return None, []
+    found: dict[str, object] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            name = getattr(node.targets[0], "id", None)
+            if name in {"GITIGNORE", "IGNORE_PROBES"}:
+                with contextlib.suppress(ValueError, SyntaxError):
+                    found[name] = ast.literal_eval(node.value)
+    block = found.get("GITIGNORE")
+    probes = found.get("IGNORE_PROBES") or ()
+    probes = [
+        (p[0], p[1])
+        for p in probes
+        if isinstance(p, tuple) and len(p) == 2 and isinstance(p[0], str)  # noqa: PLR2004
+    ]
+    return (block if isinstance(block, str) else None), probes
+
+
+def git_output(root: Path, *args: str, data: str | None = None) -> str:
+    """Run a read-only git command in root."""
+    result = subprocess.run(  # noqa: S603 - fixed git subcommands
+        ["git", *args],  # noqa: S607 - as tools/setup does
+        cwd=root,
+        input=data,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout
+
+
+def with_ref(config: str, pin: str, ref: str) -> str:
+    """ballast.toml with its `[standard] ref` value replaced."""
+    pattern = r"(?m)^(\s*ref\s*=\s*)([\"'])" + re.escape(pin) + r"\2"
+    changed, count = re.subn(
+        pattern, lambda m: m.group(1) + m.group(2) + ref + m.group(2), config, count=1
+    )
+    if count != 1:
+        message = "cannot set the ref in a copy of ballast.toml"
+        raise PreviewError(message)
+    return changed
+
+
+def walk(project: Path) -> dict[str, str]:
+    """Every file and link a build left, in the installation record's format."""
+    found = {}
+    for path in sorted(project.rglob("*")):
+        relative = path.relative_to(project)
+        name = relative.as_posix()
+        if (
+            relative.parts[0] == ".git"
+            or name in SEEDS
+            or "__pycache__" in relative.parts
+        ):
+            continue
+        if path.is_symlink():
+            found[name] = "link:" + str(path.readlink())
+        elif path.is_file():
+            found[name] = digest(path)
+    return found
+
+
+def disposable_build(
+    root: Path, standard: Path, ref: str, work: Path, block: str | None
+) -> tuple[dict[str, str], dict[str, str] | None]:
+    """Run a version's own setup in a fresh project; return (walk, record files)."""
+    project, state = work / "project", work / "state"
+    state.mkdir(parents=True)
+    git_output(work, "init", "-q", str(project))
+    pin = pinned_ref(root)
+    (project / "ballast.toml").write_text(
+        with_ref((root / "ballast.toml").read_text(encoding="utf-8"), pin, ref)
+    )
+    gitignore = root / ".gitignore"
+    ignore = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
+    if block and block not in ignore:
+        ignore += ("\n" if ignore and not ignore.endswith("\n") else "") + block
+    (project / ".gitignore").write_text(ignore)
+    constitution = root / SEEDS[2]
+    if constitution.is_file():
+        (project / SEEDS[2]).parent.mkdir(parents=True)
+        shutil.copyfile(constitution, project / SEEDS[2])
+    environment = {**os.environ, "XDG_STATE_HOME": str(state)}
+    environment.pop("BALLAST_STANDARD_DIR", None)
+    result = subprocess.run(  # noqa: S603 - the verified cached version's own setup
+        [PYTHON, "-I", "-S", str(standard / "tools/setup"), "--project", str(project)],
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        lines = (result.stderr or result.stdout).strip().splitlines()
+        cause = lines[-1] if lines else f"exit status {result.returncode}"
+        message = f"the build of {ref} failed: {cause}"
+        raise PreviewError(message)
+    key = hashlib.sha256(str(project.resolve()).encode()).hexdigest()[:16]
+    try:
+        record = json.loads((state / "ballast" / key / "installation.json").read_text())
+        files = record["files"] if isinstance(record.get("files"), dict) else None
+    except (OSError, ValueError, KeyError, AttributeError):
+        files = None
+    return walk(project), files
+
+
+def unfinished_runs(root: Path, resumes: list[str]) -> list[dict]:
+    """Every run not completed, with its archived format and compatibility."""
+    runs = root / ".specify/workflows/runs"
+    if not runs.is_dir() or runs.is_symlink():
+        return []
+    common = git_output(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    archives = Path(common.strip()) / "speckit-runs" if common.strip() else None
+    found = []
+    for run in sorted(runs.iterdir()):
+        if run.is_symlink() or not run.is_dir():
+            continue
+        try:
+            status = json.loads((run / "state.json").read_text()).get("status")
+        except (OSError, ValueError, AttributeError):
+            status = None
+        if status == "completed":
+            continue
+        try:
+            record = json.loads((archives / run.name / "run-format.json").read_text())
+            run_format = record.get("format") if isinstance(record, dict) else None
+        except (OSError, ValueError, TypeError):
+            run_format = None
+        run_format = run_format if isinstance(run_format, str) else None
+        found.append(
+            {
+                "id": run.name,
+                "status": status if isinstance(status, str) else "unknown",
+                "format": run_format,
+                "compatible": run_format is not None and run_format in resumes,
+            }
+        )
+    return found
+
+
+def preview_refusal(root: Path, ref: str) -> str | None:
+    """Why the preview must not run at all, if it must not."""
+    if not REF.fullmatch(ref) or ".." in ref:
+        return f"{ref} is not a tag or commit of the standard"
+    if os.environ.get("BALLAST_STANDARD_DIR"):
+        return (
+            "BALLAST_STANDARD_DIR is set: there is no cache to preview from; unset it"
+        )
+    _, error = read_pin(root)
+    if error:
+        return error
+    state = operator_state(root)
+    if os.path.lexists(state / "setup-attempt.json"):
+        return "setup did not finish in this checkout; run `ballast setup` first"
+    lock = state / "checkout.lock"
+    if lock.is_file() and not lock.is_symlink():
+        fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "ballast setup is running in this checkout; wait for it to finish"
+        finally:
+            os.close(fd)
+    return None
+
+
+def compare(root: Path, ref: str, target: Path, work: Path) -> dict:
+    """Build both sides with one procedure and report the update (FR-015).
+
+    Record against record when both versions keep one, otherwise walk against
+    walk of two disposable builds, so both sides always describe one set.
+    """
+    pin = pinned_ref(root)
+    block, probes = ignore_block(target)
+    target_recoverable, resumes = declarations(target)
+    pinned = trusted_standard_dir(root, pin)
+    both = target_recoverable and pinned.is_dir() and declarations(pinned)[0]
+    after_walk, after_record = disposable_build(
+        root, target, ref, work / "after", block
+    )
+    before = after = None
+    live = installation(root)
+    if both and after_record is not None and live and live["ref"] == pin:
+        setup = str(pinned / "tools/setup")
+        check = probe([PYTHON, "-I", "-S", setup, "--project", str(root), "--check"])
+        if check is not None and check.returncode == 0:
+            before, after = live["files"], after_record
+    if before is None:
+        pinned = ensure_standard(root, pin)
+        before_walk, before_record = disposable_build(
+            root, pinned, pin, work / "before", None
+        )
+        if both and after_record is not None and before_record is not None:
+            before, after = before_record, after_record
+        else:
+            before, after = before_walk, after_walk
+    paths = {
+        "added": sorted(after.keys() - before.keys()),
+        "changed": sorted(
+            n for n in after.keys() & before.keys() if after[n] != before[n]
+        ),
+        "removed": sorted(before.keys() - after.keys()),
+    }
+    must = [(path, True) for path in after] + probes
+    ignored = set(
+        git_output(
+            root,
+            "check-ignore",
+            "--no-index",
+            "-z",
+            "--stdin",
+            data="\0".join(p for p, _ in must) + "\0",
+        ).split("\0")
+    )
+    not_ignored = sorted({p for p, wanted in must if wanted != (p in ignored)})
+    tracked = set(git_output(root, "ls-files", "-z").split("\0"))
+    owned = sorted(
+        p
+        for p in after
+        if p in tracked or p.startswith("docs/policies/project/") or p == SEEDS[2]
+    )
+    return {
+        "paths": paths,
+        "ignore": {
+            "ok": not not_ignored,
+            "not_ignored": not_ignored,
+            "block": block if not_ignored else None,
+        },
+        "project_owned_changed": owned,
+        "target_recoverable": target_recoverable,
+        "resumes": resumes,
+    }
+
+
+def update_report(root: Path, ref: str, target: Path, work: Path) -> dict:
+    """Assemble the preview report for moving the pin to `ref`."""
+    found = compare(root, ref, target, work)
+    pin = pinned_ref(root)
+    minimum, _, _ = manifest(target)
+    meets = minimum is None or minimum <= semver(VERSION)
+    shown_minimum = ".".join(map(str, minimum)) if minimum else None
+    runs = unfinished_runs(root, found["resumes"])
+    paths = found["paths"]
+    changed = sorted({*paths["added"], *paths["changed"], *paths["removed"]})
+    protected = ["ballast.toml", *(p for p in changed if p.startswith(PROTECTED))]
+    try:
+        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+        commands = config.get("checks", {}).get("commands") or []
+    except (OSError, ValueError, AttributeError):
+        commands = []
+    checks = "; ".join(map(str, commands)) if commands else "none configured"
+    steps = []
+    if not meets:
+        wanted = f"v{shown_minimum}"
+        steps.append(f"Install the CLI {wanted}: {install_line(wanted)}")
+    if not found["ignore"]["ok"]:
+        steps.append(
+            "Add this block to .gitignore and commit it:\n"
+            + (found["ignore"]["block"] or "")
+        )
+    steps += [
+        f'Set ref = "{ref}" under [standard] in ballast.toml, review and commit it',
+        "ballast setup",
+        "Review the changed protected inputs: " + ", ".join(protected),
+        "ballast trust",
+        f"Run the project's checks: {checks}",
+    ]
+    blockers = [
+        f"run {run['id']} cannot resume under {ref}: {RESUME_BLOCKER}"
+        for run in runs
+        if not run["compatible"]
+    ]
+    if not meets:
+        blockers.append(f"this CLI v{VERSION} is below {ref}'s minimum {shown_minimum}")
+    if not found["ignore"]["ok"]:
+        blockers.append("the ignore rules must change first (see the steps)")
+    if found["project_owned_changed"]:
+        blockers.append("project-owned files would change")
+    return {
+        "schema": 1,
+        "pinned": pin,
+        "installed": installed_ref(root),
+        "target": ref,
+        "target_recoverable": found["target_recoverable"],
+        "cli": {"version": VERSION, "minimum": shown_minimum, "meets": meets},
+        "runs": runs,
+        "paths": paths,
+        "ignore": found["ignore"],
+        "project_owned_changed": found["project_owned_changed"],
+        "steps": steps,
+        "blockers": blockers,
+    }
+
+
+def render_preview(report: dict) -> str:
+    """Render the human form of an update preview."""
+    target = report["target"]
+    guarantees = (
+        "yes"
+        if report["target_recoverable"]
+        else "no — a failed setup or rollback to this version can leave the checkout "
+        "without a usable installation"
+    )
+    cli = report["cli"]
+    verdict = "meets" if cli["meets"] else "does not meet"
+    lines = [
+        "Ballast update preview",
+        f"  pinned     {report['pinned']}",
+        f"  installed  {report['installed'] or 'unknown'}",
+        f"  target     {target} (recovery guarantees: {guarantees})",
+        (
+            f"  CLI        v{cli['version']} {verdict} {target}'s minimum "
+            f"{cli['minimum'] or '(none)'}"
+        ),
+        "",
+        "Unfinished runs",
+    ]
+    for run in report["runs"]:
+        resumable = (
+            f"can resume under {target}"
+            if run["compatible"]
+            else f"cannot resume: {RESUME_BLOCKER}"
+        )
+        shown = run["format"] or "(no format)"
+        lines.append(f"  {run['id']}  {run['status']}  {shown}  {resumable}")
+    if not report["runs"]:
+        lines.append("  none")
+    lines += ["", "Installed paths"]
+    for kind in ("added", "changed", "removed"):
+        lines += [f"  {kind:<8} {path}" for path in report["paths"][kind]]
+    if not any(report["paths"].values()):
+        lines.append("  none would change")
+    ignore = report["ignore"]
+    lines.append(
+        "Ignore rules: the current .gitignore covers every installed path"
+        if ignore["ok"]
+        else "Ignore rules: not ignored today: " + ", ".join(ignore["not_ignored"])
+    )
+    owned = report["project_owned_changed"]
+    lines.append(
+        "Project-owned files: " + (", ".join(owned) if owned else "none would change")
+    )
+    lines += ["", "To finish the update"]
+    lines += [f"  {n}. {step}" for n, step in enumerate(report["steps"], 1)]
+    if report["blockers"]:
+        lines += ["", "Blocked: " + "; ".join(report["blockers"])]
+    return "\n".join(lines) + "\n"
+
+
+def preview(argv: list[str]) -> int:
+    """Report what moving the pin to a version would do, changing nothing."""
+    parser = argparse.ArgumentParser(prog="ballast preview")
+    parser.add_argument("ref")
+    parser.add_argument("--json", action="store_true")
+    arguments = parser.parse_args(argv)
+    root = Path.cwd()
+    refusal = preview_refusal(root, arguments.ref)
+    if refusal:
+        sys.stderr.write(f"ballast: refusing: {refusal}\n")
+        return EXIT_REFUSED
+    target = ensure_standard(root, arguments.ref)
+    base = standard_dir(arguments.ref).parent.parent / "preview"
+    base.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(dir=base))
+    try:
+        report = update_report(root, arguments.ref, target, work)
+    except (PreviewError, OSError, ValueError) as error:
+        sys.stderr.write(f"ballast: preview of {arguments.ref} failed: {error}\n")
+        return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            base.rmdir()
+    if arguments.json:
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+    else:
+        sys.stdout.write(render_preview(report))
+    return 1 if report["blockers"] else 0
+
+
+def command_standard(root: Path, command: str) -> Path:
+    """Return the standard a command runs: local, or the pinned version."""
+    local = os.environ.get("BALLAST_STANDARD_DIR")
+    if local:
+        standard = Path(local).resolve()
+        sys.stderr.write(f"ballast: using local standard {standard}\n")
+        return standard
+    ref = pinned_ref(root)
+    if command == "setup":
+        return ensure_standard(root, ref)
+    standard = trusted_standard_dir(root, ref)
+    if not standard.is_dir():
+        installed = installed_detail(root, ref)
+        fail(
+            f"standard {ref} is not fetched; run `ballast setup`"
+            + (f"; {installed}" if installed else "")
+            + DOCTOR_HINT
+        )
+    return standard
+
+
 def main(argv: list[str]) -> int:
     """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
     if not argv:
@@ -1176,24 +1624,10 @@ def main(argv: list[str]) -> int:
         return self_install(argv[1:])
     if argv[0] == "doctor":
         return doctor(argv[1:])
+    if argv[0] == "preview":
+        return preview(argv[1:])
     root = Path.cwd()
-    local = os.environ.get("BALLAST_STANDARD_DIR")
-    if local:
-        standard = Path(local).resolve()
-        sys.stderr.write(f"ballast: using local standard {standard}\n")
-    else:
-        ref = pinned_ref(root)
-        if argv[0] == "setup":
-            standard = ensure_standard(root, ref)
-        else:
-            standard = trusted_standard_dir(root, ref)
-        if not standard.is_dir():
-            installed = installed_detail(root, ref)
-            fail(
-                f"standard {ref} is not fetched; run `ballast setup`"
-                + (f"; {installed}" if installed else "")
-                + DOCTOR_HINT
-            )
+    standard = command_standard(root, argv[0])
     if argv[0] == "setup":
         tool = standard / "tools/setup"
         os.execv(  # noqa: S606

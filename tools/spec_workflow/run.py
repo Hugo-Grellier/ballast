@@ -117,6 +117,10 @@ FALLBACK_OPTIONS = [
 ]
 RESUMABLE_INPUTS = {"integration"}
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# The saved-run format this version writes; `tools/cli.toml [runs] format`
+# declares the same value (a test keeps them equal), and an update preview
+# reads it from the archive to tell whether a target version can resume a run.
+RUN_FORMAT = "ballast-run/1"
 
 
 def _summary(run_id: str) -> None:
@@ -189,10 +193,30 @@ def _environment(run_id: str) -> dict[str, str]:
     }
 
 
+def _archive_format(run_id: str) -> None:
+    """Record the run's format in its archive.
+
+    A run without one never resumes under another version, so a failure here
+    only narrows later updates.
+    """
+    try:
+        with archive_lock(ROOT, run_id, exclusive=True):
+            target = archive_dir(ROOT, run_id) / "run-format.json"
+            pending = target.with_name("run-format.json.tmp")
+            pending.write_text(
+                json.dumps({"schema": 1, "format": RUN_FORMAT}) + "\n",
+                encoding="utf-8",
+            )
+            pending.replace(target)
+    except (OSError, SystemExit) as error:
+        sys.stderr.write(f"warning: run format not recorded: {error}\n")
+
+
 def _launch(command: list[str], run_id: str, *, start: bool) -> int:
     """Run Spec Kit, then summarize, archive and import the run."""
     if start:
         archive_policy(ROOT, run_id)
+        _archive_format(run_id)
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(  # noqa: S603

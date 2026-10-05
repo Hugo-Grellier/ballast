@@ -12,17 +12,20 @@ import io
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import tomllib
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import Mock, patch
 
 import yaml
@@ -1327,6 +1330,60 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertEqual(self.status(), {"installed": True, "refusal": None})
 
 
+def _ids(node: object) -> list[str]:
+    if isinstance(node, dict):
+        own = [node["id"]] if isinstance(node.get("id"), str) else []
+        return own + [i for value in node.values() for i in _ids(value)]
+    if isinstance(node, list):
+        return [i for value in node for i in _ids(value)]
+    return []
+
+
+class RunFormatTests(unittest.TestCase):
+    """A version declares the run format it writes and the ones it resumes."""
+
+    # What saved run state depends on, per format: the Spec Kit version and
+    # every shipped workflow's step IDs. Record a new entry only together with
+    # a new [runs] format (and a decision on [runs] resumes).
+    BASIS: ClassVar[dict[str, str]] = {
+        "ballast-run/1": (
+            "96c4d6ccbae5d9431514de885d4a48c8f1522fb380e62dd8135f200895e2b93b"
+        ),
+    }
+
+    def manifest(self) -> dict:
+        return tomllib.loads((ROOT / "tools/cli.toml").read_text())
+
+    def test_run_format_matches_the_manifest(self) -> None:
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import run  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        manifest = self.manifest()
+        self.assertEqual(run.RUN_FORMAT, manifest["runs"]["format"])
+        self.assertIn(run.RUN_FORMAT, manifest["runs"]["resumes"])
+        self.assertTrue(manifest["setup"]["recoverable"])
+
+    def test_format_changes_with_what_runs_depend_on(self) -> None:
+        version = re.search(
+            r'^VERSION = "([^"]+)"', (ROOT / "tools/setup").read_text(), re.MULTILINE
+        )
+        digest = hashlib.sha256(version.group(1).encode())
+        for path in sorted(
+            (ROOT / "templates/spec-kit/workflows").glob("*/workflow.yml")
+        ):
+            steps = "\0".join(_ids(yaml.safe_load(path.read_text())))
+            digest.update(path.parent.name.encode() + b"\0" + steps.encode() + b"\0")
+        self.assertEqual(
+            self.BASIS.get(self.manifest()["runs"]["format"]),
+            digest.hexdigest(),
+            "the Spec Kit version or a shipped workflow's step IDs changed: decide "
+            "whether saved runs still resume, then bump [runs] format (and "
+            "RUN_FORMAT in run.py) or record the new basis for the same format",
+        )
+
+
 HOLD_LOCK = """\
 import fcntl, os, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
@@ -1823,6 +1880,41 @@ class RunHistoryTests(unittest.TestCase):
                 ),
                 0,
             )
+
+    def test_launcher_records_the_run_format_at_start(self) -> None:
+        # FR-016, AC-017: a later preview reads which format this run uses.
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import run  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        recorded: list[dict] = []
+
+        def launch(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            target = run.archive_dir(self.repo.root, "run43xxx") / "run-format.json"
+            recorded.append(json.loads(target.read_text()))
+            return SimpleNamespace(returncode=0)
+
+        with (
+            patch.object(run, "ROOT", self.repo.root),
+            patch.object(run.shutil, "which", return_value="/bin/specify"),
+            patch.object(
+                run.uuid, "uuid4", return_value=SimpleNamespace(hex="run43xxx")
+            ),
+            patch.object(
+                run, "subprocess", SimpleNamespace(run=Mock(side_effect=launch))
+            ),
+            patch.object(run, "_summary"),
+            patch.object(run, "_record"),
+            patch.object(run, "import_run"),
+        ):
+            self.assertEqual(
+                run.main(
+                    ["start", "-i", "feature_directory=specs/93-agent-run-ledger"]
+                ),
+                0,
+            )
+        self.assertEqual(recorded, [{"schema": 1, "format": run.RUN_FORMAT}])
 
     def test_launcher_import_failure_fails_successful_workflow(self) -> None:
         sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
