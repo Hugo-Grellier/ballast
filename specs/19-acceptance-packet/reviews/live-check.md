@@ -232,3 +232,14 @@ Variants rendered with `gh api markdown -f mode=gfm -f context=Hugo-Grellier/bal
 - SEC-003: FAIL (FR-013, low; fix in `packet.inert`)
 - T052 stays unchecked until SEC-003 is fixed and its rendering re-checked.
 - Verdict: FAIL
+
+## SEC-003 re-check after the fix (2026-10-06)
+
+`inert()` now breaks `#N`, `owner/repo#N` and `GH-N` with a zero-width space (`fix(packet): never let an issue reference autolink`, test `test_issue_references_never_autolink`, which fails on the previous code). Rendered through GitHub's GFM endpoint (`gh api markdown -f mode=gfm -f context=<scratch repository>`), which renders without posting a backlink:
+
+- Before (control), `see \#8 | owner/repo\#5 | GH-8`: three `issue-link` anchors.
+- After, `inert()` of `see #8`, `owner/repo#5`, `GH-8`, `cost $5`: `<p dir="auto">see #​8 | …/ballast-pilot#​5 | GH-​8 | cost $5</p>`, no anchor.
+
+A full republish in the scratch project was not repeated: `ballast setup` there now fails applying `skills.patch` to the second (Claude) integration that `-i integration=claude` runs installed (filed separately; unrelated to the packet).
+
+- Verdict: PASS
