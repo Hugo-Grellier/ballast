@@ -556,6 +556,18 @@ class ProjectTests(DoctorCase):
         )
         self.assertEqual(check["remedy"], shim.CHECKS_REMEDY)
 
+    def test_text_report_escapes_control_characters(self) -> None:
+        # A checkout's ballast.toml must not forge a doctor line or emit
+        # terminal escapes through a [checks] command.
+        (self.project / "ballast.toml").write_text(
+            '[standard]\nref = "v0.1.0"\n[checks]\n'
+            'commands = ["x\\n  ok           trust            \\u001b[2K"]\n'
+        )
+        _, output = self.doctor()
+        self.assertNotIn("\x1b", output)
+        self.assertNotRegex(output, r"(?m)^  ok +trust ")
+        self.assertIn(r"x\n  ok", output)
+
     def test_rule_matching(self) -> None:
         for rule, command, allowed in (
             ("Bash(uv run *)", "uv run pytest -q", True),
