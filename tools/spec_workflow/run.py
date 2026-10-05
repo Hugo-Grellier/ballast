@@ -274,9 +274,9 @@ def _sync_block(run_id: str, outcome: branch_sync.Outcome) -> int:
     The block has its own category and is recovered by starting again: no
     agent step ran, so `continue` has nothing to gate.
     """
+    detail = f": {outcome.detail}" if outcome.detail else ""
     condition = (
-        f"BLOCKED_UPSTREAM_SYNC ({outcome.cause}): {outcome.detail}. "
-        f"Recovery: {outcome.recovery}"
+        f"BLOCKED_UPSTREAM_SYNC ({outcome.cause}){detail}. Recovery: {outcome.recovery}"
     )[:4000]
     try:
         code = _stop(

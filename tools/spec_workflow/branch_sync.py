@@ -629,6 +629,8 @@ class _Sync:
         env |= {
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_NO_LAZY_FETCH": "1",
+            # `push` failures are told apart by Git's English messages.
+            "LC_ALL": "C",
             "GIT_ASKPASS": "",
             "SSH_ASKPASS_REQUIRE": "never",
             "GIT_CEILING_DIRECTORIES": str(self.bare.parent),

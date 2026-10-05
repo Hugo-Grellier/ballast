@@ -419,6 +419,7 @@ class FoundationTests(SyncCase):
             self.assertEqual(env["GIT_NO_LAZY_FETCH"], "1")
             self.assertEqual(env["GIT_ASKPASS"], "")
             self.assertEqual(env["SSH_ASKPASS_REQUIRE"], "never")
+            self.assertEqual(env["LC_ALL"], "C")
             for name in ("SSH_ASKPASS", "DISPLAY", "WAYLAND_DISPLAY"):
                 self.assertNotIn(name, env)
             self.assertFalse(

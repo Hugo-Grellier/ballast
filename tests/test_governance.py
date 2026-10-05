@@ -29,7 +29,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("the merge decision is the single human approval", workflow)
         spec_kit = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
         self.assertIn("## Autonomous runs", spec_kit)
-        self.assertIn("#18", spec_kit)
+        # Autonomous resume waits for #21; #18 added the synchronization.
+        self.assertIn("#21", spec_kit)
 
 
 if __name__ == "__main__":
