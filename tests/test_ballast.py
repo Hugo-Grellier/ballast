@@ -23,7 +23,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(ROOT / "tests"))
-from test_autonomy import operator_state  # noqa: E402
+from test_autonomy import operator_state, outside_temp  # noqa: E402
 
 sys.path.pop(0)
 SHIM = ROOT / "tools/ballast"
@@ -61,7 +61,7 @@ class ShimTests(unittest.TestCase):
     """A project picks a fetched version; the launcher never comes from it."""
 
     def setUp(self) -> None:
-        self.directory = TemporaryDirectory()
+        self.directory = TemporaryDirectory(dir=outside_temp())
         self.base = Path(self.directory.name)
         self.project = self.base / "project"
         self.project.mkdir()
@@ -96,6 +96,31 @@ class ShimTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("v0.1.0 is not fetched", result.stderr)
         self.assertFalse((self.base / "data/ballast/standard/v0.1.0").exists())
+
+    def test_standard_in_a_temp_directory_is_refused(self) -> None:
+        # An agent could rewrite the launcher there (#34).
+        self.pin("v0.1.0")
+        with TemporaryDirectory() as temp:
+            for command in ("run", "setup"):
+                result = subprocess.run(  # noqa: S603
+                    [sys.executable, str(SHIM), command],
+                    cwd=self.project,
+                    env={**self.env, "XDG_DATA_HOME": temp},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("which agents can write", result.stderr)
+            self.assertEqual(list(Path(temp).iterdir()), [])
+
+    def test_temp_roots_match_the_launcher(self) -> None:
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import launcher  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(shim.TEMP_ROOTS, launcher.TEMP_ROOTS)
 
     def test_runs_the_launcher_of_the_pinned_version(self) -> None:
         archive = self.base / "standard.tar.gz"
@@ -462,7 +487,7 @@ class CompatibilityTests(unittest.TestCase):
     """A project pinning a version without tools/cli.toml works as before (FR-019)."""
 
     def setUp(self) -> None:
-        self.directory = TemporaryDirectory()
+        self.directory = TemporaryDirectory(dir=outside_temp())
         base = Path(self.directory.name)
         self.project = base / "project"
         workflow = self.project / ".ballast/spec_workflow"

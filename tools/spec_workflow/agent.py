@@ -113,13 +113,16 @@ def permission_args(integration: str, args: list[str]) -> list[str]:
             "--settings",
             str(SETTINGS),
         ]
-    # Pin network off: a user config could otherwise enable it for workspace-write.
+    # Pin network off and the writable roots to the checkout and temp roots: a
+    # user config could otherwise widen workspace-write (#34).
     return [
         "exec",
         "--sandbox",
         "workspace-write",
         "--config",
         "sandbox_workspace_write.network_access=false",
+        "--config",
+        "sandbox_workspace_write.writable_roots=[]",
         *args[1:],
     ]
 

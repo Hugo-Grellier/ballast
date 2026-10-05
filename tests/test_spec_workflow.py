@@ -602,6 +602,8 @@ class AgentWrapperTests(unittest.TestCase):
                 "workspace-write",
                 "--config",
                 "sandbox_workspace_write.network_access=false",
+                "--config",
+                "sandbox_workspace_write.writable_roots=[]",
                 "$speckit-tasks",
             ],
         )

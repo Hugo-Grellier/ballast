@@ -34,7 +34,7 @@ SHIM = ROOT / "tools/ballast"
 SCHEMA = ROOT / "specs/12-cli-install-doctor/contracts/doctor-report.schema.json"
 
 sys.path.insert(0, str(ROOT / "tests"))
-from test_autonomy import operator_state  # noqa: E402
+from test_autonomy import operator_state, outside_temp  # noqa: E402
 
 sys.path.pop(0)
 _loader = SourceFileLoader("ballast_doctor", str(SHIM))
@@ -142,7 +142,7 @@ class DoctorCase(unittest.TestCase):
     """A home, a stub bin directory, data and state directories and a project."""
 
     def setUp(self) -> None:
-        self.directory = TemporaryDirectory()
+        self.directory = TemporaryDirectory(dir=outside_temp())
         self.base = Path(self.directory.name)
         self.home = self.base / "home"
         self.local_bin = self.home / ".local/bin"
@@ -448,6 +448,20 @@ class MachineTests(DoctorCase):
             self.assertEqual(checks[check]["status"], "missing")
             self.assertIn(f"ignored {name} found only in", checks[check]["detail"])
 
+    def test_programs_in_a_temp_directory_never_run(self) -> None:
+        # Codex agents can write $TMPDIR and /tmp; the runtime never trusts a
+        # program there, and doctor now agrees (#34).
+        (self.bin / "gh").unlink()
+        self.stub("gh", f"touch {self.sentinel}", self.tmp / "bin")
+        self.env["PATH"] = os.pathsep.join([str(self.tmp / "bin"), self.env["PATH"]])
+        _, checks = self.checks()
+        self.assertEqual(checks["gh"]["status"], "missing")
+        self.assertIn("a temp directory", checks["gh"]["detail"])
+        boundary = checks["agent-cli"]["detail"]
+        self.assertIn("agents can write the checkout and ", boundary)
+        self.assertIn(str(self.tmp.resolve()), boundary)
+        self.assertFalse(self.sentinel.exists())
+
     def test_safe_program_later_on_path_is_used(self) -> None:
         other = self.base / "other-checkout"
         (other / ".git").mkdir(parents=True)
@@ -706,6 +720,9 @@ class ProjectTests(DoctorCase):
         self.sentinel_tools(
             self.project / ".data/ballast/standard" / self.REF, manifest
         )
+        # $TMPDIR is agent-writable too (#34).
+        variants["XDG_DATA_HOME in a temp directory"] = self.tmp / "data"
+        self.sentinel_tools(self.tmp / "data/ballast/standard" / self.REF, manifest)
         for name, data in variants.items():
             with self.subTest(name):
                 self.env["XDG_DATA_HOME"] = str(data)
@@ -714,7 +731,8 @@ class ProjectTests(DoctorCase):
                     self.assert_gap(checks[check], "inconclusive")
                     self.assertEqual(
                         checks[check]["detail"],
-                        "standard directory resolves into a working tree",
+                        "standard directory resolves into a working tree or temp"
+                        " directory",
                     )
 
 

@@ -42,7 +42,7 @@ ballast doctor            # add --json for a machine-readable report
 - `cli-on-path`: the `ballast` command on `PATH`.
 - `git`, `uvx` and `patch` for `ballast setup`, and `network`: HTTPS access to GitHub and PyPI the first time a version is fetched.
 - `linux`, `systemd-user` and `systemd-run`: headless agent steps of `ballast run` need Linux with a systemd user session that can start transient scopes.
-- `specify` (the Spec Kit CLI) and `agent-cli` (Claude Code or Codex) for `ballast run`.
+- `specify` (the Spec Kit CLI) and `agent-cli` (Claude Code or Codex) for `ballast run`; `agent-cli` also reports where agents can write, which Ballast never trusts for programs or state.
 - `gh`, authenticated, for issue intake and PR steps.
 
 Inside a project it also checks the pin in `ballast.toml`, whether that version is fetched, the CLI version it needs, whether setup is current, and whether the launcher would refuse until `ballast trust`.

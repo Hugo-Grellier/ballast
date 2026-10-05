@@ -311,7 +311,8 @@ from `SPECKIT_INTEGRATION_*_EXTRA_ARGS`:
   (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, matched as whole
   subcommands), and the commands the project allows there.
 - **Codex** runs `codex exec --sandbox workspace-write`: writes are confined to
-  the checkout and temporary directories, network access is pinned off, and
+  the checkout and temporary directories (extra `writable_roots` from your
+  Codex configuration are pinned empty), network access is pinned off, and
   approvals are never requested. Codex still loads the user's Codex
   configuration, and user Codex hooks run for workflow workers; these flags
   override its sandbox. Codex cannot express Claude's per-path denials, so the
@@ -327,6 +328,17 @@ on the agent's `PATH`. It sees the arguments after shell quoting, which a
 permission rule matching command text cannot, and refuses `--output` (which
 writes a file anywhere), `difftool` and `mergetool` (which run a program)
 before running the trusted `git` the wrapper resolved.
+
+**Agent write boundary.** Headless agents can write the checkout and the
+temp roots (`/tmp`, `/var/tmp`, `/dev/shm` and `$TMPDIR`); Claude also any
+`additionalDirectories` the project's committed Claude settings add, so review
+those like code. Autonomous runs narrow this further with bubblewrap. Whenever
+Ballast runs a program with your authority (`git`, `gh`, `systemd-run`,
+`bwrap`) it skips copies inside that boundary or any Git working tree and
+trusts every other absolute `PATH` entry, so keep no directory an agent can
+write on your `PATH`. Ballast also refuses an `XDG_STATE_HOME` or
+`XDG_DATA_HOME` inside the boundary. `ballast doctor` reports the boundary
+under `agent-cli` and names any program it ignored.
 
 Both integrations get the same executable-input guard. The agent runs with
 `PYTHONPYCACHEPREFIX` outside the checkout, so a legitimate test run leaves no

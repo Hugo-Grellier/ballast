@@ -121,10 +121,33 @@ def pinned_ref(root: Path) -> str:
     return ref
 
 
+# Agents can write these outside the checkout (Codex's workspace-write
+# sandbox); the same list as launcher.TEMP_ROOTS, which a test keeps equal.
+TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")  # noqa: S108 - refused, never used
+
+
+def agent_temp_roots() -> tuple[Path, ...]:
+    """Directories an agent may write outside the checkout."""
+    names = {*TEMP_ROOTS, os.environ.get("TMPDIR", "")} - {""}
+    return tuple(Path(name).resolve() for name in sorted(names))
+
+
 def standard_dir(ref: str) -> Path:
     """Return where the given standard version is (or will be) extracted."""
     base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share"
     return Path(base) / "ballast/standard" / ref
+
+
+def trusted_standard_dir(root: Path, ref: str) -> Path:
+    """standard_dir, refused where an agent could rewrite the launcher there."""
+    standard = standard_dir(ref)
+    if within(standard.resolve(), (root.resolve(), *agent_temp_roots())):
+        fail(
+            f"standard directory {standard} is inside the checkout or a temp "
+            f"directory, which agents can write; set XDG_DATA_HOME elsewhere"
+            f"{DOCTOR_HINT}"
+        )
+    return standard
 
 
 def fetch(ref: str, target: Path) -> None:
@@ -340,8 +363,8 @@ def resolve_program(name: str, excluded: tuple[Path, ...]) -> tuple[str | None, 
         shadow = found
     shadow = shadow or shutil.which(name, path=os.pathsep.join(dropped))
     note = (
-        f"; ignored {name} found only in the checkout, another Git working tree"
-        " or a relative PATH entry"
+        f"; ignored {name} found only in the checkout, another Git working tree,"
+        " a temp directory or a relative PATH entry"
     )
     return None, note if shadow else ""
 
@@ -447,7 +470,10 @@ def _check_agent(context: Context) -> Outcome:
     resolved = {n: resolve_program(n, context.excluded) for n in ("claude", "codex")}
     found = [name for name, (program, _) in resolved.items() if program]
     if found:
-        return "passing", ", ".join(found)
+        # The agent write boundary (#34): what program lookup never trusts.
+        writable = ", ".join(str(path) for path in agent_temp_roots())
+        boundary = f"agents can write the checkout and {writable}, never trusted"
+        return "passing", f"{', '.join(found)}; {boundary}"
     notes = "".join(note for _, note in resolved.values())
     return "missing", "neither claude nor codex found" + notes
 
@@ -691,7 +717,10 @@ def _probe_boundary(context: Context) -> tuple[str, str] | None:
             f"remove {standard}, then run `ballast setup` with XDG_DATA_HOME "
             "outside any checkout"
         )
-        return "standard directory resolves into a working tree", remedy
+        return (
+            "standard directory resolves into a working tree or temp directory",
+            remedy,
+        )
     return None
 
 
@@ -804,8 +833,9 @@ def project_checks(context: Context) -> list[Check]:
 def context_for(root: Path) -> Context:
     """Read what doctor needs about the cwd, without writing anything."""
     project = (root / "ballast.toml").is_file()
-    excluded = tuple(
-        p.resolve() for p in (root if project else None, git_root(root)) if p
+    excluded = (
+        tuple(p.resolve() for p in (root if project else None, git_root(root)) if p)
+        + agent_temp_roots()
     )
     ref, error = read_pin(root) if project else (None, None)
     local = os.environ.get("BALLAST_STANDARD_DIR")
@@ -910,7 +940,7 @@ def main(argv: list[str]) -> int:
         sys.stderr.write(f"ballast: using local standard {standard}\n")
     else:
         ref = pinned_ref(root)
-        standard = standard_dir(ref)
+        standard = trusted_standard_dir(root, ref)
         if not standard.is_dir():
             if argv[0] != "setup":
                 fail(f"standard {ref} is not fetched; run `ballast setup`{DOCTOR_HINT}")
