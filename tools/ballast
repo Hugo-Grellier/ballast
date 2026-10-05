@@ -14,6 +14,7 @@ Then, from a project root whose ballast.toml has `[standard] ref = "..."`:
     ballast trust              # after reviewing the checkout
     ballast run start|resume ...
     ballast ledger ...
+    ballast intake ...         # the feature-intake helper
 
 Each version is extracted once into $XDG_DATA_HOME/ballast/standard/<ref>/.
 Only `setup` downloads; every other command runs the launcher
@@ -62,7 +63,8 @@ ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PYTHON = "/usr/bin/python3"
 USAGE = (
-    "usage: ballast setup | trust | run ... | ledger ... | doctor [--json]"
+    "usage: ballast setup | trust | run ... | ledger ... | intake ..."
+    " | doctor [--json]"
     " | self-install [--dir DIR] [--force] | --version"
 )
 DOCTOR_HINT = "; run `ballast doctor` for details"
