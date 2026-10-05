@@ -3226,6 +3226,20 @@ class BranchSyncCallTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(pointer.read_text())["feature_directory"], FEATURE)
 
+    def test_resume_points_feature_json_at_the_pinned_feature(self) -> None:
+        """SEC-002: resume takes the feature from the pin, never from inputs.json."""
+        pins = autonomy.state_dir(self.repo.root) / "draft-pr"
+        pins.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (pins / "run42.json").write_text(
+            json.dumps({"branch": "feat-x", "feature": FEATURE})
+        )
+        inputs = self.repo.root / ".specify/workflows/runs/run42/inputs.json"
+        inputs.write_text(json.dumps({"inputs": {"feature_directory": "specs/4-y"}}))
+        status, _, _ = self.main("resume", "run42")
+        self.assertEqual(status, 0)
+        pointer = self.repo.root / ".specify/feature.json"
+        self.assertEqual(json.loads(pointer.read_text())["feature_directory"], FEATURE)
+
     def test_called_once_before_the_engine_for_start_and_resume(self) -> None:
         for args, run_id, starting in (
             (("start", "-i", f"feature_directory={FEATURE}"), "new18xxx", True),

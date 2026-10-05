@@ -1044,7 +1044,12 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
     if argv[0] == "start":
         # After the check: the snapshot is a new file it would count as dirty.
         _snapshot_issue(options)
-    refusal = _point_feature(feature)
+    # SEC-002: a resume's feature is the pinned one the check used, never inputs.json.
+    refusal = _point_feature(
+        feature
+        if argv[0] == "start"
+        else branch_sync.read_pin(ROOT, run_id).get("feature")
+    )
     if refusal is not None:
         return refusal
     try:
