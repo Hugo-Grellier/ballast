@@ -17,7 +17,7 @@ The plan's claims about existing code were checked against the code itself:
 - `tools/spec_workflow/draft_pr.py:46-47, 442, 710-754, 986-1015`: the #17 markers differ from the proposed packet markers. `_after`, the re-read-before-edit rule (DEC-0007), `gh pr edit --body-file -` and the `checkpoint` → `_record` order all exist where the plan puts the packet step. Only `create` takes the clone-wide lock (`draft_pr.py:811`), and the packet's body edits follow #17's unlocked `reuse` path with the same re-read guard.
 - `tools/spec_workflow/autonomy.py:162-165`: `HUMAN_APPROVAL` is the same pattern the packet-format contract cites. `autonomy.py` imports `draft_pr` only lazily (`_trusted()`), so `draft_pr` → `packet` → `autonomy` creates no import cycle when the module loads.
 - `draft_pr.py:67`: #17 already reads the intake comment's `Risk:` field, which R7 relies on for human-gated runs.
-- `docs/adr/0003-launcher-github-authority.md:17,28`: the command allowlist is fixed, and "later features extend this allowlist by a new ADR rather than adding a second path". Proposed ADR-0005 is the route that ADR asks for.
+- `docs/adr/0003-launcher-github-authority.md:17,28`: the command allowlist is fixed, and "later features extend this allowlist by a new ADR rather than adding a second path". Proposed ADR-0006 is the route that ADR asks for.
 
 ## Coverage against the spec
 
@@ -34,7 +34,7 @@ Every acceptance criterion from AC-001 to AC-022 and every FR-017 situation has 
 - level-based shortening and an archive copy (FR-014, R14/R15);
 - failure isolation (FR-015, checkpoint contract);
 - token redaction (FR-016);
-- policy documentation and ADR-0005 (FR-018).
+- policy documentation and ADR-0006 (FR-018).
 
 The plan reports PD-0002's ordering rule (`failed` before `stale` before `not run`) as an agent-provisional default. R5 states honestly that Autonomous runs will show `not run` until the operator records per-criterion checks, and it leaves the R2 alternative to a follow-up.
 
@@ -47,11 +47,11 @@ I confirm R1. R18 walks through the four project R2 boundaries:
 - the launcher runs no new program and downloads nothing; its new calls are read-only `gh api` and Git plumbing on a private index;
 - installed paths do not change.
 
-The one GitHub write is the PR-body edit ADR-0003 already allows, applied to a second marked section. Under ADR-0003's own wording, extending the read allowlist calls for an ADR, not a trust-model change. That makes ADR-0005 an architecture-boundary record, and the review matrix requires an architecture review of it at implementation time.
+The one GitHub write is the PR-body edit ADR-0003 already allows, applied to a second marked section. Under ADR-0003's own wording, extending the read allowlist calls for an ADR, not a trust-model change. That makes ADR-0006 an architecture-boundary record, and the review matrix requires an architecture review of it at implementation time.
 
 ## Reviews this change needs
 
-The plan's notes require engineering, test, security and documentation reviews. I add `architecture`, because ADR-0005 extends ADR-0003's authority allowlist. These kinds are listed in the draft's `required_kinds`; the engineering and test reviews come from the implementation review.
+The plan's notes require engineering, test, security and documentation reviews. I add `architecture`, because ADR-0006 extends ADR-0003's authority allowlist. These kinds are listed in the draft's `required_kinds`; the engineering and test reviews come from the implementation review.
 
 ## Observations for the implementer
 

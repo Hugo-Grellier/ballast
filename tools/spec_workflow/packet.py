@@ -1,7 +1,7 @@
 """Publish a source-linked acceptance packet into the feature's Draft PR.
 
 `draft_pr.checkpoint` calls `publish` after recording its own outcome, and
-only for a `created` or `reused` PR (docs/adr/0005). The packet is a derived
+only for a `created` or `reused` PR (docs/adr/0006). The packet is a derived
 summary, never an approval: it lists every acceptance criterion of the spec at
 the PR's head commit with one evidence state, the run's risk, decisions,
 open findings and checks, optional API and UI sections, and links to every

@@ -996,7 +996,7 @@ exit status or its step state; the next checkpoint retries.
 
 The packet adds only read calls to the checkpoint's GitHub authority (the PR,
 check runs at the head commit, the configured OpenAPI file) and local Git reads
-of the head commit; it never fetches, pushes or commits. See ADR-0005 in the
+of the head commit; it never fetches, pushes or commits. See ADR-0006 in the
 Ballast repository.
 
 ## Project status and component choices

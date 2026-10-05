@@ -1,4 +1,4 @@
-# ADR-0005: Review packet reads under the launcher's GitHub authority
+# ADR-0006: Review packet reads under the launcher's GitHub authority
 
 - Status: proposed (2026-10-05, with the plan of [feature 19](../../specs/19-acceptance-packet/plan.md#architecture-boundaries); agent-provisional in Autonomous run `97858712`, accepted only when the operator merges the feature PR)
 - Feature: [19-acceptance-packet](../../specs/19-acceptance-packet/spec.md), FR-001, FR-002, FR-008, FR-012; research [R1](../../specs/19-acceptance-packet/research.md#r1-where-the-packet-is-built-and-published), [R8](../../specs/19-acceptance-packet/research.md#r8-ci-results), [R10](../../specs/19-acceptance-packet/research.md#r10-openapi-comparison-fr-010-fr-012), [R18](../../specs/19-acceptance-packet/research.md#r18-risk-recheck-against-the-r2-boundaries)

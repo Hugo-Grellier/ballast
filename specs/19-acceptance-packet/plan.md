@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `specs/19-acceptance-packet/spec.md` (intent agent-provisional, PD-0003, digest in [intent.md](intent.md))
 
-**Risk**: R1, rechecked against the R2 boundaries in [research R18](research.md#r18-risk-recheck-against-the-r2-boundaries). The plan extends ADR-0003's fixed GitHub/Git command allowlist with read-only calls (proposed ADR-0005). The plan gate must confirm R1 explicitly. **Mode**: Autonomous run `97858712`. Every decision here is agent-provisional; merging the PR is the only human approval.
+**Risk**: R1, rechecked against the R2 boundaries in [research R18](research.md#r18-risk-recheck-against-the-r2-boundaries). The plan extends ADR-0003's fixed GitHub/Git command allowlist with read-only calls (proposed ADR-0006). The plan gate must confirm R1 explicitly. **Mode**: Autonomous run `97858712`. Every decision here is agent-provisional; merging the PR is the only human approval.
 
 ## Summary
 
@@ -34,7 +34,7 @@ A criterion is `verified` only when every manifest-mapped test passed in operato
 
 **Constraints**: inert rendering of all agent-written text; links built only by Ballast; GitHub body limit 65,536 characters; JSON-only OpenAPI; nothing waits for CI; no fetch, push or commit; no free text in the ledger.
 
-**Scale/Scope**: `packet.py` about 700 lines (collect, render, OpenAPI diff, config, publish); about 40 lines in `draft_pr.py`, 10 in `run.py` and 120 in `ledger.py`; one new test file; documentation and ADR-0005.
+**Scale/Scope**: `packet.py` about 700 lines (collect, render, OpenAPI diff, config, publish); about 40 lines in `draft_pr.py`, 10 in `run.py` and 120 in `ledger.py`; one new test file; documentation and ADR-0006.
 
 No NEEDS CLARIFICATION remains. Three spec wordings are read explicitly, without changing behavior: AC-010 (R13), the CI edge case (R8) and AC-021's archive "link" (R15).
 
@@ -60,7 +60,7 @@ No NEEDS CLARIFICATION remains. Three spec wordings are read explicitly, without
 - **Contracts and data flow**: `run.py` → `draft_pr.checkpoint` → #17 outcome recorded → `packet.publish(work, outcome)` → `collect` (GitHub PR read, local Git at head, ledger, operator records, check runs, contents) → `render` (pure) → section edit → `acceptance_packet` event and archive file → second printed line. GitHub stays the source of truth for the PR, the feature artifacts at head for intent, the ledger for evidence, and the operator records for Autonomous decisions. The packet is a projection and can be regenerated from them (FR-002). See [contracts/checkpoint-integration.md](contracts/checkpoint-integration.md), [contracts/packet-format.md](contracts/packet-format.md), [contracts/ledger-acceptance-packet-event.md](contracts/ledger-acceptance-packet-event.md) and [data-model.md](data-model.md).
 - **Architecture references**: [constitution](../../.specify/memory/constitution.md) BL-INV-002, -003, -006; [ADR-0003](../../docs/adr/0003-launcher-github-authority.md); [ADR-0004](../../docs/adr/0004-autonomous-provisional-decisions.md); [technical spec §91](../TECHNICAL-SPEC.md#91-v10-target); [ledger schema](../../tools/spec_workflow/ledger-schema.md); #17 [checkpoint contract](../17-draft-pr/contracts/pr-checkpoint.md); #27 [PR summary contract](../27-autonomous-core/contracts/pr-summary.md).
 - **Proposed architecture decisions** (agent-provisional here; the merge approves them):
-  1. **ADR-0005 Review packet reads under the launcher's GitHub authority.** This extends ADR-0003's fixed allowlist. It adds `gh api` reads of a single PR (already used for the re-read), of check runs for one commit, and of one configured file's contents at a commit. It adds `git` plumbing reads (`cat-file`, `ls-tree`, `rev-parse <commit>:<path>`, `read-tree`/`rm --cached`/`write-tree` on a private index). `gh pr edit --body-file -` now also rewrites a second Ballast-marked section, the acceptance packet, under the same re-read rule. No new program, no write other than the PR body, and no fetch.
+  1. **ADR-0006 Review packet reads under the launcher's GitHub authority.** This extends ADR-0003's fixed allowlist. It adds `gh api` reads of a single PR (already used for the re-read), of check runs for one commit, and of one configured file's contents at a commit. It adds `git` plumbing reads (`cat-file`, `ls-tree`, `rev-parse <commit>:<path>`, `read-tree`/`rm --cached`/`write-tree` on a private index). `gh pr edit --body-file -` now also rewrites a second Ballast-marked section, the acceptance packet, under the same re-read rule. No new program, no write other than the PR body, and no fetch.
 
 ## Repository Impact
 
@@ -77,7 +77,7 @@ No NEEDS CLARIFICATION remains. Three spec wordings are read explicitly, without
 | `tests/test_spec_workflow.py` | `run.py` prints both lines; a raising packet step keeps exit statuses 0, 1 and 130. |
 | `templates/policies/spec-kit-workflow.md` | New subsection "Acceptance packet" under "Draft PR": what it shows, the five evidence states, `ballast ledger check` to record evidence, the `[review]` configuration (JSON OpenAPI, UI states), outcomes and remedies, "derived summary, not an approval" (FR-018). `ballast setup` refreshes the installed `docs/policies/` copy. |
 | `README.md` | One sentence in the workflow section pointing to that subsection. |
-| `docs/adr/0005-review-packet-reads.md` | New (ADR-0005). |
+| `docs/adr/0006-review-packet-reads.md` | New (ADR-0006). |
 
 `tools/setup`, `tools/ballast`, `tools/cli.toml`, `claude-settings.json`, `agent.py`, `autonomy.py` (read through its existing public functions) and `artifacts.py` are unchanged.
 
@@ -104,8 +104,8 @@ specs/19-acceptance-packet/
 
 ## Review notes
 
-- **Required reviews** (R1, [review matrix](../../docs/policies/workflow.md#review-triggers)): engineering review; security review, because the change touches GitHub authority, agent-written text rendered into the PR and credential leakage; test review; documentation review for the policy section and ADR-0005.
-- **For the plan gate**: confirm R1 against R18, and accept ADR-0005 as an extension of ADR-0003 rather than a trust-model change. Also accept the `implementation_tree` change (R3): evidence recorded before the upgrade reads `stale` once.
+- **Required reviews** (R1, [review matrix](../../docs/policies/workflow.md#review-triggers)): engineering review; security review, because the change touches GitHub authority, agent-written text rendered into the PR and credential leakage; test review; documentation review for the policy section and ADR-0006.
+- **For the plan gate**: confirm R1 against R18, and accept ADR-0006 as an extension of ADR-0003 rather than a trust-model change. Also accept the `implementation_tree` change (R3): evidence recorded before the upgrade reads `stale` once.
 - **Follow-up to propose in the PR, not in scope**: let `run-checks` record per-criterion evidence by running the manifest's mapped tests. Today Autonomous packets show `not run` until the operator runs `ballast ledger check` (R5). It would be a new command path, so R2 under FR-012.
 
 ## Complexity Tracking

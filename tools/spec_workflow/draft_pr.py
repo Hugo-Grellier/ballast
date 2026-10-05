@@ -18,7 +18,7 @@ only place Ballast uses GitHub authority (docs/adr/0003):
 
 After recording its own outcome, the checkpoint asks `packet.py` to publish
 the acceptance packet into an open Ballast Draft PR (`created` or `reused`;
-docs/adr/0005) and records that step as one `acceptance_packet` event. A
+docs/adr/0006) and records that step as one `acceptance_packet` event. A
 packet failure, even one that raises, never changes this outcome.
 
 Nothing here can change the workflow's exit status: `run.py` catches anything
