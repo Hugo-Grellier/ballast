@@ -253,6 +253,11 @@ lines; open the file for the rest). Peer reviews and spec reconciliation are
 **manual**: the gates say so and the workflow does not claim they ran.
 Approving an intent change outside the gate means reviewing `spec.md` and
 running `.ballast/spec_workflow/artifacts.py record-intent --feature <dir>`.
+`record-intent` registers each approval it writes in your state directory,
+which no agent can write, and every check of a human-gated run refuses an
+approval block it did not register in this checkout. A run approved before
+this check existed, or a checkout that moved, stops at `validate-intent`:
+review the spec, re-approve with the command above, then resume the run.
 Human-only steps a headless agent cannot finish—clarification questions,
 decision resolutions, convergence verdicts—surface as a failed validation;
 complete them interactively and resume.

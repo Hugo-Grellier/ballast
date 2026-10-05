@@ -81,6 +81,18 @@ def served_pr(number: int, body: str, **changes: object) -> dict:
     }
 
 
+def isolate_operator_state() -> None:
+    """Point operator state at a module-scoped temp dir, never the real one.
+
+    record-intent registers approvals there; call from setUpModule.
+    """
+    state = TemporaryDirectory()
+    unittest.addModuleCleanup(state.cleanup)
+    patcher = patch.dict(os.environ, {"XDG_STATE_HOME": state.name})
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
 def trusted_directory(case: unittest.TestCase) -> Path:
     """Return a fresh directory outside every Git working tree and temp root.
 

@@ -72,6 +72,10 @@ def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)  # noqa: S603, S607
 
 
+def setUpModule() -> None:  # noqa: D103
+    isolate_operator_state()
+
+
 class Repository:
     """A temporary Git repository shaped like a project checkout."""
 
@@ -241,6 +245,56 @@ class ArtifactContractTests(unittest.TestCase):
         intent = (self.repo.root / FEATURE / "intent.md").read_text()
         self.assertIn("Human words.", intent)
         self.assertEqual(intent.count("workflow-approval: begin"), 1)
+
+    def test_gated_run_accepts_only_registered_approvals(self) -> None:
+        # Issue #29: an agent step can write spec.md and a well-formed approval
+        # block, but not the operator state record-intent registers it in.
+        run = self.repo.root / ".specify/workflows/runs/abc123"
+        run.mkdir(parents=True)
+        (run / "inputs.json").write_text(
+            json.dumps({"inputs": {"feature_directory": FEATURE}})
+        )
+        self.repo.write("spec.md", SPEC)
+        self.repo.write("plan.md", PLAN)
+        gated = ("--run", "abc123")
+        self.assertEqual(self.repo.check("record-intent", *gated).returncode, 0)
+        self.assertEqual(self.repo.check("plan", *gated).returncode, 0)
+        intent = self.repo.root / FEATURE / "intent.md"
+        approved = intent.read_text()
+
+        # Forged: the agent changes the spec and runs record-intent with
+        # operator state of its own choosing.
+        self.repo.write("spec.md", SPEC + "\nMore scope.\n")
+        with TemporaryDirectory() as forged_state:
+            forged = {**os.environ, "XDG_STATE_HOME": forged_state}
+            self.assertEqual(self.repo.check("record-intent", env=forged).returncode, 0)
+        for check in ("intent", "plan"):
+            result = self.repo.check(check, *gated)
+            self.assertNotEqual(result.returncode, 0, check)
+            self.assertIn("did not register", result.stderr)
+
+        # Where operator state is unwritable (an agent sandbox), record-intent
+        # fails and leaves intent.md alone.
+        with TemporaryDirectory() as locked:
+            Path(locked).chmod(0o500)
+            sandboxed = {**os.environ, "XDG_STATE_HOME": f"{locked}/state"}
+            before = intent.read_text()
+            self.assertNotEqual(
+                self.repo.check("record-intent", env=sandboxed).returncode, 0
+            )
+            self.assertEqual(intent.read_text(), before)
+            Path(locked).chmod(0o700)
+
+        # Upgrade path for an in-flight run approved before registration
+        # existed: the operator re-approves with --feature, then resumes.
+        self.repo.write("spec.md", SPEC)
+        intent.write_text(approved)
+        self.assertEqual(self.repo.check("intent").returncode, 0)
+        self.assertEqual(self.repo.check("intent", *gated).returncode, 0)
+        intent.write_text(approved.replace("Approved**: ", "Approved**: 0"))
+        self.assertIn("did not register", self.repo.check("intent", *gated).stderr)
+        self.repo.approve()
+        self.assertEqual(self.repo.check("plan", *gated).returncode, 0)
 
     def test_implementation_needs_completed_tasks_and_a_change(self) -> None:
         self.repo.approve()
@@ -1882,6 +1936,7 @@ from test_autonomy import (  # noqa: E402
     AutonomyCase,
     _bwrap_works,
     autonomy,
+    isolate_operator_state,
     trusted_directory,
 )
 
