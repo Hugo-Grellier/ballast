@@ -20,7 +20,21 @@ run record (autonomy.py) and runs ballast-autonomous, which has no approval
 gate; when it completes, this runner (never an agent) commits, pushes and opens
 one Draft PR. A stopped Autonomous run records a block; it continues only
 human-gated, through `continue`, which starts the gate-only ballast-continue.
-Autonomous `resume` is refused until safe resume (#18) exists.
+Autonomous `resume` is refused until Autonomous resume through branch
+synchronization (#21) exists.
+
+Branch sync: before the first agent step of every `start`, `resume` and
+`continue`, the check in branch_sync.py (imported here before any agent
+step) brings the run's branch onto its base: the base the run recorded, or
+the default branch of the `[github] repository` pinned in ballast.toml. It
+prints one line, `Branch sync: up-to-date ...` or `Branch sync:
+synchronized ...`. When the branch cannot be updated safely it changes
+nothing, prints `BLOCKED_UPSTREAM_SYNC (CAUSE): DETAIL` and one `Recovery:`
+action, starts no agent and exits 1 (130 when interrupted). Only the feature
+branch named for the Issue is rebased, and a published one is pushed only
+with a lease. The causes and their recovery actions are in
+docs/policies/spec-kit-workflow.md, "Branch synchronization". `publish`
+starts no agent and runs no check.
 
 Routes Spec Kit's Claude/Codex dispatch through `bin/` (see agent.py), assigns
 the run ID up front so agent logs land in `.specify/workflow-state/<run>/`, and
@@ -41,7 +55,7 @@ receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
 
 from __future__ import annotations
 
-import contextlib
+import itertools
 import json
 import os
 import re
@@ -69,6 +83,7 @@ sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import autonomy  # noqa: E402
+import branch_sync  # noqa: E402
 import draft_pr  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
@@ -171,12 +186,6 @@ def _launch(command: list[str], run_id: str, *, start: bool) -> int:
     """Run Spec Kit, then summarize, archive and import the run."""
     if start:
         archive_policy(ROOT, run_id)
-        # Before any agent step can change HEAD or .git/config (DEC-0006).
-        with contextlib.suppress(Exception):  # The checkpoint reports it unpinned.
-            pinned = draft_pr.pin_branch(ROOT, run_id)
-            if pinned:
-                # The operator sees which branch the run's PR will follow.
-                sys.stdout.write(f"Draft PR: branch pinned: {pinned}\n")
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(  # noqa: S603
@@ -226,6 +235,88 @@ def _launch(command: list[str], run_id: str, *, start: bool) -> int:
             if status == 0:
                 status = 1
     return status
+
+
+def _sync(  # noqa: PLR0913 - branch_sync's entry point, one call site each.
+    run_id: str,
+    *,
+    feature: str | None,
+    starting: bool = False,
+    branch: str | None = None,
+    base: str | None = None,
+    source_run: str | None = None,
+) -> branch_sync.Outcome:
+    """Run the branch check once, before any agent step, and print its lines."""
+    outcome = branch_sync.synchronize(
+        ROOT,
+        run_id,
+        feature=feature,
+        starting=starting,
+        branch=branch,
+        base=base,
+        source_run=source_run,
+    )
+    for stream, line in branch_sync.format_lines(outcome):
+        (sys.stdout if stream == "stdout" else sys.stderr).write(line + "\n")
+    return outcome
+
+
+def _sync_status(outcome: branch_sync.Outcome) -> int | None:
+    """Return a blocked check's exit status, or None when agents may start."""
+    if outcome.outcome != "blocked":
+        return None
+    return EXIT_INTERRUPTED if outcome.interrupted else EXIT_BLOCKED
+
+
+def _sync_block(run_id: str, outcome: branch_sync.Outcome) -> int:
+    """Stop an Autonomous start whose check blocked (AC-011, R10).
+
+    The block has its own category and is recovered by starting again: no
+    agent step ran, so `continue` has nothing to gate.
+    """
+    condition = (
+        f"BLOCKED_UPSTREAM_SYNC ({outcome.cause}): {outcome.detail}. "
+        f"Recovery: {outcome.recovery}"
+    )[:4000]
+    try:
+        code = _stop(
+            run_id, autonomy.make_block("upstream-sync", condition, run_id=run_id)
+        )
+    except autonomy.AutonomyError as error:
+        sys.stderr.write(f"ballast: autonomous run {run_id}: {error}\n")
+        code = EXIT_BLOCKED
+    finally:
+        _archive_operator(run_id)
+    return EXIT_INTERRUPTED if outcome.interrupted else code
+
+
+def _option_feature(options: list[str]) -> str | None:
+    """Return `-i feature_directory=...` of a human-gated start, if given."""
+    for flag, pair in itertools.pairwise(options):
+        name, _, value = pair.partition("=")
+        if flag in {"-i", "--input"} and name == "feature_directory":
+            return value
+    return None
+
+
+def _run_feature(run_id: str) -> str | None:
+    """Return the feature directory a run was started with.
+
+    From its engine inputs, else from its operator run record (a continuation).
+    """
+    path = ROOT / ".specify/workflows/runs" / run_id / "inputs.json"
+    try:
+        inputs = json.loads(path.read_text(encoding="utf-8")).get("inputs")
+    except (OSError, ValueError, AttributeError):
+        inputs = None
+    value = inputs.get("feature_directory") if isinstance(inputs, dict) else None
+    if isinstance(value, str):
+        return value
+    try:
+        record = autonomy.find_run(ROOT, run_id) if RUN_ID.fullmatch(run_id) else None
+    except autonomy.AutonomyError:
+        return None
+    return record["feature"] if record else None
 
 
 def _checkpoint(run_id: str) -> None:
@@ -423,6 +514,9 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         + ("" if review != integration else " (same provider: reduced independence)")
         + "\n"
     )
+    outcome = _sync(run_id, feature=feature, starting=True)
+    if outcome.outcome == "blocked":
+        return _sync_block(run_id, outcome)
     command = [
         specify,
         "workflow",
@@ -643,6 +737,29 @@ def _publish_command(options: list[str]) -> int:
         _archive_operator(run_id)
 
 
+def _continue_refusal(source: dict, reason: str) -> str | None:
+    """Return why a source run cannot be continued, or None."""
+    run_id = source["run_id"]
+    if source["status"] not in {"stopped", "completed", "published"}:
+        return (
+            f"run {run_id} is {source['status']}; only a stopped, completed or "
+            "published autonomous run can be continued"
+        )
+    try:
+        block = autonomy.read_block(ROOT, run_id)
+    except autonomy.AutonomyError as error:
+        return str(error)
+    if block is not None and block["category"] == "upstream-sync":
+        # R10: blocked before its first agent step, so no artifact exists.
+        return (
+            f"run {run_id} stopped before its first agent step; there is nothing "
+            "to continue. Remove the cause, then start again."
+        )
+    if reason == "block-resolved" and block is None:
+        return f"run {run_id} has no block to resolve"
+    return None
+
+
 def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, PLR0911
     """`ballast run continue`: record the human decision, lower, run gates."""
     if not options or options[0].startswith("-"):
@@ -668,15 +785,22 @@ def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, P
     if isinstance(source, str):
         return _refuse(source)
     run_id = source["run_id"]
-    if source["status"] not in {"stopped", "completed", "published"}:
-        return _refuse(
-            f"run {run_id} is {source['status']}; only a stopped, completed or "
-            "published autonomous run can be continued"
-        )
+    refusal = _continue_refusal(source, flags["--reason"])
+    if refusal is not None:
+        return _refuse(refusal)
+    new_id = uuid.uuid4().hex[:8]
+    pin = branch_sync.read_pin(ROOT, run_id)
+    outcome = _sync(
+        new_id,
+        feature=source["feature"],
+        branch=pin.get("branch"),
+        base=pin.get("base"),
+        source_run=run_id,
+    )
+    blocked = _sync_status(outcome)
+    if blocked is not None:
+        return blocked
     try:
-        block = autonomy.read_block(ROOT, run_id)
-        if flags["--reason"] == "block-resolved" and block is None:
-            return _refuse(f"run {run_id} has no block to resolve")
         decision = autonomy.append_human_decision(
             ROOT,
             run_id,
@@ -689,7 +813,6 @@ def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, P
         )
         autonomy.set_status(source, "continued")
         autonomy.write_run(ROOT, source)
-        new_id = uuid.uuid4().hex[:8]
         record = autonomy.new_run(
             run_id=new_id,
             feature=source["feature"],
@@ -837,9 +960,14 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]
         command = [specify, "workflow", "run", WORKFLOW, *options]
+        outcome = _sync(run_id, feature=_option_feature(options), starting=True)
     else:
         run_id = options[0]
         command = [specify, "workflow", "resume", *options]
+        outcome = _sync(run_id, feature=_run_feature(run_id))
+    blocked = _sync_status(outcome)
+    if blocked is not None:
+        return blocked  # No agent step, and no Draft PR checkpoint (R13).
     try:
         return _launch(command, run_id, start=argv[0] == "start")
     finally:

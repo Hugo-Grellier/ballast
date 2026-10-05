@@ -474,11 +474,14 @@ ineligible, the run stops with a block: a category, the condition, the options
 or recovery, and the recovery command. No approval prompt appears and no
 provisional decision is written for the blocked point.
 
-**Recovery.** `ballast run resume` refuses an Autonomous run until safe
-Autonomous resume (#18) exists. Continue human-gated instead:
+**Recovery.** `ballast run resume` refuses an Autonomous run until Autonomous
+resume through branch synchronization (#21) exists. Continue human-gated
+instead:
 
 - `ballast run continue RUN_ID --reason block-resolved --ref TEXT` after
-  resolving a block;
+  resolving a block, except an `upstream-sync` block: that run stopped before
+  its first agent step, so remove the cause and start it again with your
+  `ballast run start --mode autonomous` command;
 - `ballast run continue RUN_ID --reason changes-requested --ref PR-REVIEW-URL`
   when the merge reviewer requests changes;
 - `ballast run publish RUN_ID` retries a failed publication without running an
@@ -619,6 +622,116 @@ deliberately from the approved feature plan, then update GitHub with concise
 status. GitHub remains useful without API/MCP access: humans can update Issues
 and PRs manually.
 
+## Branch synchronization
+
+Before the first agent step of every `ballast run start`, `resume` and
+`continue`, the launcher checks the run's branch against its base. `publish`
+starts no agent and runs no check. Bugfix and assess runs started with
+`specify` directly do not pass through `ballast run` and are not synchronized.
+
+- **The base** is the base the run recorded, or else the default branch of the
+  `[github] repository` pinned in `ballast.toml`. It is fetched from that
+  repository on every invocation, never through `origin` or another remote an
+  agent can change, and never replaced by a cached or substituted base.
+- **Up to date**: when the base commit is already in the branch, nothing
+  changes and the run prints `Branch sync: up-to-date BRANCH with BASE
+  (COMMIT)`.
+- **Behind**: a clean feature branch is rebased onto the base before any agent
+  starts, and the run prints `Branch sync: synchronized BRANCH onto BASE
+  (OLD..NEW), HEAD OLD -> NEW`. A published feature branch is pushed with
+  `--force-with-lease` on the commit observed in the same invocation, and the
+  line ends with `, pushed`.
+- **Which branches it may rewrite**: only the feature branch, whose name split
+  at `/`, `-`, `_` and `.` has a segment equal to the feature's Issue number
+  (`18` in `feat/18-branch-sync` or `18-branch-sync`, not in `feat/180-x`), and
+  that is neither the run's base nor the repository's default branch. A run on
+  its base branch is only fast-forwarded, never replayed or pushed. Any other
+  branch is never rewritten or pushed; when it is behind, the run blocks. A
+  branch that is strictly behind its own published branch and clean is
+  fast-forwarded to it first; nothing is pushed then.
+- **The pin**: `ballast run start` pins the branch before the first agent step;
+  a continuation uses its source run's pin. A `resume` or `continue` of a run
+  that has no pin (started before branch pinning) blocks and asks for a new
+  run. The run must be on its pinned branch.
+- **Requirements**: `git` 2.41 or later on `PATH`, outside every checkout and
+  temp directory (`ballast doctor` checks it). Shallow checkouts and partial
+  clones are refused; unshallow the checkout, or clone it again without
+  `--filter`.
+- **Plan and review evidence**: when the base and the feature both changed a
+  file and the feature has a `plan.md` or review evidence, the line names that
+  evidence as possibly stale, the ledger event records it, and the Draft PR's
+  Ballast section lists the dated entry and its files. No gate is added and no
+  review re-runs; the human approving the merge sees the staleness.
+
+When the branch cannot be updated safely, the launcher changes nothing, starts
+no agent, prints `BLOCKED_UPSTREAM_SYNC (CAUSE): DETAIL` and one `Recovery:`
+action on stderr, and exits 1 (130 after Ctrl-C). An Autonomous `start` records
+the block in category `upstream-sync`; recover by removing the cause and
+starting the run again, because `ballast run continue` has nothing to continue
+in a run stopped before its first agent step. Every check records one
+`branch_sync` event in the run ledger. "rerun" below is printed as the full
+command: `ballast run resume RUN_ID`, your `ballast run start` command, or
+your `ballast run continue` command.
+
+| Cause | When | Recovery |
+| --- | --- | --- |
+| `busy` | another invocation is synchronizing the same branch | another ballast run is synchronizing {branch}; retry when it finishes |
+| `git-unavailable` | no trusted `git`, or one older than 2.41 | put a system git 2.41 or later on PATH ahead of any checkout directory |
+| `git-unavailable` | shallow checkout | git fetch --unshallow, then rerun |
+| `git-unavailable` | partial clone | clone the repository again without --filter, then rerun |
+| `in-progress` | a rebase, merge, cherry-pick, revert or bisect is in progress | finish or abort the {operation} yourself, then rerun |
+| `in-progress` | `index.lock` exists | if no git process is running, remove {path}, then rerun |
+| `wrong-branch` | detached HEAD, or not the pinned branch | git switch {pinned}, then rerun |
+| `wrong-branch` | the run has no branch pin | start a new run: your ballast run start command |
+| `unknown-base` | no `[github] repository` in `ballast.toml` | declare [github] repository and run ballast trust |
+| `unknown-base` | the base or a default branch does not exist on the repository | restore {base} on {repo}; Ballast never substitutes another base |
+| `fetch-failed` | the repository cannot be reached or read | check network access and credentials for {repo} (Ballast cannot answer a prompt), then rerun |
+| `not-feature-branch` | behind on a branch that is not the feature branch, or no feature directory | synchronize {branch} yourself, or run the feature on its own branch: git switch -c {feature_branch} |
+| `diverged` | the branch and its published branch both have commits, or the published branch moved during the check | reconcile by hand: git pull --rebase {remote} {branch}, then rerun |
+| `diverged` | the base was rewritten and the old base is unknown | rebase by hand onto {base}, then rerun |
+| `diverged` | the base branch itself has local commits | git switch -c {new_branch} |
+| `dirty` | uncommitted changes (tracked, or untracked and not ignored) | commit or finish these changes (Ballast never stashes or discards them), then rerun |
+| `dirty` | ignored files the update would overwrite, or untracked files in the way | move or commit these files, then rerun |
+| `dirty` | uncommitted changes while finishing a synchronization already pushed | move these changes aside without committing them (Ballast never stashes or discards them), then rerun to finish the synchronization |
+| `dirty` | files in the way while finishing a synchronization already pushed | move or commit these files, then rerun to finish the synchronization |
+| `dirty` | an update interrupted while it wrote the working tree | git restore --source={new_head} --staged --worktree ., then rerun to finish the synchronization |
+| `conflict` | replaying a feature commit conflicts | rebase by hand: git rebase {base}, resolve, then rerun |
+| `conflict` | a commit made after a pushed synchronization conflicts | git rebase --onto {new_head} {old_head} {branch}, resolve, then rerun |
+| `push-failed` | the push failed and a retry can succeed alone | rerun |
+| `push-failed` | the repository rejected the push | check {repo}'s branch rules for {branch} (protection, required signatures), then rerun |
+| `protected-input` | the update changed `ballast.toml`, `.ballast/`, `.specify/` or `.venv/` | review these changes, then run ballast trust (operator only) |
+| `internal-error` | an unexpected failure, Ctrl-C, or the check could not be recorded | report it with the run ID, then rerun |
+| `internal-error` | no committer identity | set user.name and user.email in your global Git configuration, then rerun |
+| `internal-error` | invalid write-ahead record | report it with the run ID; Ballast keeps {record} until you check {branch} and its published branch and delete it |
+| `busy`, `internal-error` | after the published branch was already updated | rerun to finish the synchronization |
+
+"Nothing changes" has two exceptions. `protected-input` keeps the completed
+synchronization, so you can review it and run `ballast trust`; the next
+`ballast run` is refused until you do. A block after a successful push leaves
+the published branch at the rebased commit; the next invocation on the branch,
+whatever its run ID, finishes the synchronization from a write-ahead record in
+your state directory, and says so with `completed the interrupted
+synchronization from run RUN_ID`.
+
+What the check never does: stash, reset or discard changes; overwrite or
+delete ignored files; push without a lease; push or rewrite the base or any
+branch other than the feature branch; run a hook, merge driver, filter,
+`core.sshCommand`, credential helper or any other program named by the
+checkout's Git configuration or attributes; prompt for a credential; or print
+Git's own output. It fetches, replays and pushes in a throwaway repository
+with an empty configuration, so only your global and system Git configuration
+apply, and replayed commits carry your global committer identity.
+
+Differences from `git rebase`: replayed commits are unsigned; merge attributes
+such as `merge=union` come from the fetched base's `.gitattributes`, not from
+each replayed commit or the feature branch; no `rebase.*` configuration
+applies. As with `git rebase`, merge commits are dropped and their non-merge
+commits replayed, and a change already upstream is dropped.
+
+Authority: the check is trusted launcher code, imported by `run.py` after the
+launcher verified the protected inputs. No agent step can run, skip or
+configure it. See ADR-0005 in the Ballast repository.
+
 ## Draft PR
 
 At the end of every `ballast run start`, `resume` or `continue` invocation,
@@ -686,8 +799,9 @@ is printed or stored.
 | `blocked-unlinked` | `no-repository` | declare `[github] repository = "OWNER/NAME"` in `ballast.toml`, then run `ballast trust` |
 | `blocked-unlinked` | `repository-mismatch` | the branch's upstream is not the repository pinned in `ballast.toml`: push the branch there, or fix the pin and run `ballast trust` |
 
-`ballast run start` prints `Draft PR: branch pinned: <branch>` before any agent
-runs; every later checkpoint must be on that branch, published under that name.
+`ballast run start` pins the branch before any agent runs (see
+[Branch synchronization](#branch-synchronization)); every later checkpoint must
+be on that branch, published under that name.
 
 While `BALLAST_TAMPERED` or an unfinished agent step's marker exists, the
 checkpoint prints `Draft PR: skipped: <marker> exists; restore the checkout`

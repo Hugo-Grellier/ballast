@@ -2355,6 +2355,14 @@ human merge review for every feature PR
 
 ```
 
+Safe branch synchronization on start and resume is delivered by #18
+([`specs/18-branch-sync/`](18-branch-sync/spec.md), ADR-0005): before the first
+agent step of every `ballast run start`, `resume` and `continue`, trusted
+launcher code rebases the run's feature branch onto its authoritative base and
+pushes a published one with a lease, or blocks before any agent with
+`BLOCKED_UPSTREAM_SYNC`. Autonomous `resume` stays refused; lifting that refusal
+through branch synchronization is #21.
+
 ---
 
 # 91. v1.0 target
@@ -2381,6 +2389,8 @@ acceptance evidence and an on-demand UI demo when requested
 PR ready for human merge decision
 
 ```
+
+Branch synchronization (#18) covers every invocation that starts agent steps; an Autonomous run that stops still continues human-gated until #21 lets Autonomous `resume` go through it.
 
 Autonomous makes intermediate intent, plan and implementation decisions provisionally and records their basis. For an eligible feature, it requests no human approval until merge. Chat keeps the operator in the conversation while using the same trusted preflight and evidence contracts. Technical failures, conflicts, exhausted limits and unavailable authority may still block a run. No mode silently approves its own PR or merges it.
 

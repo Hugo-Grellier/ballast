@@ -291,28 +291,13 @@ def _pin_path(root: Path, run_id: str) -> Path | None:
         return None
 
 
-def pin_branch(root: Path, run_id: str) -> str | None:
-    """Record the run's branch when the operator starts it.
+def _branch_pin(root: Path, run_id: str) -> str | None:
+    """Return the branch pinned at `ballast run start` by branch_sync (#18).
 
     HEAD lives in agent-writable Git state; every later checkpoint must still
     be on this branch, published under the same name (DEC-0006, DEC-0010).
+    Only `branch` is read; `base` and `base_commit` belong to branch_sync.
     """
-    path = _pin_path(root, run_id) if RUN_ID_PATTERN.fullmatch(run_id) else None
-    if path is None:
-        return None
-    git, _ = _resolve("git", root)
-    if git is None:
-        return None
-    head = _command([git, "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root)
-    branch = head.stdout.strip()
-    if head.returncode or not branch or branch.startswith("-"):
-        return None
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_text(json.dumps({"branch": branch}), encoding="utf-8")
-    return branch
-
-
-def _branch_pin(root: Path, run_id: str) -> str | None:
     path = _pin_path(root, run_id)
     if path is None:
         return None
@@ -462,8 +447,87 @@ def _section(run: _Run, checked_at: datetime) -> str:
         lines.extend(f"  - {line}" for line in run.scope)
     else:
         lines.append("- Scope: no intake scope comment")
+    stale = _stale_entries(run)
+    if stale:
+        lines.append("- Evidence that a branch synchronization may have made stale:")
+        lines.extend(f"  - {entry}" for entry in stale)
     lines.append(MARK_END)
     return "\n".join(lines)
+
+
+STALE_PATHS = 20
+STALE_KINDS = frozenset({"plan", "review"})
+
+
+def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:
+    """(observed_at, entry) for a valid stale-evidence record of this feature."""
+    if not isinstance(data, dict) or data.get("feature") != feature:
+        return None
+    observed, base = data.get("observed_at"), data.get("base_ref")
+    before, after = data.get("base_before"), data.get("base_after")
+    stale, paths = data.get("stale"), data.get("paths")
+    if (
+        not isinstance(observed, str)
+        or not isinstance(base, str)
+        or not ledger.REF.fullmatch(base)
+        or not all(
+            value is None or (isinstance(value, str) and ledger.COMMIT.fullmatch(value))
+            for value in (before, after)
+        )
+        or after is None
+        or not isinstance(stale, list)
+        or not stale
+        or not set(stale) <= STALE_KINDS
+        or not isinstance(paths, list)
+        or not all(isinstance(path, str) for path in paths)
+        or not isinstance(data.get("truncated"), bool)
+    ):
+        return None
+    try:
+        when = datetime.fromisoformat(observed).astimezone(UTC)
+    except ValueError:
+        return None
+    moved = f"{before[:12]}..{after[:12]}" if before else f"to {after[:12]}"
+    shown = ", ".join(_escape(_printable(path)) for path in paths[:STALE_PATHS])
+    more = len(paths) - STALE_PATHS
+    if more > 0 or data["truncated"]:
+        shown += " and more"
+    kinds = " and ".join(sorted(set(stale)))
+    entry = (
+        f"{when.strftime('%Y-%m-%dT%H:%M:%SZ')}: {base} moved {moved}; {kinds} "
+        f"evidence may be stale; files changed on both sides: {shown}"
+    )
+    return observed, entry
+
+
+def _printable(text: str) -> str:
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in text)
+
+
+def _stale_entries(run: _Run) -> list[str]:
+    """Dated stale-evidence entries for the feature, oldest first (#18 R11).
+
+    Read from every run archive of the clone: a continuation has a new run
+    ID, so the source run's staleness must stay visible. Unreadable or
+    foreign records are skipped; nothing here clears an entry.
+    """
+    try:
+        parent = ledger.common_dir(run.root) / "speckit-runs"
+    except (ledger.LedgerError, OSError):
+        return []
+    found: list[tuple[str, str]] = []
+    if not parent.is_dir() or parent.is_symlink():
+        return []
+    for path in sorted(parent.glob("*/branch-sync/*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            record = _stale_record(json.loads(path.read_text("utf-8")), run.feature)
+        except (OSError, ValueError):
+            continue
+        if record is not None:
+            found.append(record)
+    return [entry for _, entry in sorted(found)]
 
 
 class _Checkpoint:
@@ -943,8 +1007,15 @@ def _references(body: str, run: _Run) -> bool:
 
 
 class _Locked:
-    def __init__(self, path: Path) -> None:
+    """An exclusive `flock`; entering returns False when it stays held.
+
+    `wait` is how long to retry; 0 makes one attempt (branch_sync's `busy`).
+    LockUnavailableError means the lock file itself is broken, not held.
+    """
+
+    def __init__(self, path: Path, wait: float = LOCK_WAIT) -> None:
         self.path = path
+        self.wait = wait
         self.handle: int | None = None
 
     def __enter__(self) -> bool:
@@ -958,7 +1029,7 @@ class _Locked:
             os.close(handle)
             message = "the PR lock is not a regular file"
             raise LockUnavailableError(message)
-        deadline = time.monotonic() + LOCK_WAIT
+        deadline = time.monotonic() + self.wait
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
