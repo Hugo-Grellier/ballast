@@ -1030,7 +1030,6 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
         return _start_autonomous(flags, options, specify)
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]
-        _snapshot_issue(options)
         command = [specify, "workflow", "run", WORKFLOW, *options]
         feature = _option_feature(options)
         outcome = _sync(run_id, feature=feature, starting=True)
@@ -1042,6 +1041,9 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
     blocked = _sync_status(outcome)
     if blocked is not None:
         return blocked  # No agent step, and no Draft PR checkpoint (R13).
+    if argv[0] == "start":
+        # After the check: the snapshot is a new file it would count as dirty.
+        _snapshot_issue(options)
     refusal = _point_feature(feature)
     if refusal is not None:
         return refusal
