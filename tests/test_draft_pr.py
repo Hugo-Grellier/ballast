@@ -65,6 +65,31 @@ def git(root: Path, *args: str) -> str:
     ).stdout
 
 
+def pin_branch(root: Path, run_id: str) -> str | None:
+    """Pin the current branch as `ballast run start` does (branch_sync, #18).
+
+    None when the pin would live where an agent can write, or HEAD is detached.
+    """
+    import branch_sync  # noqa: PLC0415
+
+    try:
+        path = branch_sync._pin_path(root, run_id)  # noqa: SLF001
+    except OSError:
+        return None
+    head = subprocess.run(  # noqa: S603
+        [REAL_GIT, "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    branch = head.stdout.strip()
+    if head.returncode or not branch:
+        return None
+    branch_sync._write_json(path, {"branch": branch})  # noqa: SLF001
+    return branch
+
+
 def http(code: int) -> draft_pr.Result:
     """Fail a gh call with an HTTP status."""
     return draft_pr.Result(1, "", f"gh: request failed (HTTP {code})")
@@ -370,7 +395,7 @@ class CheckpointCase(unittest.TestCase):
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
-        draft_pr.pin_branch(self.repo.root, RUN)
+        pin_branch(self.repo.root, RUN)
         self.fake.calls.clear()
         self.fake.stdins.clear()
 
@@ -500,7 +525,7 @@ class IdentityTests(CheckpointCase):
         # DEC-0010: the upstream name lives in agent-writable .git/config even
         # at start, so the branch must be published under its own name.
         git(self.repo.root, "config", "branch.feat-x.merge", "refs/heads/other-name")
-        draft_pr.pin_branch(self.repo.root, RUN)
+        pin_branch(self.repo.root, RUN)
         outcome = self.check()
         # Not published under its own name: push it there (live check: a
         # worktree branch created from origin/main tracks main).
@@ -533,14 +558,20 @@ class IdentityTests(CheckpointCase):
     def test_pin_in_agent_writable_state_is_never_trusted(self) -> None:
         # R2 round 3: XDG_STATE_HOME under /tmp would let an agent rewrite it.
         with patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state")}):
-            self.assertIsNone(draft_pr.pin_branch(self.repo.root, RUN))
+            self.assertIsNone(pin_branch(self.repo.root, RUN))
             outcome = self.check()
         self.assertOutcome(outcome, "skipped", None)
         self.assertIn("agents can write", outcome.remedy)
         self.assertEqual(self.fake.gh_calls(), [])
 
-    def test_pin_returns_the_pinned_branch(self) -> None:
-        self.assertEqual(draft_pr.pin_branch(self.repo.root, RUN), "feat-x")
+    def test_checkpoint_reads_only_the_branch_of_a_18_pin(self) -> None:
+        # #18 adds base and base_commit to the pin; the checkpoint keeps
+        # reading `branch` only (research R12).
+        path = draft_pr._pin_path(self.repo.root, RUN)  # noqa: SLF001
+        path.write_text(
+            json.dumps({"branch": "feat-x", "base": "main", "base_commit": "a" * 40})
+        )
+        self.assertEqual(draft_pr._branch_pin(self.repo.root, RUN), "feat-x")  # noqa: SLF001
 
     def test_branch_pin_lives_outside_the_checkout(self) -> None:
         path = draft_pr._pin_path(self.repo.root, RUN)  # noqa: SLF001
@@ -1386,6 +1417,162 @@ class CommandSeamTests(unittest.TestCase):
         with patch.object(draft_pr.subprocess, "run", slow):
             result = draft_pr._command(["/usr/bin/gh"], cwd=Path("/"))  # noqa: SLF001
         self.assertTrue(result.timed_out)
+
+
+def _hold(path: str, ready: Any, release: Any) -> None:  # noqa: ANN401
+    with Path(path).open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        ready.set()
+        release.wait(30)
+
+
+class LockWaitTests(unittest.TestCase):
+    """T007 [FR-016]: one non-blocking attempt for branch_sync's `busy`."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "x.lock"
+
+    def test_wait_zero_reports_busy_at_once(self) -> None:
+        import multiprocessing  # noqa: PLC0415
+        import time  # noqa: PLC0415
+
+        context = multiprocessing.get_context("fork")
+        ready, release = context.Event(), context.Event()
+        holder = context.Process(target=_hold, args=(str(self.path), ready, release))
+        holder.start()
+        self.addCleanup(holder.join)
+        self.addCleanup(release.set)
+        self.assertTrue(ready.wait(10))
+        started = time.monotonic()
+        with draft_pr._Locked(self.path, wait=0) as held:  # noqa: SLF001
+            self.assertFalse(held)
+        self.assertLess(time.monotonic() - started, 1)
+        release.set()
+        holder.join(10)
+        with draft_pr._Locked(self.path, wait=0) as held:  # noqa: SLF001
+            self.assertTrue(held)
+
+    def test_default_wait_and_broken_lock_are_unchanged(self) -> None:
+        self.assertEqual(draft_pr._Locked(self.path).wait, draft_pr.LOCK_WAIT)  # noqa: SLF001
+        self.assertEqual(draft_pr._locked(self.path).wait, draft_pr.LOCK_WAIT)  # noqa: SLF001
+        self.path.symlink_to(self.path.parent / "elsewhere")
+        with (
+            self.assertRaises(draft_pr.LockUnavailableError),
+            draft_pr._Locked(self.path, wait=0),  # noqa: SLF001
+        ):
+            pass
+
+
+class StaleEvidenceSectionTests(unittest.TestCase):
+    """T035 [AC-018, FR-015, SEC-003]: dated stale-evidence entries in the section."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        git(self.root, "init", "-q")
+        self.enterContext(
+            patch.dict(os.environ, {"XDG_STATE_HOME": str(operator_state(self))})
+        )
+        self.directory = draft_pr.stale_dir(self.root, FEATURE)
+        self.run = draft_pr._Run(self.root, RUN, feature=FEATURE, issue=17)  # noqa: SLF001
+
+    def record(self, run_id: str, name: str, **changes: object) -> dict:
+        return {
+            "event_id": name,
+            "run_id": run_id,
+            "feature": FEATURE,
+            "observed_at": "2026-10-05T10:00:00+00:00",
+            "base_ref": "main",
+            "base_before": "a" * 40,
+            "base_after": "b" * 40,
+            "stale": ["plan", "review"],
+            "paths": ["tools/a.py"],
+            "truncated": False,
+            **changes,
+        }
+
+    def stale(self, run_id: str, name: str, **changes: object) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.directory / f"{name}.json"
+        path.write_text(json.dumps(self.record(run_id, name, **changes)))
+
+    def section(self) -> list[str]:
+        text = draft_pr._section(self.run, FIXED)  # noqa: SLF001
+        return [line for line in text.splitlines() if line.startswith("  - ")]
+
+    def test_entries_across_runs_oldest_first(self) -> None:
+        self.stale(
+            "run2", "e2", observed_at="2026-10-05T11:00:00+00:00", stale=["plan"]
+        )
+        self.stale(RUN, "e1")
+        self.stale("run3", "other", feature="specs/18-other")
+        self.stale("run4", "bad", base_after="nope")
+        (self.directory / "x.json").write_text("{")
+        self.assertEqual(
+            self.section(),
+            [
+                (
+                    "  - 2026-10-05T10:00:00Z: main moved aaaaaaaaaaaa..bbbbbbbbbbbb; "
+                    "plan and review evidence may be stale; files changed on both "
+                    "sides: `tools/a.py`"
+                ),
+                (
+                    "  - 2026-10-05T11:00:00Z: main moved aaaaaaaaaaaa..bbbbbbbbbbbb; "
+                    "plan evidence may be stale; files changed on both sides: "
+                    "`tools/a.py`"
+                ),
+            ],
+        )
+        self.assertIn(
+            "- Evidence that a branch synchronization may have made stale:",
+            draft_pr._section(self.run, FIXED),  # noqa: SLF001
+        )
+
+    def test_paths_are_code_spans_and_bounded(self) -> None:
+        paths = [
+            "<script>@x\n.py",
+            "[review passed](https://example.test)",
+            "a`b`c.md",
+            draft_pr.MARK_END,
+            *[f"f{n}.py" for n in range(30)],
+        ]
+        self.stale(RUN, "e1", paths=paths)
+        (entry,) = self.section()
+        self.assertIn("`<script>@x\\n.py`", entry)
+        self.assertIn("`[review passed](https://example.test)`", entry)
+        self.assertIn("`abc.md`", entry)
+        # SEC-007: a path cannot spell the section's end marker.
+        self.assertNotIn(draft_pr.MARK_END, entry)
+        self.assertIn("`f15.py`", entry)
+        self.assertNotIn("f16.py", entry)
+        self.assertTrue(entry.endswith(" and more"))
+
+    def test_planted_or_oversized_records_stay_bounded(self) -> None:
+        for number in range(500):
+            observed = f"2026-10-05T10:{number // 60:02d}:{number % 60:02d}+00:00"
+            self.stale(RUN, f"e{number:03d}", observed_at=observed)
+        huge = self.directory / "huge.json"
+        with huge.open("wb") as handle:
+            handle.truncate(100 * 1024 * 1024)  # sparse: cheap to plant
+        lines = self.section()
+        self.assertEqual(len(lines), draft_pr.STALE_ENTRIES + 1)
+        self.assertEqual(lines[0], "  - and 480 earlier")
+        self.assertTrue(lines[-1].startswith("  - 2026-10-05T10:08:19Z:"))
+        body = draft_pr._section(self.run, FIXED)  # noqa: SLF001
+        self.assertLess(len(body), 10_000)
+
+    def test_records_in_the_git_directory_are_ignored(self) -> None:
+        old = self.root / ".git/speckit-runs" / RUN / "branch-sync" / "e1.json"
+        old.parent.mkdir(parents=True)
+        old.write_text(json.dumps(self.record(RUN, "e1")))
+        self.assertEqual(self.section(), [])
+
+    def test_no_record_means_no_entry(self) -> None:
+        self.assertEqual(self.section(), [])
+        self.assertNotIn("Evidence that", draft_pr._section(self.run, FIXED))  # noqa: SLF001
 
 
 if __name__ == "__main__":

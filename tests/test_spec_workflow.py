@@ -1541,6 +1541,12 @@ class RunHistoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = TemporaryDirectory()
         self.repo = Repository(self.directory.name)
+        # These tests cover archiving and import; the branch check has its own.
+        self.enterContext(
+            patch.object(
+                _run_module().branch_sync, "synchronize", return_value=_sync_outcome()
+            )
+        )
         run_dir = self.repo.root / ".specify/workflows/runs/run42"
         run_dir.mkdir(parents=True)
         (run_dir / "inputs.json").write_text(
@@ -2045,6 +2051,7 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
 
 
 sys.path.insert(0, str(ROOT / "tests"))
+import test_branch_sync  # noqa: E402
 from test_autonomy import (  # noqa: E402
     AutonomyCase,
     _bwrap_works,
@@ -2223,6 +2230,10 @@ class AutonomousEngineCase(AutonomyCase):
         self.layout(_autonomous_plan())
         os.environ["FAKE_AGENT_PLAN"] = str(self.plan_dir)
         self.enterContext(patch.object(run_module, "ROOT", self.root))
+        origin = (self.base / "origin.git").as_uri()
+        self.enterContext(
+            patch.object(run_module.branch_sync, "_url", lambda *_a, **_k: origin)
+        )
         self.enterContext(
             patch.object(run_module, "BIN", self.root / ".ballast/spec_workflow/bin")
         )
@@ -2820,6 +2831,20 @@ def _run_module() -> object:
     return run
 
 
+def _sync_outcome(outcome: str = "up-to-date", **values: object) -> object:
+    """Return a branch check result, for tests that stand in for branch_sync."""
+    fields = {
+        "branch": "feat-x",
+        "base_ref": "main",
+        "base_after": "a" * 40,
+        "head_before": "b" * 40,
+        "head_after": "b" * 40,
+    }
+    if outcome == "blocked":
+        fields = {"cause": "dirty", "detail": "uncommitted changes: x", "recovery": "r"}
+    return _run_module().branch_sync.Outcome(outcome, **{**fields, **values})
+
+
 class DraftPrRunTests(unittest.TestCase):
     """run.py reaches the Draft PR checkpoint once and never lets it change a run."""
 
@@ -2934,61 +2959,6 @@ class DraftPrRunTests(unittest.TestCase):
                 self.assertEqual(status, 0)
                 self.assertEqual(order, ["import", (self.repo.root, run_id)])
 
-    def test_start_pins_the_branch_before_the_engine_and_resume_never_does(
-        self,
-    ) -> None:
-        # DEC-0006: a resume must not re-record a branch an agent switched to.
-        for args, run_id, expected in (
-            (("start", "-i", f"feature_directory={FEATURE}"), "run42xxx", True),
-            (("resume", "run42"), "run42", False),
-        ):
-            pins: list[tuple[Path, str, bool]] = []
-            self.dump.unlink(missing_ok=True)
-
-            def pin(
-                root: Path, rid: str, pins: list[tuple[Path, str, bool]] = pins
-            ) -> str:
-                pins.append((root, rid, self.dump.exists()))
-                return "feat-x"
-
-            with (
-                self.subTest(command=args[0]),
-                patch.object(
-                    self.run.uuid, "uuid4", return_value=SimpleNamespace(hex=run_id)
-                ),
-                patch.object(self.run, "archive_policy"),
-                patch.object(self.run.draft_pr, "pin_branch", side_effect=pin),
-                patch.object(
-                    self.run.draft_pr,
-                    "checkpoint",
-                    return_value=self.run.draft_pr.Outcome("pending", "no-branch"),
-                ),
-            ):
-                _, output = self.main(0, *args)
-            self.assertEqual(
-                pins, [(self.repo.root, run_id, False)] if expected else []
-            )
-            # The operator sees which branch the run's PR will follow.
-            self.assertEqual("Draft PR: branch pinned: feat-x" in output, expected)
-
-    def test_failing_pin_never_stops_the_start(self) -> None:
-        with (
-            patch.object(self.run, "archive_policy"),
-            patch.object(self.run.draft_pr, "pin_branch", side_effect=OSError("x")),
-            patch.object(self.run, "_summary"),
-            patch.object(self.run, "_record"),
-            patch.object(self.run, "import_run", return_value=0),
-            patch.object(
-                self.run.draft_pr,
-                "checkpoint",
-                return_value=self.run.draft_pr.Outcome(
-                    "blocked-unlinked", "branch-unpinned"
-                ),
-            ),
-        ):
-            status, _ = self.main(0, "start", "-i", f"feature_directory={FEATURE}")
-        self.assertEqual(status, 0)
-
     def test_paused_run_still_records_its_checkpoint(self) -> None:
         run_dir = self.repo.root / ".specify/workflows/runs/run42"
         (run_dir / "log.jsonl").write_text(
@@ -3018,3 +2988,255 @@ class DraftPrRunTests(unittest.TestCase):
         self.assertIn("Bash(gh *)", settings["permissions"]["deny"])
         for rule in settings["permissions"]["allow"]:
             self.assertFalse(rule.startswith(("Bash(gh", "Bash(git push")), rule)
+
+
+class BranchSyncCallTests(unittest.TestCase):
+    """T015 [FR-001, FR-010, FR-014, SC-001, R12, R13]: where run.py calls the check."""
+
+    def setUp(self) -> None:
+        DraftPrRunTests.setUp(self)  # type: ignore[arg-type]
+        self.calls: list[dict[str, object]] = []
+        self.result = _sync_outcome()
+
+        def recorder(root: Path, run_id: str, **kwargs: object) -> object:
+            # Whether the fake engine (every agent step) had already run.
+            self.calls.append(
+                {"root": root, "run_id": run_id, "engine": self.dump.exists(), **kwargs}
+            )
+            return self.result
+
+        self.enterContext(
+            patch.object(self.run.branch_sync, "synchronize", side_effect=recorder)
+        )
+        self.checkpoint = self.enterContext(
+            patch.object(
+                self.run.draft_pr,
+                "checkpoint",
+                return_value=self.run.draft_pr.Outcome("pending", "no-branch"),
+            )
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def main(self, *args: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            patch.object(self.run, "ROOT", self.repo.root),
+            patch.object(self.run.shutil, "which", return_value=str(self.specify)),
+            patch.object(
+                self.run.uuid, "uuid4", return_value=SimpleNamespace(hex="new18xxx")
+            ),
+            patch.object(self.run, "_record"),
+            patch.object(self.run, "import_run", return_value=0),
+            patch.dict(os.environ, {"FAKE_EXIT": "0", "FAKE_ENV_DUMP": str(self.dump)}),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
+            status = self.run.main(list(args))
+        return status, out.getvalue(), err.getvalue()
+
+    def test_called_once_before_the_engine_for_start_and_resume(self) -> None:
+        for args, run_id, starting in (
+            (("start", "-i", f"feature_directory={FEATURE}"), "new18xxx", True),
+            (("resume", "run42"), "run42", False),
+        ):
+            with self.subTest(command=args[0]):
+                self.calls.clear()
+                self.dump.unlink(missing_ok=True)
+                status, out, _ = self.main(*args)
+                self.assertEqual(status, 0)
+                self.assertEqual(
+                    self.calls,
+                    [
+                        {
+                            "root": self.repo.root,
+                            "run_id": run_id,
+                            "engine": False,
+                            "feature": FEATURE,
+                            "starting": starting,
+                            "branch": None,
+                            "base": None,
+                            "source_run": None,
+                        }
+                    ],
+                )
+                self.assertTrue(self.dump.exists())
+                self.assertIn("Branch sync: up-to-date feat-x with main", out)
+
+    def test_start_needs_one_valid_feature_directory(self) -> None:
+        """E-01 [FR-009]: refused before any check, pin or agent step."""
+        for args in (
+            ("start",),
+            ("start", "-i", "integration=claude"),
+            ("start", "-i", "feature_directory=nope"),
+            (
+                "start",
+                "-i",
+                f"feature_directory={FEATURE}",
+                "--input",
+                f"feature_directory={FEATURE}",
+            ),
+        ):
+            with self.subTest(args=args):
+                self.calls.clear()
+                status, _, err = self.main(*args)
+                self.assertEqual(status, 2)
+                self.assertIn(
+                    "start needs one -i feature_directory=specs/<issue>-<slug>", err
+                )
+                self.assertEqual(self.calls, [])
+                self.assertFalse(self.dump.exists(), "an agent step started")
+                pins = autonomy.state_dir(self.repo.root) / "draft-pr"
+                self.assertEqual(list(pins.glob("*.json")) if pins.exists() else [], [])
+
+    def test_publish_never_runs_the_check(self) -> None:
+        self.main("publish", "run42")
+        self.assertEqual(self.calls, [])
+
+    def test_every_block_stops_before_any_agent_and_any_checkpoint(self) -> None:
+        bs = self.run.branch_sync
+        for cause in sorted(bs.ledger.SYNC_CAUSES):
+            for interrupted in (False, True) if cause == "internal-error" else (False,):
+                with self.subTest(cause=cause, interrupted=interrupted):
+                    self.dump.unlink(missing_ok=True)
+                    self.checkpoint.reset_mock()
+                    self.result = bs.Outcome(
+                        "blocked",
+                        cause=cause,
+                        detail="interrupted" if interrupted else "why",
+                        recovery="the one action",
+                        interrupted=interrupted,
+                    )
+                    for args in (
+                        ("resume", "run42"),
+                        ("start", "-i", f"feature_directory={FEATURE}"),
+                    ):
+                        status, out, err = self.main(*args)
+                        self.assertEqual(status, 130 if interrupted else 1)
+                        self.assertFalse(self.dump.exists(), "an agent step started")
+                        self.checkpoint.assert_not_called()
+                        self.assertEqual(
+                            err.splitlines()[-2:],
+                            [
+                                f"BLOCKED_UPSTREAM_SYNC ({cause}): "
+                                + ("interrupted" if interrupted else "why"),
+                                "Recovery: the one action",
+                            ],
+                        )
+                        self.assertNotIn("Draft PR:", out)
+
+    def test_the_check_is_the_only_pin_writer(self) -> None:
+        """R12: _launch no longer pins; draft_pr has no pin writer."""
+        self.assertFalse(hasattr(self.run.draft_pr, "pin_branch"))
+        status, _, _ = self.main("start", "-i", f"feature_directory={FEATURE}")
+        self.assertEqual(status, 0)
+        self.assertFalse(
+            (autonomy.state_dir(self.repo.root) / "draft-pr" / "new18xxx.json").exists()
+        )
+
+    def test_help_describes_the_check(self) -> None:
+        """FR-014."""
+        result = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                str(ROOT / "tools/spec_workflow/run.py"),
+                "--help",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        for text in ("Branch sync:", "BLOCKED_UPSTREAM_SYNC", "Branch synchronization"):
+            self.assertIn(text, " ".join(result.stderr.split()))
+
+
+HEAD_SPECIFY = """#!/usr/bin/env python3
+import os
+head = open(".git/HEAD").read().strip()
+ref = head.removeprefix("ref: ")
+commit = open(os.path.join(".git", ref)).read().strip() if ref != head else head
+open(os.environ["FAKE_HEAD"], "w").write(commit)
+"""
+
+
+class BranchSyncEndToEndTests(unittest.TestCase):
+    """T019 [AC-001, AC-004]: run.py with the real check against a scratch remote."""
+
+    def setUp(self) -> None:
+        if not test_branch_sync.GIT_OK:
+            self.skipTest("needs git 2.41 or later")
+        self.scratch = test_branch_sync.Scratch(self)
+        self.branch = test_branch_sync.BRANCH
+        self.feature = test_branch_sync.FEATURE
+        self.run_id = test_branch_sync.RUN
+        root = self.scratch.root
+        (root / ".git/info/exclude").write_text(".specify/workflows/\n")
+        inputs = root / ".specify/workflows/runs" / self.run_id / "inputs.json"
+        inputs.parent.mkdir(parents=True)
+        inputs.write_text(json.dumps({"inputs": {"feature_directory": self.feature}}))
+        self.specify = self.scratch.base / "specify"
+        self.specify.write_text(HEAD_SPECIFY)
+        self.specify.chmod(0o755)
+        self.head_file = self.scratch.base / "engine-head"
+        self.run = _run_module()
+
+    def main(self, *args: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with (
+            patch.object(self.run, "ROOT", self.scratch.root),
+            patch.object(self.run.shutil, "which", return_value=str(self.specify)),
+            patch.object(self.run, "_record"),
+            patch.object(self.run, "import_run", return_value=0),
+            patch.object(
+                self.run.draft_pr,
+                "checkpoint",
+                return_value=self.run.draft_pr.Outcome("pending", "no-branch"),
+            ),
+            patch.dict(os.environ, {"FAKE_HEAD": str(self.head_file)}),
+            redirect_stdout(out),
+            redirect_stderr(io.StringIO()),
+        ):
+            status = self.run.main(list(args))
+        return status, out.getvalue()
+
+    def test_resume_runs_the_engine_on_the_new_base(self) -> None:
+        new = self.scratch.advance_base({"base.txt": "b\n"})
+        status, out = self.main("resume", self.run_id)
+        self.assertEqual(status, 0, out)
+        self.assertIn(f"Branch sync: synchronized {self.branch} onto main", out)
+        engine_head = self.head_file.read_text()
+        self.scratch.git("merge-base", "--is-ancestor", new, engine_head)
+
+    def test_start_synchronizes_before_the_first_step(self) -> None:
+        new = self.scratch.advance_base({"base.txt": "b\n"})
+        status, out = self.main("start", "-i", f"feature_directory={self.feature}")
+        self.assertEqual(status, 0, out)
+        self.scratch.git("merge-base", "--is-ancestor", new, self.head_file.read_text())
+
+    def test_resume_takes_the_issue_number_from_the_pin(self) -> None:
+        """SEC-002: an agent-written inputs.json cannot widen the rewrite rule."""
+        scratch = self.scratch
+        scratch.git("checkout", "-q", "-b", "release/3")
+        scratch.publish("release/3")
+        scratch.pin(self.run_id, branch="release/3")
+        inputs = scratch.root / ".specify/workflows/runs" / self.run_id / "inputs.json"
+        inputs.write_text(json.dumps({"inputs": {"feature_directory": "specs/3-x"}}))
+        scratch.advance_base({"base.txt": "b\n"})
+        before = scratch.snapshot("release/3")
+        status, _ = self.main("resume", self.run_id)
+        self.assertEqual(status, 1)
+        self.assertFalse(self.head_file.exists())
+        self.assertEqual(scratch.snapshot("release/3"), before)
+        (event,) = scratch.events(self.run_id)
+        self.assertEqual(event["cause"], "not-feature-branch")
+
+    def test_blocked_resume_starts_no_engine(self) -> None:
+        self.scratch.advance_base({"base.txt": "b\n"})
+        self.scratch.write({"README.md": "dirty\n"})
+        status, _ = self.main("resume", self.run_id)
+        self.assertEqual(status, 1)
+        self.assertFalse(self.head_file.exists())

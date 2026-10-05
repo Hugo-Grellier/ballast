@@ -162,7 +162,8 @@ class AgentWrapperAutonomousTests(WrapperCase):
                 autonomy.write_run(self.root, record)
                 result = self.wrapper()
                 self.assertEqual(result.returncode, 2)
-                self.assertIn("#18", result.stderr)
+                # A-9: lifting the resume refusal belongs to #21.
+                self.assertIn("#21", result.stderr)
                 self.assertIsNone(self.ran())
 
     def test_confined_step_counts_and_hides_secrets(self) -> None:
@@ -298,6 +299,11 @@ class RunCase(WrapperCase):
         self.engine: dict[str, object] = {"status": "completed", "code": 0}
         self.enterContext(patch.object(run, "ROOT", self.root))
         self.enterContext(patch.object(run, "_launch", side_effect=self.fake_launch))
+        # The real branch check, against the bare origin standing in for GitHub.
+        origin = (self.base / "origin.git").as_uri()
+        self.enterContext(
+            patch.object(run.branch_sync, "_url", lambda *_a, **_k: origin)
+        )
 
     def fake_launch(self, command: list[str], run_id: str, *, start: bool) -> int:
         """Stand in for Spec Kit: write the engine state, run a scenario."""
@@ -811,24 +817,205 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["command"], f"ballast run publish {run_id}")
 
     def test_resume_is_refused_for_autonomous_runs(self) -> None:
-        """AC-014: names #18 and the human-gated continuation."""
+        """AC-014: names #21 (A-9 of #18) and the human-gated continuation."""
         self.engine.update(status="failed", code=1, step="validate-plan")
         run_id = self.started()
         code, _, err = self.main("resume", run_id)
         self.assertEqual(code, 2)
-        self.assertIn("autonomous resume is not supported until safe resume (#18)", err)
+        self.assertIn(
+            "autonomous resume is not supported until Autonomous resume through "
+            "branch synchronization (#21)",
+            err,
+        )
         self.assertIn(f"ballast run continue {run_id} --reason block-resolved", err)
         self.assertEqual(len(self.launched), 1)
         code, _, err = self.main("resume", run_id, "--mode", "autonomous")
         self.assertEqual(code, 2)
 
     def test_resume_of_human_gated_run_is_unchanged(self) -> None:
-        code, _, _ = self.main("resume", "abc123")
-        self.assertEqual(code, 0)
+        # What `ballast run start` leaves: the engine inputs and the pin (SEC-002).
+        inputs = self.root / ".specify/workflows/runs/abc123/inputs.json"
+        inputs.parent.mkdir(parents=True)
+        inputs.write_text(json.dumps({"inputs": {"feature_directory": FEATURE}}))
+        run.branch_sync._write_json(  # noqa: SLF001
+            run.branch_sync._pin_path(self.root, "abc123"),  # noqa: SLF001
+            {"branch": "27-demo-run", "feature": FEATURE},
+        )
+        code, out, err = self.main("resume", "abc123")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Branch sync: up-to-date 27-demo-run with main", out)
         ((command, run_id),) = self.launched
         self.assertEqual(
             (command[1:], run_id), (["workflow", "resume", "abc123"], "abc123")
         )
+
+
+class UpstreamSyncRunTests(RunCase):
+    """T026, T015, T019 [AC-005, AC-011, AC-021, FR-011, F-06, N-05, N-07, DEC-0006].
+
+    run.py's Autonomous start and continue with the real branch check, against
+    the bare origin.
+    """
+
+    def advance_origin(self, files: dict[str, str]) -> str:
+        """Push a commit to origin's main without touching the checkout."""
+        up = self.base / "up"
+        if not up.exists():
+            subprocess.run(  # noqa: S603
+                ["git", "clone", "-q", str(self.base / "origin.git"), str(up)],  # noqa: S607
+                check=True,
+                capture_output=True,
+            )
+
+        def git(*args: str) -> str:
+            return subprocess.run(  # noqa: S603
+                ["git", *args],  # noqa: S607
+                cwd=up,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+
+        git("fetch", "-q", "origin")
+        git("checkout", "-q", "-B", "main", "origin/main")
+        for name, text in files.items():
+            (up / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-q", "-m", "base change")
+        git("push", "-q", "origin", "main")
+        return git("rev-parse", "HEAD").strip()
+
+    def conflict(self) -> None:
+        (self.root / "README.md").write_text("mine\n")
+        self.git("commit", "-q", "-am", "feature edits README")
+        self.advance_origin({"README.md": "theirs\n"})
+
+    def sync_events(self, run_id: str) -> list[dict]:
+        events, problems = run.draft_pr.ledger.read(self.root, run_id)
+        self.assertEqual(problems, [])
+        return [e["data"] for e in events if e["kind"] == "branch_sync"]
+
+    def stopped_run(self) -> str:
+        """Start an Autonomous run that stops on a decision block."""
+        return RunContinueTests.stopped_run(self)  # type: ignore[arg-type]
+
+    def test_blocked_autonomous_start_is_an_upstream_sync_block(self) -> None:
+        """Q13 [AC-011, FR-011, F-06]."""
+        self.conflict()
+        code, out, err = self.start()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.launched, [])
+        (run_id,) = self.run_ids()
+        self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "stopped")
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(block["category"], "upstream-sync")
+        self.assertEqual(block["command"], autonomy.RESTART_COMMAND)
+        self.assertEqual(block["recovery"], autonomy.RECOVERY["upstream-sync"])
+        self.assertTrue(
+            block["condition"].startswith("BLOCKED_UPSTREAM_SYNC (conflict): ")
+        )
+        self.assertIn(". Recovery: rebase by hand", block["condition"])
+        self.assertEqual(autonomy.read_decisions(self.root, run_id), [])
+        self.assertIn("BLOCKED_UPSTREAM_SYNC (conflict)", err)
+        self.assertIn("Autonomous run blocked (upstream-sync)", out)
+        self.assertEqual([e["cause"] for e in self.sync_events(run_id)], ["conflict"])
+        code, _, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("there is nothing to continue", err)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+
+    def test_eligibility_uses_the_feature_branch_rule(self) -> None:
+        """Q44 [AC-021, N-05]."""
+        for name in ("develop", "feat/270-x"):
+            with self.subTest(name=name):
+                self.git("checkout", "-q", "-B", name, "27-demo-run")
+                code, _, err = self.start()
+                self.assertEqual(code, 2)
+                self.assertIn("a feature branch named for the Issue", err)
+                self.assertEqual(self.run_ids(), [])
+
+    def test_recovery_command_and_resume_refusal(self) -> None:
+        command = autonomy.recovery_command("r1", "upstream-sync")
+        self.assertEqual(command, autonomy.RESTART_COMMAND)
+        self.assertTrue(autonomy.BLOCK_COMMAND.fullmatch(command))
+        self.assertIn("upstream-sync", autonomy.BLOCK_CATEGORIES)
+        self.assertIn("#21", autonomy.RESUME_REFUSAL)
+
+    def test_continue_checks_then_pins_the_continuation(self) -> None:
+        """Q4, second variant [AC-005, R12]."""
+        run_id = self.stopped_run()
+        new_base = self.advance_origin({"base.txt": "b\n"})
+        # What `ballast trust` recorded: the recheck after the HEAD change uses it.
+        trusted = autonomy.state_dir(self.root) / "trusted.json"
+        trusted.write_text(
+            json.dumps(run.branch_sync.launcher.trusted_inputs(self.root))
+        )
+        code, out, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
+        self.assertEqual(code, 0, out + err)
+        new_id = self.launched[-1][1]
+        self.assertIn("Branch sync: synchronized 27-demo-run onto main", out)
+        self.assertEqual(
+            run.branch_sync.read_pin(self.root, new_id),
+            {
+                "branch": "27-demo-run",
+                "feature": FEATURE,
+                "base": "main",
+                "base_commit": new_base,
+            },
+        )
+        self.assertEqual(len(autonomy.read_human_decisions(self.root, run_id)), 1)
+        self.assertEqual(
+            [e["outcome"] for e in self.sync_events(new_id)], ["synchronized"]
+        )
+
+    def test_blocked_continue_changes_no_record(self) -> None:
+        """Q4, third variant [N-07]."""
+        run_id = self.stopped_run()
+        self.conflict()
+        before = autonomy.run_file(self.root, run_id).read_bytes()
+        for _ in range(2):
+            code, _, err = self.main(
+                "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("BLOCKED_UPSTREAM_SYNC (conflict)", err)
+        self.assertEqual(len(self.launched), 1)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+        self.assertEqual(autonomy.run_file(self.root, run_id).read_bytes(), before)
+        self.assertEqual(
+            [e["cause"] for e in self.sync_events(run_id) if e["outcome"] == "blocked"],
+            ["conflict", "conflict"],
+        )
+        archives = run.draft_pr.ledger.common_dir(self.root) / "speckit-runs"
+        self.assertEqual([p.name for p in archives.iterdir()], [run_id])
+        pins = autonomy.state_dir(self.root) / "draft-pr"
+        self.assertEqual([p.stem for p in pins.glob("*.json")], [run_id])
+
+    def test_continue_needs_the_source_branch(self) -> None:
+        """Q4, first and fourth variants [DEC-0006]."""
+        run_id = self.stopped_run()
+        self.git("checkout", "-q", "main")
+        code, _, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(
+            "BLOCKED_UPSTREAM_SYNC (wrong-branch): on main, run started on 27-demo-run",
+            err,
+        )
+        self.git("checkout", "-q", "27-demo-run")
+        (autonomy.state_dir(self.root) / "draft-pr" / f"{run_id}.json").unlink()
+        code, _, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(f"run {run_id} has no branch or feature pin", err)
+        self.assertIn("Recovery: start a new run", err)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
 
 
 class RunContinueTests(RunCase):
@@ -1128,8 +1315,13 @@ class PublisherCheckpointTests(RunCase):
         self.gh_data("created-pr.json", self.PR)
 
     def started_run(self, run_id: str) -> None:
-        """Leave what the real _launch would: the branch pin and the run's inputs."""
-        run.draft_pr.pin_branch(self.root, run_id)
+        """Leave what the real _launch would: the run's inputs.
+
+        The branch check pinned the branch before _launch (#18).
+        """
+        self.assertEqual(
+            run.branch_sync.read_pin(self.root, run_id)["branch"], "27-demo-run"
+        )
         inputs = self.root / ".specify/workflows/runs" / run_id / "inputs.json"
         inputs.write_text(json.dumps({"inputs": {"feature_directory": FEATURE}}))
         self.publishable(run_id)

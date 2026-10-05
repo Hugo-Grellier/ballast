@@ -107,6 +107,7 @@ BLOCK_CATEGORIES = (
     "ineligible",
     "forge",
     "interrupted",
+    "upstream-sync",
 )
 REVIEW_KINDS = (
     "plan",
@@ -135,12 +136,16 @@ HUMAN_DECISION_KINDS = ("mode-change", "block-resolution", "merge-feedback")
 
 REFUSAL = "not eligible for autonomous: "
 CANNOT_CHECK = "cannot check autonomous eligibility: "
-BRANCH_REFUSAL = "autonomous needs a feature branch without an open PR"
+BRANCH_REFUSAL = (
+    "autonomous needs a feature branch named for the Issue without an open PR"
+)
 ORIGIN_REFUSAL = "origin is not the GitHub repository pinned in ballast.toml"
 RESUME_REFUSAL = (
-    "autonomous resume is not supported until safe resume (#18); continue "
-    "human-gated: ballast run continue {run_id} --reason block-resolved --ref TEXT"
+    "autonomous resume is not supported until Autonomous resume through branch "
+    "synchronization (#21); continue human-gated: ballast run continue {run_id} "
+    "--reason block-resolved --ref TEXT"
 )
+BRANCH_SEPARATORS = re.compile(r"[/._-]")
 HUMAN_GATED_ALTERNATIVE = (
     "Run it human-gated instead: ballast run start -i idea=... -i feature_directory=..."
 )
@@ -705,12 +710,20 @@ BLOCK_COMMAND = re.compile(
 PUBLISH_RETRY = ("forge", "permission")
 
 
+RESTART_COMMAND = (
+    "ballast run start --mode autonomous ... (your original start command)"
+)
+
+
 def recovery_command(run_id: str, category: str) -> str:
     """Return the one command that recovers from a block of this category."""
     if category in PUBLISH_RETRY:
         return f"ballast run publish {run_id}"
     if category in {"tamper", "unfinished-step"}:
         return "ballast discard-runs"
+    if category == "upstream-sync":
+        # Blocked before the first agent step: nothing exists to continue.
+        return RESTART_COMMAND
     return f"ballast run continue {run_id} --reason block-resolved --ref TEXT"
 
 
@@ -730,6 +743,7 @@ RECOVERY = {
     "ineligible": "Run the feature human-gated instead.",
     "forge": "Fix forge access, then retry publication.",
     "interrupted": "Review the checkout, then continue human-gated.",
+    "upstream-sync": "Remove the cause shown, then start the run again.",
 }
 
 
@@ -1017,6 +1031,21 @@ def remaining_seconds(record: dict) -> float:
 
 
 # --- Git ------------------------------------------------------------------
+
+
+def is_feature_branch(
+    name: str, issue: int | None, base: str | None, default_branch: str | None
+) -> bool:
+    """Whether `name` is the feature branch of Issue `issue` (#18 R15, DEC-0004).
+
+    The one definition of the branches Ballast may rewrite, shared by branch
+    synchronization and Autonomous eligibility: a segment of the name, split
+    at `/`, `-`, `_` and `.`, is the Issue number in decimal, and the branch is
+    neither the run's base nor the repository's default branch.
+    """
+    if issue is None or not name or name in {base, default_branch}:
+        return False
+    return str(issue) in BRANCH_SEPARATORS.split(name)
 
 
 def git(
@@ -1811,7 +1840,10 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
             f"{REFUSAL}feature directory {feature} is not for issue #{issue}"
         )
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
-    if not branch or branch in {"HEAD", default_branch}:
+    # A new Autonomous run records the default branch as its base.
+    if branch == "HEAD" or not is_feature_branch(
+        branch, issue, default_branch, default_branch
+    ):
         reasons.append(f"{REFUSAL}{BRANCH_REFUSAL}")
     else:
         prs = _gh(

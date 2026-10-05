@@ -40,7 +40,7 @@ ballast doctor            # add --json for a machine-readable report
 
 - `python`: `/usr/bin/python3` 3.11 or newer, which runs every Ballast tool.
 - `cli-on-path`: the `ballast` command on `PATH`.
-- `git`, `uvx` and `patch` for `ballast setup`, and `network`: HTTPS access to GitHub and PyPI the first time a version is fetched.
+- `git` (2.41 or later, which branch synchronization needs), `uvx` and `patch` for `ballast setup`, and `network`: HTTPS access to GitHub and PyPI the first time a version is fetched.
 - `linux`, `systemd-user` and `systemd-run`: headless agent steps of `ballast run` need Linux with a systemd user session that can start transient scopes.
 - `specify` (the Spec Kit CLI) and `agent-cli` (Claude Code or Codex) for `ballast run`; `agent-cli` also reports where agents can write, which Ballast never trusts for programs or state.
 - `gh`, authenticated, for issue intake and PR steps.
@@ -83,11 +83,13 @@ ballast ledger snapshot|check|report ...
 
 Only `setup` downloads; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
+Before the first agent step of every `ballast run start`, `resume` or `continue`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
+
 At the end of every `ballast run start`, `resume` or `continue` invocation, after any Autonomous publication, the launcher makes sure one Draft PR shows an issue-linked feature once its published branch holds a change outside `specs/<feature>/`, and reuses that PR afterwards. It needs `[github] repository = "OWNER/NAME"` in `ballast.toml`, uses your authenticated `gh` 2.48 or later, never pushes (only an Autonomous run's publisher does), and never marks a PR ready, merges or closes it. The [Draft PR section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#draft-pr) lists the reported states and their remedies.
 
 ### Autonomous runs
 
-An eligible feature can run unattended to a Draft PR. Every gate decision is then recorded as agent-provisional, and merging the PR is the single human approval. Eligible means a scoped leaf Issue (its intake scope comment has `Risk: R0|R1|R2` and `Privileged actions before merge: none` or an authorized action), started from a feature branch with no open PR. Autonomous needs `bwrap` (bubblewrap) with user namespaces on the host, because every agent step and check runs confined; a missing `bwrap` refuses the start. It also needs the `[github] repository` pin described above: eligibility and publication use only that repository, and `origin` must be it.
+An eligible feature can run unattended to a Draft PR. Every gate decision is then recorded as agent-provisional, and merging the PR is the single human approval. Eligible means a scoped leaf Issue (its intake scope comment has `Risk: R0|R1|R2` and `Privileged actions before merge: none` or an authorized action), started from a feature branch named for the Issue with no open PR. Autonomous needs `bwrap` (bubblewrap) with user namespaces on the host, because every agent step and check runs confined; a missing `bwrap` refuses the start. It also needs the `[github] repository` pin described above: eligibility and publication use only that repository, and `origin` must be it.
 
 ```bash
 ballast run start --mode autonomous [--wall-time MINUTES] [--max-agent-steps N] \

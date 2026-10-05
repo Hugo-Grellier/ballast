@@ -336,6 +336,173 @@ class LedgerTests(unittest.TestCase):
         )
         self.assertNotIn("pull_request", ledger.aggregate(self.root))
 
+    SYNC = {  # noqa: RUF012 - read-only fixture
+        "base_ref": "main",
+        "base_before": "a" * 40,
+        "base_after": "b" * 40,
+        "head_before": "c" * 40,
+        "head_after": "d" * 40,
+    }
+
+    def sync(self, data: dict[str, object], event_id: str = "s1") -> dict[str, object]:
+        return ledger.new_event(
+            "run_1", FEATURE, "branch_sync", "runner", data, event_id
+        )
+
+    def test_branch_sync_events_accept_each_outcome(self) -> None:
+        """T004 [FR-009]: the event contract of #18."""
+        valid = [
+            {"outcome": "up-to-date", **self.SYNC},
+            {"outcome": "up-to-date", **self.SYNC, "fast_forwarded": True},
+            {"outcome": "synchronized", **self.SYNC, "pushed": False},
+            {
+                "outcome": "synchronized",
+                **self.SYNC,
+                "base_after": "e" * 64,
+                "pushed": True,
+                "recovered": True,
+                "recovered_from": "a1b2c3d4",
+                "overlap": 3,
+                "stale_plan": True,
+                "stale_review": False,
+            },
+            {"outcome": "blocked", "cause": "push-failed", "retryable": True},
+            {"outcome": "blocked", "cause": "busy", "base_ref": "release/1.0"},
+        ]
+        valid += [
+            {"outcome": "blocked", "cause": c} for c in sorted(ledger.SYNC_CAUSES)
+        ]
+        for data in valid:
+            with self.subTest(data=data):
+                self.assertEqual(self.sync(data)["data"], data)
+
+    def test_branch_sync_events_reject_values_outside_the_schema(self) -> None:
+        cases = {
+            "unknown outcome": {"outcome": "rebased", **self.SYNC},
+            "unknown cause": {"outcome": "blocked", "cause": "offline"},
+            "blocked without cause": {"outcome": "blocked"},
+            "up-to-date with cause": {
+                "outcome": "up-to-date",
+                "cause": "busy",
+                **self.SYNC,
+            },
+            "up-to-date without head": {
+                "outcome": "up-to-date",
+                **{k: v for k, v in self.SYNC.items() if k != "head_after"},
+            },
+            "synchronized without pushed": {"outcome": "synchronized", **self.SYNC},
+            "retryable on another cause": {
+                "outcome": "blocked",
+                "cause": "dirty",
+                "retryable": True,
+            },
+            "recovered when blocked": {
+                "outcome": "blocked",
+                "cause": "busy",
+                "recovered": True,
+            },
+            "recovered_from without recovered": {
+                "outcome": "synchronized",
+                **self.SYNC,
+                "pushed": False,
+                "recovered_from": "a1b2c3d4",
+            },
+            "invalid recovered_from": {
+                "outcome": "synchronized",
+                **self.SYNC,
+                "pushed": False,
+                "recovered": True,
+                "recovered_from": "../x",
+            },
+            "short commit": {"outcome": "up-to-date", **self.SYNC, "base_after": "abc"},
+            "upper-case commit": {
+                "outcome": "up-to-date",
+                **self.SYNC,
+                "base_after": "A" * 40,
+            },
+            "free text": {"outcome": "blocked", "cause": "dirty", "detail": "x"},
+        }
+        for ref in ("-x", "a..b", "x.lock", "a@{1}", "a//b", "/a", "a/", "a b"):
+            cases[f"ref {ref}"] = {
+                "outcome": "up-to-date",
+                **self.SYNC,
+                "base_ref": ref,
+            }
+        for name, data in cases.items():
+            with self.subTest(name=name), self.assertRaises(ledger.LedgerError):
+                self.sync(data)
+        with self.assertRaisesRegex(ledger.LedgerError, "requires runner"):
+            ledger.new_event(
+                "run_1",
+                FEATURE,
+                "branch_sync",
+                "operator-attested",
+                {"outcome": "blocked", "cause": "busy"},
+            )
+
+    def test_branch_sync_is_runner_only(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            self.assertRaises(SystemExit),
+        ):
+            ledger.main(
+                [
+                    "record",
+                    "run_1",
+                    "branch_sync",
+                    "--source",
+                    "agent-reported",
+                    "--data",
+                    '{"outcome": "blocked", "cause": "busy"}',
+                ]
+            )
+        self.assertIn("invalid choice", output.getvalue())
+
+    def test_a_stream_of_one_blocked_check_is_valid_and_reported(self) -> None:
+        """A start blocked before its first step (#18 event contract)."""
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(report["status"], "uninstrumented")
+        ledger.append(self.root, self.sync({"outcome": "blocked", "cause": "dirty"}))
+        events, problems = ledger.read(self.root, "run_1")
+        self.assertEqual(problems, [])
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(report["problems"], [])
+        self.assertEqual(
+            report["branch_sync"],
+            {
+                "outcome": "blocked",
+                "cause": "dirty",
+                "observed_at": events[0]["observed_at"],
+            },
+        )
+        text = ledger._text_report(report)  # noqa: SLF001
+        self.assertEqual(
+            [line for line in text.splitlines() if line.startswith("branch_sync:")],
+            [f"branch_sync: {json.dumps(report['branch_sync'], sort_keys=True)}"],
+        )
+
+    def test_report_shows_latest_branch_sync_or_its_absence(self) -> None:
+        self.write_run([], None)
+        ledger.import_run(self.root, "run_1")
+        self.assertEqual(
+            ledger.report(self.root, "run_1")["branch_sync"],
+            {"available": False, "reason": "no check recorded"},
+        )
+        ledger.append(self.root, self.sync({"outcome": "up-to-date", **self.SYNC}))
+        ledger.append(
+            self.root,
+            self.sync({"outcome": "synchronized", **self.SYNC, "pushed": True}, "s2"),
+        )
+        events, _ = ledger.read(self.root, "run_1")
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(
+            report["branch_sync"],
+            {**events[-1]["data"], "observed_at": events[-1]["observed_at"]},
+        )
+        self.assertNotIn("branch_sync", ledger.aggregate(self.root))
+
     def test_checkout_local_git_is_never_executed(self) -> None:
         sentinel = self.root / "git-ran"
         local = self.root / "bin"

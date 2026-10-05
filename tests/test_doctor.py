@@ -152,6 +152,7 @@ class DoctorCase(unittest.TestCase):
         self.bin.mkdir()
         for name in STUBS:
             self.stub(name)
+        self.stub("git", 'echo "git version 2.43.0"')
         self.data = self.base / "data"
         # Not yet created: doctor must not write it.
         self.state = operator_state(self) / "state"
@@ -306,6 +307,17 @@ class MachineTests(DoctorCase):
             self.assertIn("ballast run (headless steps)", checks[name]["gates"])
         for name in ("git", "uvx", "patch", "gh", "agent-cli"):
             self.assertEqual(checks[name]["status"], "passing")
+
+    def test_git_older_than_the_sync_floor(self) -> None:
+        """T027 [DEC-0001, N-02, Q36]: branch synchronization needs git 2.41."""
+        self.stub("git", 'echo "git version 2.40.1"')
+        code, checks = self.checks()
+        self.assertEqual(code, 1)
+        self.assert_gap(checks["git"])
+        self.assertIn("git 2.40 is older than 2.41", checks["git"]["detail"])
+        self.assertIn("2.41 or later", checks["git"]["remedy"])
+        self.stub("git", 'echo "git version 2.41.0"')
+        self.assertEqual(self.checks()[1]["git"]["status"], "passing")
 
     def test_no_systemd_user_session(self) -> None:
         self.stub("systemctl", "exit 1")

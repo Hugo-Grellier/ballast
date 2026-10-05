@@ -95,6 +95,31 @@ PR_REASONS: dict[str, frozenset[str]] = {
         }
     ),
 }
+# Branch synchronization outcomes and causes (branch_sync.py, #18).
+SYNC_OUTCOMES = frozenset({"up-to-date", "synchronized", "blocked"})
+SYNC_CAUSES = frozenset(
+    {
+        "busy",
+        "git-unavailable",
+        "in-progress",
+        "wrong-branch",
+        "unknown-base",
+        "fetch-failed",
+        "not-feature-branch",
+        "diverged",
+        "dirty",
+        "conflict",
+        "push-failed",
+        "protected-input",
+        "internal-error",
+    }
+)
+# A branch name Ballast records or passes to Git: never an option, a range, a
+# reflog expression or a lock file.
+REF = re.compile(
+    r"(?![-/])(?!.*(?:\.\.|//|@\{))(?!.*(?:\.lock|/)$)[A-Za-z0-9._/-]{1,200}"
+)
+COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 SOURCES = {"runner", "client-counter", "operator-attested", "agent-reported"}
 RANK = {"economy": 0, "standard": 1, "senior": 2, "critical": 3}
 EFFORT_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
@@ -187,6 +212,7 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
         "outcome": set(PR_REASONS),
         "reason": set().union(*PR_REASONS.values()),
     },
+    "branch_sync": {"outcome": set(SYNC_OUTCOMES), "cause": set(SYNC_CAUSES)},
 }
 
 # No opaque payload, prose, argv, or output field is accepted. A question mark
@@ -312,9 +338,29 @@ FIELDS: dict[str, dict[str, str]] = {
         "pr_url?": "url",
         "matches?": "int",
     },
+    "branch_sync": {
+        "outcome": "label",
+        "cause?": "label",
+        "base_ref?": "ref",
+        "base_before?": "commit",
+        "base_after?": "commit",
+        "head_before?": "commit",
+        "head_after?": "commit",
+        "pushed?": "bool",
+        "fast_forwarded?": "bool",
+        "recovered?": "bool",
+        "recovered_from?": "run_id",
+        "retryable?": "bool",
+        "overlap?": "int",
+        "stale_plan?": "bool",
+        "stale_review?": "bool",
+    },
 }
-# Written only by the runner or its Draft PR checkpoint, never by `record`.
-RUNNER_ONLY = frozenset({"run", "step", "gate", "snapshot", "pull_request"})
+# Written only by the runner, its Draft PR checkpoint or its branch
+# synchronization, never by `record`.
+RUNNER_ONLY = frozenset(
+    {"run", "step", "gate", "snapshot", "pull_request", "branch_sync"}
+)
 
 
 class LedgerError(ValueError):
@@ -468,11 +514,14 @@ def _valid_value(kind: str, value: object) -> bool:
         "ac": AC,
         "sha": SHA,
         "url": PR_URL,
+        "ref": REF,
+        "commit": COMMIT,
+        "run_id": RUN_ID_PATTERN,
     }[kind]
     return bool(pattern.fullmatch(value))
 
 
-def validate(event: object) -> None:  # noqa: C901, PLR0912 - Explicit schema checks.
+def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit checks.
     """Reject event versions, fields, types, and unsafe values outside the schema."""
     if not isinstance(event, dict):
         fail("event must be an object")
@@ -544,16 +593,41 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912 - Explicit schema ch
             fail(f"{data['outcome']} needs reason")
         if "reason" in data and data["reason"] not in PR_REASONS[data["outcome"]]:
             fail(f"reason does not apply to {data['outcome']}")
+    if event["kind"] == "branch_sync":
+        _validate_branch_sync(data)
     required_source = {
         "run": "runner",
         "step": "runner",
         "gate": "runner",
         "pull_request": "runner",
+        "branch_sync": "runner",
         "usage": "client-counter",
         "human_action": "operator-attested",
     }.get(event["kind"])
     if required_source and event["source"] != required_source:
         fail(f"{event['kind']} requires {required_source} source")
+
+
+def _validate_branch_sync(data: dict[str, Any]) -> None:
+    """Apply the per-outcome rules of the branch_sync event (#18 contract)."""
+    outcome = data["outcome"]
+    if outcome == "blocked":
+        if "cause" not in data:
+            fail("blocked needs cause")
+    else:
+        if "cause" in data:
+            fail(f"{outcome} has no cause")
+        needed = {"base_ref", "base_after", "head_before", "head_after"}
+        if outcome == "synchronized":
+            needed.add("pushed")
+        if not needed <= set(data):
+            fail(f"{outcome} needs {', '.join(sorted(needed))}")
+    if "retryable" in data and data.get("cause") != "push-failed":
+        fail("retryable applies only to push-failed")
+    if "recovered" in data and outcome != "synchronized":
+        fail("recovered applies only to synchronized")
+    if "recovered_from" in data and data.get("recovered") is not True:
+        fail("recovered_from needs recovered")
 
 
 def new_event(  # noqa: PLR0913, PLR0917 - Event identity has six fixed fields.
@@ -1795,6 +1869,15 @@ def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share thi
         if checkpoints
         else {"available": False, "reason": "no checkpoint recorded"}
     )
+    syncs = [event for event in events if event["kind"] == "branch_sync"]
+    result["branch_sync"] = (
+        {**syncs[-1]["data"], "observed_at": syncs[-1]["observed_at"]}
+        if syncs
+        else {"available": False, "reason": "no check recorded"}
+    )
+    if len(syncs) == len(events):
+        # A start blocked by branch synchronization never ran a workflow.
+        return result
     runs = [event for event in events if event["kind"] == "run"]
     result["status"] = (
         runs[-1]["data"].get("status", "incomplete") if runs else "incomplete"
@@ -2362,6 +2445,7 @@ def _text_report(data: dict[str, Any]) -> str:
         "efficiency",
         "human_effort",
         "pull_request",
+        "branch_sync",
     ):
         if name in data:
             lines.append(f"{name}: {json.dumps(data[name], sort_keys=True)}")

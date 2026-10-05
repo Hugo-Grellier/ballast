@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -291,28 +292,13 @@ def _pin_path(root: Path, run_id: str) -> Path | None:
         return None
 
 
-def pin_branch(root: Path, run_id: str) -> str | None:
-    """Record the run's branch when the operator starts it.
+def _branch_pin(root: Path, run_id: str) -> str | None:
+    """Return the branch pinned at `ballast run start` by branch_sync (#18).
 
     HEAD lives in agent-writable Git state; every later checkpoint must still
     be on this branch, published under the same name (DEC-0006, DEC-0010).
+    Only `branch` is read; `base` and `base_commit` belong to branch_sync.
     """
-    path = _pin_path(root, run_id) if RUN_ID_PATTERN.fullmatch(run_id) else None
-    if path is None:
-        return None
-    git, _ = _resolve("git", root)
-    if git is None:
-        return None
-    head = _command([git, "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root)
-    branch = head.stdout.strip()
-    if head.returncode or not branch or branch.startswith("-"):
-        return None
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_text(json.dumps({"branch": branch}), encoding="utf-8")
-    return branch
-
-
-def _branch_pin(root: Path, run_id: str) -> str | None:
     path = _pin_path(root, run_id)
     if path is None:
         return None
@@ -462,8 +448,128 @@ def _section(run: _Run, checked_at: datetime) -> str:
         lines.extend(f"  - {line}" for line in run.scope)
     else:
         lines.append("- Scope: no intake scope comment")
+    stale = _stale_entries(run)
+    if stale:
+        lines.append("- Evidence that a branch synchronization may have made stale:")
+        lines.extend(f"  - {entry}" for entry in stale)
     lines.append(MARK_END)
     return "\n".join(lines)
+
+
+STALE_PATHS = 20
+STALE_ENTRIES = 20
+STALE_RECORD_BYTES = 16 * 1024  # ample for branch_sync's 200 paths
+STALE_KINDS = frozenset({"plan", "review"})
+
+
+def stale_dir(root: Path, feature: str) -> Path:
+    """Operator-state directory of a feature's stale-evidence records (#18).
+
+    Keyed by feature, so a continuation keeps its source run's entries; an
+    agent can neither plant nor delete them (SEC-003).
+    """
+    key = hashlib.sha256(feature.encode("utf-8", "surrogateescape")).hexdigest()
+    return state_dir(root) / "branch-sync" / "stale" / key[:16]
+
+
+def _code(text: str) -> str:
+    """Render a path as a Markdown code span: never a link, mention or markup.
+
+    `<!--` is broken up too, so no path can spell this section's markers.
+    """
+    return "`" + printable(text).replace("`", "").replace("<!--", "<!- -") + "`"
+
+
+def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:
+    """(observed_at, entry) for a valid stale-evidence record of this feature."""
+    if not isinstance(data, dict) or data.get("feature") != feature:
+        return None
+    observed, base = data.get("observed_at"), data.get("base_ref")
+    before, after = data.get("base_before"), data.get("base_after")
+    stale, paths = data.get("stale"), data.get("paths")
+    if (
+        not isinstance(observed, str)
+        or not isinstance(base, str)
+        or not ledger.REF.fullmatch(base)
+        or not all(
+            value is None or (isinstance(value, str) and ledger.COMMIT.fullmatch(value))
+            for value in (before, after)
+        )
+        or after is None
+        or not isinstance(stale, list)
+        or not stale
+        or not set(stale) <= STALE_KINDS
+        or not isinstance(paths, list)
+        or not all(isinstance(path, str) for path in paths)
+        or not isinstance(data.get("truncated"), bool)
+    ):
+        return None
+    try:
+        when = datetime.fromisoformat(observed).astimezone(UTC)
+    except ValueError:
+        return None
+    moved = f"{before[:12]}..{after[:12]}" if before else f"to {after[:12]}"
+    shown = ", ".join(_code(path) for path in paths[:STALE_PATHS])
+    more = len(paths) - STALE_PATHS
+    if more > 0 or data["truncated"]:
+        shown += " and more"
+    kinds = " and ".join(sorted(set(stale)))
+    entry = (
+        f"{when.strftime('%Y-%m-%dT%H:%M:%SZ')}: {base} moved {moved}; {kinds} "
+        f"evidence may be stale; files changed on both sides: {shown}"
+    )
+    return observed, entry
+
+
+def printable(text: object) -> str:
+    """Untrusted text for display: control characters escaped."""
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in str(text))
+
+
+def _small_json(path: Path) -> object:
+    """Parse a regular file of at most STALE_RECORD_BYTES; else ValueError."""
+    handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(handle, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            message = "not a regular file"
+            raise ValueError(message)
+        raw = stream.read(STALE_RECORD_BYTES + 1)
+    if len(raw) > STALE_RECORD_BYTES:
+        message = "record too large"
+        raise ValueError(message)
+    return json.loads(raw.decode("utf-8"))
+
+
+def _stale_entries(run: _Run) -> list[str]:
+    """Dated stale-evidence entries for the feature, oldest first (#18 R11).
+
+    Read from operator state, keyed by feature: a continuation has a new run
+    ID, so the source run's staleness must stay visible. Unreadable, oversized
+    or foreign records are skipped; nothing here clears an entry. At most the
+    newest STALE_ENTRIES are shown, so the PR body stays bounded.
+    """
+    if run.feature is None:
+        return []
+    try:
+        directory = stale_dir(run.root, run.feature)
+        paths = sorted(directory.iterdir()) if directory.is_dir() else []
+    except (OSError, ValueError):
+        return []
+    found: list[tuple[str, str]] = []
+    for path in paths:
+        if path.suffix != ".json":
+            continue
+        try:
+            record = _stale_record(_small_json(path), run.feature)
+        except (OSError, ValueError, MemoryError, RecursionError):
+            continue
+        if record is not None:
+            found.append(record)
+    entries = [entry for _, entry in sorted(found)]
+    if len(entries) > STALE_ENTRIES:
+        hidden = len(entries) - STALE_ENTRIES
+        entries = [f"and {hidden} earlier", *entries[-STALE_ENTRIES:]]
+    return entries
 
 
 class _Checkpoint:
@@ -943,8 +1049,15 @@ def _references(body: str, run: _Run) -> bool:
 
 
 class _Locked:
-    def __init__(self, path: Path) -> None:
+    """An exclusive `flock`; entering returns False when it stays held.
+
+    `wait` is how long to retry; 0 makes one attempt (branch_sync's `busy`).
+    LockUnavailableError means the lock file itself is broken, not held.
+    """
+
+    def __init__(self, path: Path, wait: float = LOCK_WAIT) -> None:
         self.path = path
+        self.wait = wait
         self.handle: int | None = None
 
     def __enter__(self) -> bool:
@@ -958,7 +1071,7 @@ class _Locked:
             os.close(handle)
             message = "the PR lock is not a regular file"
             raise LockUnavailableError(message)
-        deadline = time.monotonic() + LOCK_WAIT
+        deadline = time.monotonic() + self.wait
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)

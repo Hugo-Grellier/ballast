@@ -1354,6 +1354,11 @@ class EligibilityTests(AutonomyCase):
         (self.gh_dir / "pr-list.json").unlink()
         self.git("checkout", "-q", "main")
         self.assertIn(autonomy.REFUSAL + autonomy.BRANCH_REFUSAL, self.reasons())
+        # N-05: the same predicate as branch synchronization (Q44).
+        for name in ("develop", "feat/270-x"):
+            self.git("checkout", "-q", "-b", name, "27-demo-run")
+            self.assertIn(autonomy.REFUSAL + autonomy.BRANCH_REFUSAL, self.reasons())
+        self.assertIn("named for the Issue", autonomy.BRANCH_REFUSAL)
         self.git("checkout", "-q", "27-demo-run")
         self.git("remote", "set-url", "origin", "https://u:token@example.test/r.git")
         self.assertTrue(any("carries a credential" in r for r in self.reasons()))
@@ -1385,6 +1390,30 @@ class EligibilityTests(AutonomyCase):
             autonomy.REFUSAL + "confinement unavailable: x",
             result["eligibility"]["reasons"],
         )
+
+
+class FeatureBranchTests(unittest.TestCase):
+    """T009 [FR-005, AC-021, DEC-0004, N-05]: the one feature-branch predicate."""
+
+    def test_issue_number_as_a_whole_segment(self) -> None:
+        for name in ("feat/18-branch-sync", "18-branch-sync", "fix_18.x", "a/b/18"):
+            with self.subTest(name=name):
+                self.assertTrue(autonomy.is_feature_branch(name, 18, "main", "main"))
+
+    def test_everything_else_is_not_a_feature_branch(self) -> None:
+        cases = {
+            "feat/180-x": (18, "main", "main"),
+            "v18": (18, "main", "main"),
+            "feat/018-x": (18, "main", "main"),
+            "develop": (18, "main", "main"),
+            "18-base": (18, "18-base", "main"),
+            "18-default": (18, "release", "18-default"),
+            "feat/18-x": (None, "main", "main"),
+            "": (18, "main", "main"),
+        }
+        for name, (issue, base, default) in cases.items():
+            with self.subTest(name=name):
+                self.assertFalse(autonomy.is_feature_branch(name, issue, base, default))
 
 
 class IssueSnapshotTests(AutonomyCase):
