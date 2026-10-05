@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 import unittest
-from contextlib import redirect_stderr, redirect_stdout, suppress
+from contextlib import nullcontext, redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -3082,6 +3082,66 @@ class DraftPrRunTests(unittest.TestCase):
                 status, output = self.main(0)
                 self.assertEqual(status, 130)
                 self.assertIn("Draft PR: failed-retryable (internal-error)", output)
+
+    def test_acceptance_packet_line_follows_the_draft_pr_line(self) -> None:
+        draft_pr = self.run.draft_pr
+        outcome = draft_pr.Outcome(
+            "reused",
+            issue=102,
+            pr_number=7,
+            pr_url="https://github.com/o/r/pull/7",
+            packet=draft_pr.packet.PacketOutcome(
+                "published", pr_number=7, head="a" * 40
+            ),
+        )
+        with patch.object(draft_pr, "checkpoint", return_value=outcome):
+            status, output = self.main(0)
+        self.assertEqual(status, 0)
+        self.assertIn(
+            "Draft PR: reused #7 https://github.com/o/r/pull/7\n"
+            "Acceptance packet: published #7 head aaaaaaaaaaaa\n",
+            output,
+        )
+
+    def test_raising_packet_step_never_changes_the_exit_status(self) -> None:
+        draft_pr = self.run.draft_pr
+
+        def execute(work: object) -> object:
+            work.run.feature, work.run.issue = FEATURE, 102
+            return draft_pr.Outcome(
+                "created",
+                issue=102,
+                pr_number=7,
+                pr_url="https://github.com/o/r/pull/7",
+            )
+
+        for code in (0, 1, 130):
+            engine = (
+                patch.object(
+                    self.run,
+                    "subprocess",
+                    SimpleNamespace(run=Mock(side_effect=KeyboardInterrupt)),
+                )
+                if code == 130  # noqa: PLR2004
+                else nullcontext()
+            )
+            with (
+                self.subTest(code=code),
+                engine,
+                patch.object(draft_pr._Checkpoint, "execute", execute),  # noqa: SLF001
+                patch.object(
+                    draft_pr.packet, "publish", side_effect=RuntimeError("boom")
+                ),
+            ):
+                status, output = self.main(0 if code == 130 else code)  # noqa: PLR2004
+                self.assertEqual(status, code)
+                self.assertIn(
+                    "Draft PR: created #7 https://github.com/o/r/pull/7\n"
+                    "Acceptance packet: failed-retryable (internal-error): report it "
+                    "with the run ID; the next run retries (RuntimeError)\n",
+                    output,
+                )
+                self.assertNotIn("boom", output)
 
     def test_engine_never_receives_github_tokens_but_checkpoint_does(self) -> None:
         seen: dict[str, str] = {}

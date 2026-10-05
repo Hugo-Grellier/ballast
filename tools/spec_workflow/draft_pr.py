@@ -16,6 +16,11 @@ only place Ballast uses GitHub authority (docs/adr/0003):
 - `gh` output is parsed, never printed or stored; every result is one fixed
   outcome, reason and remedy, printed as one line and recorded in the ledger.
 
+After recording its own outcome, the checkpoint asks `packet.py` to publish
+the acceptance packet into an open Ballast Draft PR (`created` or `reused`;
+docs/adr/0005) and records that step as one `acceptance_packet` event. A
+packet failure, even one that raises, never changes this outcome.
+
 Nothing here can change the workflow's exit status: `run.py` catches anything
 that escapes.
 """
@@ -41,6 +46,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import ledger
+import packet
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN
 from launcher import IN_PROGRESS, TAMPER_MARKER, state_dir
 
@@ -181,6 +187,7 @@ class Outcome:
     remedy: str | None = None
     matches: int | None = None
     detail: str | None = None
+    packet: packet.PacketOutcome | None = None
 
 
 @dataclass(frozen=True)
@@ -1125,4 +1132,32 @@ def checkpoint(root: Path, run_id: str) -> Outcome:
             _record(work.run, outcome)
         except Exception as error:  # noqa: BLE001 - The line is still printed.
             outcome = replace(outcome, detail=f"not recorded: {type(error).__name__}")
+        outcome = replace(outcome, packet=_packet(work, outcome))
     return outcome
+
+
+def _packet(work: _Checkpoint, outcome: Outcome) -> packet.PacketOutcome:
+    """Publish the acceptance packet; its failure never touches `outcome`."""
+    try:
+        result = packet.publish(work, outcome)
+    except Exception as error:  # noqa: BLE001 - Any failure is one outcome.
+        result = packet.make_outcome(
+            "failed-retryable",
+            "internal-error",
+            run=work.run,
+            detail=type(error).__name__,
+        )
+    try:
+        ledger.append(
+            work.run.root,
+            ledger.new_event(
+                work.run.run_id,
+                work.run.feature,
+                "acceptance_packet",
+                "runner",
+                packet.event_data(result),
+            ),
+        )
+    except Exception as error:  # noqa: BLE001 - The line is still printed.
+        result = replace(result, detail=f"not recorded: {type(error).__name__}")
+    return result
