@@ -311,7 +311,8 @@ def _recovery(key: str, **fill: object) -> str:
         text = str(value)
         if name in TEXT_VALUES:
             values[name] = _text(text)
-        elif not text.isprintable() or text.startswith("-") or not text:
+        # A leading `-` reads as an option, a leading `+` as a forced refspec.
+        elif not text.isprintable() or text.startswith(("-", "+")) or not text:
             values[name] = f"<{name.replace('_', '-')}>"
         else:
             values[name] = shlex.quote(text)

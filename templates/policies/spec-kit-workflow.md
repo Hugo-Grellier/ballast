@@ -723,6 +723,11 @@ whatever its run ID, finishes the synchronization from a write-ahead record in
 your state directory, and says so with `completed the interrupted
 synchronization from run RUN_ID`.
 
+The by-hand recoveries use `origin`, which must name the repository pinned in
+`[github] repository`, and run Git in the checkout with your credentials, so
+its hooks and configuration apply: review them first if an agent could have
+changed them.
+
 What the check never does: stash, reset or discard changes; overwrite or
 delete ignored files; push without a lease; push or rewrite the base or any
 branch other than the feature branch; run a hook, merge driver, filter,

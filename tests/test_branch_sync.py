@@ -531,6 +531,17 @@ class FoundationTests(SyncCase):
         self.assertIn("git switch 'feat/18-$(id);x', then r", lines[1])
         option = branch_sync._recovery("wrong-branch", pinned="-x", rerun="r")  # noqa: SLF001
         self.assertIn("<pinned>", option)
+        # PFR-01: `+x-18` as a push refspec would force-push without the lease.
+        forced = branch_sync._recovery(  # noqa: SLF001
+            "conflict-published",
+            remote="origin",
+            base="main",
+            branch="+x-18",
+            published="a" * 40,
+            rerun="r",
+        )
+        self.assertNotIn("+x-18", forced)
+        self.assertIn("<branch>", forced)
 
     def test_never_raises(self) -> None:
         with patch.object(branch_sync._Sync, "classify", side_effect=RuntimeError("x")):  # noqa: SLF001
