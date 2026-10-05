@@ -968,7 +968,12 @@ def render(context: Context, checks: list[Check]) -> tuple[str, list[str], int]:
         lines.append(f"Blocked: {', '.join(blocked)} ({gaps}).")
     else:
         lines.append("Everything Ballast needs is in place.")
-    return "\n".join(lines) + "\n", blocked, len(blocking)
+    # Details carry checkout and tool text: escape control characters so none
+    # forges a line or drives the terminal.
+    text = "\n".join(
+        "".join(c if c.isprintable() else repr(c)[1:-1] for c in line) for line in lines
+    )
+    return text + "\n", blocked, len(blocking)
 
 
 def doctor(argv: list[str]) -> int:
