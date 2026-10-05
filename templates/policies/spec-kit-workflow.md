@@ -704,7 +704,8 @@ your `ballast run continue` command.
 | `dirty` | uncommitted changes while finishing a synchronization already pushed | move these changes aside without committing them (Ballast never stashes or discards them), then rerun to finish the synchronization |
 | `dirty` | files in the way while finishing a synchronization already pushed | move or commit these files, then rerun to finish the synchronization |
 | `dirty` | an update interrupted while it wrote the working tree | git restore --source={new_head} --staged --worktree ., then rerun to finish the synchronization |
-| `conflict` | replaying a feature commit conflicts | rebase by hand: git pull --rebase origin {base}, resolve, then rerun; a published branch also needs git push --force-with-lease={branch}:{published} origin {branch} first |
+| `conflict` | replaying a feature commit conflicts | rebase by hand: git pull --rebase {remote} {base}, resolve, then rerun |
+| `conflict` | replaying a commit of a published feature branch conflicts | rebase by hand: git pull --rebase {remote} {base}, resolve, git push --force-with-lease={branch}:{published} {remote} {branch}, then rerun |
 | `conflict` | a commit made after a pushed synchronization conflicts | git rebase --onto {new_head} {old_head} {branch}, resolve, then rerun |
 | `push-failed` | the push failed and a retry can succeed alone | rerun |
 | `push-failed` | the repository rejected the push | check {repo}'s branch rules for {branch} (protection, required signatures), then rerun |
