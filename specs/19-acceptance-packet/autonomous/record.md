@@ -5,6 +5,7 @@ Run `97858712` for #19 (`specs/19-acceptance-packet`). Generated from the operat
 ## Mode and risk
 
 - Mode start: autonomous at 2026-10-05T20:11:45+00:00 by operator
+- Mode lower: human-gated at 2026-10-05T20:43:20+00:00 by operator, decision HD-0001: block-resolved
 - Risk: R1 (scope-record); history: R1 at 2026-10-05T20:11:45+00:00
 - Limits (default): 240 minutes wall time, 30 agent steps
 - Authoring integration: claude; review integration: claude
