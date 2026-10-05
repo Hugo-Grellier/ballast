@@ -14,7 +14,9 @@ import subprocess
 import sys
 import threading
 import unittest
+import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,6 +28,7 @@ sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
 
 import draft_pr  # noqa: E402
 import ledger  # noqa: E402
+import packet  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "tests"))
 from test_autonomy import operator_state  # noqa: E402
@@ -122,9 +125,11 @@ def pull(  # noqa: PLR0913
     body: str = "",
     merged: bool = False,
     closed_at: str | None = None,
+    head_sha: str | None = None,
+    base_sha: str | None = None,
 ) -> dict[str, Any]:
-    """One entry of GitHub's pulls list."""
-    return {
+    """One entry of GitHub's pulls list; commit IDs only when given."""
+    entry = {
         "number": number,
         "state": state,
         "draft": draft,
@@ -142,6 +147,11 @@ def pull(  # noqa: PLR0913
         "html_url": url(number),
         "body": body,
     }
+    if head_sha is not None:
+        entry["head"]["sha"] = head_sha
+    if base_sha is not None:
+        entry["base"]["sha"] = base_sha
+    return entry
 
 
 def section(
@@ -236,6 +246,12 @@ class FakeGitHub:
         self.pr_pages: list[list[dict[str, Any]]] | None = None
         self.files: list[dict[str, Any]] | None = [{"filename": "src/x.py"}]
         self.template: str | None = None
+        # Acceptance packet reads: check runs at head, and contents by
+        # (path, ref) as text or a scripted failure.
+        self.check_pages: list[list[dict[str, Any]]] = [[]]
+        self.contents: dict[tuple[str, str], str | draft_pr.Result] = {}
+        # Commit IDs a created PR reports as its head and base.
+        self.shas: tuple[str, str] | None = None
         self.failures: dict[str, draft_pr.Result] = {}
         self.git_overrides: dict[str, draft_pr.Result] = {}
         self.on_create: Any = None
@@ -288,15 +304,19 @@ class FakeGitHub:
             return "comments"
         if "/compare/" in path:
             return "compare"
-        if "/contents/" in path:
+        if "/check-runs?" in path:
+            return "checks"
+        if "/contents/.github/pull_request_template.md?" in path:
             return "template"
+        if "/contents/" in path:
+            return "contents"
         if "/issues/" in path:
             return "issue"
         return "repo"
 
     def serve(self, argv: list[str], stdin: str | None) -> draft_pr.Result:  # noqa: C901, PLR0911, PLR0912
         stage = self.stage(argv)
-        if stage in {"pulls", "comments"}:
+        if stage in {"pulls", "comments", "checks"}:
             assert argv[1:4] == ["api", "--paginate", "--slurp"], argv  # noqa: S101
         if stage in self.failures:
             return self.failures[stage]
@@ -322,6 +342,22 @@ class FakeGitHub:
                 return http(404)
             # GitHub lists at most 300 files, on the first page only.
             return self.ok({"files": self.files[:300]})
+        if stage == "checks":
+            return self.ok(
+                [
+                    {"total_count": len(page), "check_runs": copy.deepcopy(page)}
+                    for page in self.check_pages
+                ]
+            )
+        if stage == "contents":
+            path, _, ref = argv[-1].split("/contents/", 1)[1].partition("?ref=")
+            found = self.contents.get((urllib.parse.unquote(path), ref))
+            if found is None:
+                return http(404)
+            if isinstance(found, draft_pr.Result):
+                return found
+            content = base64.encodebytes(found.encode()).decode()
+            return self.ok({"type": "file", "encoding": "base64", "content": content})
         if stage == "template":
             if self.template is None:
                 return http(404)
@@ -334,7 +370,17 @@ class FakeGitHub:
             self.next_number += 1
             base = argv[argv.index("--base") + 1]
             head = argv[argv.index("--head") + 1]
-            self.prs.append(pull(number, base=base, head=head, body=stdin or ""))
+            head_sha, base_sha = self.shas or (None, None)
+            self.prs.append(
+                pull(
+                    number,
+                    base=base,
+                    head=head,
+                    body=stdin or "",
+                    head_sha=head_sha,
+                    base_sha=base_sha,
+                )
+            )
             return draft_pr.Result(0, url(number) + "\n")
         if stage == "edit":
             number = int(argv[3])
@@ -1003,7 +1049,9 @@ class ReuseTests(CheckpointCase):
         self.fake.prs.append(pull(9, body="Opened by hand."))
         self.assertOutcome(self.check(), "reused")
         stages = [self.fake.stage(argv) for argv in self.fake.gh_calls()]
-        self.assertEqual(stages[-2:], ["pull", "edit"])
+        # The acceptance packet's own read follows the #17 edit.
+        edit = stages.index("edit")
+        self.assertEqual(stages[edit - 1 : edit + 1], ["pull", "edit"])
 
     def test_failed_reread_is_retryable_and_writes_nothing(self) -> None:
         self.fake.prs.append(pull(9, body="Opened by hand."))
@@ -1280,6 +1328,98 @@ class LeakageTests(CheckpointCase):
         self.assertIn("RuntimeError", line)
         self.assertNotIn(SECRETS[0], line)
         self.assertEqual(self.recorded()[-1]["reason"], "internal-error")
+
+
+class PacketWiringTests(CheckpointCase):
+    """The acceptance packet step (#19 AC-019, FR-001, FR-015)."""
+
+    def kinds(self) -> list[str]:
+        events, problems = ledger.read(self.repo.root, RUN)
+        self.assertEqual(problems, [])
+        return [event["kind"] for event in events]
+
+    def test_publish_runs_after_created_or_reused_and_after_the_event(self) -> None:
+        seen: list[list[str]] = []
+
+        def publish(_work: object, outcome: draft_pr.Outcome) -> object:
+            seen.append(self.kinds())
+            self.assertIn(outcome.state, {"created", "reused"})
+            return packet.make_outcome("failed-retryable", "github-error")
+
+        with patch.object(packet, "publish", side_effect=publish):
+            created = self.check()
+            reused = self.check()
+        self.assertEqual((created.state, reused.state), ("created", "reused"))
+        self.assertEqual(
+            seen,
+            [["pull_request"], ["pull_request", "acceptance_packet", "pull_request"]],
+        )
+        self.assertEqual(
+            self.kinds(),
+            ["pull_request", "acceptance_packet", "pull_request", "acceptance_packet"],
+        )
+
+    def test_no_open_pr_gives_pending_without_a_packet_call(self) -> None:
+        spec_only = [{"filename": f"{FEATURE}/spec.md"}]
+        cases = (
+            ("no-pr", lambda: setattr(self.fake, "files", spec_only)),
+            ("no-pr", lambda: self.fake.failures.__setitem__("issue", http(502))),
+            (
+                "pr-blocked",
+                lambda: self.fake.prs.append(
+                    pull(5, state="closed", closed_at="2026-10-01T00:00:00Z")
+                ),
+            ),
+            ("pr-blocked", lambda: self.fake.prs.extend([pull(5), pull(6)])),
+        )
+        for reason, prepare in cases:
+            with self.subTest(reason=reason):
+                self.fake.prs.clear()
+                self.fake.failures.clear()
+                self.fake.files = [{"filename": "src/x.py"}]
+                prepare()
+                self.fake.calls.clear()
+                with patch.object(packet, "publish", wraps=packet.publish) as spy:
+                    outcome = self.check()
+                self.assertNotIn(outcome.state, {"created", "reused"})
+                self.assertEqual(spy.call_count, 1)
+                self.assertEqual(
+                    (outcome.packet.state, outcome.packet.reason),
+                    ("pending", reason),
+                )
+                self.assertEqual(self.fake.gh_calls("checks"), [])
+                self.assertEqual(self.fake.gh_calls("edit"), [])
+                self.assertEqual(
+                    self.kinds()[-2:], ["pull_request", "acceptance_packet"]
+                )
+
+    def test_skipped_attempts_no_packet(self) -> None:
+        (self.repo.root / ledger.TAMPER_MARKER).write_text("")
+        with patch.object(packet, "publish") as spy:
+            outcome = self.check()
+        self.assertEqual(outcome.state, "skipped")
+        self.assertIsNone(outcome.packet)
+        spy.assert_not_called()
+        self.assertEqual(self.kinds(), [])
+
+    def test_raising_packet_never_changes_the_pr_outcome(self) -> None:
+        expected = self.check()
+        self.fake.prs.clear()
+        self.fake.next_number = 42
+        with patch.object(packet, "publish", side_effect=RuntimeError("boom")):
+            outcome = self.check()
+        self.assertEqual(replace(outcome, packet=None), replace(expected, packet=None))
+        self.assertEqual(
+            (outcome.packet.state, outcome.packet.reason, outcome.packet.detail),
+            ("failed-retryable", "internal-error", "RuntimeError"),
+        )
+        self.assertIn("next run retries", outcome.packet.remedy)
+        events, _ = ledger.read(self.repo.root, RUN)
+        self.assertEqual(
+            events[-1]["data"],
+            {"outcome": "failed-retryable", "reason": "internal-error"},
+        )
+        self.assertEqual(events[-2]["data"]["outcome"], "created")
 
 
 class CommandSeamTests(unittest.TestCase):

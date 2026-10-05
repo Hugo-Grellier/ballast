@@ -68,7 +68,7 @@ LS_REMOTE_TIMEOUT = 30
 NETWORK_TIMEOUT = 600
 LOCAL_TIMEOUT = 600
 REF = ledger.REF
-COMMIT = ledger.COMMIT
+COMMIT = ledger.OID
 IN_PROGRESS_MARKERS = (
     ("rebase-merge", "rebase"),
     ("rebase-apply", "rebase"),

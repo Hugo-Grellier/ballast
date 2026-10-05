@@ -54,7 +54,8 @@ full run state and agent logs stay outside Git tracking.
 
 Then, once per invocation and after any Autonomous publication, it runs the
 Draft PR checkpoint (draft_pr.py, imported here before any agent step) and
-prints its one-line outcome; nothing the checkpoint does changes the exit
+prints its one-line outcome, then the acceptance packet's line (packet.py,
+imported with draft_pr); nothing the checkpoint does changes the exit
 status. The workflow engine, and so every agent step, never
 receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
 """
@@ -341,7 +342,10 @@ def _checkpoint(run_id: str) -> None:
     After an Autonomous publication it finds and reuses the publisher's PR.
     """
     try:
-        line = draft_pr.format_line(draft_pr.checkpoint(ROOT, run_id))
+        outcome = draft_pr.checkpoint(ROOT, run_id)
+        line = draft_pr.format_line(outcome)
+        if outcome.packet is not None:
+            line += "\n" + draft_pr.packet.format_line(outcome.packet)
     except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
         line = f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
     sys.stdout.write(line + "\n")

@@ -49,6 +49,13 @@ MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,63}")
 POLICY_ROW = re.compile(r"[A-Za-z0-9`][A-Za-z0-9`_./:+,() -]{0,127}")
 AC = re.compile(r"AC-[0-9]{3}")
 SHA = re.compile(r"[0-9a-f]{64}")
+OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# Spec Kit writes `1. **AC-NNN**:`; older fixtures `- **AC-NNN**:`.
+CRITERION = re.compile(r"(?:-|[0-9]+\.)[ \t]+\*\*(AC-[0-9]{3})\*\*:[ \t]*(.*)")
+TITLE_LIMIT = 120
+DROP_SPECS = ("rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", "specs")
+# Writing even a private index runs the agent-writable post-index-change hook.
+NO_HOOKS = ("-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false")
 PR_URL = re.compile(
     r"https://github\.com/[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}"
     r"/pull/[1-9][0-9]{0,9}"
@@ -119,7 +126,31 @@ SYNC_CAUSES = frozenset(
 REF = re.compile(
     r"(?![-/])(?!.*(?:\.\.|//|@\{))(?!.*(?:\.lock|/)$)[A-Za-z0-9._/-]{1,200}"
 )
-COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# Acceptance packet outcomes and the reasons each may carry (packet.py).
+PACKET_REASONS: dict[str, frozenset[str]] = {
+    "published": frozenset(),
+    "updated": frozenset(),
+    "unchanged": frozenset(),
+    "pending": frozenset({"no-pr", "pr-blocked", "head-not-local"}),
+    "failed-retryable": frozenset(
+        {
+            "gh-missing",
+            "gh-unauthenticated",
+            "gh-forbidden",
+            "gh-untrusted",
+            "github-unreachable",
+            "github-error",
+            "body-changed",
+            "section-unmanaged",
+            "source-unreadable",
+            "manifest-malformed",
+            "ledger-invalid",
+            "too-large",
+            "internal-error",
+        }
+    ),
+}
+PACKET_COUNTS = ("verified", "failed", "not_run", "stale", "missing")
 SOURCES = {"runner", "client-counter", "operator-attested", "agent-reported"}
 RANK = {"economy": 0, "standard": 1, "senior": 2, "critical": 3}
 EFFORT_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
@@ -213,6 +244,10 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
         "reason": set().union(*PR_REASONS.values()),
     },
     "branch_sync": {"outcome": set(SYNC_OUTCOMES), "cause": set(SYNC_CAUSES)},
+    "acceptance_packet": {
+        "outcome": set(PACKET_REASONS),
+        "reason": set().union(*PACKET_REASONS.values()),
+    },
 }
 
 # No opaque payload, prose, argv, or output field is accepted. A question mark
@@ -289,6 +324,7 @@ FIELDS: dict[str, dict[str, str]] = {
         "snapshot?": "sha",
         "spec_digest?": "sha",
         "manifest_digest?": "sha",
+        "commit?": "oid",
     },
     "convergence": {
         "verdict": "label",
@@ -342,10 +378,10 @@ FIELDS: dict[str, dict[str, str]] = {
         "outcome": "label",
         "cause?": "label",
         "base_ref?": "ref",
-        "base_before?": "commit",
-        "base_after?": "commit",
-        "head_before?": "commit",
-        "head_after?": "commit",
+        "base_before?": "oid",
+        "base_after?": "oid",
+        "head_before?": "oid",
+        "head_after?": "oid",
         "pushed?": "bool",
         "fast_forwarded?": "bool",
         "recovered?": "bool",
@@ -355,11 +391,30 @@ FIELDS: dict[str, dict[str, str]] = {
         "stale_plan?": "bool",
         "stale_review?": "bool",
     },
+    "acceptance_packet": {
+        "outcome": "label",
+        "reason?": "label",
+        "pr_number?": "int",
+        "head?": "oid",
+        "base?": "oid",
+        "feature_version?": "oid",
+        "packet_digest?": "sha",
+        "shortened?": "bool",
+        **{f"{count}?": "int" for count in PACKET_COUNTS},
+    },
 }
 # Written only by the runner, its Draft PR checkpoint or its branch
 # synchronization, never by `record`.
 RUNNER_ONLY = frozenset(
-    {"run", "step", "gate", "snapshot", "pull_request", "branch_sync"}
+    {
+        "run",
+        "step",
+        "gate",
+        "snapshot",
+        "pull_request",
+        "branch_sync",
+        "acceptance_packet",
+    }
 )
 
 
@@ -513,9 +568,9 @@ def _valid_value(kind: str, value: object) -> bool:
         "id": ID,
         "ac": AC,
         "sha": SHA,
+        "oid": OID,
         "url": PR_URL,
         "ref": REF,
-        "commit": COMMIT,
         "run_id": RUN_ID_PATTERN,
     }[kind]
     return bool(pattern.fullmatch(value))
@@ -595,12 +650,15 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
             fail(f"reason does not apply to {data['outcome']}")
     if event["kind"] == "branch_sync":
         _validate_branch_sync(data)
+    if event["kind"] == "acceptance_packet":
+        _validate_packet(data)
     required_source = {
         "run": "runner",
         "step": "runner",
         "gate": "runner",
         "pull_request": "runner",
         "branch_sync": "runner",
+        "acceptance_packet": "runner",
         "usage": "client-counter",
         "human_action": "operator-attested",
     }.get(event["kind"])
@@ -628,6 +686,23 @@ def _validate_branch_sync(data: dict[str, Any]) -> None:
         fail("recovered applies only to synchronized")
     if "recovered_from" in data and data.get("recovered") is not True:
         fail("recovered_from needs recovered")
+
+
+def _validate_packet(data: dict[str, Any]) -> None:
+    if data["outcome"] in {"pending", "failed-retryable"}:
+        if "reason" not in data:
+            fail(f"{data['outcome']} needs reason")
+    elif not {
+        "pr_number",
+        "head",
+        "base",
+        "feature_version",
+        "packet_digest",
+        *PACKET_COUNTS,
+    } <= set(data):
+        fail(f"{data['outcome']} needs the PR, commits, digest and counts")
+    if "reason" in data and data["reason"] not in PACKET_REASONS[data["outcome"]]:
+        fail(f"reason does not apply to {data['outcome']}")
 
 
 def new_event(  # noqa: PLR0913, PLR0917 - Event identity has six fixed fields.
@@ -788,14 +863,66 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _has_head(root: Path, git: Any = None) -> bool:  # noqa: ANN401
+    try:
+        (git or _git)(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+    except LedgerError:
+        return False
+    return True
+
+
 def implementation_tree(root: Path) -> str:
-    """Fingerprint dirty implementation files without touching the user's index."""
+    """Fingerprint dirty implementation files without touching the user's index.
+
+    The private index starts from HEAD, so tracked files matched by an ignore
+    rule count as they do in a commit: a clean checkout's fingerprint equals
+    `commit_tree(root, "HEAD")`.
+    """
     with tempfile.TemporaryDirectory() as directory:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
+        if _has_head(root):
+            _git(root, *NO_HOOKS, "read-tree", "HEAD", env=env)
         # Fixed pathspecs avoid interpreting untrusted filenames as Git magic.
-        _git(root, "add", "-A", "--", ".", ":!specs", env=env)
-        tree_oid = _git(root, "write-tree", env=env)
+        _git(root, *NO_HOOKS, "add", "-A", "--", ".", ":!specs", env=env)
+        _git(root, *NO_HOOKS, *DROP_SPECS, env=env)
+        tree_oid = _git(root, *NO_HOOKS, "write-tree", env=env)
         return hashlib.sha256(tree_oid.encode("ascii")).hexdigest()
+
+
+def commit_tree(root: Path, commit: str, git: Any = None) -> str:  # noqa: ANN401
+    """Fingerprint a commit's implementation files as `implementation_tree` does.
+
+    Reads only the object store into a private index: the worktree and the
+    user's index are untouched, and no hook or filter runs.
+    """
+    run = git or _git
+    if commit != "HEAD" and not OID.fullmatch(commit):
+        fail("invalid commit")
+    with tempfile.TemporaryDirectory() as directory:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
+        run(root, *NO_HOOKS, "read-tree", commit, env=env)
+        run(root, *NO_HOOKS, *DROP_SPECS, env=env)
+        tree_oid = run(root, *NO_HOOKS, "write-tree", env=env)
+        return hashlib.sha256(tree_oid.encode("ascii")).hexdigest()
+
+
+def spec_criteria(text: str) -> list[tuple[str, str, int]]:
+    """`(AC-NNN, title, line)` for each criterion item, first occurrence, in order.
+
+    The title is the text before `**When**`, without bold markers, at most
+    TITLE_LIMIT characters.
+    """
+    found: list[tuple[str, str, int]] = []
+    seen: set[str] = set()
+    for number, line in enumerate(text.splitlines(), 1):
+        match = CRITERION.fullmatch(line.rstrip())
+        if match is None or match.group(1) in seen:
+            continue
+        seen.add(match.group(1))
+        title = match.group(2).split("**When**", 1)[0].replace("**", "")
+        title = " ".join(title.split()).rstrip(" ,;")[:TITLE_LIMIT]
+        found.append((match.group(1), title, number))
+    return found
 
 
 def _run_files(root: Path, run_id: str) -> Path:
@@ -1071,9 +1198,7 @@ def _approved_spec_ids(root: Path, feature: str) -> tuple[str, set[str]]:
     digest = _sha(spec)
     if f"sha256:{digest}" not in intent.read_text(encoding="utf-8"):
         fail("spec intent approval is missing or stale")
-    ids = set(
-        re.findall(r"(?m)^- \*\*(AC-[0-9]{3})\*\*:", spec.read_text(encoding="utf-8"))
-    )
+    ids = {ac for ac, _, _ in spec_criteria(spec.read_text(encoding="utf-8"))}
     if not ids:
         fail("approved spec has no AC IDs")
     return digest, ids
@@ -1869,6 +1994,12 @@ def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share thi
         if checkpoints
         else {"available": False, "reason": "no checkpoint recorded"}
     )
+    packets = [event for event in events if event["kind"] == "acceptance_packet"]
+    result["acceptance_packet"] = (
+        {**packets[-1]["data"], "observed_at": packets[-1]["observed_at"]}
+        if packets
+        else {"available": False, "reason": "no packet recorded"}
+    )
     syncs = [event for event in events if event["kind"] == "branch_sync"]
     result["branch_sync"] = (
         {**syncs[-1]["data"], "observed_at": syncs[-1]["observed_at"]}
@@ -2446,6 +2577,7 @@ def _text_report(data: dict[str, Any]) -> str:
         "human_effort",
         "pull_request",
         "branch_sync",
+        "acceptance_packet",
     ):
         if name in data:
             lines.append(f"{name}: {json.dumps(data[name], sort_keys=True)}")
@@ -2525,6 +2657,12 @@ def _check(root: Path, run_id: str, ac_id: str, test_id: str) -> int:
     )
     unchanged = artifact_digests(root, feature) == snapshot
     status = "passed" if result.returncode == 0 and unchanged else "failed"
+    # The checked code is exactly HEAD's only when the checkout is clean.
+    commit = (
+        {"commit": _git(root, "rev-parse", "--verify", "HEAD^{commit}")}
+        if _has_head(root) and commit_tree(root, "HEAD") == snapshot["tree"]
+        else {}
+    )
     append(
         root,
         new_event(
@@ -2540,6 +2678,7 @@ def _check(root: Path, run_id: str, ac_id: str, test_id: str) -> int:
                 "snapshot": snapshot["tree"],
                 "spec_digest": snapshot["spec_digest"],
                 "manifest_digest": snapshot["manifest_digest"],
+                **commit,
             },
         ),
     )
