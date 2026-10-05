@@ -30,3 +30,8 @@
   3. Keep the behavior; the packet of a finished Autonomous run is final, and the policy says so (done now as the truthful interim).
 - **Interim**: the policy now states option 3's behavior truthfully (no behavior change). The implementation is unchanged.
 - **Needs**: an operator decision before v1.0; options 1 and 2 change the launcher's command surface and need their own Issue.
+
+## DEC-0002 — Resolution
+
+- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for the Epic #11 children (2026-10-05); listed in the PR for merge review. The operator has not reviewed this option individually.
+- **Resolution**: option 3. The packet of a finished Autonomous run is final for this feature, and the policy says so (already applied as the interim). A refresh entry point for a finished Autonomous run's PR (option 1 or 2) changes the launcher's command surface and belongs to #21, which owns taking an Autonomous run through PR review; the gap is recorded on #21. No spec, plan or task change: US3's "stays current" holds for human-gated runs, which resume.
