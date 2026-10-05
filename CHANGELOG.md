@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/Hugo-Grellier/ballast/compare/v0.5.0...v0.6.0) (2026-10-05)
+
+
+### Features
+
+* **discovery:** create a source-backed brief before feature specs ([#57](https://github.com/Hugo-Grellier/ballast/issues/57)) ([36df129](https://github.com/Hugo-Grellier/ballast/commit/36df129d4717fadc60140b3af9c036b60c7fd913))
+* **review:** generate a source-linked PR acceptance packet ([#59](https://github.com/Hugo-Grellier/ballast/issues/59)) ([042f884](https://github.com/Hugo-Grellier/ballast/commit/042f884c60daf17cabf78ce52bc2d4e605aada0a))
+
 ## [0.5.0](https://github.com/Hugo-Grellier/ballast/compare/v0.4.2...v0.5.0) (2026-10-05)
 
 
