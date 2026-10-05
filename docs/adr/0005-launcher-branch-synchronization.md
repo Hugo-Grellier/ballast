@@ -1,6 +1,6 @@
 # ADR-0005: The trusted launcher synchronizes the feature branch before agent steps
 
-- Status: proposed (2026-10-05, with feature 18; needs the operator's explicit approval before it is accepted)
+- Status: accepted (2026-10-05, approved by the operator in conversation)
 - Feature: [18-branch-sync](../../specs/18-branch-sync/spec.md), FR-001, FR-005, FR-007, FR-012, FR-016; plan [§ Proposed architecture decisions](../../specs/18-branch-sync/plan.md#architecture-boundaries); decisions DEC-0001 to DEC-0007 in [decisions.md](../../specs/18-branch-sync/decisions.md)
 - Extends: [ADR-0003](0003-launcher-github-authority.md)
 

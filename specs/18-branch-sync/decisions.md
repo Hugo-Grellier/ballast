@@ -113,7 +113,7 @@ Three proposals came up while planning. Each needs a human resolution at the pla
 - **Status**: approved by the agent under the operator's delegation, 2026-10-05. The operator acknowledged at 17:15 that the agent would approve the plan gate and continue to merge readiness.
 - **G1**: the R2 pre-change approval on file is the agent's, under that delegation; the operator's explicit merge approval is the human R2 approval of the plan and implementation, and the PR says so.
 - **Applied now**: U1 (`busy` when HEAD moved before the mutation: research R5 step 1, T022), D1 (T019 depends on T003), D2 (plan Repository Impact), C1 (T011 import check), C2 (T048 covers `ballast run --help`).
-- **Deferred to the operator at merge (spec wording only, design unchanged)**: I1 (edge case: an interrupted sync with a write-ahead record is completed by the next invocation, DEC-0005; an operation in progress or a half-written update blocks), I2 (FR-006 gets SC-002's exceptions), I3 (SC-002/FR-006 exception for a branch moved by an outside actor during the check, `busy`), I4 (AC-010 allows the write-ahead record of an unfinished sync), I5 (FR-009 `git-unavailable` also covers shallow checkouts and partial clones, DEC-0007), I6 (AC-011 names the restart path), T1 (A-1: "rebase" means the replay in ADR-0005). Amending the approved spec now would re-record the intent approval as "human user", which an agent decision under delegation is not; implementation follows these resolutions in this file.
+- **Deferred to the operator at merge (spec wording only, design unchanged)**: I1 (edge case: an interrupted sync with a write-ahead record is completed by the next invocation, DEC-0005; an operation in progress or a half-written update blocks), I2 (FR-006 gets SC-002's exceptions), I3 (SC-002/FR-006 exception for a branch moved by an outside actor during the check, `busy`), I4 (AC-010 allows the write-ahead record of an unfinished sync), I5 (FR-009 `git-unavailable` also covers shallow checkouts and partial clones, DEC-0007), I6 (AC-011 names the restart path), T1 (A-1: "rebase" means the replay in ADR-0005). Amending the approved spec now would re-record the intent approval as "human user", which an agent decision under delegation is not; implementation follows these resolutions in this file. [Resolved: I1–I6 and T1 applied to spec.md as A-1..A-9 after the operator's approval on 2026-10-05 21:54 CEST.]
 
 ## Implement-step interruption (2026-10-05 18:33)
 
@@ -141,9 +141,21 @@ Findings of [implementation-security-fable-1](reviews/implementation-security-fa
 - **S-01, S-02, S-03, S-05** → `new_pin` removed (`save_pin(final=True)`), `CAUSES`/`OUTCOMES` removed in favor of `ledger.SYNC_CAUSES`, one `draft_pr.printable` helper, `_Block.retryable`/`interrupted` fields. Behavior-neutral; covered by the existing suite. S-04 (reuse `autonomy` JSON helpers) not done: not requested, and the extra `chmod 0700` would need its own review.
 - **Docs** → ADR-0005 checkout command list (`remote get-url`, `config --list`/`--get-regexp`, `status --ignore-submodules=dirty`, `ls-files` dropped), environment and refused shapes; `run.py` docstring names the two exceptions; policy pin, requirements, stale-evidence and table rows.
 
-Design changes for the operator to confirm at merge:
+Design changes for the operator to confirm at merge (resolved: confirmed 2026-10-05 21:54 CEST, see Operator confirmation):
 
 - A `resume` or `continue` of a run whose pin has a branch but no feature (any run started before this fix, including #17 pins) now blocks as `wrong-branch` and asks for a new run, instead of reading the Issue number from `inputs.json`. Chosen to match DEC-0006 (fail closed); the review's alternative was an Issue number of none, blocking only when a rewrite is needed.
 - A human-gated `ballast run start` now needs `-i feature_directory` on the command line; Spec Kit would otherwise have prompted for it.
 - The write-ahead record has two new required fields; no released version wrote records, so none is migrated.
-- **Design changes from the fixes, accepted by the agent under the operator's delegation (2026-10-05)**: (1) `resume`/`continue` of a run whose pin lacks `feature` (any run started before this change) blocks `wrong-branch` with "start a new run", failing closed like DEC-0006; (2) a human-gated `ballast run start` needs `-i feature_directory` on the command line (E-01); (3) the write-ahead record gains `old_base`/`new_base`; no released version wrote records, so nothing is migrated. The operator confirms these at merge.
+- **Design changes from the fixes, accepted by the agent under the operator's delegation (2026-10-05)**: (1) `resume`/`continue` of a run whose pin lacks `feature` (any run started before this change) blocks `wrong-branch` with "start a new run", failing closed like DEC-0006; (2) a human-gated `ballast run start` needs `-i feature_directory` on the command line (E-01); (3) the write-ahead record gains `old_base`/`new_base`; no released version wrote records, so nothing is migrated. The operator confirms these at merge. [Resolved: confirmed by the operator 2026-10-05 21:54 CEST; see Operator confirmation.]
+
+## Operator confirmation (2026-10-05)
+
+The operator approved in conversation at 21:54 CEST ("approve all"):
+
+- the spec amendments A-1..A-13 listed in [reviews/spec-reconciliation.md](reviews/spec-reconciliation.md), now applied to `spec.md` (its Status is `Implemented, pending merge`);
+- DEC-0007;
+- the plan and tasks gate answers given by the agent under the operator's delegation;
+- the three review-fix design changes (pin without `feature` blocks `wrong-branch`; `-i feature_directory` required at `start`; write-ahead record gains `old_base`/`new_base`);
+- ADR-0005, now `Accepted`.
+
+I1–I6 and T1 are resolved by A-1..A-9.
