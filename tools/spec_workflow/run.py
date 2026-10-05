@@ -560,8 +560,8 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
 
 
 def _input(options: list[str], name: str) -> str | None:
-    """The value of `-i NAME=VALUE` among Spec Kit start options."""
-    for flag, pair in zip(options, options[1:], strict=False):
+    """Return the value of `-i NAME=VALUE` among Spec Kit start options."""
+    for flag, pair in itertools.pairwise(options):
         key, equals, value = pair.partition("=")
         if flag in {"-i", "--input"} and key == name and equals:
             return value

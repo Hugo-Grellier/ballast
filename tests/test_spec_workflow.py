@@ -1444,7 +1444,7 @@ if "speckit-specify" in prompt and os.environ.get("FAKE_SPEC"):
 
 
 def _gated_brief() -> str:
-    """A settled human-gated brief citing only the Issue: nothing to ask."""
+    """Write a settled human-gated brief citing only the Issue: nothing to ask."""
     issue = "Issue #102 body"
     return brief_text(
         {
@@ -2538,7 +2538,10 @@ class AutonomousDiscoveryEngineTests(AutonomousEngineCase):
         sections = AUTO_BRIEF_SECTIONS | {
             "Inferred": "- Plain text is used [P: D-01]",
             "Decisions": decision(
-                "D-01", "assumed", resolution="Plain text: reversible, no data loss"
+                "D-01",
+                "assumed",
+                sources="[S: Issue #27 body] [S: README.md]",
+                resolution="Plain text: reversible, no data loss",
             ),
             "Question metrics": metrics(0, 0, 1),
         }

@@ -57,7 +57,7 @@ SETTLED = decision(
 
 
 def metrics(rounds: object = 0, questions: object = 0, assumptions: object = 0) -> str:
-    """The `## Question metrics` section body."""
+    """Return the `## Question metrics` section body."""
     return (
         f"- **Rounds**: {rounds}\n"
         f"- **Questions asked**: {questions}\n"
@@ -107,7 +107,7 @@ def brief_text(
     marker: str = MARKER,
     authority: str = AUTHORITY,
 ) -> str:
-    """A `discovery.md` per contracts/discovery-brief.md, with overrides."""
+    """Build a `discovery.md` per contracts/discovery-brief.md, with overrides."""
     body = {**SECTIONS, **(sections or {})}
     parts = [
         marker,
@@ -128,7 +128,7 @@ def brief_text(
 def snapshot_text(
     criteria: tuple[str, ...] | None = ("works",), comments: tuple[str, ...] = ()
 ) -> str:
-    """An Issue snapshot as the runner writes it, criteria as a checklist."""
+    """Build an Issue snapshot as the runner writes it, criteria as a checklist."""
     lines = [
         "<!-- Untrusted Issue data -->",
         "",

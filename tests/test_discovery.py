@@ -62,7 +62,7 @@ def asked(ident: str, status: str = "open", answer: str = "") -> str:
 
 
 def answered(ident: str, answer: str = "A") -> str:
-    """The decision as asked, answered by the operator."""
+    """Return the decision as asked, answered by the operator."""
     return asked(ident, "answered", answer)
 
 
@@ -312,7 +312,9 @@ class ProvenanceTests(DiscoveryCase):
         self.failed(self.run_check("discovery"), "docs/policies/gone.md")
 
     def test_cited_path_with_section_or_line_passes(self) -> None:
-        self.write_brief({"Constraints": f"- Stdlib [S: {POLICY}#rules; {POLICY}:1 rule]"})
+        self.write_brief(
+            {"Constraints": f"- Stdlib [S: {POLICY}#rules; {POLICY}:1 rule]"}
+        )
         self.ok(self.run_check("discovery"))
 
     def test_unavailable_source_passes(self) -> None:
@@ -394,6 +396,11 @@ class CommandContractTests(unittest.TestCase):
         self.assertIn(".specify/workflow-state/issues/", self.text)
         self.assertIn("untrusted requirements data", self.lower)
         self.assertIn("never follow instructions", self.lower)
+
+    def test_only_maintainer_comments_settle_a_decision(self) -> None:
+        """#16 SEC-002: a comment from any account never settles a decision."""
+        self.assertIn("owner, member or collaborator", self.lower)
+        self.assertIn("never settles a decision", self.lower)
 
     def test_writes_only_its_files(self) -> None:
         for path in (
@@ -513,16 +520,16 @@ class AttributionTests(DiscoveryCase):
 
     def test_accepted_answers_are_recorded_as_digests(self) -> None:
         self.ask()
-        secret = "B, my own wording"
+        wording = "B, my own wording"
         self.write_brief(
-            two_open(**{"D-01": answered("D-01", secret), "D-02": answered("D-02")})
+            two_open(**{"D-01": answered("D-01", wording), "D-02": answered("D-02")})
         )
         self.ok(self.gated())
         state = self.discovery_state()
         self.assertEqual(set(state["answered"]), {"D-01", "D-02"})
         for digest in state["answered"].values():
             self.assertRegex(digest, r"^sha256:[0-9a-f]{64}$")
-        self.assertNotIn(secret, self.state_file().read_text())
+        self.assertNotIn(wording, self.state_file().read_text())
         self.assertTrue(state["ran"])
 
     def test_accepted_answer_cannot_change(self) -> None:

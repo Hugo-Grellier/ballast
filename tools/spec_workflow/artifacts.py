@@ -729,7 +729,7 @@ def _parse_decision(ident: str, title: str, body: str) -> dict:
 
 
 def _split_sections(text: str) -> tuple[str, dict[str, str]]:
-    """The text before the first `## ` heading, and each section's body."""
+    """Split off the text before the first `## ` heading and each section's body."""
     preamble: list[str] = []
     sections: dict[str, list[str]] = {}
     current = preamble
@@ -808,7 +808,7 @@ def _check_cited(feature: Feature, where: str, value: str) -> None:
 
 
 def _issue_criteria(feature: Feature) -> list[str] | None:
-    """The Issue's acceptance criteria from the runner's snapshot (R-05).
+    """Return the Issue's acceptance criteria from the runner's snapshot (R-05).
 
     None when the snapshot is missing or its body has no acceptance-criteria
     heading; the brief's own IAC list is then what the spec must cover.
@@ -876,7 +876,7 @@ def _check_decision_markers(
 
 
 def _check_decision_status(feature: Feature, item: dict, mode: str) -> None:
-    """A status the mode allows: an autonomous run never asks, nobody blocks."""
+    """Check a status the mode allows: an autonomous run never asks, nobody blocks."""
     where, status = f"decision {item['id']}", item["status"]
     if status == "blocking":
         detail = f"{where} is blocking: write the block draft and stop the run"
@@ -940,7 +940,7 @@ def _check_undecided(feature: Feature, items: list[str], decisions: dict) -> Non
 
 
 def _brief_metrics(feature: Feature, items: list[str]) -> dict[str, int]:
-    """The integer counts of `## Question metrics`."""
+    """Parse the integer counts of `## Question metrics`."""
     values: dict[str, str] = {}
     for item in items:
         label = LABEL.match(item)
@@ -1098,7 +1098,7 @@ def _save_discovery_state(feature: Feature, state: dict) -> None:
 
 
 def _discovery_ran(feature: Feature) -> bool:
-    """A brief exists, or the operator state says discovery validated (R-06)."""
+    """Tell whether a brief exists or operator state says discovery validated (R-06)."""
     if feature.file(DISCOVERY).exists():
         return True
     try:
@@ -1123,10 +1123,12 @@ def _questions_digest(decisions: dict, asked: list[str]) -> str:
 def _question_message(
     feature: Feature, decisions: dict, pending: list[str], number: int
 ) -> str:
-    """The one bundled question round, with how to answer and resume (AC-006)."""
+    """Render the one bundled question round, with how to answer and resume (AC-006)."""
     lines = [
-        f"discovery needs your answers (question round {number}); the "
-        "repository and the Issue do not settle these decisions:",
+        (
+            f"discovery needs your answers (question round {number}); the "
+            "repository and the Issue do not settle these decisions:"
+        ),
     ]
     for ident in pending:
         item = decisions[ident]
@@ -1140,10 +1142,12 @@ def _question_message(
         ]
     lines += [
         "",
-        f"For each decision above, edit {feature.relative}/{DISCOVERY}: set "
-        "**Status** to answered and write your choice on its **Answer** line "
-        "(the recommended default is fine). Leave the questions unchanged, then "
-        f"run `ballast run resume {feature.run_id}`.",
+        (
+            f"For each decision above, edit {feature.relative}/{DISCOVERY}: set "
+            "**Status** to answered and write your choice on its **Answer** line "
+            "(the recommended default is fine). Leave the questions unchanged, "
+            f"then run `ballast run resume {feature.run_id}`."
+        ),
     ]
     return "\n".join(lines)
 
@@ -1348,7 +1352,7 @@ def _spec_items(spec: str) -> list[tuple[str, bool, str | None]]:
 
 
 def _spec_brief(feature: Feature) -> dict | None:
-    """The brief a spec traces to, or None when discovery never ran (R-06)."""
+    """Return the brief a spec traces to, or None when discovery never ran (R-06)."""
     if not _discovery_ran(feature):
         return None
     path = feature.file(DISCOVERY)

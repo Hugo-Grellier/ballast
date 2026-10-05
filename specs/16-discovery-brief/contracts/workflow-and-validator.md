@@ -52,10 +52,10 @@ When discovery ran for the feature (brief present or operator state `ran`), `che
 
 ### <login> (<author_association>), <created_at>
 
-<body>
+> <body, every line quoted>
 ```
 
-Comments appear oldest first. The intake scope comment stays in its own section and is not repeated. Budget within the existing 60,000-character cap: body first, then scope comment, then comments, each truncated with the existing marker; a truncated or omitted comment is announced as such.
+Comments appear oldest first. Each body is quoted line by line, so a comment cannot forge another author's header or a section (security review SEC-001). The intake scope comment stays in its own section and is not repeated. Budget within the existing 60,000-character cap: body first, then scope comment, then comments, each truncated with the existing marker; a truncated or omitted comment is announced as such.
 
 | Start | When the Issue cannot be read |
 | --- | --- |

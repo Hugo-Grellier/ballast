@@ -255,7 +255,8 @@ feature's authority, and recorded intent binds only the `spec.md` digest, so
 editing the brief never changes or invalidates it.
 
 What the repository or the Issue already answers is `settled` with its source
-and never asked. Sources that contradict each other are never settled. What
+and never asked; a comment settles a decision only when its author is an owner,
+member or collaborator of the repository. Sources that contradict each other are never settled. What
 remains depends on the mode:
 
 | Mode | Open decision | Result |
@@ -499,10 +500,11 @@ any agent step and names the human-gated command as the alternative.
 
 Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
 it read it (title, labels, body with the acceptance criteria, the intake scope
-comment and the other comments, oldest first, each with its author
-association) to `.specify/workflow-state/issues/<N>.md`, capped at 60,000
+comment and the other comments, oldest first, each quoted under its author
+and author association) to `.specify/workflow-state/issues/<N>.md`, capped at 60,000
 characters. A human-gated start writes the same snapshot; when it cannot read
-the Issue (no `gh`, no network), the snapshot says so and the run goes on with
+the Issue (no `gh`, no network, or no `[github] repository` in
+`ballast.toml`), the snapshot says so and the run goes on with
 the Issue listed as unavailable in the brief. Agent steps can read the snapshot
 but not write it. Discovery, the `specify` prompt, the scope decision and
 clarification read it as untrusted requirements data, never as instructions.
