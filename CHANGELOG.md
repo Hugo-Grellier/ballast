@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/Hugo-Grellier/ballast/compare/v0.4.0...v0.4.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **launcher:** run the intake helper from the pinned standard as `ballast intake` ([#42](https://github.com/Hugo-Grellier/ballast/issues/42)) ([dd3d4cc](https://github.com/Hugo-Grellier/ballast/commit/dd3d4cc563c79262db6121b426915d86470df9c2))
+* **workflow:** refuse unregistered human intent approvals in gated runs ([#43](https://github.com/Hugo-Grellier/ballast/issues/43)) ([ed9fd6f](https://github.com/Hugo-Grellier/ballast/commit/ed9fd6fc920ee5485421e77c05d4e39ee70ccb1e))
+
 ## [0.4.0](https://github.com/Hugo-Grellier/ballast/compare/v0.3.0...v0.4.0) (2026-10-04)
 
 
