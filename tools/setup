@@ -84,7 +84,6 @@ IGNORE_PROBES = (
 # Installed outputs a setup stamp promises; `--check` confirms they exist.
 PROMISED = (
     ".ballast/spec_workflow/run.py",
-    ".ballast/feature_intake.py",
     ".specify/workflows/ballast-feature/workflow.yml",
     ".specify/workflows/ballast-autonomous/workflow.yml",
     ".specify/workflows/ballast-continue/workflow.yml",
@@ -331,9 +330,6 @@ class Setup:
                 indent=2,
             )
             + "\n"
-        )
-        shutil.copy2(
-            STANDARD / "tools/feature_intake.py", ballast / "feature_intake.py"
         )
         policies = self.root / "docs/policies"
         policies.mkdir(parents=True, exist_ok=True)

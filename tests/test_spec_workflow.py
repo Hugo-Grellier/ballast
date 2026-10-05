@@ -1247,7 +1247,8 @@ class InterpreterStartupTests(unittest.TestCase):
             root = Path(directory)
             (root / ".ballast/spec_workflow").mkdir(parents=True)
             (root / ".ballast/spec_workflow/run.py").write_text("")
-            for command in ("run", "ledger"):
+            (root / ".ballast/feature_intake.py").write_text("")
+            for command in ("run", "ledger", "intake"):
                 calls: list[list[str]] = []
                 with (
                     self.subTest(command=command),
@@ -1261,6 +1262,18 @@ class InterpreterStartupTests(unittest.TestCase):
                 ):
                     launcher.main([command, "x"])
                 self.assertEqual(calls[0][1], "-IS", calls)
+                if command == "intake":
+                    # The pinned standard's helper acts with the operator's gh
+                    # authority; a checkout copy is never executed (#38).
+                    self.assertEqual(calls[0][2], str(ROOT / "tools/feature_intake.py"))
+            with (
+                patch.object(launcher.Path, "cwd", return_value=root),
+                patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state")}),
+                patch.object(launcher.os, "execv") as execv,
+                patch("sys.stderr"),
+            ):
+                self.assertEqual(launcher.main(["intake", "x"]), 2)
+            execv.assert_not_called()
 
 
 FAKE_INTEGRATION = """#!/usr/bin/env python3
