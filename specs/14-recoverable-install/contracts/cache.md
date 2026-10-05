@@ -6,8 +6,8 @@ Layout under `$XDG_DATA_HOME/ballast/standard/` (refused inside the checkout or 
 <ref>/                     the extracted standard version (unchanged layout)
 <ref>/.ballast-cache.json  its content record, published by the same rename
 .locks/<ref>.lock          per-version fetch lock
-.fetch-<random>/           an extraction in progress; never read
-.damaged-<random>/         a damaged copy being removed; never read
+.fetch-<ref>+<random>/     an extraction in progress; never read
+.damaged-<ref>+<random>/   a damaged copy being removed; never read
 ```
 
 ## Record
@@ -24,14 +24,14 @@ Layout under `$XDG_DATA_HOME/ballast/standard/` (refused inside the checkout or 
 }
 ```
 
-Paths are relative to `<ref>/`, sorted, excluding the record itself.
+Paths are relative to `<ref>/`, sorted, excluding the record itself and `__pycache__` (Python may write bytecode next to a module it imports).
 
 ## Fetch (only `setup` and `preview` fetch)
 
 1. Take `LOCK_EX` on `.locks/<ref>.lock`, waiting up to 600 s with `ballast: waiting for another fetch of <ref>` printed once; on timeout refuse (exit 2) naming the lock.
 2. Under the lock, if `<ref>/` verifies, use it: no download.
-3. Remove `.fetch-*` and `.damaged-*` left by dead fetches (safe: only a lock holder creates them).
-4. Download the archive and extract it into `.fetch-<random>/`; write the record; `rename` the tree to `<ref>/`.
+3. Remove `.fetch-<ref>+*` and `.damaged-<ref>+*` left by dead fetches of this version (safe: only this version's lock holder creates them; `+` cannot occur in a ref, so another version's fetch is never touched).
+4. Download the archive and extract it into `.fetch-<ref>+<random>/`; write the record; `rename` the tree to `<ref>/`.
 5. Any failure: delete `.fetch-<random>/`, exit 1 with `ballast: cannot fetch standard <ref>: <cause>; the cache and the checkout are unchanged. Next: check network access (ballast doctor), then rerun the command`.
 
 ## Verify (before `setup` and `preview` use a cached version)

@@ -378,6 +378,35 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(self.leftovers(), [])
 
 
+class ReadmeUpdateTests(unittest.TestCase):
+    """The README documents the update, retry and rollback paths (AC-024)."""
+
+    def test_update_section_uses_only_real_commands(self) -> None:
+        text = README.read_text()
+        self.assertIn("### Updating the pinned version", text)
+        section = text.split("### Updating the pinned version", 1)[1]
+        section = section.split("\n## ", 1)[0].split("\n### ", 1)[0]
+        for topic in (
+            "ballast preview",
+            "ballast setup",
+            "ballast trust",
+            "**Retry after a failed update.**",
+            "**Roll back to the previous pin.**",
+        ):
+            self.assertIn(topic, section)
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import launcher  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        accepted = set(re.findall(r"\bballast ([a-z][a-z-]*)", shim.__doc__ or ""))
+        accepted |= {*launcher.COMMANDS, "intake", "trust", "discard-runs"}
+        shown = set(re.findall(r"\bballast ([a-z][a-z-]*)", section))
+        self.assertIn("preview", accepted)
+        self.assertTrue(shown)
+        self.assertLessEqual(shown, accepted)
+
+
 class VersionTests(unittest.TestCase):
     """`--version` needs nothing; an old interpreter gets a message (FR-006)."""
 

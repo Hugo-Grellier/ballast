@@ -11,17 +11,22 @@ released copy of this file, checks its SHA-256 and runs `self-install`:
 Then, from a project root whose ballast.toml has `[standard] ref = "..."`:
 
     ballast setup              # fetch that version, run its tools/setup
+    ballast preview REF [--json]   # what moving the pin to REF would do
     ballast trust              # after reviewing the checkout
     ballast run start|resume ...
     ballast ledger ...
     ballast intake ...         # the feature-intake helper
 
-Each version is extracted once into $XDG_DATA_HOME/ballast/standard/<ref>/.
-Only `setup` downloads; every other command runs the launcher
-of an already fetched version. The repository is fixed here, so a project can
-choose a version but never a source. Set BALLAST_STANDARD_DIR to a local
-checkout of this repository to develop the standard itself; from such a
-checkout, `install -m 0755 tools/ballast ~/.local/bin/ballast` also installs it.
+Each version is extracted once into $XDG_DATA_HOME/ballast/standard/<ref>/,
+under a per-version lock, and published together with a record of its content;
+`setup` and `preview` verify a cached copy against that record and fetch a
+damaged one again. Only `setup` and `preview` download; every other command
+runs the launcher of an already fetched version. `preview` runs the target
+version's own setup in a disposable project and changes nothing else. The
+repository is fixed here, so a project can choose a version but never a
+source. Set BALLAST_STANDARD_DIR to a local checkout of this repository to
+develop the standard itself; from such a checkout,
+`install -m 0755 tools/ballast ~/.local/bin/ballast` also installs it.
 `doctor` writes nothing, downloads nothing and runs only the read-only probes a
 fetched version declares in its tools/cli.toml.
 """

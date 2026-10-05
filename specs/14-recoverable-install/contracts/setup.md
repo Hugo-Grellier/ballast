@@ -33,11 +33,13 @@ Refusal reasons and their actions:
 | `an agent step did not finish` | `review the checkout, then run ballast discard-runs` (setup never clears the marker) |
 | `the operator state directory … is inside the checkout or a temp directory` | set `XDG_STATE_HOME` elsewhere |
 | `installed entries are on different filesystems: <path>` | keep the checkout on one filesystem |
-| `<path> is a symbolic link; setup never moves files through a link` | replace the link with a directory, or remove it |
+| `<path> is a symbolic link; setup never moves files through a link` (also checked again before switching) | replace the link with a directory, or remove it |
 | `setup-attempt.json is unreadable` | inspect it, then remove it to retry |
 | ignore rules (as today, with the block) | add the block to `.gitignore` |
 
 Recovery lines (step 3): `recovered an interrupted setup: the previous installation (<ref>) is in place`, `… no installation was in place before it; none is now`, or `… the new installation (<ref>) is complete`.
+
+A setup whose fingerprint equals the kept installation's record reuses it (DEC-0002) and prints `Reused the previous installation (<ref>)`; the copy is verified, validated and switched like a build.
 
 ## Worktree copy (AC-014)
 

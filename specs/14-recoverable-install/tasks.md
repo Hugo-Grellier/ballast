@@ -119,19 +119,24 @@ description: "Task list for recoverable installs and pin updates"
 
 ### Acceptance tests for User Story 4
 
-- [ ] T023 [P] [US4] Test in `tests/test_setup.py` and `tests/test_ballast.py`: after A → B with A cached, restoring pin A and running setup with downloads denied reinstalls A equal to a fresh A installation; constitution, `docs/policies/project/`, run state, run archives and `trusted.json` unchanged; the launcher refuses until `trust` [AC-022, AC-023, SC-007] (depends on T001, T017, T018)
-- [ ] T024 [P] [US4] Test in `tests/test_ballast.py`: the README's update section documents preview, update, retry after a failed update and rollback, and every `ballast <subcommand>` it shows is accepted by the CLI or the launcher [AC-024] (depends on T001)
+- [x] T023 [P] [US4] Test in `tests/test_setup.py` and `tests/test_ballast.py`: after A → B with A cached, restoring pin A and running setup with downloads denied reinstalls A equal to a fresh A installation; constitution, `docs/policies/project/`, run state, run archives and `trusted.json` unchanged; the launcher refuses until `trust` [AC-022, AC-023, SC-007] (depends on T001, T017, T018)
+  - Evidence: `RecoverableSetupTests.test_rollback_reuses_the_previous_installation` (downloads and Spec Kit calls denied; checkout equals a fresh A; archives and `trusted.json` unchanged; launcher refuses until trust) and `CacheTests.test_fetch_publishes_the_tree_with_its_record` (a verified cached version is used without a download). The setup half needed DEC-0002.
+- [x] T024 [P] [US4] Test in `tests/test_ballast.py`: the README's update section documents preview, update, retry after a failed update and rollback, and every `ballast <subcommand>` it shows is accepted by the CLI or the launcher [AC-024] (depends on T001)
+  - Evidence: `ReadmeUpdateTests.test_update_section_uses_only_real_commands` in `tests/test_ballast.py`.
 
 ### Implementation for User Story 4
 
-- [ ] T025 [US4] `README.md`: "Updating the pinned version" section (update the CLI first, `ballast preview`, pin change, `ballast setup`, review, `ballast trust`, checks; retry; rollback; what an older version does not guarantee; DEC-0001's CLI note); adjust the reinstall sentence (depends on T022, T024)
+- [x] T025 [US4] `README.md`: "Updating the pinned version" section (update the CLI first, `ballast preview`, pin change, `ballast setup`, review, `ballast trust`, checks; retry; rollback; what an older version does not guarantee; DEC-0001's CLI note); adjust the reinstall sentence (depends on T022, T024)
+  - Evidence: `README.md` "Updating the pinned version" section, and the setup paragraph and download sentence adjusted; T024 passes.
 
 **Checkpoint**: all stories hold.
 
 ## Phase 6: Polish and cross-cutting
 
-- [ ] T026 [P] `docs/adr/0006-recoverable-installation.md` and `docs/adr/0007-verified-cache-and-update-preview.md` (status Proposed; accepted when the PR merges) (depends on T017, T022)
-- [ ] T027 [P] Module docstrings and usage in `tools/setup` and `tools/ballast` match the new states and commands; `IGNORE_PROBES` gains `.ballast/setup/` (depends on T017, T022)
+- [x] T026 [P] `docs/adr/0006-recoverable-installation.md` and `docs/adr/0007-verified-cache-and-update-preview.md` (status Proposed; accepted when the PR merges) (depends on T017, T022)
+  - Evidence: `docs/adr/0006-recoverable-installation.md`, `docs/adr/0007-verified-cache-and-update-preview.md`.
+- [x] T027 [P] Module docstrings and usage in `tools/setup` and `tools/ballast` match the new states and commands; `IGNORE_PROBES` gains `.ballast/setup/` (depends on T017, T022)
+  - Evidence: Module docstrings of `tools/setup` and `tools/ballast` (states, `preview`, cache), `IGNORE_PROBES` entry for `.ballast/setup/`; `ReadmeUpdateTests` reads the CLI docstring.
 - [ ] T028 End-to-end check on a scratch project with `BALLAST_STANDARD_DIR` pointing at this working copy ([quickstart](quickstart.md#end-to-end-full-gate-network)): setup, trust, a failing patch keeps the previous installation and `status --json` stays clear, a rerun prints `nothing changed`, a `kill -9` during Spec Kit steps is recovered; record the commands and results [AC-002, AC-004, AC-007, AC-012] (depends on T017, T011)
 
 ## After implementation (workflow-owned)

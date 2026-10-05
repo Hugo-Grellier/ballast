@@ -11,3 +11,15 @@
 
 - **Status**: decided by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05); listed for the merge review.
 - **Decision**: accept the proposal. FR-009 and FR-012 hold on machines whose `ballast` CLI includes this feature; the README update section and the PR state the limitation. A follow-up may raise `[cli] minimum` once the release that ships this feature exists.
+
+## DEC-0002 — Proposal
+
+- **Source**: implementation of T023 (AC-022, FR-019, SC-007). The plan relies on the standard cache for a rollback without network, but a rollback is a full setup of the previous version, and a full build downloads the pinned Spec Kit sources (`_fetch_source`) and runs `uvx --from specify-cli==…`, both of which use the network. With staging alone, AC-022 ("restored without a network request") cannot hold.
+- **Classification**: technical choice inside accepted intent (the plan missed how a build gets its Spec Kit sources).
+- **Proposal**: when a switch commits, keep the entries it replaced in `.ballast/setup/kept/` and their installation record as `kept-installation.json` in operator state, one generation only. A later setup whose fingerprint equals the kept record's copies the kept entries into the stage and uses them only when the copy hashes exactly to that record, through the same verified copy as the worktree copy (FR-013); otherwise it builds normally. The copy is validated and switched like any build, so every guarantee of User Story 1 still applies. The kept area is under the already ignored `.ballast/`, outside the trusted inputs (`launcher.BASES`), and costs one extra installation on disk (a few MB).
+- **Alternatives**: a per-machine cache of Spec Kit source archives (the CLI does not own setup's sources, and `uvx` would still resolve against PyPI); dropping AC-022's "without a network request" (a spec change).
+
+## DEC-0002 — Resolution
+
+- **Status**: decided by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05); listed for the merge review.
+- **Decision**: accept the proposal. Implemented in `tools/setup` (`copy_kept`, `finish`) and recorded in [data-model.md](data-model.md#installation), [contracts/operator-state.md](contracts/operator-state.md) and ADR-0006; evidence `RecoverableSetupTests.test_rollback_reuses_the_previous_installation` (downloads and Spec Kit calls denied).

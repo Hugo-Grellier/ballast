@@ -9,6 +9,7 @@ Entities from the [spec](spec.md#key-entities), with their storage, owner and va
 | Installation (live) | Installed entries in the checkout (below) | `tools/setup` | Yes (checkout); guarded by trust |
 | Staged installation | `.ballast/setup/<attempt>/stage/` | `tools/setup` | Yes; validated before use, deleted after |
 | Previous installation (backup) | `.ballast/setup/<attempt>/previous/` | `tools/setup` | Yes; restored only by rename, verified against the previous record |
+| Kept installation (DEC-0002) | `.ballast/setup/kept/`, record in `$XDG_STATE_HOME/ballast/<key>/kept-installation.json` | `tools/setup` | Entries yes, record no; reused only when a copy hashes to the record |
 | Installation record | `$XDG_STATE_HOME/ballast/<key>/installation.json` | `tools/setup` | No |
 | Setup attempt journal | `$XDG_STATE_HOME/ballast/<key>/setup-attempt.json` | `tools/setup` | No |
 | Checkout lock and holder | `$XDG_STATE_HOME/ballast/<key>/checkout.lock`, `setup-holder.json` | `tools/setup` (exclusive), launcher (shared) | No |
@@ -23,6 +24,7 @@ Entities from the [spec](spec.md#key-entities), with their storage, owner and va
 ## Installation
 
 - **Installed entries** (the unit of a switch), one rule for every use (`entries(root)`, R1): `.ballast/spec_workflow`, `.ballast/.setup-version`; each `.specify/` entry in `INSTALLED`, except that `.specify/workflows` is switched child by child, leaving `runs` and `.cache`; every skill directory or link matching `SKILLS`; every `docs/policies/*.md`. Entries the live checkout holds by that rule, or that a valid previous `installation.json` lists, and that the new version no longer builds are removed in the same switch, and only when the project ignores them.
+- **Kept installation** (DEC-0002): when a switch commits, the entries it replaced become `.ballast/setup/kept/` and the previous record `kept-installation.json`, one generation only. A setup whose fingerprint equals the kept record's copies them into the stage and uses the copy only when it hashes to that record, so a rollback to the previous pin needs no download.
 - **Discarded stage outputs**: `DISCARDED` (`.specify/.workflow-install.lock`) is dropped with the stage; any other stage output outside the entry set, the seeds and the constitution fails validation.
 - **Never touched**: `.specify/memory/constitution.md` (copied in only when absent, R13), `docs/policies/project/`, `.specify/workflows/runs`, `.specify/workflow-state`, `.specify/bugs`, `.specify/assessments`, `ballast.toml`, every tracked file.
 - **Identity**: pinned ref, fingerprint (`VERSION` plus the digest of the standard's `tools/`, `templates/` and `ballast.toml`, as today) and the content digests of the installation record.
