@@ -1,0 +1,14 @@
+#!/bin/sh
+# The git headless agents run (#34). Claude's allowlist matches command text,
+# which shell quoting can dodge (`--out''put`); this sees the real arguments.
+# It refuses the options that write a file anywhere or run a program, then
+# runs the trusted git the agent wrapper resolved into BALLAST_GIT.
+for arg in "$@"; do
+	case $arg in
+	--output | --output=* | difftool | mergetool)
+		echo "ballast: \`git $arg\` is not available to agents" >&2
+		exit 128
+		;;
+	esac
+done
+exec "${BALLAST_GIT:?ballast: no trusted git; run git through the agent wrapper}" "$@"
