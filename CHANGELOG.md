@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2](https://github.com/Hugo-Grellier/ballast/compare/v0.4.1...v0.4.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **agent:** run agent git through a guard and match whole subcommands ([#47](https://github.com/Hugo-Grellier/ballast/issues/47)) ([706dc11](https://github.com/Hugo-Grellier/ballast/commit/706dc1138e324d04b18c3065c8548abd8b57e71f))
+* **cli:** treat temp directories as agent-writable in doctor and the shim ([#49](https://github.com/Hugo-Grellier/ballast/issues/49)) ([bcf77f3](https://github.com/Hugo-Grellier/ballast/commit/bcf77f32d9c1cd0cfffe074cfc9a279e6ef5d86a))
+* **launcher:** refuse an operator state directory agents can write ([#48](https://github.com/Hugo-Grellier/ballast/issues/48)) ([fcc498e](https://github.com/Hugo-Grellier/ballast/commit/fcc498e2b1cef24a0ae0e605ff5f58d9fe398b54))
+
 ## [0.4.1](https://github.com/Hugo-Grellier/ballast/compare/v0.4.0...v0.4.1) (2026-10-05)
 
 
