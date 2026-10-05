@@ -16,8 +16,8 @@ All critical, high and medium findings are fixed with a test written first: SEC-
 - `uvx ruff check && uvx ruff format --check`: pass.
 - `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py`: 636 tests, OK, none skipped (full local gate on a host with a systemd user session, the Codex CLI, the Spec Kit CLI and bwrap).
 
-## Open
+## End-to-end runs
 
-- T044: the two real end-to-end runs of `quickstart.md`, which need the operator (`ballast trust`, `ballast run`, a real Issue, answering the round). Until it runs, `tasks.md` has a pending task, so the feature is not converged.
+T044 ran on 2026-10-05 in a scratch project (`reviews/e2e.md`): both scenarios PASS. The first attempt found two defects, fixed with tests before the passing runs: the human-gated run's `.specify/feature.json` pointer was stale before discovery (`54171bc`), and the Issue snapshot was written before #18's branch check, which counts it as dirty (`3716a3f`). Neither changes a requirement. A review of that delta is in `reviews/e2e-fix-review.md`.
 
-- Verdict: PARTIAL
+- Verdict: CONVERGED
