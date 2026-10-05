@@ -1,0 +1,119 @@
+{
+  "point": "plan-review",
+  "decision": "accept-finding",
+  "summary": "Plan covers every FR/AC/SC with a sound stage-journal-switch design; four medium gaps (rollback of removed entries, stage outputs outside the entry set, stale installation record, cache guarantees under an old CLI) must be carried into tasks",
+  "basis": "Traced FR-001..FR-020 and AC-001..AC-024 through research R1-R13, data-model, the five contracts and quickstart; checked the plan's claims against tools/setup (INSTALLED, PRESERVED, LOCAL_STATE, remove_installed, copy_from_primary, install_spec_kit, main) and tools/spec_workflow/launcher.py (state_dir, digests, BASES, SKIPPED, _refusal, _trust, _discard, execv). Walked the recovery state machine and rollback table for kills at each phase, the flock interleavings between setup and run/ledger/intake, the trust baseline under rename-based switching, and compatibility with pre-feature setups and CLIs. Verified docs/adr holds 0001-0005 so ADR-0006/0007 are free, and that today's installed .specify/.ballast files contain no absolute checkout path, so validation check R4(3) does not reject a normal build. docs/policies/project/engineering.md, tasks.md and decisions.md do not exist (pre-tasks review). No high or critical defect: each medium gap is fail-closed or detected by an existing postcondition and has a bounded fix the tasks phase can carry, so the plan is approved agent-provisionally.",
+  "evidence": [
+    "specs/14-recoverable-install/reviews/plan.md",
+    "specs/14-recoverable-install/plan.md",
+    "specs/14-recoverable-install/research.md",
+    "specs/14-recoverable-install/data-model.md",
+    "specs/14-recoverable-install/quickstart.md",
+    "specs/14-recoverable-install/contracts/setup.md",
+    "specs/14-recoverable-install/contracts/operator-state.md",
+    "specs/14-recoverable-install/contracts/cache.md",
+    "specs/14-recoverable-install/contracts/preview-cli.md",
+    "specs/14-recoverable-install/contracts/launcher-and-manifest.md",
+    "specs/14-recoverable-install/spec.md",
+    "specs/14-recoverable-install/intent.md",
+    "tools/setup",
+    "tools/spec_workflow/launcher.py",
+    "docs/policies/workflow.md",
+    "docs/policies/project/workflow.md",
+    "docs/policies/engineering.md",
+    "AGENTS.md"
+  ],
+  "artifact": "specs/14-recoverable-install/plan.md",
+  "model": "claude-opus-5-5",
+  "material": false,
+  "supersedes": null,
+  "privileged_actions": [],
+  "review": {
+    "kind": "plan",
+    "verdict": "approved",
+    "report": "specs/14-recoverable-install/reviews/plan.md",
+    "findings": [
+      {
+        "id": "F-001",
+        "severity": "medium",
+        "label": "implementation-bug",
+        "disposition": "accepted-provisionally",
+        "reason": "data-model.md's rollback table, keyed only on the filesystem, does not cover entries the new version removes. (1) An entry moved to previous/ with no stage counterpart matches no row. (2) A not-yet-moved entry that the new version drops looks like row 4 ('absent | new | absent' -> remove live), so a kill during the switch could delete part of the previous installation, against AC-004 and SC-001. The journal already holds previous_record and record, so the fix is bounded. Tasks must key each rollback action on membership in previous_record versus record, not on presence alone. They must also add rows for removed entries (previous present, stage absent -> rename back; live old and absent from record -> keep). A kill test needs a fixture version that removes an entry. Post-rollback verification against previous_record already makes this failure loud, not silent, so it can proceed to tasks.",
+        "evidence": [
+          "specs/14-recoverable-install/data-model.md",
+          "specs/14-recoverable-install/quickstart.md"
+        ]
+      },
+      {
+        "id": "F-002",
+        "severity": "medium",
+        "label": "spec-ambiguity",
+        "disposition": "accepted-provisionally",
+        "reason": "The plan defines the installation by two different rules. The switch moves only INSTALLED/SKILLS/policy entries, while R4 checks that 'every staged path' is ignored and the preview's after-side is a walk of the whole disposable project minus seeds and .git. Spec Kit already writes byproducts outside the entry set: this worktree holds .specify/.workflow-install.lock, which is in neither INSTALLED nor SKIPPED and is therefore a trusted input under BASES. Under the plan, such files are silently discarded from the stage and left stale live. The preview would also report them as 'added' against an installation record that never lists them, which breaks SC-006. Tasks must state one entry set used by switch, record, validation and preview. Stage outputs outside it must be either an explicit allowlisted discard or a validation failure, and the preview must diff the same set.",
+        "evidence": [
+          "specs/14-recoverable-install/research.md",
+          "specs/14-recoverable-install/contracts/preview-cli.md",
+          "tools/setup",
+          "tools/spec_workflow/launcher.py"
+        ]
+      },
+      {
+        "id": "F-003",
+        "severity": "medium",
+        "label": "implementation-bug",
+        "disposition": "accepted-provisionally",
+        "reason": "installation.json is never reconciled after a pre-feature setup runs. The spec supports rolling back to a pre-feature version, whose setup rewrites the checkout and the stamp but leaves the record naming B. On a later return to B, three things go wrong. The CLI and launcher pinned/installed messages see installed == pinned and omit the AC-008 detail. The removal of 'entries recorded in the previous installation.json that the new version no longer builds' uses B's stale record, so files only the older version installed (for example a policy B dropped) stay live. And --check reports 'modified' instead of 'stale: pinned/installed'. Setup still fails closed, because content verification forces a full build and trust refuses changed inputs. Tasks should treat the record as valid only when its fingerprint equals the stamp, which every version still writes, and otherwise treat the installed set as live entries globbed from the record and INSTALLED/SKILLS/policies. A test should cover B -> pre-feature A -> B.",
+        "evidence": [
+          "specs/14-recoverable-install/research.md",
+          "specs/14-recoverable-install/contracts/operator-state.md",
+          "specs/14-recoverable-install/contracts/cache.md"
+        ]
+      },
+      {
+        "id": "F-004",
+        "severity": "medium",
+        "label": "spec-ambiguity",
+        "disposition": "accepted-provisionally",
+        "reason": "Research R7 keeps [cli] minimum at 0.1.0, so a project pinning the new standard with an older CLI gets none of the cache guarantees. FR-009, FR-012, AC-010 and AC-013 are unconditional MUSTs, yet without a CLI update the fetch stays unserialized and the cache unverified. The plan only tells operators in the README to update the CLI. This is a scope trade-off, not a defect, but it narrows spec requirements without a recorded decision. Either raise the minimum, which is the ADR-0002 mechanism, or record the limitation in decisions.md and the PR so the merge approval sees it. Neither blocks tasks.",
+        "evidence": [
+          "specs/14-recoverable-install/research.md",
+          "specs/14-recoverable-install/spec.md"
+        ]
+      },
+      {
+        "id": "F-005",
+        "severity": "low",
+        "label": "implementation-bug",
+        "disposition": "open",
+        "reason": "trust and discard-runs only check that setup-attempt.json exists and take no lock. A trust that starts before setup journals 'switching' can hash a half-switched tree. The result fails closed, because the next comparison differs, but it costs the operator a confusing re-trust. Taking the checkout lock shared, non-blocking in trust and discard-runs closes the race.",
+        "evidence": [
+          "specs/14-recoverable-install/contracts/launcher-and-manifest.md",
+          "tools/spec_workflow/launcher.py"
+        ]
+      },
+      {
+        "id": "F-006",
+        "severity": "low",
+        "label": "spec-ambiguity",
+        "disposition": "open",
+        "reason": "The launcher checks for setup-attempt.json (refusal 2) before trying the checkout lock (refusal 3). While a setup is legitimately running, the operator is told 'setup did not finish; run ballast setup to recover', and that rerun then refuses because the checkout is held. Trying the lock first, or wording refusal 2 as 'running or interrupted', gives the correct message. Safety is unaffected.",
+        "evidence": [
+          "specs/14-recoverable-install/contracts/launcher-and-manifest.md"
+        ]
+      },
+      {
+        "id": "F-007",
+        "severity": "low",
+        "label": "architecture-issue",
+        "disposition": "open",
+        "reason": "Setup renames and deletes inside .ballast/setup/<attempt>/ with operator authority, and data-model.md marks that area agent-writable. The plan does not require link-safe operations, such as the O_NOFOLLOW/dir_fd pattern launcher._remove_tree already uses, so a planted link in a parent could redirect a rename or delete outside the checkout. Headless agents cannot run while the journal exists, which narrows the window. The security review should confirm link-safe handling.",
+        "evidence": [
+          "specs/14-recoverable-install/data-model.md",
+          "tools/spec_workflow/launcher.py"
+        ]
+      }
+    ],
+    "required_kinds": ["security", "architecture", "documentation"]
+  },
+  "assumption": null
+}
