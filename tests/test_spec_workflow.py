@@ -265,9 +265,8 @@ class ArtifactContractTests(unittest.TestCase):
         # Forged: the agent changes the spec and runs record-intent with
         # operator state of its own choosing.
         self.repo.write("spec.md", SPEC + "\nMore scope.\n")
-        with TemporaryDirectory() as forged_state:
-            forged = {**os.environ, "XDG_STATE_HOME": forged_state}
-            self.assertEqual(self.repo.check("record-intent", env=forged).returncode, 0)
+        forged = {**os.environ, "XDG_STATE_HOME": str(operator_state(self))}
+        self.assertEqual(self.repo.check("record-intent", env=forged).returncode, 0)
         for check in ("intent", "plan"):
             result = self.repo.check(check, *gated)
             self.assertNotEqual(result.returncode, 0, check)
@@ -275,15 +274,21 @@ class ArtifactContractTests(unittest.TestCase):
 
         # Where operator state is unwritable (an agent sandbox), record-intent
         # fails and leaves intent.md alone.
-        with TemporaryDirectory() as locked:
-            Path(locked).chmod(0o500)
-            sandboxed = {**os.environ, "XDG_STATE_HOME": f"{locked}/state"}
-            before = intent.read_text()
-            self.assertNotEqual(
-                self.repo.check("record-intent", env=sandboxed).returncode, 0
-            )
-            self.assertEqual(intent.read_text(), before)
-            Path(locked).chmod(0o700)
+        locked = operator_state(self)
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        sandboxed = {**os.environ, "XDG_STATE_HOME": f"{locked}/state"}
+        before = intent.read_text()
+        self.assertNotEqual(
+            self.repo.check("record-intent", env=sandboxed).returncode, 0
+        )
+        self.assertEqual(intent.read_text(), before)
+        # A temp directory is refused outright: agents can write it.
+        with TemporaryDirectory() as temp:
+            in_temp = {**os.environ, "XDG_STATE_HOME": temp}
+            result = self.repo.check("record-intent", env=in_temp)
+        self.assertIn("agents can write", result.stderr)
+        self.assertEqual(intent.read_text(), before)
 
         # Upgrade path for an in-flight run approved before registration
         # existed: the operator re-approves with --feature, then resumes.
@@ -549,7 +554,7 @@ class AgentWrapperTests(unittest.TestCase):
             "FAKE_SYSTEMCTL_LOG": str(self.root / "systemctl.log"),
             "FAKE_ARGV": str(self.root / "argv.json"),
             "SPECKIT_WORKFLOW_RUN_ID": "run42",
-            "XDG_STATE_HOME": str(self.root / "operator-state"),
+            "XDG_STATE_HOME": str(operator_state(self)),
         }
 
     def tearDown(self) -> None:
@@ -759,7 +764,7 @@ class AgentWrapperTests(unittest.TestCase):
             "codex", "exec", "$speckit-plan", FAKE_KILL_WRAPPER="1"
         )
         self.assertEqual(result.returncode, -signal.SIGKILL)
-        (state,) = (self.root / "operator-state/ballast").iterdir()
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
         self.assertTrue((state / "in-progress").exists())
         clean = self.run_wrapper("codex", "exec", "$speckit-plan")
         self.assertEqual(clean.returncode, 0, clean.stderr)
@@ -972,7 +977,7 @@ class ScopeContainmentTests(unittest.TestCase):
             "FAKE_SURVIVOR": str(self.pid_file),
             "FAKE_KILL_WRAPPER": "1",
             "SPECKIT_WORKFLOW_RUN_ID": "run42",
-            "XDG_STATE_HOME": str(self.root / "operator-state"),
+            "XDG_STATE_HOME": str(operator_state(self)),
         }
 
     def tearDown(self) -> None:
@@ -1100,7 +1105,7 @@ class TrustedLauncherTests(unittest.TestCase):
         self.env = {
             **os.environ,
             "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(Path(self.directory.name) / "state"),
+            "XDG_STATE_HOME": str(operator_state(self)),
         }
 
     def tearDown(self) -> None:
@@ -1171,7 +1176,7 @@ class TrustedLauncherTests(unittest.TestCase):
         workflows = self.root / ".specify/workflows"
         shutil.rmtree(workflows)
         workflows.symlink_to(operator)
-        (state_root := Path(self.directory.name) / "state/ballast").mkdir(parents=True)
+        (state_root := Path(self.env["XDG_STATE_HOME"]) / "ballast").mkdir(parents=True)
         result = self.launch("discard-runs")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual((operator / "runs/keep.txt").read_text(), "keep\n")
@@ -1195,7 +1200,7 @@ class TrustedLauncherTests(unittest.TestCase):
                 "refusal": "no trusted baseline; review the checkout, then run `trust`",
             },
         )
-        self.assertFalse(state.exists())
+        self.assertEqual(list(state.iterdir()), [])
         self.assertEqual(self.launch("trust").returncode, 0)
         self.assertEqual(self.status(), {"installed": True, "refusal": None})
         (self.root / ".specify/extensions.yml").write_text("hooks: {x: y}\n")
@@ -1216,7 +1221,7 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assert_refused("BALLAST_TAMPERED")
         self.assertEqual(self.launch("trust").returncode, 2)
         (self.root / "BALLAST_TAMPERED").unlink()
-        (state,) = (Path(self.directory.name) / "state/ballast").iterdir()
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
         (state / "in-progress").write_text("ballast-agent-r1-step.scope\n")
         self.assert_refused("did not finish")
         # Saved runs are outside the baseline: trust alone must not clear this.
@@ -1251,6 +1256,35 @@ class LauncherTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 2, args)
             self.assertIn("resume", result.stderr)
+
+    def test_agent_writable_state_directory_is_refused(self) -> None:
+        # Issue #34: the trust baseline and in-progress marker live there.
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout"
+            (root / ".ballast/spec_workflow").mkdir(parents=True)
+            (root / ".ballast/spec_workflow/run.py").write_text("")
+            for state in (str(root / "state"), str(Path(directory) / "s"), "rel"):
+                for command in (["trust"], ["status", "--json"]):
+                    result = subprocess.run(  # noqa: S603
+                        [
+                            sys.executable,
+                            "-IS",
+                            str(ROOT / "tools/spec_workflow/launcher.py"),
+                            *command,
+                        ],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        env={**os.environ, "XDG_STATE_HOME": state},
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertIn("agents can write", output, (state, command))
+                    self.assertNotEqual(command == ["trust"], result.returncode == 0)
+            self.assertEqual(
+                sorted(p.name for p in Path(directory).rglob("*")),
+                sorted(["checkout", ".ballast", "spec_workflow", "run.py"]),
+            )
 
 
 def _steps() -> list[dict[str, object]]:
@@ -1386,7 +1420,7 @@ class InterpreterStartupTests(unittest.TestCase):
                     self.assertEqual(calls[0][2], str(ROOT / "tools/feature_intake.py"))
             with (
                 patch.object(launcher.Path, "cwd", return_value=root),
-                patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state")}),
+                patch.dict(os.environ, {"XDG_STATE_HOME": str(operator_state(self))}),
                 patch.object(launcher.os, "execv") as execv,
                 patch("sys.stderr"),
             ):
@@ -2014,6 +2048,7 @@ from test_autonomy import (  # noqa: E402
     _bwrap_works,
     autonomy,
     isolate_operator_state,
+    operator_state,
     trusted_directory,
 )
 

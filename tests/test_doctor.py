@@ -32,6 +32,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SHIM = ROOT / "tools/ballast"
 SCHEMA = ROOT / "specs/12-cli-install-doctor/contracts/doctor-report.schema.json"
+
+sys.path.insert(0, str(ROOT / "tests"))
+from test_autonomy import operator_state  # noqa: E402
+
+sys.path.pop(0)
 _loader = SourceFileLoader("ballast_doctor", str(SHIM))
 shim = module_from_spec(spec_from_loader("ballast_doctor", _loader))
 _loader.exec_module(shim)
@@ -148,7 +153,8 @@ class DoctorCase(unittest.TestCase):
         for name in STUBS:
             self.stub(name)
         self.data = self.base / "data"
-        self.state = self.base / "state"
+        # Not yet created: doctor must not write it.
+        self.state = operator_state(self) / "state"
         self.project = self.base / "project"
         self.project.mkdir()
         self.sentinel = self.base / "executed"

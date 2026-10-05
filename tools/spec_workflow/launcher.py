@@ -69,11 +69,38 @@ COMMANDS = {"run": ("-IS", "run.py"), "ledger": ("-IS", "ledger.py")}
 INTAKE = Path(__file__).resolve().parents[1] / "feature_intake.py"
 
 
+TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")  # noqa: S108 - Refused, never used.
+
+
+def agent_temp_roots() -> tuple[Path, ...]:
+    """Directories an agent may write outside the checkout.
+
+    Codex's workspace-write sandbox allows /tmp and $TMPDIR; a program found
+    there is as untrusted as one in a working tree.
+    """
+    names = {*TEMP_ROOTS, os.environ.get("TMPDIR", "")} - {""}
+    return tuple(Path(name).resolve() for name in sorted(names))
+
+
 def state_dir(root: Path) -> Path:
-    """Per-checkout operator state, outside every agent's write authority."""
-    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state"
+    """Per-checkout operator state, outside every agent's write authority.
+
+    Raises OSError when XDG_STATE_HOME points where an agent can write: the
+    trust baseline and the in-progress marker would then be the agent's (#34).
+    """
+    base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    resolved = base.resolve()
+    if not base.is_absolute() or any(
+        resolved.is_relative_to(writable)
+        for writable in (root.resolve(), *agent_temp_roots())
+    ):
+        message = (
+            f"state directory {base} is inside the checkout or a temp directory, "
+            "which agents can write; set XDG_STATE_HOME elsewhere"
+        )
+        raise OSError(message)
     key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
-    return Path(base) / "ballast" / key
+    return base / "ballast" / key
 
 
 def digests(root: Path, bases: list[Path], skip: list[Path]) -> dict[str, str]:
@@ -147,7 +174,10 @@ def trusted_inputs(root: Path) -> dict[str, str]:
 
 
 def _refusal(root: Path) -> str | None:
-    state = state_dir(root)
+    try:
+        state = state_dir(root)
+    except OSError as error:
+        return str(error)
     if os.path.lexists(root / TAMPER_MARKER):
         return f"{TAMPER_MARKER} exists: an agent changed protected files"
     if os.path.lexists(state / IN_PROGRESS):
@@ -236,6 +266,16 @@ def _trust(root: Path, state: Path) -> int:
     return 0
 
 
+def _operator(root: Path, command: str) -> int:
+    """Run `trust` or `discard-runs` against a state directory agents cannot write."""
+    try:
+        state = state_dir(root)
+    except OSError as error:
+        sys.stderr.write(f"ballast: refusing: {error}\n")
+        return EXIT_REFUSED
+    return _trust(root, state) if command == "trust" else _discard(root, state)
+
+
 def main(argv: list[str]) -> int:
     """Verify the checkout, then run a workflow tool or record a baseline."""
     root = Path.cwd()
@@ -250,8 +290,7 @@ def main(argv: list[str]) -> int:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
     if argv[0] in {"trust", "discard-runs"}:
-        state = state_dir(root)
-        return _trust(root, state) if argv[0] == "trust" else _discard(root, state)
+        return _operator(root, argv[0])
     if argv[0] not in {*COMMANDS, "intake"}:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED

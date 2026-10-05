@@ -277,7 +277,9 @@ dependency sync, or a `tools/setup` reinstall), record a baseline with
 `.git` pointer file (a redirected pointer could make the operator's Git run a
 forged repository's configuration) under
 `$XDG_STATE_HOME/ballast/` (default `~/.local/state`), where no agent can
-write. `ballast run ...` and `ballast ledger ...` then
+write. Every command refuses an `XDG_STATE_HOME` that is relative or lies
+inside the checkout, `/tmp`, `/var/tmp`, `/dev/shm` or `$TMPDIR`, which
+agents can write. `ballast run ...` and `ballast ledger ...` then
 refuse, before executing any checkout code, if those inputs changed since
 `trust`, if `BALLAST_TAMPERED` exists, or if an agent step never finished its
 check (for example because the agent killed the wrapper). Saved run state is

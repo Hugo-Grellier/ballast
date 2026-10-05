@@ -27,6 +27,11 @@ sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
 import draft_pr  # noqa: E402
 import ledger  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tests"))
+from test_autonomy import operator_state  # noqa: E402
+
+sys.path.pop(0)
+
 FEATURE = "specs/17-draft-pr"
 RUN = "run17"
 REAL_GIT = shutil.which("git") or "/usr/bin/git"
@@ -360,7 +365,7 @@ class CheckpointCase(unittest.TestCase):
             patch.object(draft_pr, "_command", self.fake),
             patch.object(draft_pr, "_path_entries", lambda: list(self.entries)),
             patch.object(draft_pr, "_now", lambda: FIXED),
-            patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state")}),
+            patch.dict(os.environ, {"XDG_STATE_HOME": str(operator_state(self))}),
             patch.object(ledger, "agent_temp_roots", tuple),
         ):
             patcher.start()
@@ -527,11 +532,11 @@ class IdentityTests(CheckpointCase):
 
     def test_pin_in_agent_writable_state_is_never_trusted(self) -> None:
         # R2 round 3: XDG_STATE_HOME under /tmp would let an agent rewrite it.
-        state = self.base / "state"
-        with patch.object(ledger, "agent_temp_roots", lambda: (state,)):
+        with patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state")}):
             self.assertIsNone(draft_pr.pin_branch(self.repo.root, RUN))
             outcome = self.check()
-        self.assertOutcome(outcome, "blocked-unlinked", "branch-unpinned")
+        self.assertOutcome(outcome, "skipped", None)
+        self.assertIn("agents can write", outcome.remedy)
         self.assertEqual(self.fake.gh_calls(), [])
 
     def test_pin_returns_the_pinned_branch(self) -> None:

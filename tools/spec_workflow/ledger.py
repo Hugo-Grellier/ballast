@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN  # noqa: E402
 from autonomy import AutonomyError, filter_flags  # noqa: E402
+from launcher import agent_temp_roots  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = 1
@@ -352,19 +353,6 @@ def resolve_program(
             return str(program), False
         shadowed = True
     return None, shadowed or any(_executable(Path(e) / name) for e in dropped)
-
-
-TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")  # noqa: S108 - Refused, never used.
-
-
-def agent_temp_roots() -> tuple[Path, ...]:
-    """Directories an agent may write outside the checkout.
-
-    Codex's workspace-write sandbox allows /tmp and $TMPDIR; a program found
-    there is as untrusted as one in a working tree.
-    """
-    names = {*TEMP_ROOTS, os.environ.get("TMPDIR", "")} - {""}
-    return tuple(Path(name).resolve() for name in sorted(names))
 
 
 def trusted_entries(entries: list[str], excluded: tuple[Path, ...] = ()) -> list[str]:
