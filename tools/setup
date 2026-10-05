@@ -448,9 +448,11 @@ class Setup:
             self.check_links([*PARENTS, *(item["path"] for item in plan)])
             journal.update(phase="switching", entries=plan, record=record)
             _write_journal(state, journal)
-        except BaseException:
+        except BaseException as error:
             self.discard_work(keep_kept=True)
             _remove_file(state / launcher.SETUP_ATTEMPT)
+            if isinstance(error, (OSError, subprocess.SubprocessError)):
+                fail("stage", error)
             raise
         try:
             self.switch(work, plan)
@@ -459,8 +461,10 @@ class Setup:
             if changed:
                 cause = f"the live installation differs from the stage at {changed}"
                 fail("switch", cause)
-        except BaseException:
+        except BaseException as error:
             self.roll_back(state, journal)
+            if isinstance(error, OSError):
+                fail("switch", error)
             raise
         journal["phase"] = "committed"
         _write_journal(state, journal)

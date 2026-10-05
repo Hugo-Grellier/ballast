@@ -564,8 +564,11 @@ class RecoverableSetupTests(ProjectCase):
             ("fetch core", "fetch core"),
             ("fetch intent", "fetch intent"),
             ("specify init", "spec-kit init"),
+            ("integration install", "spec-kit integration install claude"),
+            ("bundle install", "spec-kit bundle install"),
             ("extension add", "spec-kit extension add"),
             ("workflow add", "spec-kit workflow add"),
+            ("preset add", "spec-kit preset add"),
             ("skills.patch", "patch skills.patch"),
             ("preset.patch", "patch preset.patch"),
         ):
@@ -576,6 +579,30 @@ class RecoverableSetupTests(ProjectCase):
                 self.assertIn("The previous installation was kept. Next: ", err)
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse((self.root / ".ballast/setup").exists())
+
+    def test_switch_and_stage_failures_keep_the_previous_installation(self) -> None:
+        # SC-001: a failing rename mid-switch, and a stage that cannot be prepared.
+        self.pin("vB")
+        before = self.snapshot()
+        rename, calls = setup._rename, []  # noqa: SLF001 - fault injection
+
+        def failing(source: Path, target: Path) -> None:
+            calls.append(source)
+            if len(calls) == 7:  # noqa: PLR2004 - mid-switch
+                raise OSError(errno.EIO, "I/O error")
+            rename(source, target)
+
+        broken = OSError(errno.EACCES, "Permission denied")
+        for stage, failure in (
+            ("switch", patch.object(setup, "_rename", failing)),
+            ("stage", patch.object(setup.shutil, "copyfile", side_effect=broken)),
+        ):
+            with self.subTest(stage=stage), failure:
+                code, _, err = self.setup()
+                self.assertEqual(code, 1, err)
+                self.assertIn(f"setup: {stage} failed: ", err)
+                self.assertIn("The previous installation was kept.", err)
+                self.assertEqual(self.snapshot(), before)
 
     def test_invalid_stage_is_never_switched(self) -> None:
         # AC-003, F-002

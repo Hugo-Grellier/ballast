@@ -340,6 +340,16 @@ class PreviewTests(unittest.TestCase):
             text,
         )
 
+    def test_checkout_text_cannot_drive_the_terminal(self) -> None:
+        # Run IDs and states come from the agent-writable checkout.
+        run = self.project / ".specify/workflows/runs/r\x1b]0;x\x07"
+        run.mkdir(parents=True)
+        (run / "state.json").write_text(json.dumps({"status": "\x1b[2Jpaused"}))
+        _, text, _ = self.preview("vB")
+        self.assertNotIn("\x1b", text)
+        self.assertNotIn("\x07", text)
+        self.assertIn("?[2Jpaused", text)
+
     def test_failed_build_reports_nothing_compatible(self) -> None:
         code, out, err = self.preview("vD")
         self.assertEqual(code, 1)

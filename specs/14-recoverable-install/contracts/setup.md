@@ -22,7 +22,7 @@ The order guarantees that no refusal in steps 1, 2, 4 or 6 writes to the checkou
 | 1 | A stage failed | `setup: <stage> failed: <cause>. The previous installation was kept. Next: <action>` |
 | 2 | Refused before writing | `setup: refusing: <reason>. Next: <action>` |
 
-`<stage>` names exactly one of: `fetch <source>` (a Spec Kit source), `spec-kit <command>` (for example `spec-kit extension add`), `patch <file>`, `install standard` (copying the standard's tools, policies, skills and templates), `copy from primary`, `validate <check>` (`required outputs`, `ignore rules`, `stage paths`, `links`, `filesystem`, `content`), `switch`. `<action>` is fixed per stage: network and source failures say `check network access (ballast doctor), then rerun ballast setup`; Spec Kit and patch failures say `rerun ballast setup; if it fails again, restore the previous pin`; validation failures name the path or rule to fix.
+`<stage>` names exactly one of: `fetch <source>` (a Spec Kit source), `spec-kit <command>` (for example `spec-kit extension add`), `patch <file>`, `install standard` (copying the standard's tools, policies, skills and templates), `stage` (preparing the stage itself: its Git repository and seeds), `copy from primary`, `validate <check>` (`required outputs`, `ignore rules`, `stage paths`, `links`, `filesystem`, `content`), `switch`. `<action>` is fixed per stage: network and source failures say `check network access (ballast doctor), then rerun ballast setup`; Spec Kit and patch failures say `rerun ballast setup; if it fails again, restore the previous pin`; validation failures name the path or rule to fix.
 
 Refusal reasons and their actions:
 

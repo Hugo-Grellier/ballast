@@ -1303,6 +1303,7 @@ def disposable_build(
     environment.pop("BALLAST_STANDARD_DIR", None)
     result = subprocess.run(  # noqa: S603 - the verified cached version's own setup
         [PYTHON, "-I", "-S", str(standard / "tools/setup"), "--project", str(project)],
+        cwd=work,  # never the checkout
         env=environment,
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -1511,6 +1512,11 @@ def update_report(root: Path, ref: str, target: Path, work: Path) -> dict:
     }
 
 
+def printable(text: object) -> str:
+    """Show checkout text with control characters replaced by `?`."""
+    return "".join(c if c.isprintable() else "?" for c in str(text))
+
+
 def render_preview(report: dict) -> str:
     """Render the human form of an update preview."""
     target = report["target"]
@@ -1541,7 +1547,10 @@ def render_preview(report: dict) -> str:
             else f"cannot resume: {RESUME_BLOCKER}"
         )
         shown = run["format"] or "(no format)"
-        lines.append(f"  {run['id']}  {run['status']}  {shown}  {resumable}")
+        lines.append(
+            f"  {printable(run['id'])}  {printable(run['status'])}  "
+            f"{printable(shown)}  {resumable}"
+        )
     if not report["runs"]:
         lines.append("  none")
     lines += ["", "Installed paths"]
@@ -1562,7 +1571,7 @@ def render_preview(report: dict) -> str:
     lines += ["", "To finish the update"]
     lines += [f"  {n}. {step}" for n, step in enumerate(report["steps"], 1)]
     if report["blockers"]:
-        lines += ["", "Blocked: " + "; ".join(report["blockers"])]
+        lines += ["", "Blocked: " + printable("; ".join(report["blockers"]))]
     return "\n".join(lines) + "\n"
 
 
