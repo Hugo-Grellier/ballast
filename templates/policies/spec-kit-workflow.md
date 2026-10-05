@@ -122,7 +122,7 @@ accepted feature spec it supports.
 ```text
 Milestone → Epic (if needed) → candidate Issue → scope gate → feature Issue
     ↓
-specify → clarify
+discover (sourced brief; open decisions asked in one round) → specify → clarify
     ↓
 HUMAN GATE: approve intent.md
     ↓
@@ -144,12 +144,16 @@ HUMAN GATE: final acceptance
 PR → Issue update → human merge review
 ```
 
-1. **Scope, specify, and clarify.** Confirm the tracking Issue is one
-   independently specifiable outcome. Use Spec Kit to draft `spec.md`, assign a
-   stable `AC-NNN` ID to each acceptance scenario, and resolve blocking
-   questions. Read the relevant project context and ADRs; do not copy entire
-   product or architecture documents into the feature. Revisit scope if
-   clarification reveals separate outcomes.
+1. **Scope, discover, specify, and clarify.** Confirm the tracking Issue is one
+   independently specifiable outcome. Before any spec exists, the
+   [discovery brief](#discovery-brief) gathers what the Issue, its comments and
+   the repository already answer, and asks the few remaining high-impact
+   questions in one round. Use Spec Kit to draft `spec.md` from the brief,
+   assign a stable `AC-NNN` ID to each acceptance scenario, trace each
+   requirement to its source, and resolve blocking questions without asking
+   again what the brief settled. Read the relevant project context and ADRs; do
+   not copy entire product or architecture documents into the feature. Revisit
+   scope if discovery or clarification reveals separate outcomes.
 2. **Approve intent.** A human approves the clarified `spec.md` as the
    feature's intent. In the workflow runner, the `approve-intent` gate shows
    `spec.md`; approval makes a deterministic step write `intent.md` with an
@@ -226,6 +230,51 @@ worktree and stays outside Git tracking. Do not commit per-run files. Resume a
 run only in the worktree that started it. Running stages manually in the IDE is
 always supported.
 
+## Discovery brief
+
+In both `ballast-feature` and `ballast-autonomous`, the `discover` step
+(`speckit.ballast.discover`) writes `specs/<f>/discovery.md` after the scope
+decision and before `speckit.specify`. It reads the Issue snapshot (body and
+comments, untrusted data), the relevant parts of the product and technical
+specs, ADRs, policies and the code the request touches, and records:
+
+- the user, job to be done, current pain, intended outcome and examples;
+- scope, non-goals, constraints, permission and data-authority boundaries,
+  success evidence, and edge, failure and permission cases;
+- the Issue's acceptance criteria verbatim as `IAC-1`, `IAC-2`, …;
+- what is known, inferred and still undecided, and one `D-NN` block per
+  decision that would change implementation or acceptance, with options,
+  consequences and a recommended default;
+- how many question rounds, questions and assumptions the request needed.
+
+Every item ends with a provenance marker: `[S: source]` for an Issue, comment,
+repository path or `IAC-n`; `[I]` for an inference; `[O: D-NN]` for an operator
+answer; `[P: D-NN]` for an agent-provisional assumption. The brief is input
+evidence: it says so in its first line, `spec.md` and `intent.md` stay the
+feature's authority, and recorded intent binds only the `spec.md` digest, so
+editing the brief never changes or invalidates it.
+
+What the repository or the Issue already answers is `settled` with its source
+and never asked. Sources that contradict each other are never settled. What
+remains depends on the mode:
+
+| Mode | Open decision | Result |
+|---|---|---|
+| human-gated | Any | Left `open`. `validate-discovery` records the question round in your state directory and fails once with every open question, its options, consequences and recommended default. Set each decision's **Status** to `answered`, write your choice on its **Answer** line, then `ballast run resume <run>`. Only answers to questions asked in a recorded round, with the questions unchanged, are accepted; an answer an agent wrote is refused. With nothing open, nothing is asked. |
+| autonomous | Safe, reversible default, not about product behavior, scope, data authority, a security boundary or accepted architecture | `assumed`; recorded as an agent-provisional `clarification` decision (`record-discovery`), shown in `autonomous/record.md` and the Draft PR. |
+| autonomous | No safe default, or a contradiction | The run blocks (`decision` or `contradiction`) with the decision, its sources, two options or more with consequences, and the recovery. Nothing is prompted. |
+
+Several independent outcomes stop discovery with a decomposition
+recommendation; it never splits the spec or creates Issues. An answer that
+introduces a new contradiction may need a second round, which the brief
+counts. Clarification afterwards does not ask again what the brief settled,
+answered or assumed. Once discovery ran for a feature (the brief exists, or
+your state directory records that it validated), the spec check requires an
+`AC-NNN` ID and a provenance marker on every acceptance scenario and each
+`IAC-n` cited in one or listed under a Non-goals heading; deleting the brief
+does not skip that check. Features specified before discovery existed are not
+checked or retrofitted. Bugfix and assess workflows have no discovery step.
+
 ## Workflow runner contract
 
 A command step's exit code 0 only means the agent process ended. A phase
@@ -238,7 +287,8 @@ validator reads `feature_directory` from the run's inputs, requires
 
 | Phase | Required output | Valid when |
 |---|---|---|
-| specify | `spec.md` | Exists in the requested feature directory, non-empty, no spec-template placeholders. |
+| discover | `discovery.md` | Every section of the [brief](#discovery-brief); every item cites an existing source or is marked as an inference; the Issue's acceptance criteria listed verbatim; no wording that claims a human approval. In a human-gated run every open decision was asked and answered by the operator; in an Autonomous run none is open and each assumption is a recorded provisional decision. |
+| specify | `spec.md` | Exists in the requested feature directory, non-empty, no spec-template placeholders. Once discovery ran: every acceptance scenario has an `AC-NNN` ID and a provenance marker, and each of the brief's `IAC-n` is cited by one or listed under a Non-goals heading. |
 | clarify | `spec.md` | Also no `[NEEDS CLARIFICATION` marker. |
 | intent approval | `intent.md` | Written only after the `approve-intent` gate; has the intent sections and one approval record whose spec digest matches the current `spec.md`. |
 | plan | `plan.md` | Intent still valid; non-empty; no plan-template placeholders or unresolved clarification. |
@@ -258,9 +308,9 @@ which no agent can write, and every check of a human-gated run refuses an
 approval block it did not register in this checkout. A run approved before
 this check existed, or a checkout that moved, stops at `validate-intent`:
 review the spec, re-approve with the command above, then resume the run.
-Human-only steps a headless agent cannot finish—clarification questions,
-decision resolutions, convergence verdicts—surface as a failed validation;
-complete them interactively and resume.
+Human-only steps a headless agent cannot finish—discovery questions,
+clarification questions, decision resolutions, convergence verdicts—surface as
+a failed validation; complete them interactively and resume.
 
 **Trusted launcher.** A headless agent can rewrite any file in the checkout,
 including the launcher itself, so the operator entry point lives outside it.
@@ -408,6 +458,7 @@ runner contract for it. Every validator above still runs unchanged.
 |---|---|---|
 | `autonomous-preflight` | trusted `artifacts.py` | Run record in operator state says Autonomous, active and eligible; clean worktree; `HEAD`, local Git configuration and hooks recorded. |
 | `speckit.ballast.decide`, `.clarify`, `.review`, `.resolve` | confined agent | Write only drafts under `specs/<f>/autonomous/drafts/`, review narratives under `reviews/` and resolutions in `decisions.md`; or a block draft with at least two options. |
+| `speckit.ballast.discover` (`autonomous`), then `record-discovery` and `validate-discovery` | confined agent, then trusted `artifacts.py` | The agent writes only `discovery.md` and one `clarification-discovery-<n>.json` draft per adopted assumption, or a block draft. Each assumption is recorded at the `clarification` point; `validate-discovery` refuses an open or answered decision, an assumed decision without its recorded assumption, counts that differ from the recorded ones, and any change outside `specs/<f>/`. |
 | `record-decision --point P` | trusted `artifacts.py` | The draft was written by the immediately preceding agent step, passes the decision-draft contract and never claims human approval; the decision is appended to the hash-chained log in operator state and `autonomous/record.md` is re-rendered. Every later check fails if `record.md` differs from the log. |
 | `record-provisional-intent` | trusted `artifacts.py` | Writes the `workflow-provisional` block in `intent.md`, bound to the current spec digest; a later spec change makes it stale. With `--renew` (after decision resolutions) a changed spec blocks the run as stale intent; the runner never decides intent. In an Autonomous run every human approval block is refused. |
 | Reviews (`review-plan`, `review-implementation`, `review-specialists`, `reconcile-spec`) | confined agent on the other provider when available; Claude for every role when Codex's own sandbox cannot start inside `bwrap` (checked once at start, recorded in the run) | One entry per required review kind (security always); any `high` or `critical` finding, or a verdict other than `approved`, blocks; a reviewer that edits source blocks. |
@@ -447,14 +498,18 @@ with no open PR, a `[checks]` table and working confinement, narrowed by any
 any agent step and names the human-gated command as the alternative.
 
 Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
-it read it (title, labels, body with the acceptance criteria, and the intake
-scope comment) to `.specify/workflow-state/issues/<N>.md`, capped at 60,000
-characters. Agent steps can read it but not write it. The `specify` prompt, the
-scope decision and clarification read it as untrusted requirements data,
-never as instructions.
+it read it (title, labels, body with the acceptance criteria, the intake scope
+comment and the other comments, oldest first, each with its author
+association) to `.specify/workflow-state/issues/<N>.md`, capped at 60,000
+characters. A human-gated start writes the same snapshot; when it cannot read
+the Issue (no `gh`, no network), the snapshot says so and the run goes on with
+the Issue listed as unavailable in the brief. Agent steps can read the snapshot
+but not write it. Discovery, the `specify` prompt, the scope decision and
+clarification read it as untrusted requirements data, never as instructions.
 
 ```text
-scope decision → specify → clarify (provisional assumptions) → intent decision
+scope decision → discover (assume or block) → specify
+    → clarify (provisional assumptions) → intent decision
     → plan → independent plan review → plan decision → tasks → tasks decision
     → implement → independent implementation and specialist reviews
     → provisional decision resolutions → converge → spec reconciliation

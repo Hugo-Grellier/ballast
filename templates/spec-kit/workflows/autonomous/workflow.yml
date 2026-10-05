@@ -3,7 +3,7 @@ schema_version: "1.0"
 workflow:
   id: ballast-autonomous
   name: Ballast Autonomous Feature Workflow
-  version: 1.0.0
+  version: 1.1.0
   author: Ballast
   description: >-
     Feature lifecycle without approval prompts: every human gate of
@@ -59,6 +59,22 @@ steps:
     type: shell
     run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point scope
 
+  # Discovery never asks here: a safe, reversible default becomes a
+  # clarification decision, anything else blocks the run.
+  - id: discover
+    command: speckit.ballast.discover
+    integration: "{{ inputs.integration }}"
+    input:
+      args: autonomous
+
+  - id: record-discovery
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point clarification
+
+  - id: validate-discovery
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py discovery --run {{ context.run_id }}
+
   - id: specify
     command: speckit.specify
     integration: "{{ inputs.integration }}"
@@ -66,7 +82,13 @@ steps:
       args: >-
         {{ inputs.idea }}. Set
         SPECIFY_FEATURE_DIRECTORY={{ inputs.feature_directory }} before creating
-        spec.md; keep this path for the feature's later artifacts.
+        spec.md; keep this path for the feature's later artifacts. Write spec.md
+        from {{ inputs.feature_directory }}/discovery.md: give every acceptance
+        scenario an AC-NNN ID, end every functional requirement and acceptance
+        criterion with a provenance marker ([S: source], [B: brief item], [I],
+        [P: D-NN] for an agent-provisional assumption), and cite every IAC-n of
+        the brief in an acceptance criterion's marker or list it under a
+        Non-goals heading.
 
   - id: validate-spec
     type: shell
@@ -75,6 +97,11 @@ steps:
   - id: clarify
     command: speckit.ballast.clarify
     integration: "{{ inputs.integration }}"
+    input:
+      args: >-
+        Read {{ inputs.feature_directory }}/discovery.md first. Do not reopen
+        or ask again a decision the brief settled, answered or assumed; ask
+        only about a new contradiction it does not cover.
 
   - id: record-clarifications
     type: shell

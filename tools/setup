@@ -277,7 +277,8 @@ class Setup:
             self.specify("bundle", "install", str(sources["core"] / "bundles" / bundle))
         for extension in ("multi-model-review", "status-report", "intent"):
             self.specify("extension", "add", str(sources[extension]), "--dev")
-        # Ballast's own commands for Autonomous runs, shipped with the standard.
+        # Ballast's own workflow commands (discovery, Autonomous decisions),
+        # shipped with the standard.
         self.specify(
             "extension",
             "add",

@@ -195,9 +195,14 @@ def spec_digest(text: str) -> str:
 
 
 def check_spec(feature: Feature) -> str:
-    """spec.md exists in the requested feature and is not the template."""
+    """spec.md exists in the requested feature and is not the template.
+
+    Once discovery ran for the feature, every acceptance criterion is also
+    traced to its source and every Issue criterion is covered (#16).
+    """
     text = feature.read("spec.md")
     _reject_sentinels(f"{feature.relative}/spec.md", text, SPEC_SENTINELS)
+    _spec_traceability(feature, text)
     return text
 
 
@@ -546,6 +551,889 @@ def check_preflight(feature: Feature) -> None:
         )
         raise ContractError(message)
     del feature
+
+
+# --- Discovery brief (#16) ------------------------------------------------
+#
+# `discover` writes <f>/discovery.md, non-authoritative input evidence for
+# spec.md (contracts/discovery-brief.md). `discovery` validates it; in a
+# human-gated run it asks every open decision in one failed validation and
+# attributes the answers through operator state, which no agent can write.
+# `check_spec` traces the spec to the brief once discovery ran.
+
+DISCOVERY = "discovery.md"
+DISCOVERY_MARKER = "<!-- ballast-discovery: input evidence -->"
+# Provenance markers (research R-04); [B: ...] cites a brief item from spec.md.
+PROVENANCE = re.compile(r"\[(?:S: [^\]\n]+|I|O: D-\d{2}|P: D-\d{2}|B: [^\]\n]+)\]")
+DISCOVERY_SECTIONS = (
+    "Sources",
+    "Need",
+    "Examples",
+    "Scope",
+    "Non-goals",
+    "Constraints",
+    "Permissions and data authority",
+    "Success evidence",
+    "Issue acceptance criteria",
+    "Edge, failure and permission cases",
+    "Known",
+    "Inferred",
+    "Undecided",
+    "Decisions",
+    "Question metrics",
+)
+# Sections whose every list item carries a provenance marker.
+MARKED_SECTIONS = (
+    "Need",
+    "Examples",
+    "Scope",
+    "Non-goals",
+    "Constraints",
+    "Permissions and data authority",
+    "Success evidence",
+    "Edge, failure and permission cases",
+    "Known",
+    "Inferred",
+    "Changes",
+)
+MARKER_KINDS = {"Known": ("S", "O"), "Inferred": ("I", "P")}
+BRIEF_KINDS = ("S", "I", "O", "P")
+# The decision status and the run mode an [O:] or [P:] marker requires.
+MARKER_DECISION = {"O": ("answered", "human-gated"), "P": ("assumed", "autonomous")}
+MIN_OPTIONS = 2
+NEED_ITEMS = ("User", "Job to be done", "Current pain", "Intended outcome")
+DECISION_STATUSES = ("settled", "open", "answered", "assumed", "blocking")
+DECISION_FIELDS = {
+    "Status": "status",
+    "Question": "question",
+    "Why it matters": "why",
+    "Sources": "sources",
+    "Options": "options",
+    "Recommended default": "default",
+    "Answer": "answer",
+    "Resolution": "resolution",
+}
+DECISION_REQUIRED = ("Status", "Question", "Why it matters", "Sources")
+METRICS = ("Rounds", "Questions asked", "Assumptions adopted")
+SECTION = re.compile(r"^## +(\S.*?)\s*$")
+LIST_ITEM = re.compile(r"^(?:[-*]|\d+\.)\s+(.*)$")
+LABEL = re.compile(r"^\*\*([^*\n]+)\*\*:\s*(.*)$")
+BRIEF_DECISION = re.compile(r"^###\s+(D-\d{2}):\s*(\S.*)$")
+DECISION_ID = re.compile(r"\bD-\d{2}\b")
+IAC_ITEM = re.compile(r"^(IAC-[1-9]\d*):\s*(\S.*)$")
+IAC_TOKEN = re.compile(r"\bIAC-[1-9]\d*\b")
+MODE_LINE = re.compile(r"^\*\*Mode\*\*:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+CONSEQUENCE = re.compile(r"(?i)\bconsequence:\s*\S")
+SOURCE_ENTRY = re.compile(r"^S-\d+:\s*(.*)$")
+SOURCE_CITE = re.compile(r"\[S: ([^\]\n]+)\]")
+PATH_TOKEN = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/?")
+# A file name: `AGENTS.md`, `artifacts.py`; not `e.g.` or `2.0`.
+FILE_NAME = re.compile(r"[^./]+\.[A-Za-z][A-Za-z0-9]{0,7}")
+DISCOVERY_ASSUMPTION = re.compile(r"(D-\d{2}):")
+ANSWER_LINE = re.compile(r"^- \*\*Answer\*\*:.*$", re.MULTILINE)
+HEADING_LINE = re.compile(r"^(#{1,6})\s+(.*)$")
+CRITERIA_HEADING = re.compile(r"(?i)^#{1,6}\s+.*\bacceptance criteria\b")
+CHECKBOX = re.compile(r"^\[[ xX]\]\s+")
+AC_ID = re.compile(r"\*\*(AC-\d{3})\*\*")
+SCENARIOS_LABEL = re.compile(r"(?i)^(?:#{1,6}\s+|\*\*)acceptance scenarios\b")
+NON_GOALS = re.compile(r"(?i)\bnon-goals?\b|\bout of scope\b")
+
+
+def _brief_error(feature: Feature, detail: str) -> ContractError:
+    return ContractError(f"{feature.relative}/{DISCOVERY}: {detail}")
+
+
+def _short(text: str, limit: int = 80) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _markers(text: str) -> list[str]:
+    """Provenance markers in text, in order; a Markdown link is none."""
+    return PROVENANCE.findall(text)
+
+
+def _marker_kind(marker: str) -> str:
+    return marker[1]
+
+
+def _list_items(body: str) -> list[str]:
+    """Top-level list items of a body; indented lines continue the item."""
+    items: list[str] = []
+    open_item = False
+    for line in body.splitlines():
+        match = LIST_ITEM.match(line)
+        if match:
+            items.append(match.group(1).strip())
+            open_item = True
+        elif open_item and line[:1] in {" ", "\t"} and line.strip():
+            items[-1] += " " + line.strip()
+        elif line.strip():
+            open_item = False
+    return items
+
+
+def _decision_line(ident: str, line: str) -> tuple[str, str]:
+    """(field, value) of a decision's `- **Field**: value` line."""
+    item = LIST_ITEM.match(line)
+    label = LABEL.match(item.group(1)) if item else None
+    if label is None or label.group(1) not in DECISION_FIELDS:
+        message = f"decision {ident} has an unknown line {_short(line)!r}"
+        raise ContractError(message)
+    return DECISION_FIELDS[label.group(1)], label.group(2).strip()
+
+
+def _continue_decision(found: dict, field: str | None, text: str) -> None:
+    """Fold an indented line into the field above it; options are sub-items."""
+    if field == "options":
+        option = LIST_ITEM.match(text)
+        if option:
+            found["options"].append(option.group(1).strip())
+        elif found["options"]:
+            found["options"][-1] += " " + text
+    elif field is not None:
+        found[field] = f"{found[field]} {text}".strip()
+
+
+def _parse_decision(ident: str, title: str, body: str) -> dict:
+    """Parse one `### D-NN: <title>` block; a malformed block raises."""
+    found: dict = {"id": ident, "title": title, "options": []}
+    found |= {"default": "", "answer": "", "resolution": ""}
+    seen: set[str] = set()
+    field = None
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        if line[0] in {" ", "\t"}:
+            _continue_decision(found, field, line.strip())
+            continue
+        field, value = _decision_line(ident, line)
+        if field in seen:
+            message = f"decision {ident} repeats its {field} line"
+            raise ContractError(message)
+        seen.add(field)
+        if field != "options":
+            found[field] = value
+    missing = [name for name in DECISION_REQUIRED if DECISION_FIELDS[name] not in seen]
+    if missing:
+        message = f"decision {ident} lacks **{'**, **'.join(missing)}**"
+        raise ContractError(message)
+    found["status"] = found["status"].lower()
+    if found["status"] not in DECISION_STATUSES:
+        message = (
+            f"decision {ident} has status {found['status']!r}; use one of "
+            + ", ".join(DECISION_STATUSES)
+        )
+        raise ContractError(message)
+    return found
+
+
+def _split_sections(text: str) -> tuple[str, dict[str, str]]:
+    """The text before the first `## ` heading, and each section's body."""
+    preamble: list[str] = []
+    sections: dict[str, list[str]] = {}
+    current = preamble
+    for line in text.splitlines():
+        match = SECTION.match(line)
+        if match is None:
+            current.append(line)
+        elif match.group(1) in sections:
+            message = f"section '## {match.group(1)}' appears twice"
+            raise ContractError(message)
+        else:
+            current = sections[match.group(1)] = []
+    bodies = {name: "\n".join(lines).strip() for name, lines in sections.items()}
+    return "\n".join(preamble), bodies
+
+
+def _parse_decisions(body: str) -> dict[str, dict]:
+    """Each `### D-NN: <title>` block of the `## Decisions` section."""
+    decisions: dict[str, dict] = {}
+    for block in re.split(r"(?m)^(?=###\s)", body):
+        if not block.startswith("###"):
+            continue
+        heading, _, rest = block.partition("\n")
+        match = BRIEF_DECISION.match(heading.strip())
+        if match is None:
+            message = f"decision heading {_short(heading)!r} is not '### D-NN: title'"
+            raise ContractError(message)
+        if match.group(1) in decisions:
+            message = f"decision {match.group(1)} appears twice"
+            raise ContractError(message)
+        decisions[match.group(1)] = _parse_decision(*match.groups(), rest)
+    return decisions
+
+
+def _parse_discovery(text: str) -> dict:
+    """Parse a brief's sections, list items, decisions and Issue criteria."""
+    preamble, sections = _split_sections(text)
+    iacs = []
+    for item in _list_items(sections.get("Issue acceptance criteria", "")):
+        match = IAC_ITEM.match(item)
+        iacs.append((match.group(1), match.group(2).strip()) if match else ("", item))
+    mode = MODE_LINE.search(preamble)
+    return {
+        "preamble": preamble,
+        "mode": mode.group(1) if mode else None,
+        "sections": sections,
+        "items": {name: _list_items(body) for name, body in sections.items()},
+        "decisions": _parse_decisions(sections.get("Decisions", "")),
+        "iacs": iacs,
+    }
+
+
+def _cited_paths(value: str) -> list[str]:
+    """Repository paths a citation names, as `path`, `path#part` or `path:12`."""
+    paths = []
+    for part in re.split(r"[;,]", value):
+        words = part.split()
+        if not words or "://" in part:
+            continue
+        token = re.split(r"[#:]", words[0].strip("`'\"()"), maxsplit=1)[0]
+        if PATH_TOKEN.fullmatch(token) and (
+            token.endswith("/") or FILE_NAME.fullmatch(token.rpartition("/")[2])
+        ):
+            paths.append(token.rstrip("/"))
+    return paths
+
+
+def _check_cited(feature: Feature, where: str, value: str) -> None:
+    """Every repository path a citation names exists (AC-002)."""
+    for path in _cited_paths(value):
+        try:
+            _repo_path(feature, path, "cited source")
+        except ContractError as error:
+            detail = f"{where}: {error}"
+            raise _brief_error(feature, detail) from error
+
+
+def _issue_criteria(feature: Feature) -> list[str] | None:
+    """The Issue's acceptance criteria from the runner's snapshot (R-05).
+
+    None when the snapshot is missing or its body has no acceptance-criteria
+    heading; the brief's own IAC list is then what the spec must cover.
+    """
+    number = feature.relative.split("/")[1].split("-")[0]
+    path = feature.root / STATE_DIR / "issues" / f"{number}.md"
+    if path.is_symlink() or not path.is_file():
+        return None
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if "## Body" not in lines:
+        return None
+    start = lines.index("## Body") + 1
+    # Comments follow the scope comment: a heading there is not the Issue's.
+    scope = "## Intake scope comment"
+    end = lines.index(scope, start) if scope in lines[start:] else len(lines)
+    heading = next(
+        (i for i in range(start, end) if CRITERIA_HEADING.match(lines[i])), None
+    )
+    if heading is None:
+        return None
+    region = []
+    for line in lines[heading + 1 : end]:
+        if HEADING_LINE.match(line):
+            break
+        region.append(line)
+    return [
+        " ".join(CHECKBOX.sub("", item).split())
+        for item in _list_items("\n".join(region))
+    ]
+
+
+def _check_marked_items(feature: Feature, items: dict[str, list[str]]) -> None:
+    """Each item of a marked section carries provenance of the allowed kinds."""
+    for name in MARKED_SECTIONS:
+        allowed = MARKER_KINDS.get(name, BRIEF_KINDS)
+        for item in items.get(name, []):
+            where = f"section '## {name}' item {_short(item)!r}"
+            found = _markers(item)
+            if not found:
+                detail = f"{where} has no provenance marker ([S: ...] or [I])"
+                raise _brief_error(feature, detail)
+            if not {_marker_kind(marker) for marker in found} <= set(allowed):
+                detail = f"{where} may carry only {', '.join(allowed)} markers"
+                raise _brief_error(feature, detail)
+            for marker in found:
+                if _marker_kind(marker) == "S":
+                    _check_cited(feature, where, marker[4:-1])
+
+
+def _check_decision_markers(
+    feature: Feature, text: str, decisions: dict, mode: str
+) -> None:
+    """[O: D-NN] names an answered decision, [P: D-NN] an assumed one."""
+    for marker in _markers(text):
+        kind = _marker_kind(marker)
+        if kind not in MARKER_DECISION:
+            continue
+        ident, (status, wanted_mode) = marker[4:-1], MARKER_DECISION[kind]
+        if mode != wanted_mode:
+            detail = f"{marker} belongs only in {wanted_mode} briefs"
+            raise _brief_error(feature, detail)
+        if decisions.get(ident, {}).get("status") != status:
+            detail = f"{marker} refers to {ident}, which is not {status}"
+            raise _brief_error(feature, detail)
+
+
+def _check_decision_status(feature: Feature, item: dict, mode: str) -> None:
+    """A status the mode allows: an autonomous run never asks, nobody blocks."""
+    where, status = f"decision {item['id']}", item["status"]
+    if status == "blocking":
+        detail = f"{where} is blocking: write the block draft and stop the run"
+    elif status == "assumed" and mode != "autonomous":
+        detail = f"{where} is assumed; only an autonomous run assumes a default"
+    elif status in {"open", "answered"} and mode == "autonomous":
+        detail = f"{where} is {status}; an autonomous run assumes a default or blocks"
+    elif status == "answered" and not item["answer"]:
+        detail = f"{where} is answered but its **Answer** is empty"
+    elif item["answer"] and status != "answered":
+        detail = (
+            f"{where} has an **Answer** but status {status}; only an answered "
+            "decision has one (set **Status** to answered)"
+        )
+    else:
+        return
+    raise _brief_error(feature, detail)
+
+
+def _check_decision_fields(feature: Feature, item: dict) -> None:
+    """Check cited sources, and options and a default unless settled."""
+    where = f"decision {item['id']}"
+    for field in ("question", "why", "sources"):
+        if not item[field]:
+            detail = f"{where} has an empty {field}"
+            raise _brief_error(feature, detail)
+    _check_cited(feature, where, " ; ".join(SOURCE_CITE.findall(item["sources"])))
+    cited = SOURCE_CITE.findall(item["resolution"])
+    if item["status"] == "settled":
+        if not cited:
+            detail = (
+                f"{where} is settled, so its **Resolution** must cite the source "
+                "that settles it as [S: ...]"
+            )
+            raise _brief_error(feature, detail)
+        _check_cited(feature, where, " ; ".join(cited))
+        return
+    options = item["options"]
+    if len(options) < MIN_OPTIONS or not all(CONSEQUENCE.search(o) for o in options):
+        detail = f"{where} needs two **Options** or more, each with a Consequence"
+        raise _brief_error(feature, detail)
+    if not item["default"]:
+        detail = f"{where} has no **Recommended default**"
+        raise _brief_error(feature, detail)
+    if item["status"] == "assumed" and not item["resolution"]:
+        detail = f"{where} is assumed; its **Resolution** says why it is safe"
+        raise _brief_error(feature, detail)
+
+
+def _check_undecided(feature: Feature, items: list[str], decisions: dict) -> None:
+    """Every `## Undecided` item names decisions of `## Decisions`."""
+    for item in items:
+        named = DECISION_ID.findall(item)
+        unknown = [ident for ident in named if ident not in decisions]
+        if not named or unknown:
+            detail = (
+                f"'## Undecided' item {_short(item)!r} must name decisions of "
+                f"'## Decisions' (unknown: {', '.join(unknown) or 'none named'})"
+            )
+            raise _brief_error(feature, detail)
+
+
+def _brief_metrics(feature: Feature, items: list[str]) -> dict[str, int]:
+    """The integer counts of `## Question metrics`."""
+    values: dict[str, str] = {}
+    for item in items:
+        label = LABEL.match(item)
+        if label and label.group(1) in METRICS:
+            values[label.group(1)] = label.group(2).strip()
+    for name in METRICS:
+        if not values.get(name, "").isdigit():
+            detail = f"'## Question metrics' needs an integer **{name}**"
+            raise _brief_error(feature, detail)
+    return {name: int(values[name]) for name in METRICS}
+
+
+def _check_brief_header(
+    feature: Feature, text: str, brief: dict, run_mode: str | None
+) -> str:
+    """Evidence marker, authority note and mode; return the brief's mode."""
+    if text.partition("\n")[0].strip() != DISCOVERY_MARKER:
+        detail = f"the first line must be {DISCOVERY_MARKER}"
+        raise _brief_error(feature, detail)
+    for name in ("spec.md", "intent.md"):
+        if f"]({name})" not in brief["preamble"]:
+            detail = (
+                f"the authority note before the first section must link {name}: "
+                "the brief is input evidence, spec.md and intent.md govern"
+            )
+            raise _brief_error(feature, detail)
+    mode = brief["mode"]
+    if mode not in autonomy.MODES:
+        detail = "state **Mode**: human-gated or **Mode**: autonomous"
+        raise _brief_error(feature, detail)
+    if run_mode is not None and mode != run_mode:
+        detail = f"**Mode** is {mode}, but this run is {run_mode}"
+        raise _brief_error(feature, detail)
+    return mode
+
+
+def _check_brief_sections(feature: Feature, brief: dict) -> None:
+    """Every section filled, the need spelled out, cited sources present."""
+    for name in DISCOVERY_SECTIONS:
+        if not brief["sections"].get(name):
+            detail = f"section '## {name}' is missing or empty"
+            raise _brief_error(feature, detail)
+    need = brief["items"]["Need"]
+    for label in NEED_ITEMS:
+        if not any(item.startswith(f"**{label}**:") for item in need):
+            detail = f"section '## Need' lacks the **{label}** item"
+            raise _brief_error(feature, detail)
+    if not brief["items"]["Examples"]:
+        detail = "section '## Examples' needs one example or more"
+        raise _brief_error(feature, detail)
+    for item in brief["items"]["Sources"]:
+        if not item.lower().startswith("unavailable:"):
+            entry = SOURCE_ENTRY.match(item)
+            _check_cited(feature, "'## Sources'", entry.group(1) if entry else item)
+
+
+def _check_brief_iacs(feature: Feature, iacs: list[tuple[str, str]]) -> None:
+    """IAC-n items, verbatim from the Issue snapshot when it lists criteria."""
+    listed = [ident for ident, _ in iacs]
+    if "" in listed or len(set(listed)) != len(listed):
+        detail = "'## Issue acceptance criteria' needs unique 'IAC-n: <text>' items"
+        raise _brief_error(feature, detail)
+    criteria = _issue_criteria(feature)
+    mine = [" ".join(text.split()) for _, text in iacs]
+    if criteria is not None and mine != criteria:
+        missing = "; ".join(c for c in criteria if c not in mine) or "none"
+        extra = "; ".join(c for c in mine if c not in criteria) or "none"
+        detail = (
+            "'## Issue acceptance criteria' must list the Issue's criteria verbatim "
+            f"and in order (missing: {missing}; not in the Issue: {extra})"
+        )
+        raise _brief_error(feature, detail)
+
+
+def _check_brief(
+    feature: Feature, text: str, brief: dict, run_mode: str | None
+) -> None:
+    """Structure, provenance and coverage of a brief (data-model.md)."""
+    mode = _check_brief_header(feature, text, brief, run_mode)
+    _check_brief_sections(feature, brief)
+    _check_marked_items(feature, brief["items"])
+    sections = "\n".join(brief["sections"].values())
+    _check_decision_markers(feature, sections, brief["decisions"], mode)
+    for item in brief["decisions"].values():
+        _check_decision_status(feature, item, mode)
+        _check_decision_fields(feature, item)
+    _check_undecided(feature, brief["items"]["Undecided"], brief["decisions"])
+    _check_brief_iacs(feature, brief["iacs"])
+    # Only the operator's own answer may use approval wording (FR-010).
+    checked = ANSWER_LINE.sub("", text) if mode == "human-gated" else text
+    if autonomy.HUMAN_APPROVAL.search(checked):
+        detail = (
+            "claims a human approval; an agent's choice is an inference or "
+            "agent-provisional, and only an operator **Answer** may say otherwise"
+        )
+        raise _brief_error(feature, detail)
+    _brief_metrics(feature, brief["items"]["Question metrics"])
+
+
+def _discovery_state_path(feature: Feature) -> Path:
+    """Operator state of the feature's discovery, outside every checkout."""
+    key = hashlib.sha256(feature.relative.encode()).hexdigest()
+    try:
+        base = state_dir(feature.root)
+    except OSError as error:
+        raise ContractError(str(error)) from error
+    return base / "discovery" / f"{key}.json"
+
+
+def _valid_discovery_state(data: object, feature: str) -> bool:
+    if not isinstance(data, dict) or data.get("feature") != feature:
+        return False
+    rounds, answered = data.get("rounds"), data.get("answered")
+    return (
+        isinstance(data.get("ran"), bool)
+        and isinstance(rounds, list)
+        and all(
+            isinstance(r, dict)
+            and isinstance(r.get("asked"), list)
+            and all(isinstance(i, str) for i in r["asked"])
+            and isinstance(r.get("questions_digest"), str)
+            for r in rounds
+        )
+        and isinstance(answered, dict)
+        and all(isinstance(v, str) for v in answered.values())
+    )
+
+
+def _load_discovery_state(feature: Feature) -> dict:
+    """Operator record of question rounds, accepted answers and `ran`."""
+    path = _discovery_state_path(feature)
+    if not os.path.lexists(path):
+        return {"feature": feature.relative, "rounds": [], "answered": {}, "ran": False}
+    message = f"operator discovery state {path} is malformed"
+    if path.is_symlink() or not path.is_file():
+        raise ContractError(message)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ContractError(message) from error
+    if not _valid_discovery_state(data, feature.relative):
+        raise ContractError(message)
+    return data
+
+
+def _save_discovery_state(feature: Feature, state: dict) -> None:
+    """Write operator state by rename, never through a symlink."""
+    path = _discovery_state_path(feature)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(path.name + ".tmp")
+    staged.unlink(missing_ok=True)
+    text = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    staged.write_text(text, encoding="utf-8")
+    staged.replace(path)
+
+
+def _discovery_ran(feature: Feature) -> bool:
+    """A brief exists, or the operator state says discovery validated (R-06)."""
+    if feature.file(DISCOVERY).exists():
+        return True
+    try:
+        return _load_discovery_state(feature)["ran"]
+    except ContractError:
+        if feature.run_id is not None:
+            raise
+        return False
+
+
+def _text_digest(*parts: object) -> str:
+    data = json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(data.encode()).hexdigest()
+
+
+def _questions_digest(decisions: dict, asked: list[str]) -> str:
+    """Digest of what a round asked: each question, reason, option and default."""
+    fields = ("id", "question", "why", "options", "default")
+    return _text_digest(*([decisions[i][f] for f in fields] for i in asked))
+
+
+def _question_message(
+    feature: Feature, decisions: dict, pending: list[str], number: int
+) -> str:
+    """The one bundled question round, with how to answer and resume (AC-006)."""
+    lines = [
+        f"discovery needs your answers (question round {number}); the "
+        "repository and the Issue do not settle these decisions:",
+    ]
+    for ident in pending:
+        item = decisions[ident]
+        lines += [
+            "",
+            f"{ident}: {item['question']}",
+            f"  Why it matters: {item['why']}",
+            "  Options:",
+            *(f"    - {option}" for option in item["options"]),
+            f"  Recommended default: {item['default']}",
+        ]
+    lines += [
+        "",
+        f"For each decision above, edit {feature.relative}/{DISCOVERY}: set "
+        "**Status** to answered and write your choice on its **Answer** line "
+        "(the recommended default is fine). Leave the questions unchanged, then "
+        f"run `ballast run resume {feature.run_id}`.",
+    ]
+    return "\n".join(lines)
+
+
+def _write_metrics(feature: Feature, text: str, values: tuple[int, ...]) -> None:
+    """Rewrite only the `## Question metrics` section (FR-015)."""
+    lines = text.split("\n")
+    heads = {i: SECTION.match(line) for i, line in enumerate(lines)}
+    starts = [i for i, match in heads.items() if match]
+    start = next(i for i in starts if heads[i].group(1) == "Question metrics")
+    end = next((i for i in starts if i > start), len(lines))
+    pairs = zip(METRICS, values, strict=True)
+    # Keeps the blank line before the next section, or the final newline.
+    body = ["", *(f"- **{name}**: {value}" for name, value in pairs), ""]
+    updated = "\n".join([*lines[: start + 1], *body, *lines[end:]])
+    if updated != text:
+        path = feature.file(DISCOVERY)
+        staged = path.with_name(path.name + ".tmp")
+        staged.unlink(missing_ok=True)
+        staged.write_text(updated, encoding="utf-8")
+        staged.replace(path)
+
+
+def _asked(feature: Feature, state: dict, decisions: dict) -> set[str]:
+    """Decisions of the recorded rounds, whose questions must be unchanged."""
+    asked: set[str] = set()
+    for number, round_ in enumerate(state["rounds"], 1):
+        ids = round_["asked"]
+        if any(i not in decisions for i in ids) or (
+            _questions_digest(decisions, ids) != round_["questions_digest"]
+        ):
+            detail = (
+                f"the questions asked in round {number} ({', '.join(ids)}) changed "
+                "or were removed after they were asked; restore them as asked"
+            )
+            raise _brief_error(feature, detail)
+        asked.update(ids)
+    return asked
+
+
+def _check_answers(
+    feature: Feature, state: dict, decisions: dict, asked: set[str]
+) -> None:
+    """Accept answers only to asked questions; an accepted one never changes."""
+    for ident, item in decisions.items():
+        accepted = state["answered"].get(ident)
+        if item["status"] == "answered" and ident not in asked:
+            detail = (
+                f"{ident} has an answer to a question that was not asked; only "
+                "the operator answers, after validate-discovery asks"
+            )
+        elif accepted is not None and (
+            item["status"] != "answered" or _text_digest(item["answer"]) != accepted
+        ):
+            detail = f"the accepted answer to {ident} changed after it was accepted"
+        else:
+            continue
+        raise _brief_error(feature, detail)
+
+
+def _check_gated_discovery(feature: Feature, text: str, brief: dict) -> None:
+    """Ask every open decision once; accept only answers to asked questions.
+
+    The round is recorded in operator state before the validation fails, so
+    an answer an agent wrote before it was asked is never the operator's.
+    """
+    state = _load_discovery_state(feature)
+    decisions = brief["decisions"]
+    asked = _asked(feature, state, decisions)
+    _check_answers(feature, state, decisions, asked)
+    pending = [i for i, item in decisions.items() if item["status"] == "open"]
+    new = [i for i in pending if i not in asked]
+    if new:
+        at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        digest = _questions_digest(decisions, new)
+        state["rounds"].append({"asked": new, "questions_digest": digest, "at": at})
+        _save_discovery_state(feature, state)
+    if pending:
+        number = len(state["rounds"])
+        raise ContractError(_question_message(feature, decisions, pending, number))
+    given = {i: d["answer"] for i, d in decisions.items() if d["status"] == "answered"}
+    state["answered"].update({i: _text_digest(a) for i, a in given.items()})
+    state["ran"] = True
+    _save_discovery_state(feature, state)
+    questions = sum(len(round_["asked"]) for round_ in state["rounds"])
+    _write_metrics(feature, text, (len(state["rounds"]), questions, 0))
+
+
+def _changed_paths(feature: Feature) -> list[str]:
+    """Paths `git status` reports as changed, both sides of a rename."""
+    status = autonomy.git(
+        feature.root, "status", "--porcelain", "-z", "--untracked-files=all"
+    ).stdout
+    entries = status.split("\0")
+    paths = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:  # noqa: PLR2004 - "XY path"
+            continue
+        paths.append(entry[3:])
+        if entry[0] in {"R", "C"} and index < len(entries):
+            paths.append(entries[index])
+            index += 1
+    return paths
+
+
+def _recorded_assumptions(feature: Feature) -> list[str]:
+    """D-NN of each current clarification decision recorded from discovery."""
+    run = _require_run(feature)
+    entries = autonomy.current(
+        autonomy.read_decisions(feature.root, run["run_id"]), "clarification"
+    )
+    questions = [(e.get("assumption") or {}).get("question", "") for e in entries]
+    return [m.group(1) for q in questions if (m := DISCOVERY_ASSUMPTION.match(q))]
+
+
+def _check_autonomous_discovery(feature: Feature, brief: dict) -> None:
+    """Assumptions match the recorded decisions; nothing changed outside <f>."""
+    recorded = _recorded_assumptions(feature)
+    decisions = brief["decisions"]
+    assumed = {i for i, d in decisions.items() if d["status"] == "assumed"}
+    unmatched = sorted(assumed ^ set(recorded))
+    if unmatched or len(set(recorded)) != len(recorded):
+        detail = (
+            "each assumed decision needs exactly one clarification-discovery-<n> "
+            "draft whose assumption question starts with its 'D-NN:'; mismatched: "
+            + (", ".join(unmatched) or "a decision recorded twice")
+        )
+        raise _brief_error(feature, detail)
+    values = _brief_metrics(feature, brief["items"]["Question metrics"])
+    for name, value in zip(METRICS, (0, 0, len(recorded)), strict=True):
+        if values[name] != value:
+            detail = (
+                f"'## Question metrics' **{name}** is {values[name]}, but the run "
+                f"recorded {value}"
+            )
+            raise _brief_error(feature, detail)
+    prefix = feature.relative + "/"
+    outside = sorted(p for p in _changed_paths(feature) if not p.startswith(prefix))
+    if outside:
+        listed = ", ".join(outside[:10])
+        message = f"the discover step changed files outside {prefix}: {listed}"
+        raise ContractError(message)
+    state = _load_discovery_state(feature)
+    state["ran"] = True
+    _save_discovery_state(feature, state)
+
+
+def check_discovery(feature: Feature) -> None:
+    """Validate the discovery brief; in a run, attribute and count questions."""
+    text = feature.read(DISCOVERY)
+    try:
+        brief = _parse_discovery(text)
+    except ContractError as error:
+        raise _brief_error(feature, str(error)) from error
+    run_mode = None
+    if feature.run is not None:
+        run_mode = "autonomous"
+    elif feature.run_id is not None:
+        run_mode = "human-gated"
+    _check_brief(feature, text, brief, run_mode)
+    if run_mode == "autonomous":
+        _check_autonomous_discovery(feature, brief)
+    elif run_mode == "human-gated":
+        _check_gated_discovery(feature, text, brief)
+
+
+def _spec_items(spec: str) -> list[tuple[str, bool, str | None]]:
+    """Each list item: (text, is an acceptance scenario, non-goal heading)."""
+    items: list[tuple[str, bool, str | None]] = []
+    scenarios = False
+    non_goal: tuple[int, str] | None = None
+    open_item = False
+    for line in spec.splitlines():
+        heading = HEADING_LINE.match(line)
+        if heading:
+            level = len(heading.group(1))
+            if non_goal and level <= non_goal[0]:
+                non_goal = None
+            if NON_GOALS.search(heading.group(2)):
+                non_goal = (level, heading.group(2))
+        if heading or line.strip() == "---":
+            scenarios = bool(heading and SCENARIOS_LABEL.match(line))
+            open_item = False
+            continue
+        if SCENARIOS_LABEL.match(line):
+            scenarios, open_item = True, False
+            continue
+        match = LIST_ITEM.match(line)
+        if match:
+            items.append((match.group(1).strip(), scenarios, non_goal and non_goal[1]))
+            open_item = True
+        elif open_item and line[:1] in {" ", "\t"} and line.strip():
+            text, inside, goal = items[-1]
+            items[-1] = (f"{text} {line.strip()}", inside, goal)
+        elif line.strip():
+            open_item = False
+            scenarios = False
+    return items
+
+
+def _spec_brief(feature: Feature) -> dict | None:
+    """The brief a spec traces to, or None when discovery never ran (R-06)."""
+    if not _discovery_ran(feature):
+        return None
+    path = feature.file(DISCOVERY)
+    if not path.exists():
+        message = (
+            f"discovery ran for {feature.relative}, but {feature.relative}/"
+            f"{DISCOVERY} is missing; restore the brief"
+        )
+        raise ContractError(message)
+    try:
+        return _parse_discovery(path.read_text(encoding="utf-8"))
+    except ContractError as error:
+        raise _brief_error(feature, str(error)) from error
+
+
+def _check_spec_criteria(where: str, items: list[tuple[str, bool, str | None]]) -> None:
+    """Every scenario has an AC-NNN ID and every criterion a provenance marker."""
+    for item, scenario, _ in items:
+        found = AC_ID.search(item)
+        if scenario and found is None:
+            message = (
+                f"{where}: acceptance scenario {_short(item)!r} has no **AC-NNN** "
+                "ID; once discovery ran, every scenario is numbered and traced"
+            )
+            raise ContractError(message)
+        if found and not _markers(item):
+            message = (
+                f"{where}: acceptance criterion {found.group(1)} has no provenance "
+                "marker ([S: ...], [B: ...], [I], [O: D-NN] or [P: D-NN])"
+            )
+            raise ContractError(message)
+    if not any(AC_ID.search(item) for item, _, _ in items):
+        message = f"{where} has no acceptance scenario with an **AC-NNN** ID"
+        raise ContractError(message)
+
+
+def _check_spec_decisions(
+    feature: Feature, where: str, spec: str, decisions: dict
+) -> None:
+    """[O: D-NN] and [P: D-NN] name answered and assumed brief decisions."""
+    answered = None
+    if feature.run is None and feature.run_id is not None:
+        answered = _load_discovery_state(feature)["answered"]
+    for marker in _markers(spec):
+        kind = _marker_kind(marker)
+        if kind not in MARKER_DECISION:
+            continue
+        ident, status = marker[4:-1], MARKER_DECISION[kind][0]
+        if decisions.get(ident, {}).get("status") != status or (
+            kind == "O" and answered is not None and ident not in answered
+        ):
+            message = f"{where}: {marker} refers to {ident}, which is not {status}"
+            raise ContractError(message)
+
+
+def _check_spec_coverage(
+    where: str, items: list[tuple[str, bool, str | None]], iacs: list
+) -> None:
+    """Each IAC-n is cited by an acceptance criterion or listed as a non-goal."""
+    covered: set[str] = set()
+    for item, _, goal in items:
+        if goal:
+            covered.update(IAC_TOKEN.findall(item))
+        elif AC_ID.search(item):
+            covered.update(IAC_TOKEN.findall(" ".join(_markers(item))))
+    for ident, text in iacs:
+        if ident not in covered:
+            message = (
+                f"{where}: Issue acceptance criterion {ident} ({_short(text)}) is "
+                "neither cited by an acceptance criterion's marker nor listed under "
+                "a Non-goals heading"
+            )
+            raise ContractError(message)
+
+
+def _spec_traceability(feature: Feature, spec: str) -> None:
+    """Trace spec.md to the brief once discovery ran (FR-011, FR-012)."""
+    brief = _spec_brief(feature)
+    if brief is None:
+        return
+    where = f"{feature.relative}/spec.md"
+    items = _spec_items(spec)
+    _check_spec_criteria(where, items)
+    _check_spec_decisions(feature, where, spec, brief["decisions"])
+    _check_spec_coverage(where, items, brief["iacs"])
 
 
 # --- Autonomous runs ------------------------------------------------------
@@ -1761,6 +2649,7 @@ CHECKS = {
     "record-decision": record_decision,
     "record-provisional-intent": record_provisional_intent,
     "run-checks": run_checks,
+    "discovery": check_discovery,
 }
 
 

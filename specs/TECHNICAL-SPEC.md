@@ -666,8 +666,11 @@ Mapping:
 Spec Kit constitution
 → project principles
 
+speckit.ballast.discover (+ validate-discovery)
+→ discovery.md (input evidence, not authority)
+
 speckit specify
-→ spec.md
+→ spec.md (traced to discovery.md)
 
 speckit plan
 → plan.md
@@ -682,6 +685,8 @@ speckit converge
 → verification/reconciliation
 
 ```
+
+In both the human-gated (`ballast-feature`) and the Autonomous (`ballast-autonomous`) workflows, a `discover` step runs after the scope decision and before `speckit.specify`. It writes a source-backed discovery brief from the Issue, its comments and the relevant repository documents. A human-gated run asks the open high-impact decisions in one bundled round, answered in the brief and attributed through operator state. An Autonomous run records safe, reversible defaults as agent-provisional `clarification` decisions, or blocks. Once discovery ran, the spec check requires every acceptance criterion to carry a provenance marker and every Issue acceptance criterion to be covered or listed as a non-goal. `spec.md` and `intent.md` remain the feature's authority; see `docs/policies/spec-kit-workflow.md` (Discovery brief).
 
 The system MUST nonetheless keep its artifacts in formats standard enough to allow abandoning Spec Kit later.
 

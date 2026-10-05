@@ -574,7 +574,11 @@ class RunStartTests(RunCase):
                     ],
                 )
         self.assertEqual(self.run_ids(), [])
-        self.assertEqual(self.gh_calls(), [])
+        # #16: the only GitHub access is the read of the run's Issue.
+        self.assertTrue(self.gh_calls())
+        for call in self.gh_calls():
+            self.assertEqual(call[0], "api", call)
+            self.assertTrue(call[1].startswith("repos/acme/demo/issues/27"), call)
 
     def test_mode_limits_and_eligibility_are_not_workflow_inputs(self) -> None:
         self.engine["scenario"] = self.publishable
@@ -626,6 +630,78 @@ class RunStartTests(RunCase):
         self.assertIn("publish retries only", err)
         code, _, err = self.main("publish", "nope")
         self.assertEqual(code, 2)
+
+
+class HumanGatedSnapshotTests(RunCase):
+    """#16 T009 [AC-003]: a human-gated start writes the Issue snapshot."""
+
+    def gated_start(self) -> tuple[int, str, str]:
+        return self.main(
+            "start",
+            "-i",
+            "idea=Issue #27: demo",
+            "-i",
+            f"feature_directory={FEATURE}",
+        )
+
+    def snapshot(self) -> str:
+        return (self.root / ".specify/workflow-state/issues/27.md").read_text()
+
+    def test_snapshot_with_comments_is_written_before_the_engine(self) -> None:
+        comments = json.loads(
+            (self.gh_dir / "repos_acme_demo_issues_27_comments.json").read_text()
+        )
+        comments.append(
+            {
+                "body": "Please also import notes.",
+                "author_association": "CONTRIBUTOR",
+                "user": {"login": "alice"},
+                "created_at": "2026-10-01T10:00:00Z",
+            }
+        )
+        self.gh_data("repos_acme_demo_issues_27_comments.json", comments)
+        seen: list[str] = []
+        self.engine["scenario"] = lambda _: seen.append(self.snapshot())
+        code, out, err = self.gated_start()
+        self.assertEqual(code, 0, err)
+        ((command, _),) = self.launched
+        self.assertEqual(command[1:4], ["workflow", "run", "ballast-feature"])
+        (text,) = seen
+        self.assertIn("untrusted", text.lower())
+        self.assertIn("## Acceptance criteria\n\n- works", text)
+        self.assertIn("Main outcome: Demo outcome", text)
+        self.assertIn("### alice (CONTRIBUTOR), 2026-10-01T10:00:00Z", text)
+        self.assertIn("Please also import notes.", text)
+        self.assertIn("Issue snapshot: .specify/workflow-state/issues/27.md", out)
+        self.assertIn(["api", "repos/acme/demo/issues/27"], self.gh_calls())
+
+    def test_unreadable_issue_is_recorded_and_the_start_goes_on(self) -> None:
+        (self.gh_dir / "FAIL_api").write_text("HTTP 503: unavailable\n")
+        code, out, err = self.gated_start()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.launched), 1)
+        self.assertIn("Issue #27 could not be read: ", self.snapshot())
+        self.assertIn("HTTP 503", self.snapshot())
+        self.assertIn("discovery lists it as unavailable", out)
+
+    def test_missing_gh_is_recorded_and_the_start_goes_on(self) -> None:
+        missing = autonomy.AutonomyError("gh not found outside working trees")
+        with patch.object(run.autonomy, "read_issue", side_effect=missing):
+            code, _, err = self.gated_start()
+        self.assertEqual(code, 0, err)
+        self.assertIn("could not be read: gh not found", self.snapshot())
+
+    def test_engine_never_receives_a_token(self) -> None:
+        self.assertIn("GH_TOKEN", os.environ)
+        environment = run._environment("run1")  # noqa: SLF001
+        self.assertFalse(set(environment) & set(run.draft_pr.TOKEN_VARIABLES))
+
+    def test_autonomous_start_still_fails_closed(self) -> None:
+        (self.gh_dir / "FAIL_api").write_text("")
+        code, _, err = self.start()
+        self.assertEqual(code, run.EXIT_REFUSED)
+        self.assertIn("cannot check autonomous eligibility", err)
+        self.assertEqual(self.launched, [])
 
 
 class RunBlockTests(RunCase):

@@ -2,9 +2,9 @@ schema_version: "1.0"
 
 extension:
   id: ballast
-  name: "Ballast Autonomous Decisions"
-  version: "1.0.0"
-  description: "Agent-provisional decisions, clarification, reviews and resolutions for ballast-autonomous runs"
+  name: "Ballast Workflow Commands"
+  version: "1.1.0"
+  description: "Discovery briefs for feature runs; agent-provisional decisions, clarification, reviews and resolutions for Autonomous runs"
   category: "process"
   effect: "read-write"
   author: "Ballast"
@@ -17,6 +17,9 @@ requires:
 
 provides:
   commands:
+    - name: "speckit.ballast.discover"
+      file: "commands/speckit.ballast.discover.md"
+      description: "Write the source-backed discovery brief before specification"
     - name: "speckit.ballast.decide"
       file: "commands/speckit.ballast.decide.md"
       description: "Record one agent-provisional gate decision as a draft, or block"

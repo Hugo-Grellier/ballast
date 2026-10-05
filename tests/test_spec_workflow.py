@@ -1299,6 +1299,7 @@ class WorkflowOrderTests(unittest.TestCase):
     def test_producers_are_validated_before_the_next_step(self) -> None:
         ids = [step["id"] for step in _steps()]
         for producer, validator in (
+            ("discover", "validate-discovery"),
             ("specify", "validate-spec"),
             ("clarify", "validate-clarified-spec"),
             ("approve-intent", "record-intent"),
@@ -1433,10 +1434,28 @@ class InterpreterStartupTests(unittest.TestCase):
 FAKE_INTEGRATION = """#!/usr/bin/env python3
 import os, shutil, sys
 prompt = sys.argv[2]
+if "speckit-ballast-discover" in prompt and os.environ.get("FAKE_BRIEF"):
+    os.makedirs("specs/102-demo-import", exist_ok=True)
+    shutil.copy(os.environ["FAKE_BRIEF"], "specs/102-demo-import/discovery.md")
 if "speckit-specify" in prompt and os.environ.get("FAKE_SPEC"):
     os.makedirs("specs/102-demo-import", exist_ok=True)
     shutil.copy(os.environ["FAKE_SPEC"], "specs/102-demo-import/spec.md")
 """
+
+
+def _gated_brief() -> str:
+    """A settled human-gated brief citing only the Issue: nothing to ask."""
+    issue = "Issue #102 body"
+    return brief_text(
+        {
+            "Sources": f"- S-1: {issue}",
+            "Non-goals": "- Audio import [I]",
+            "Constraints": f"- Text only [S: {issue}]",
+            "Decisions": decision(
+                "D-01", "settled", sources=f"[S: {issue}]", resolution=f"[S: {issue}]"
+            ),
+        }
+    )
 
 
 @unittest.skipUnless(shutil.which("specify"), "Spec Kit CLI not installed")
@@ -1454,11 +1473,14 @@ class EngineRunTests(unittest.TestCase):
         agent = root / "fake-agent"
         agent.write_text(FAKE_INTEGRATION)
         agent.chmod(0o755)
-        (root / "spec-fixture.md").write_text(SPEC)
+        # Specs written after discovery are traced (#16).
+        (root / "spec-fixture.md").write_text(TRACED_SPEC)
+        (root / "brief-fixture.md").write_text(_gated_brief())
         self.env = {
             **os.environ,
             "BALLAST_SPEC_WORKFLOW": "1",
             "SPECKIT_INTEGRATION_CLAUDE_EXECUTABLE": str(agent),
+            "FAKE_BRIEF": str(root / "brief-fixture.md"),
         }
 
     def tearDown(self) -> None:
@@ -1505,6 +1527,7 @@ class EngineRunTests(unittest.TestCase):
         state = self.run_workflow(["approve"])
         results = state["step_results"]
         self.assertEqual(state["status"], "failed")
+        self.assertEqual(results["validate-discovery"]["status"], "completed")
         self.assertEqual(results["specify"]["status"], "completed")
         self.assertEqual(results["validate-spec"]["status"], "failed")
         self.assertNotIn("clarify", results)
@@ -1865,18 +1888,29 @@ class RunHistoryTests(unittest.TestCase):
 
 AUTONOMOUS_WORKFLOW = ROOT / "templates/spec-kit/workflows/autonomous/workflow.yml"
 CONTINUE_WORKFLOW = ROOT / "templates/spec-kit/workflows/continue/workflow.yml"
-# SHA-256 of ballast-feature's workflow.yml on main before Autonomous runs.
+COMMANDS = ROOT / "templates/spec-kit/extensions/ballast/commands"
+# SHA-256 of ballast-feature's workflow.yml (1.2.0, with #16's discovery):
+# Autonomous work must not change it unnoticed.
 FEATURE_WORKFLOW_DIGEST = (
-    "af141e8475e3934493ef143baa485744c30fcde0503e0b8c3ebf36622d1ab3ed"
+    "f96ebfcce18e449e8b5aed949f16e85f0144bc611c6eeb953d7995996ec56c50"
+)
+# Both workflows' clarify step (#16): no decision of the brief is asked again.
+CLARIFY_ARGS = (
+    "Read {{ inputs.feature_directory }}/discovery.md first. Do not reopen or ask "
+    "again a decision the brief settled, answered or assumed; ask only about a "
+    "new contradiction it does not cover."
 )
 # contracts/workflow.md, ballast-autonomous: (step id, check or command, args).
 AUTONOMOUS_STEPS = (
     ("preflight", "autonomous-preflight", None),
     ("decide-scope", "speckit.ballast.decide", "scope"),
     ("record-scope", "record-decision", "scope"),
+    ("discover", "speckit.ballast.discover", "autonomous"),
+    ("record-discovery", "record-decision", "clarification"),
+    ("validate-discovery", "discovery", None),
     ("specify", "speckit.specify", None),
     ("validate-spec", "spec", None),
-    ("clarify", "speckit.ballast.clarify", None),
+    ("clarify", "speckit.ballast.clarify", CLARIFY_ARGS),
     ("record-clarifications", "record-decision", "clarification"),
     ("validate-clarified-spec", "clarified-spec", None),
     ("decide-intent", "speckit.ballast.decide", "intent"),
@@ -1980,6 +2014,9 @@ class AutonomousWorkflowDefinitionTests(unittest.TestCase):
         ids = [step["id"] for step in self.steps]
         for producer, check in (
             ("decide-scope", "record-scope"),
+            ("discover", "record-discovery"),
+            ("record-discovery", "validate-discovery"),
+            ("validate-discovery", "specify"),
             ("specify", "validate-spec"),
             ("clarify", "record-clarifications"),
             ("decide-intent", "record-provisional-intent"),
@@ -2000,6 +2037,73 @@ class AutonomousWorkflowDefinitionTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(WORKFLOW.read_bytes()).hexdigest(), FEATURE_WORKFLOW_DIGEST
         )
+
+
+class DiscoveryWorkflowTests(unittest.TestCase):
+    """#16 T010 [AC-001], T020 [AC-007], T033 [AC-014]: the discover steps."""
+
+    def setUp(self) -> None:
+        self.feature = yaml.safe_load(WORKFLOW.read_text())
+        self.autonomous = yaml.safe_load(AUTONOMOUS_WORKFLOW.read_text())
+
+    def steps(self, doc: dict) -> dict[str, dict]:
+        return {step["id"]: step for step in doc["steps"]}
+
+    def test_versions(self) -> None:
+        self.assertEqual(self.feature["workflow"]["version"], "1.2.0")
+        self.assertEqual(self.autonomous["workflow"]["version"], "1.1.0")
+
+    def test_feature_discovers_after_the_scope_gate(self) -> None:
+        ids = [step["id"] for step in self.feature["steps"]]
+        start = ids.index("scope-gate")
+        self.assertEqual(
+            ids[start : start + 4],
+            ["scope-gate", "discover", "validate-discovery", "specify"],
+        )
+        steps = self.steps(self.feature)
+        self.assertEqual(steps["discover"]["command"], "speckit.ballast.discover")
+        self.assertEqual(steps["discover"]["input"]["args"], "human-gated")
+        self.assertEqual(
+            steps["validate-discovery"]["run"],
+            SHELL_PREFIX + "discovery --run {{ context.run_id }}",
+        )
+
+    def test_autonomous_records_then_validates_discovery(self) -> None:
+        steps = self.steps(self.autonomous)
+        self.assertEqual(steps["discover"]["input"]["args"], "autonomous")
+        self.assertEqual(
+            _shell_check(steps["record-discovery"]["run"]),
+            ("record-decision", "clarification"),
+        )
+
+    def test_clarify_does_not_ask_again(self) -> None:
+        for doc in (self.feature, self.autonomous):
+            with self.subTest(doc["workflow"]["id"]):
+                self.assertEqual(
+                    self.steps(doc)["clarify"]["input"]["args"], CLARIFY_ARGS
+                )
+        command = COMMANDS / "speckit.ballast.clarify.md"
+        text = " ".join(command.read_text().split())
+        self.assertIn(
+            "do not reopen a decision the brief settled, answered or assumed", text
+        )
+
+    def test_specify_writes_a_traced_spec_from_the_brief(self) -> None:
+        for doc in (self.feature, self.autonomous):
+            with self.subTest(doc["workflow"]["id"]):
+                args = self.steps(doc)["specify"]["input"]["args"]
+                self.assertIn(
+                    "Write spec.md from {{ inputs.feature_directory }}/discovery.md",
+                    args,
+                )
+                for phrase in (
+                    "every acceptance scenario an AC-NNN ID",
+                    "every functional requirement and acceptance criterion",
+                    "provenance marker",
+                    "cite every IAC-n",
+                    "Non-goals heading",
+                ):
+                    self.assertIn(phrase, args)
 
 
 class ContinueWorkflowDefinitionTests(unittest.TestCase):
@@ -2051,6 +2155,8 @@ class ContinueWorkflowDefinitionTests(unittest.TestCase):
 
 
 sys.path.insert(0, str(ROOT / "tests"))
+import discovery_fixtures  # noqa: E402
+from discovery_fixtures import brief_text, decision, metrics  # noqa: E402
 import test_branch_sync  # noqa: E402
 from test_autonomy import (  # noqa: E402
     AutonomyCase,
@@ -2070,6 +2176,21 @@ finally:
 
 AUTO_FEATURE = "specs/27-demo-run"
 DONE_TASKS = TASKS.replace("- [ ]", "- [x]")
+# Specs written after discovery are traced to the brief (#16).
+TRACED_SPEC = discovery_fixtures.SPEC
+# The engine's checkout has README.md but no policies: cite only what exists.
+AUTO_BRIEF_SECTIONS = {
+    "Sources": "- S-1: Issue #27 body\n- S-2: README.md",
+    "Non-goals": "- Audio import [I]",
+    "Constraints": "- Keep the demo small [S: README.md]",
+    "Decisions": decision(
+        "D-01",
+        "settled",
+        sources="[S: Issue #27 body]",
+        resolution="Plain text, as [S: README.md] shows",
+    ),
+}
+AUTO_BRIEF = brief_text(AUTO_BRIEF_SECTIONS, mode="autonomous")
 
 
 def _draft(point: str, artifact: str, **changes: object) -> str:
@@ -2120,7 +2241,8 @@ def _autonomous_plan() -> dict[str, dict[str, str]]:
 
     return {
         "speckit-ballast-decide-scope": decide("scope", "README.md"),
-        "speckit-specify": {spec: SPEC},
+        "speckit-ballast-discover-autonomous": {f"{feature}/discovery.md": AUTO_BRIEF},
+        "speckit-specify": {spec: TRACED_SPEC},
         "speckit-ballast-decide-intent": decide("intent", spec),
         "speckit-plan": {plan: PLAN},
         "speckit-ballast-review-plan": _review("plan-review", "plan"),
@@ -2406,6 +2528,62 @@ class AutonomousEngineTests(AutonomousEngineCase):
         self.assertNotIn("review-plan", results)
         self.assertEqual(block["category"], "postcondition")
         self.assertEqual(self.agent_commands(run_id)[-1], "speckit-plan")
+
+
+class AutonomousDiscoveryEngineTests(AutonomousEngineCase):
+    """#16 T028 [AC-010, AC-011, AC-012]: discovery assumes or blocks, unasked."""
+
+    def test_safe_gap_is_assumed_and_recorded(self) -> None:
+        feature = AUTO_FEATURE
+        sections = AUTO_BRIEF_SECTIONS | {
+            "Inferred": "- Plain text is used [P: D-01]",
+            "Decisions": decision(
+                "D-01", "assumed", resolution="Plain text: reversible, no data loss"
+            ),
+            "Question metrics": metrics(0, 0, 1),
+        }
+        assumption = {
+            "question": "D-01: Which output format?",
+            "default": "Plain text",
+            "reversible": True,
+        }
+        plan = _autonomous_plan()
+        plan["speckit-ballast-discover-autonomous"] = {
+            f"{feature}/discovery.md": brief_text(sections, mode="autonomous"),
+            f"{feature}/autonomous/drafts/clarification-discovery-1.json": _draft(
+                "clarification",
+                f"{feature}/discovery.md",
+                summary="D-01: assume plain text output",
+                assumption=assumption,
+            ),
+        }
+        self.layout(plan)
+        code, out, err, run_id = self.start()
+        self.assertEqual(code, 0, out + err)
+        results = self.engine_state(run_id)["step_results"]
+        for step in ("record-discovery", "validate-discovery"):
+            self.assertEqual(results[step]["status"], "completed", step)
+        record = (self.root / feature / "autonomous/record.md").read_text()
+        self.assertIn("D-01: assume plain text output", record)
+        self.assertIn("assume (agent-provisional)", record)
+        body = (self.gh_dir / "pr-body.md").read_text()
+        self.assertIn("D-01: assume plain text output", body)
+
+    def test_unsafe_gap_blocks_with_options(self) -> None:
+        plan = _autonomous_plan()
+        plan["speckit-ballast-discover-autonomous"] = BLOCKED | _block_draft(
+            "contradiction", "D-01: the Issue and the README disagree on the format"
+        )
+        self.layout(plan)
+        run_id, block, out = self.stopped()
+        self.assertEqual(block["category"], "contradiction")
+        self.assertIn("D-01", block["condition"])
+        self.assertEqual(len(block["options"]), 2)
+        self.assertIn("option: Keep -> Imports stay visible", out)
+        self.assertEqual(self.agent_commands(run_id)[-1], "speckit-ballast-discover")
+        self.assertNotIn("specify", self.engine_state(run_id)["step_results"])
+        points = [e["point"] for e in autonomy.read_decisions(self.root, run_id)]
+        self.assertNotIn("clarification", points)
 
 
 class AutonomousContinueEngineTests(AutonomousEngineCase):
