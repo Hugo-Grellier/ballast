@@ -492,7 +492,7 @@ def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:
         or not isinstance(base, str)
         or not ledger.REF.fullmatch(base)
         or not all(
-            value is None or (isinstance(value, str) and ledger.COMMIT.fullmatch(value))
+            value is None or (isinstance(value, str) and ledger.OID.fullmatch(value))
             for value in (before, after)
         )
         or after is None

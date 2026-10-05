@@ -2740,5 +2740,313 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(result["feature"], FEATURE)
 
 
+OID_A = "a" * 40
+SHA_A = "b" * 64
+
+
+class SpecCriteriaTests(unittest.TestCase):
+    """R6: one criteria parser for both list forms."""
+
+    def test_parses_both_forms_in_order_with_titles_and_lines(self) -> None:
+        text = (
+            "# Spec\n"
+            "\n"
+            "1. **AC-002**: **Given** a spec, **When** parsed, **Then** listed.\n"
+            "- **AC-001**: A bulleted criterion.\n"
+            "12. **AC-010**: Plain title without a when clause.\n"
+            "   - **AC-011**: indented items are not top-level criteria.\n"
+        )
+        self.assertEqual(
+            ledger.spec_criteria(text),
+            [
+                ("AC-002", "Given a spec", 3),
+                ("AC-001", "A bulleted criterion.", 4),
+                ("AC-010", "Plain title without a when clause.", 5),
+            ],
+        )
+
+    def test_first_occurrence_only_and_title_capped(self) -> None:
+        long = "x" * 300
+        text = f"1. **AC-001**: {long}\n2. **AC-001**: again\n"
+        self.assertEqual(ledger.spec_criteria(text), [("AC-001", "x" * 120, 1)])
+
+    def test_spec_without_ids_gives_nothing(self) -> None:
+        self.assertEqual(ledger.spec_criteria("# Spec\n\nNo criteria.\n"), [])
+        self.assertEqual(ledger.spec_criteria("AC-001 inline mention\n"), [])
+
+
+class CommitFingerprintTests(unittest.TestCase):
+    """R3: a clean checkout's fingerprint equals its commit's."""
+
+    def setUp(self) -> None:
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        git(self.root, "init", "-q")
+        (self.root / FEATURE).mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def commit(self) -> str:
+        git(self.root, "add", "-A")
+        git(
+            self.root,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "x",
+        )
+        return git(self.root, "rev-parse", "HEAD")
+
+    def evidence(self, spec: str) -> str:
+        """Build a run whose spec maps AC-001 to one passing unittest."""
+        (self.root / ".gitignore").write_text(
+            "__pycache__/\n.venv/\n.specify/\nkept.txt\n"
+        )
+        feature = self.root / FEATURE
+        (feature / "spec.md").write_text(spec)
+        digest = hashlib.sha256((feature / "spec.md").read_bytes()).hexdigest()
+        (feature / "intent.md").write_text(f"Approved spec sha256:{digest}\n")
+        test_id = "tests.test_demo.DemoTests.test_one"
+        (feature / "acceptance-evidence.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_digest": digest,
+                    "criteria": {"AC-001": [test_id]},
+                }
+            )
+        )
+        (self.root / "tests").mkdir()
+        (self.root / "tests/__init__.py").write_text("")
+        (self.root / "tests/test_demo.py").write_text(
+            "import unittest\nclass DemoTests(unittest.TestCase):\n"
+            "    def test_one(self): self.assertEqual(1, 1)\n"
+        )
+        interpreter = self.root / ".venv/bin/python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.symlink_to(Path(sys.executable).resolve())
+        LedgerTests.write_run(self, [])  # type: ignore[arg-type]
+        ledger.import_run(self.root, "run_1")
+        return test_id
+
+    def verifications(self) -> list[dict[str, object]]:
+        events, problems = ledger.read(self.root, "run_1")
+        self.assertEqual(problems, [])
+        return [e["data"] for e in events if e["kind"] == "verification"]
+
+    def test_clean_checkout_with_tracked_ignored_file_equals_head(self) -> None:
+        (self.root / ".gitignore").write_text("kept.txt\n")
+        (self.root / "kept.txt").write_text("tracked although ignored\n")
+        (self.root / "src.py").write_text("x = 1\n")
+        (self.root / FEATURE / "spec.md").write_text("spec\n")
+        git(self.root, "add", "-f", "kept.txt")
+        self.commit()
+        self.assertIn("kept.txt", git(self.root, "ls-files"))
+        clean = ledger.implementation_tree(self.root)
+        self.assertEqual(clean, ledger.commit_tree(self.root, "HEAD"))
+        oid = git(self.root, "rev-parse", "HEAD")
+        self.assertEqual(clean, ledger.commit_tree(self.root, oid))
+        (self.root / FEATURE / "spec.md").write_text("specs never count\n")
+        self.assertEqual(ledger.implementation_tree(self.root), clean)
+        (self.root / "src.py").write_text("x = 2\n")
+        self.assertNotEqual(ledger.implementation_tree(self.root), clean)
+        self.assertEqual(ledger.commit_tree(self.root, oid), clean)
+
+    def test_commit_tree_touches_neither_worktree_nor_index_and_runs_no_hook(
+        self,
+    ) -> None:
+        (self.root / "src.py").write_text("x = 1\n")
+        oid = self.commit()
+        (self.root / "src.py").write_text("x = 2\n")
+        (self.root / "new.py").write_text("y = 1\n")
+        git(self.root, "add", "new.py")
+        sentinel = self.root.parent / f"{self.root.name}-hook-ran"
+        hooks = self.root / ".git/hooks"
+        for name in ("post-checkout", "post-index-change", "pre-commit"):
+            (hooks / name).write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 1\n")
+            (hooks / name).chmod(0o755)
+        status = git(self.root, *ledger.NO_HOOKS, "status", "--porcelain")
+        index = (self.root / ".git/index").read_bytes()
+        ledger.commit_tree(self.root, oid)
+        ledger.implementation_tree(self.root)
+        self.assertEqual((self.root / ".git/index").read_bytes(), index)
+        self.assertEqual(
+            git(self.root, *ledger.NO_HOOKS, "status", "--porcelain"), status
+        )
+        self.assertEqual((self.root / "src.py").read_text(), "x = 2\n")
+        self.assertFalse(sentinel.exists())
+        with self.assertRaises(ledger.LedgerError):
+            ledger.commit_tree(self.root, "--output=/tmp/x")
+
+    def test_check_records_commit_only_on_a_clean_checkout(self) -> None:
+        test_id = self.evidence("1. **AC-001**: **Given** x, **When** y.\n")
+        head = self.commit()
+        self.assertEqual(ledger._check(self.root, "run_1", "AC-001", test_id), 0)  # noqa: SLF001
+        (self.root / "tests/extra.py").write_text("dirty = True\n")
+        self.assertEqual(ledger._check(self.root, "run_1", "AC-001", test_id), 0)  # noqa: SLF001
+        clean, dirty = self.verifications()
+        self.assertEqual((clean["status"], clean["commit"]), ("passed", head))
+        self.assertEqual(dirty["status"], "passed")
+        self.assertNotIn("commit", dirty)
+
+    def test_check_archives_a_numbered_form_spec(self) -> None:
+        test_id = self.evidence("1. **AC-001**: **Given** x, **When** y.\n")
+        self.assertEqual(ledger._check(self.root, "run_1", "AC-001", test_id), 0)  # noqa: SLF001
+        self.assertEqual(self.verifications()[0]["status"], "passed")
+
+    def test_verification_without_commit_stays_valid(self) -> None:
+        data = {"check_id": "x", "status": "passed"}
+        ledger.new_event("run_1", FEATURE, "verification", "runner", data)
+        with self.assertRaises(ledger.LedgerError):
+            ledger.new_event(
+                "run_1",
+                FEATURE,
+                "verification",
+                "runner",
+                {**data, "commit": "HEAD"},
+            )
+
+
+PUBLISHED_PACKET: dict[str, object] = {
+    "pr_number": 7,
+    "head": OID_A,
+    "base": "c" * 64,
+    "feature_version": "d" * 40,
+    "packet_digest": SHA_A,
+    "shortened": False,
+    "verified": 1,
+    "failed": 0,
+    "not_run": 2,
+    "stale": 0,
+    "missing": 3,
+}
+
+
+class AcceptancePacketEventTests(unittest.TestCase):
+    """The `acceptance_packet` kind (ledger contract)."""
+
+    PUBLISHED = PUBLISHED_PACKET
+
+    def setUp(self) -> None:
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        git(self.root, "init", "-q")
+        (self.root / FEATURE).mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def event(self, data: dict[str, object], source: str = "runner") -> object:
+        return ledger.new_event("run_1", FEATURE, "acceptance_packet", source, data)
+
+    def test_every_outcome_with_its_required_fields_is_accepted(self) -> None:
+        for outcome in ("published", "updated", "unchanged"):
+            self.event({"outcome": outcome, **self.PUBLISHED})
+        for outcome in ("pending", "failed-retryable"):
+            for reason in sorted(ledger.PACKET_REASONS[outcome]):
+                with self.subTest(outcome=outcome, reason=reason):
+                    self.event({"outcome": outcome, "reason": reason})
+        self.event(
+            {"outcome": "failed-retryable", "reason": "too-large", "head": OID_A}
+        )
+
+    def test_values_outside_the_contract_are_rejected(self) -> None:
+        cases: dict[str, dict[str, object]] = {
+            "pending without reason": {"outcome": "pending"},
+            "failed without reason": {"outcome": "failed-retryable"},
+            "reason of another outcome": {"outcome": "pending", "reason": "too-large"},
+            "unknown reason": {"outcome": "pending", "reason": "later"},
+            "unknown outcome": {"outcome": "approved", "reason": "no-pr"},
+            "head not an oid": {
+                "outcome": "published",
+                **self.PUBLISHED,
+                "head": "HEAD",
+            },
+            "short head": {
+                "outcome": "published",
+                **self.PUBLISHED,
+                "head": "a" * 12,
+            },
+            "free text": {"outcome": "pending", "reason": "no-pr", "note": "x"},
+        }
+        for field in (
+            "pr_number",
+            "head",
+            "base",
+            "feature_version",
+            "packet_digest",
+            *ledger.PACKET_COUNTS,
+        ):
+            data = {"outcome": "updated", **self.PUBLISHED}
+            del data[field]
+            cases[f"updated without {field}"] = data
+        for name, data in cases.items():
+            with self.subTest(name=name), self.assertRaises(ledger.LedgerError):
+                self.event(data)
+        with self.assertRaisesRegex(ledger.LedgerError, "requires runner"):
+            self.event({"outcome": "pending", "reason": "no-pr"}, "operator-attested")
+
+    def test_record_does_not_offer_the_kind(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            self.assertRaises(SystemExit),
+        ):
+            ledger.main(
+                [
+                    "record",
+                    "run_1",
+                    "acceptance_packet",
+                    "--source",
+                    "agent-reported",
+                    "--data",
+                    '{"outcome": "pending", "reason": "no-pr"}',
+                ]
+            )
+        self.assertIn("invalid choice", output.getvalue())
+
+    def test_report_shows_latest_packet_or_its_absence(self) -> None:
+        LedgerTests.write_run(self, [])  # type: ignore[arg-type]
+        ledger.import_run(self.root, "run_1")
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(
+            report["acceptance_packet"],
+            {"available": False, "reason": "no packet recorded"},
+        )
+        for index, data in enumerate(
+            (
+                {"outcome": "pending", "reason": "no-pr"},
+                {"outcome": "published", **self.PUBLISHED},
+            )
+        ):
+            ledger.append(
+                self.root,
+                ledger.new_event(
+                    "run_1", FEATURE, "acceptance_packet", "runner", data, f"p{index}"
+                ),
+            )
+        events, _ = ledger.read(self.root, "run_1")
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(
+            report["acceptance_packet"],
+            {**events[-1]["data"], "observed_at": events[-1]["observed_at"]},
+        )
+        text = ledger._text_report(report)  # noqa: SLF001
+        self.assertIn(
+            "acceptance_packet: "
+            + json.dumps(report["acceptance_packet"], sort_keys=True),
+            text.splitlines(),
+        )
+        self.assertNotIn("acceptance_packet", ledger.aggregate(self.root))
+
+
 if __name__ == "__main__":
     unittest.main()
