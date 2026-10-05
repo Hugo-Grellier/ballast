@@ -13,7 +13,7 @@ A CLI command, run from a project root. It reports what moving the pin to `<ref>
 1. Fetch and verify `<ref>` in the cache ([cache.md](cache.md)).
 2. Read `<ref>/tools/cli.toml` as data: `[cli] minimum`, `[setup] recoverable`, `[runs] resumes`.
 3. Build `<ref>` in a disposable project under `$XDG_DATA_HOME/ballast/preview/<random>/` by running its own `tools/setup --project` under `/usr/bin/python3 -I -S`, with `XDG_STATE_HOME` inside the disposable directory ([research R8](../research.md#r8-the-update-preview-is-a-cli-command-that-builds-the-target-in-a-disposable-project)).
-4. The "before" side: the installation record when the live installation matches it, otherwise a disposable build of the pinned version.
+4. The "before" side, taken with the same procedure as the "after" side so both describe one set (plan review F-002): when the pinned and target versions are both recoverable, both sides are installation records (the live record when valid and matching the live installation, otherwise the record of a disposable build of the pin); otherwise both sides are walks of disposable builds (every file and link minus `.git`, the seeds, the constitution and `__pycache__`).
 5. Compute path impact, ignore impact (read-only `git check-ignore --no-index --stdin` in the checkout) and run compatibility.
 6. Delete the disposable directory in every outcome.
 

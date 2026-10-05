@@ -16,6 +16,9 @@ How to prove each acceptance criterion. Formats are in [contracts/](contracts/) 
 | AC-002 | Fail each `specify` call in turn and each `patch` | Exit 1 naming the step; checkout snapshot unchanged |
 | AC-003 | Remove a promised output from the stage; make one staged path un-ignored; plant the stage path in a staged file; fill the disk (raise `OSError(ENOSPC)` in a copy) | Exit 1 naming the check; switch never starts; checkout unchanged |
 | AC-004, SC-001 | Kill setup with `SIGKILL` at ≥ 5 points: during staging, after `switching` is journaled, after the first entry rename, mid-switch, after `committed` | Next setup prints the recovery line; checkout equals the full previous or full new snapshot, never a mix |
+| AC-004 (F-001) | Same kills with a new version that drops one entry the previous version installed | Rollback restores the dropped entry; nothing of the previous installation is lost |
+| AC-003 (F-002, F-007) | Stage holds an unexpected output; a parent of a live entry or `.ballast/setup` is a symbolic link | Exit 1 `validate stage paths`, or exit 2 naming the link; checkout unchanged |
+| AC-008 (F-003) | Install B, then a pre-feature setup of A (stamp rewritten, record left), then B again | Record ignored while stale: no wrong pinned/installed detail; B's setup removes A-only policies |
 | AC-005 | After a kill, run `launcher.py run …`, `ledger …`, `intake …`, `trust` | Each exits 2 naming `ballast setup` |
 | AC-006 | All runs of AC-001 to AC-004 | Constitution, `docs/policies/project/`, run state, archives and `trusted.json` unchanged |
 | AC-007, SC-002 | Unchanged pin, setup fails or is killed then recovered | `launcher.py status --json` reports `refusal: null`; no `trust` run |

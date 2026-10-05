@@ -5,12 +5,12 @@
 For `run`, `ledger` and `intake`, in this order, each refusal exiting 2 with `ballast: refusing: <reason>`:
 
 1. Existing: state directory unavailable.
-2. **New**: `setup-attempt.json` exists → `setup did not finish in this checkout; run ballast setup to recover` (AC-005).
-3. **New**: take `checkout.lock` shared, non-blocking; busy → `ballast setup is running in this checkout; wait for it to finish`. The descriptor stays open and inheritable through `execv` (FR-014).
-4. **New**: `installation.json` names a ref other than the `ballast.toml` pin → `pinned <B>, installed <A>: restore ref = "<A>" in ballast.toml, or fix the cause and rerun ballast setup` (AC-008). Without a record (an installation made before this feature) the check is skipped and the trust comparison still refuses a changed pin.
+2. **New**: take `checkout.lock` shared, non-blocking; busy → `ballast setup is running in this checkout; wait for it to finish`. The descriptor stays open and inheritable through `execv` (FR-014). Taken before the journal is read, so a running setup is never reported as interrupted (plan review F-006).
+3. **New**: `setup-attempt.json` exists → `setup did not finish in this checkout; run ballast setup to recover` (AC-005).
+4. **New**: a valid `installation.json` (its fingerprint equals `.ballast/.setup-version`) names a ref other than the `ballast.toml` pin → `pinned <B>, installed <A>: restore ref = "<A>" in ballast.toml, or fix the cause and rerun ballast setup` (AC-008). Without a record (an installation made before this feature) the check is skipped and the trust comparison still refuses a changed pin.
 5. Existing: tamper marker, `in-progress`, trust baseline.
 
-`status --json` keeps its shape (`installed`, `refusal`) and reports reasons 2 and 4 as `refusal`; it takes no lock. `trust` and `discard-runs` refuse while `setup-attempt.json` exists (a trust taken mid-switch would vouch for a mixed installation). Nothing else changes in the trust model: `BASES`, `SKIPPED` and the baseline format are unchanged, and `.ballast/setup/` is outside `BASES`.
+`status --json` keeps its shape (`installed`, `refusal`) and reports reasons 2 and 4 as `refusal`; it takes no lock. `trust` and `discard-runs` hold the same shared lock while they work, refusing when a setup holds it, and refuse while `setup-attempt.json` exists (a trust taken mid-switch would vouch for a mixed installation; plan review F-005). Nothing else changes in the trust model: `BASES`, `SKIPPED` and the baseline format are unchanged, and `.ballast/setup/` is outside `BASES`.
 
 ## Run format (`tools/spec_workflow/run.py`)
 

@@ -22,14 +22,15 @@ Entities from the [spec](spec.md#key-entities), with their storage, owner and va
 
 ## Installation
 
-- **Installed entries** (the unit of a switch): `.ballast/spec_workflow`, `.ballast/.setup-version`; each `.specify/` entry in `INSTALLED`, except that `.specify/workflows` is switched child by child, leaving `runs`; every skill directory or link matching `SKILLS`; `docs/policies/<name>.md` for each shipped policy. Entries recorded in the previous `installation.json` that the new version no longer builds are removed in the same switch, and only when the project ignores them.
+- **Installed entries** (the unit of a switch), one rule for every use (`entries(root)`, R1): `.ballast/spec_workflow`, `.ballast/.setup-version`; each `.specify/` entry in `INSTALLED`, except that `.specify/workflows` is switched child by child, leaving `runs` and `.cache`; every skill directory or link matching `SKILLS`; every `docs/policies/*.md`. Entries the live checkout holds by that rule, or that a valid previous `installation.json` lists, and that the new version no longer builds are removed in the same switch, and only when the project ignores them.
+- **Discarded stage outputs**: `DISCARDED` (`.specify/.workflow-install.lock`) is dropped with the stage; any other stage output outside the entry set, the seeds and the constitution fails validation.
 - **Never touched**: `.specify/memory/constitution.md` (copied in only when absent, R13), `docs/policies/project/`, `.specify/workflows/runs`, `.specify/workflow-state`, `.specify/bugs`, `.specify/assessments`, `ballast.toml`, every tracked file.
 - **Identity**: pinned ref, fingerprint (`VERSION` plus the digest of the standard's `tools/`, `templates/` and `ballast.toml`, as today) and the content digests of the installation record.
-- **Current and verified** (FR-011): the record's fingerprint equals the computed one, and hashing the live entries (minus `LOCAL_STATE`) gives exactly the record's files.
+- **Current and verified** (FR-011): the record is valid (its fingerprint equals the live stamp), its fingerprint equals the computed one, and hashing the live entries (minus `LOCAL_STATE` and `__pycache__`) gives exactly the record's files.
 
 ## Setup attempt
 
-Fields: `schema`, `attempt` (random ID), `pid`, `started`, `ref`, `fingerprint`, `phase`, `entries` (ordered relative paths), `work` (the attempt's work-area path), `previous_record` (the record before the attempt, or null), `record` (the new record, from `switching` on).
+Fields: `schema`, `attempt` (random ID), `pid`, `started`, `ref`, `fingerprint`, `phase`, `entries` (ordered `{"path", "new"}` items, from `switching` on; `new` is true when the new installation contains the entry), `work` (the attempt's work-area path), `before` (digests of the live installation when the attempt started), `before_ref` (the ref of a valid previous record, or null), `record` (the new record, from `switching` on).
 
 State transitions:
 
@@ -43,16 +44,17 @@ killed in switching  → next setup: roll back every entry           → "previo
 killed in committed  → next setup: delete backups, write record     → "new installation completed"
 ```
 
-Rollback per entry, using the journal's entry list and the filesystem:
+Switch of one entry: when live `<e>` exists, rename it to `previous/<e>`; then, when `<e>` is new, rename `stage/<e>` to live. Rollback walks the entries in reverse, keyed on the journal's `new` flag and the filesystem (plan review F-001):
 
-| `previous/<e>` | live `<e>` | `stage/<e>` | Meaning | Action |
-| --- | --- | --- | --- | --- |
-| absent | old | present | not yet moved | nothing |
-| present | absent | present | moved out, not in | rename `previous/<e>` → live |
-| present | new | absent | switched | rename live → `stage/<e>`, then `previous/<e>` → live |
-| absent | new | absent | entry new in this version | remove live |
+| `new` | `previous/<e>` | live `<e>` | `stage/<e>` | Meaning | Action |
+| --- | --- | --- | --- | --- | --- |
+| any | absent | any | present | not yet moved | nothing |
+| any | present | absent | any | moved out, not in (or removed) | rename `previous/<e>` → live |
+| true | present | new | absent | switched | rename live → `stage/<e>`, then `previous/<e>` → live |
+| true | absent | new | absent | entry new in this version | rename live → `stage/<e>` |
+| false | absent | old or absent | absent | removal not yet done | nothing |
 
-After rollback, setup verifies the live installation against `previous_record` when there is one and reports a difference instead of claiming success.
+Each action leaves the entry in a row above, so a second kill during rollback is recovered by the same table. After rollback, setup verifies the live installation against `before` and reports a difference instead of claiming success.
 
 ## Cached version
 

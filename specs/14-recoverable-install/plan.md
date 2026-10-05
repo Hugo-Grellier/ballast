@@ -65,8 +65,8 @@ No NEEDS CLARIFICATION remains; [research.md](research.md) records R1 to R13.
 
 | Path | Change |
 | --- | --- |
-| `tools/setup` | Split building from switching: `Setup` builds into a given project root (the stage) instead of `self.root`; new attempt lifecycle (lock, recover, preflight, stage, validate, switch, verify, commit); installation record; verified worktree copy into the stage; `--check` states `interrupted`, `stale: pinned …`, `modified: <path>`; failure messages per stage; `INSTALLED` entry `.ballast` becomes `.ballast/spec_workflow` and `.ballast/.setup-version`; `PRESERVED` restore replaced by create-if-absent; a new `IGNORE_PROBES` entry for `.ballast/setup/`. |
-| `tools/spec_workflow/launcher.py` | Shared `checkout.lock` kept through `execv`; refusals for an unfinished setup and for pinned ≠ installed; `trust` and `discard-runs` refuse during an unfinished setup; `status --json` reports both. |
+| `tools/setup` | Split building from switching: `Setup` builds into a given project root (the stage) instead of `self.root`; new attempt lifecycle (lock, recover, preflight, stage, validate, switch, verify, commit); installation record; verified worktree copy into the stage; `--check` states `interrupted`, `stale: pinned …`, `modified: <path>`; failure messages per stage; `INSTALLED` entry `.ballast` becomes `.ballast/spec_workflow` and `.ballast/.setup-version`; one `entries(root)` rule and a `DISCARDED` list (F-002); the `PRESERVED` restore writes only in the stage and the checkout's constitution is created only when absent; a new `IGNORE_PROBES` entry for `.ballast/setup/`; refusal of symlinked ancestors and link-safe work-area removal (F-007). |
+| `tools/spec_workflow/launcher.py` | Shared `checkout.lock` taken before the journal is read and kept through `execv` (F-006); refusals for an unfinished setup and for pinned ≠ installed (valid record only, F-003); `trust` and `discard-runs` hold the shared lock and refuse during an unfinished setup (F-005); `status --json` reports both; a `read_record` helper shared with setup. |
 | `tools/spec_workflow/run.py` | `RUN_FORMAT` constant, written as `run-format.json` into the run archive at start; a test keeps it equal to `tools/cli.toml [runs] format`. |
 | `tools/cli.toml` | `[setup] recoverable = true`; `[runs] format`, `resumes`. `[cli] minimum` unchanged (R7). |
 | `tools/ballast` | Per-version fetch lock; content record and single-rename publication; verification and refetch before `setup`; `preview <ref> [--json]`; not-fetched refusal names the installed ref; usage and module docstring. |
@@ -100,6 +100,17 @@ specs/14-recoverable-install/
 ├── decisions.md        # only if implementation discovers one
 └── reviews/
 ```
+
+## Plan review resolutions
+
+The plan review ([reviews/plan.md](reviews/plan.md)) found four medium and three low items. Each is resolved in the design artifacts above; the review report's Resolution section names the exact change.
+
+- **F-001** (rollback of removed entries): the journal flags each entry `new` or not, and rollback is keyed on that flag ([data-model](data-model.md#setup-attempt)); a kill test uses a version that removes an entry.
+- **F-002** (one entry set): `entries(root)` is the single rule for switch, record, verification and copy; other stage outputs are either in `DISCARDED` or fail `validate stage paths`; the preview compares like with like ([R1](research.md#r1-build-into-a-stage-project-then-switch-entry-by-entry), [R8](research.md#r8-the-update-preview-is-a-cli-command-that-builds-the-target-in-a-disposable-project)).
+- **F-003** (stale record): a record is valid only while its fingerprint equals the live stamp ([R3](research.md#r3-the-installation-record-is-the-authority-for-current-and-verified)); a test covers B → pre-feature A → B.
+- **F-004** (cache guarantees under an old CLI): kept as a scope limitation, recorded in [DEC-0001](decisions.md) for the merge review.
+- **F-005**, **F-006** (launcher lock order, trust during setup): adopted ([launcher contract](contracts/launcher-and-manifest.md)).
+- **F-007** (link safety in the work area): adopted as validation check (6) and link-safe deletion ([R4](research.md#r4-validation-before-the-switch-verification-after-it)); the security review confirms it.
 
 ## Complexity Tracking
 

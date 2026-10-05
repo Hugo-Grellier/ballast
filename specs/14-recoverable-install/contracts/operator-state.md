@@ -19,7 +19,8 @@ All files live in `launcher.state_dir(root)` (`$XDG_STATE_HOME/ballast/<key>/`, 
 ```
 
 - `files` uses the `launcher.digests` value format and covers every installed entry, excluding `LOCAL_STATE`.
-- The CLI reads only `ref`, as data, and never fails on a missing or unreadable file.
+- The CLI reads only `ref` and `fingerprint`, as data, and never fails on a missing or unreadable file.
+- **Validity**: every reader uses the record only while its `fingerprint` equals the checkout's `.ballast/.setup-version` (stripped); otherwise the record is stale (an older setup ran since) and is treated as absent. `files` also excludes `__pycache__`.
 
 ## `setup-attempt.json` (writer and reader: setup; existence check: launcher, `--check`, preview)
 
@@ -33,8 +34,9 @@ All files live in `launcher.state_dir(root)` (`$XDG_STATE_HOME/ballast/<key>/`, 
   "fingerprint": "1.0.11 <sha256>",
   "phase": "staging | switching | committed",
   "work": ".ballast/setup/<attempt>",
-  "entries": [".ballast/spec_workflow", ".specify/scripts"],
-  "previous_record": { "...": "installation.json content or null" },
+  "before": {".ballast/spec_workflow/run.py": "<sha256>"},
+  "before_ref": "v0.5.0 or null",
+  "entries": [{"path": ".ballast/spec_workflow", "new": true}, {"path": "docs/policies/old.md", "new": false}],
   "record": { "...": "the new record, from switching on" }
 }
 ```

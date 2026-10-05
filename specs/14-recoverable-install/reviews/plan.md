@@ -29,3 +29,29 @@ The run is R2 and touches what `ballast` downloads and executes (the cache and `
 - the preview executing an unpinned target's setup with operator authority;
 - link-safety of setup's renames and deletions in the agent-writable `.ballast/setup/` work area;
 - the shared lock's lifetime across `execv`.
+
+## Findings
+
+The full reasons are in the review draft [`autonomous/drafts/plan-review.json`](../autonomous/drafts/plan-review.json); F-003's reason was shortened there to fit the 1,000-character field limit, with its meaning unchanged.
+
+| ID | Class | Severity | Location | Summary |
+|---|---|---|---|---|
+| F-001 | implementation bug | medium | data-model.md rollback table | Rollback keyed only on the filesystem does not cover entries the new version removes; a kill during the switch could delete part of the previous installation. |
+| F-002 | spec ambiguity | medium | research.md R1/R4, contracts/preview-cli.md | Switch, validation and preview use different definitions of the installation; Spec Kit byproducts such as `.specify/.workflow-install.lock` fall between them. |
+| F-003 | implementation bug | medium | research.md R3, contracts/operator-state.md | `installation.json` goes stale after a pre-feature setup runs (rollback to an older version), misleading the pinned/installed messages, removal and `--check`. |
+| F-004 | spec ambiguity | medium | research.md R7 | Keeping `[cli] minimum` means an older CLI gives none of the cache guarantees FR-009/FR-012 state unconditionally. |
+| F-005 | implementation bug | low | contracts/launcher-and-manifest.md | `trust` and `discard-runs` take no lock and can race a setup that has not yet journaled `switching`. |
+| F-006 | spec ambiguity | low | contracts/launcher-and-manifest.md | The journal check precedes the lock check, so a running setup is reported as interrupted. |
+| F-007 | architecture issue | low | data-model.md | Renames and deletions in the agent-writable work area are not required to be link-safe. |
+
+## Resolution
+
+Plan decision by the driving agent (the author role), after the Autonomous run blocked at `record-plan-review`. Every medium finding is resolved in the design artifacts; the low ones are adopted too, because each fix is small.
+
+- **F-001 — resolved.** The journal's `entries` carry a `new` flag; [data-model.md](../data-model.md#setup-attempt) replaces the rollback table with one keyed on that flag, adds the rows for removed entries, and verifies a rollback against `before` (the live digests taken when the attempt started, so a pre-feature installation without a record is verified too). [operator-state.md](../contracts/operator-state.md) shows the new fields. Tasks carry a kill test with a version that drops an entry.
+- **F-002 — resolved.** One rule, `entries(root)`, defines the installation for the switch, the record, live verification, the worktree copy and the no-op check ([R1](../research.md#r1-build-into-a-stage-project-then-switch-entry-by-entry)). Stage outputs outside it are either in the explicit `DISCARDED` list (`.specify/.workflow-install.lock`) or fail `validate stage paths` ([R4](../research.md#r4-validation-before-the-switch-verification-after-it)). The preview takes both sides with one procedure: record against record when both versions are recoverable, otherwise walk against walk of disposable builds ([R8](../research.md#r8-the-update-preview-is-a-cli-command-that-builds-the-target-in-a-disposable-project), [preview contract](../contracts/preview-cli.md)).
+- **F-003 — resolved.** A record is valid only while its fingerprint equals the live `.ballast/.setup-version`; every reader ignores a stale one ([R3](../research.md#r3-the-installation-record-is-the-authority-for-current-and-verified), [operator-state.md](../contracts/operator-state.md)). The removal set is the entry rule on the live checkout (whose `docs/policies/*.md` glob finds policies only an older version installed) plus a valid record's entries. Tasks carry a B → pre-feature A → B test.
+- **F-004 — resolved as a recorded limitation.** [DEC-0001](../decisions.md) keeps `[cli] minimum` and states that the cache guarantees need a CLI that includes this feature; the README update section says to update the CLI first. Listed for the merge review.
+- **F-005 — adopted.** `trust` and `discard-runs` hold the shared checkout lock while they work and refuse during a setup or an unfinished attempt ([launcher contract](../contracts/launcher-and-manifest.md)).
+- **F-006 — adopted.** The launcher takes the lock before it reads the journal.
+- **F-007 — adopted.** Setup refuses when an ancestor of a live entry or of the work area is a symbolic link, before staging and again before switching, and deletes the work area with the launcher's link-safe `_remove_tree` ([R4](../research.md#r4-validation-before-the-switch-verification-after-it)). The security review still covers it.
