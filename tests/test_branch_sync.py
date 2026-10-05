@@ -180,7 +180,7 @@ class Scratch:
     def pin(self, run_id: str = RUN, **data: str) -> None:
         path = launcher.state_dir(self.root) / "draft-pr" / f"{run_id}.json"
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path.write_text(json.dumps({"branch": BRANCH, **data}))
+        path.write_text(json.dumps({"branch": BRANCH, "feature": FEATURE, **data}))
 
     def read_pin(self, run_id: str = RUN) -> dict:
         path = launcher.state_dir(self.root) / "draft-pr" / f"{run_id}.json"
@@ -331,7 +331,7 @@ class HarnessTests(SyncCase):
         self.assertEqual(self.s.published("main"), self.s.head("main"))
         self.assertIsNone(self.s.published())
         self.assertIsNone(launcher._refusal(self.s.root))  # noqa: SLF001
-        self.assertEqual(self.s.read_pin(), {"branch": BRANCH})
+        self.assertEqual(self.s.read_pin(), {"branch": BRANCH, "feature": FEATURE})
 
 
 class FoundationTests(SyncCase):
@@ -371,9 +371,13 @@ class FoundationTests(SyncCase):
         environments: list[dict] = []
         real_run = subprocess.run
 
+        every: list[dict] = []
+
         def spy(argv, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
             if kwargs.get("env") and "GIT_DIR" in kwargs["env"]:
                 environments.append(kwargs["env"])
+            if kwargs.get("env") and argv[1:] != ["version"]:
+                every.append(kwargs["env"])
             return real_run(argv, *args, **kwargs)
 
         with (
@@ -402,6 +406,8 @@ class FoundationTests(SyncCase):
             self.assertEqual(Path(argv[0]), Path(git).resolve(), argv)
             start = argv.index(hardening[0])
             self.assertEqual(argv[start : start + len(hardening)], hardening)
+            # SEC-004: a forged commit-graph never answers ancestry.
+            self.assertIn("core.commitGraph=false", argv)
             if where == "checkout":
                 self.assertIn("submodule.recurse=false", argv)
             if where == "throwaway":
@@ -410,6 +416,10 @@ class FoundationTests(SyncCase):
                 self.assertNotIn(
                     argv[after + len(maintenance)], {"gc", "repack", "prune"}
                 )
+        self.assertTrue(every)
+        for env in every:
+            self.assertEqual(env["GIT_NO_REPLACE_OBJECTS"], "1")
+            self.assertEqual(env["GIT_GRAFT_FILE"], os.devnull)
         init = next(argv for argv in throwaway if "init" in argv)
         self.assertIn("--template=", init)
         self.assertIn("--object-format=sha1", init)
@@ -433,6 +443,24 @@ class FoundationTests(SyncCase):
         # The throwaway repository is deleted afterwards.
         state = launcher.state_dir(self.s.root)
         self.assertEqual(list(state.glob("ballast-sync-*")), [])
+
+    def test_throwaway_allow_list_holds_without_assert(self) -> None:
+        """SEC-006, E-05: a refusal, not an assert that python -O removes."""
+        work = branch_sync._Sync(  # noqa: SLF001
+            self.s.root,
+            RUN,
+            feature=FEATURE,
+            starting=False,
+            branch=None,
+            base=None,
+            source_run=None,
+        )
+        work.bare = self.s.base / "away.git"
+        with self.assertRaisesRegex(RuntimeError, "git gc is not allowed"):
+            work.throwaway("gc")
+        work.bare = None
+        with self.assertRaises(RuntimeError):
+            work.throwaway("cat-file", "-e", "HEAD")
 
     def test_checkout_git_is_never_executed(self) -> None:
         local = self.s.root / "bin"
@@ -492,7 +520,7 @@ class FoundationTests(SyncCase):
         outcome = branch_sync.Outcome(
             "blocked",
             cause="wrong-branch",
-            detail=branch_sync._text("on a\nb\x1b[31m"),  # noqa: SLF001
+            detail=draft_pr.printable("on a\nb\x1b[31m"),
             recovery=branch_sync._recovery(  # noqa: SLF001
                 "wrong-branch", pinned="feat/18-$(id);x", rerun="r"
             ),
@@ -597,7 +625,7 @@ class ResumeOnCurrentBaseTests(SyncCase):
         self.assertEqual(outcome.outcome, "synchronized", outcome)
         self.assertEqual(
             self.s.read_pin("start1"),
-            {"branch": BRANCH, "base": "main", "base_commit": new},
+            {"branch": BRANCH, "feature": FEATURE, "base": "main", "base_commit": new},
         )
         self.s.advance_base({"base2.txt": "c\n"})
         with patch.object(
@@ -605,7 +633,9 @@ class ResumeOnCurrentBaseTests(SyncCase):
         ):
             outcome = self.s.check("start2", starting=True)
         self.assertBlocked(outcome, "fetch-failed", "start2")
-        self.assertEqual(self.s.read_pin("start2"), {"branch": BRANCH})
+        self.assertEqual(
+            self.s.read_pin("start2"), {"branch": BRANCH, "feature": FEATURE}
+        )
         log: list = []
         with patch.object(branch_sync, "ARGV_LOG", log):
             outcome = self.s.check("start2")
@@ -839,6 +869,8 @@ class BlockedCauseTests(SyncCase):
         self.assertIn("Ballast cannot answer a prompt", outcome.recovery)
         self.s.assert_unchanged(before)
         moved.rename(self.s.remote)
+        # Q12 [AC-010]: once the base is reachable again, a rerun proceeds.
+        self.assertEqual(self.s.check().outcome, "synchronized")
         self.s.up("push", "-q", "origin", "main:develop")
         self.s.pin(base="develop")
         self.s.run("git", "branch", "-D", "develop", cwd=self.s.remote)
@@ -877,19 +909,123 @@ class BlockedCauseTests(SyncCase):
         self.s.git("checkout", "-q", BRANCH)
         self.assertEqual(self.s.check().outcome, "synchronized")
 
+    def test_every_operation_in_progress_blocks(self) -> None:
+        """AC-009: rebase, merge, cherry-pick, revert and bisect markers."""
+        self.s.advance_base({"base.txt": "b\n"})
+        before = self.s.snapshot()
+        for name, operation in branch_sync.IN_PROGRESS_MARKERS:
+            with self.subTest(marker=name):
+                marker = self.s.root / ".git" / name
+                marker.write_text(self.s.head() + "\n")
+                try:
+                    outcome = self.s.check()
+                finally:
+                    marker.unlink()
+                self.assertBlocked(outcome, "in-progress")
+                self.assertEqual(outcome.detail, f"a {operation} is in progress")
+                self.assertEqual(
+                    outcome.recovery,
+                    f"finish or abort the {operation} yourself, then ballast run "
+                    f"resume {RUN}",
+                )
+                self.assertEqual(self.s.snapshot(), before)
+
+    def test_start_during_a_rebase_reports_the_rebase(self) -> None:
+        """E-02 [AC-009, R4]: in-progress comes before the detached-HEAD stop."""
+        self.s.git("checkout", "-q", "main")
+        self.s.commit({"feature.txt": "base version\n"}, "conflicting")
+        self.s.git("checkout", "-q", BRANCH)
+        self.s.git("rebase", "-q", "main", check=False)
+        self.assertTrue((self.s.root / ".git/rebase-merge").exists())
+        outcome = self.s.check("st1", starting=True)
+        self.assertBlocked(outcome, "in-progress", "st1")
+        self.assertEqual(outcome.detail, "a rebase is in progress")
+        self.s.git("rebase", "--abort")
+        self.s.git("checkout", "-q", "--detach")
+        outcome = self.s.check("st2", starting=True)
+        self.assertBlocked(outcome, "wrong-branch", "st2")
+        self.assertEqual(
+            outcome.recovery, "git switch 18-x, then your ballast run start command"
+        )
+
+    def test_recorded_base_missing_locally_blocks(self) -> None:
+        """E-06 [R8]: a recorded base the store lost is unknown, not guessed."""
+        self.s.advance_base({"base.txt": "b\n"})
+        self.s.pin(base="main", base_commit="1" * 40)
+        before = self.s.snapshot()
+        outcome = self.s.check()
+        self.assertBlocked(outcome, "diverged")
+        self.assertEqual(
+            outcome.detail, "the base was rewritten and the old base is unknown"
+        )
+        self.assertEqual(
+            outcome.recovery,
+            f"rebase by hand onto main, then ballast run resume {RUN}",
+        )
+        self.s.assert_unchanged(before)
+
+    def test_no_committer_identity_changes_nothing(self) -> None:
+        """R2, F-12: the replay never borrows the checkout's identity."""
+        self.s.advance_base({"base.txt": "b\n"})
+        self.s.gitconfig.write_text(
+            '[protocol "file"]\n\tallow = always\n[user]\n\tuseConfigOnly = true\n'
+        )
+        self.s.git("config", "user.name", "Agent")
+        self.s.git("config", "user.email", "agent@example.test")
+        before = self.s.snapshot()
+        with patch.dict(os.environ):
+            for name in ("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"):
+                os.environ.pop(name, None)
+            outcome = self.s.check()
+        self.assertBlocked(outcome, "internal-error")
+        self.assertEqual(outcome.detail, "no committer identity")
+        self.assertEqual(
+            outcome.recovery,
+            "set user.name and user.email in your global Git configuration, then "
+            f"ballast run resume {RUN}",
+        )
+        self.s.assert_unchanged(before)
+
     def test_unpinned_resume_is_refused(self) -> None:
-        """Q11, first variant [DEC-0006]."""
+        """Q11, first variant [DEC-0006, SEC-002]: no branch, or no feature, pinned."""
         before = self.s.snapshot()
         outcome = self.s.check("old1")
         self.assertBlocked(outcome, "wrong-branch", "old1")
         self.assertEqual(
-            outcome.detail, "run old1 has no branch pin (started before branch pinning)"
+            outcome.detail,
+            "run old1 has no branch or feature pin (started before branch pinning)",
         )
         self.assertEqual(
             outcome.recovery, "start a new run: your ballast run start command"
         )
         self.assertEqual(self.s.read_pin("old1"), {})
+        # A #17 pin has the branch but not the feature whose Issue number
+        # decides what may be rewritten; inputs.json is never asked.
+        path = launcher.state_dir(self.s.root) / "draft-pr" / "old2.json"
+        path.write_text(json.dumps({"branch": BRANCH}))
+        outcome = self.s.check("old2")
+        self.assertBlocked(outcome, "wrong-branch", "old2")
+        self.assertEqual(
+            outcome.detail,
+            "run old2 has no feature pin (started before branch pinning)",
+        )
         self.s.assert_unchanged(before)
+
+    def test_issue_number_comes_from_the_pin(self) -> None:
+        """SEC-002: an agent-written feature directory cannot widen the rule."""
+        self.s.add_pre_receive()
+        self.s.git("checkout", "-q", "-b", "release/3")
+        self.s.publish("release/3")
+        self.s.pin(branch="release/3")
+        self.s.advance_base({"base.txt": "b\n"})
+        self.s.clear_pushes()
+        before = self.s.snapshot("release/3")
+        # What run.py would read from agent-writable inputs.json.
+        outcome = self.s.check(feature="specs/3-x")
+        self.assertBlocked(outcome, "not-feature-branch")
+        self.assertIn("is not the feature branch of #18", outcome.detail)
+        self.assertEqual(self.s.snapshot("release/3"), before)
+        self.assertEqual(self.s.pushes(), [])
 
     def test_only_feature_branches_are_rewritten(self) -> None:
         """Q28 [AC-021, FR-005, DEC-0004]."""
@@ -924,8 +1060,8 @@ class BlockedCauseTests(SyncCase):
         self.s.clear_pushes()
         self.assertBlocked(self.s.check(), "not-feature-branch")
         self.s.git("checkout", "-q", BRANCH)
-        self.s.pin()
-        outcome = self.s.check(feature=None)
+        # Defense only: run.py refuses a start without a feature directory.
+        outcome = self.s.check("start9", starting=True, feature=None)
         self.assertEqual(outcome.cause, "not-feature-branch")
         self.assertEqual(
             outcome.detail, "the run has no feature directory, so no Issue number"
@@ -1102,6 +1238,30 @@ class EnvironmentRefusalTests(SyncCase):
             (outcome.cause, outcome.detail), ("git-unavailable", "partial clone")
         )
         self.assertFalse(marker.exists())
+
+    def test_alternates_are_refused(self) -> None:
+        """SEC-005: the shared store never borrows another store's objects."""
+        other = self.s.base / "other.git"
+        self.s.run("git", "init", "-q", "--bare", str(other), cwd=self.s.base)
+        alternates = self.s.root / ".git/objects/info/alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(f"{other / 'objects'}\n")
+        self.s.advance_base({"base.txt": "b\n"})
+        before = self.s.snapshot()
+        log: list = []
+        with patch.object(branch_sync, "ARGV_LOG", log):
+            outcome = self.s.check()
+        self.assertBlocked(outcome, "git-unavailable")
+        self.assertEqual(outcome.detail, "alternate object store")
+        self.assertEqual(
+            outcome.recovery,
+            "clone the repository again without alternates, then ballast run "
+            f"resume {RUN}",
+        )
+        self.assertFalse(
+            [argv for _, argv in log if {"ls-remote", "fetch"} & set(argv)]
+        )
+        self.s.assert_unchanged(before)
 
     def test_shallow_checkouts_are_refused(self) -> None:
         """Q42 [N-12]."""
@@ -1298,6 +1458,63 @@ class TrustBoundaryTests(SyncCase):
         ).strip()
         self.assertEqual(committer, "Operator <operator@example.test>")
 
+    def test_nested_repository_configuration_never_runs(self) -> None:
+        """SEC-001: no `git status` runs inside a gitlink, under its own config."""
+        nested = self.s.root / "sub"
+        nested.mkdir()
+        self.s.run("git", "init", "-q", cwd=nested)
+        self.s.write({"x.txt": "x\n"}, nested)
+        self.s.run("git", "add", "x.txt", cwd=nested)
+        self.s.run("git", "commit", "-q", "-m", "nested", cwd=nested)
+        self.s.git("add", "sub")  # a gitlink, as an agent can stage one
+        self.s.git("commit", "-q", "-m", "gitlink")
+        program, marker = self.s.marker_program("nested")
+        with (nested / ".git/config").open("a") as handle:
+            handle.write(f'[filter "evil"]\n\tclean = {program}\n')
+        self.s.write({".gitattributes": "*.txt filter=evil\n", "x.txt": "y\n"}, nested)
+        self.s.advance_base({"base.txt": "b\n"})
+        outcome = self.s.check()
+        self.assertFalse(marker.exists(), "a nested repository's filter ran")
+        self.assertEqual(outcome.outcome, "synchronized", outcome)
+        # A changed gitlink is still a change Ballast never touches.
+        (nested / ".gitattributes").unlink()
+        self.s.run("git", "commit", "-q", "-am", "nested 2", cwd=nested)
+        self.s.git("add", "sub")
+        self.s.advance_base({"base2.txt": "c\n"})
+        before = self.s.snapshot()
+        outcome = self.s.check()
+        self.assertBlocked(outcome, "dirty")
+        self.assertIn("sub", outcome.detail)
+        self.s.assert_unchanged(before)
+        self.assertFalse(marker.exists())
+
+    def test_replace_refs_and_grafts_do_not_hide_the_base(self) -> None:
+        """SEC-004: ancestry is answered from the real commits."""
+        for how in ("replace", "grafts"):
+            with self.subTest(how=how):
+                self.s = Scratch(self)
+                new = self.s.advance_base({"base.txt": "b\n"})
+                # An agent fetches the new base and grafts the branch onto it.
+                self.s.git("fetch", "-q", str(self.s.remote), "main")
+                head = self.s.head()
+                if how == "replace":
+                    self.s.git("replace", "--graft", head, new)
+                else:
+                    (self.s.root / ".git/info/grafts").write_text(f"{head} {new}\n")
+                # Plain git is fooled: the branch looks up to date.
+                self.s.git("merge-base", "--is-ancestor", new, head)
+                outcome = self.s.check()
+                self.assertEqual(outcome.outcome, "synchronized", outcome)
+                self.s.run(
+                    "git",
+                    "merge-base",
+                    "--is-ancestor",
+                    new,
+                    str(outcome.head_after),
+                    cwd=self.s.root,
+                    env=os.environ | {"GIT_NO_REPLACE_OBJECTS": "1"},
+                )
+
     def test_crash_after_a_protected_update_is_caught_by_the_launcher(self) -> None:
         """Q47 [P-05]."""
         self.s.publish()
@@ -1308,6 +1525,7 @@ class TrustBoundaryTests(SyncCase):
         ):
             self.s.check()
         self.assertTrue(self.s.record_path().exists())
+        self.assertEqual(self.s.events(), [])  # killed: nothing was recorded
         self.assertIn(
             ".specify/memory/constitution.md",
             launcher._refusal(self.s.root) or "",  # noqa: SLF001
@@ -1315,6 +1533,8 @@ class TrustBoundaryTests(SyncCase):
         self.s.trust()
         outcome = self.s.check()
         self.assertEqual(outcome.outcome, "up-to-date", outcome)
+        # Row 1 clears the record without a HEAD change: P-05 is the launcher's.
+        self.assertIsNone(outcome.recovered)
         self.assertFalse(self.s.record_path().exists())
 
 
@@ -1340,8 +1560,10 @@ class StaleEvidenceTests(SyncCase):
         self.s.advance_base({"tools/a.py": "a = 2\n\n\n\nb = 1\n"})
 
     def stale_files(self) -> list[Path]:
-        archive = ledger.archive_dir(self.s.root, RUN)
-        return sorted((archive / "branch-sync").glob("*.json"))
+        directory = draft_pr.stale_dir(self.s.root, FEATURE)
+        old = ledger.archive_dir(self.s.root, RUN) / "branch-sync"
+        self.assertFalse(old.exists(), "a record in agent-writable Git state")
+        return sorted(directory.glob("*.json"))
 
     def test_overlap_marks_plan_and_review_stale(self) -> None:
         """Q25."""
@@ -1377,6 +1599,45 @@ class StaleEvidenceTests(SyncCase):
                 self.assertEqual(outcome.outcome, "synchronized", outcome)
                 self.assertIsNone(outcome.overlap)
                 self.assertEqual(self.stale_files(), [])
+
+    def test_kept_protected_input_sync_keeps_its_stale_record(self) -> None:
+        """E-03 [AC-016, AC-018]: the sync is kept, so is its staleness."""
+        self.overlap_setup()
+        self.s.advance_base({".specify/memory/constitution.md": "# Changed\n"})
+        outcome = self.s.check()
+        self.assertBlocked(outcome, "protected-input")
+        self.assertEqual(
+            (outcome.overlap, outcome.stale_plan, outcome.stale_review), (1, True, True)
+        )
+        event = self.s.events()[-1]
+        self.assertEqual(
+            (event["overlap"], event["stale_plan"], event["stale_review"]),
+            (1, True, True),
+        )
+        (path,) = self.stale_files()
+        self.assertEqual(json.loads(path.read_text())["paths"], ["tools/a.py"])
+
+    def test_completion_from_the_record_keeps_its_stale_record(self) -> None:
+        """E-03: recovery rows 4 and 5 report the overlap of the pushed sync."""
+        for later in (False, True):
+            with self.subTest(row=5 if later else 4):
+                self.s = Scratch(self)
+                self.overlap_setup()
+                self.s.publish()
+                self.killed("after-push")
+                record = json.loads(self.s.record_path().read_text())
+                self.assertIsNotNone(record["old_base"])
+                if later:
+                    self.s.commit({"later.txt": "l\n"}, "after the pushed sync")
+                outcome = self.s.check()
+                self.assertEqual(outcome.outcome, "synchronized", outcome)
+                self.assertTrue(outcome.recovered)
+                self.assertEqual(
+                    (outcome.overlap, outcome.stale_plan, outcome.stale_review),
+                    (1, True, True),
+                )
+                (path,) = self.stale_files()
+                self.assertEqual(json.loads(path.read_text())["paths"], ["tools/a.py"])
 
 
 class PublishedBranchTests(SyncCase):
@@ -1541,6 +1802,13 @@ class PublishedBranchTests(SyncCase):
                 self.s.clear_pushes()
                 outcome = self.s.check()
                 self.assertBlocked(outcome, "diverged")
+                self.assertEqual(
+                    outcome.recovery,
+                    "git switch -c 18-x"
+                    if branch == "main"
+                    else "reconcile by hand: git pull --rebase origin develop, then "
+                    f"ballast run resume {RUN}",
+                )
                 self.assertEqual(self.s.pushes(), [])
                 self.assertFalse(self.s.record_path(branch).exists())
 
@@ -1761,6 +2029,54 @@ class RecoveryTests(SyncCase):
                     self.assertEqual(self.s.head("HEAD~1"), pushed)
                     self.assertEqual(self.s.published(), self.s.head())
 
+    def test_local_moved_but_push_missing(self) -> None:
+        """T-01, R5 row 2: the one row that pushes from a record."""
+        for records_push in (True, False):
+            with self.subTest(records_push=records_push):
+                self.s = Scratch(self)
+                self.s.publish()
+                published_old = self.s.published()
+                self.s.advance_base({"base.txt": "b\n"})
+                self.killed("after-record")
+                path = self.s.record_path()
+                record = json.loads(path.read_text())
+                new = record["new_head"]
+                self.assertEqual(record["published_old"], published_old)
+                if not records_push:
+                    record["published_old"] = new  # a fast-forward record (P-01)
+                    path.write_text(json.dumps(record))
+                self.s.git("reset", "-q", "--hard", new)
+                self.s.add_pre_receive()
+                self.s.clear_pushes()
+                outcome = self.s.check()
+                self.assertFalse(path.exists())
+                if records_push:
+                    self.assertRecovered(outcome)
+                    self.assertTrue(outcome.pushed)
+                    self.assertEqual(self.s.published(), new)
+                    self.assertTrue(self.s.pushes())
+                else:  # row 7: never pushed from a record that records no push
+                    self.assertBlocked(outcome, "diverged")
+                    self.assertEqual(self.s.pushes(), [])
+                    self.assertEqual(self.s.published(), published_old)
+
+    def test_row_5_reads_attributes_from_the_fetched_base(self) -> None:
+        """E-04 [R2, ADR-0005]: never from the pushed feature commit."""
+        self.s.publish()
+        base = self.s.advance_base({"base.txt": "b\n"})
+        self.killed("after-push")
+        pushed = self.s.published()
+        self.s.commit({"later.txt": "l\n"}, "after the pushed sync")
+        log: list = []
+        with patch.object(branch_sync, "ARGV_LOG", log):
+            outcome = self.s.check()
+        self.assertRecovered(outcome)
+        merges = [argv for _, argv in log if "merge-tree" in argv]
+        self.assertTrue(merges)
+        for argv in merges:
+            self.assertIn(f"--attr-source={base}", argv)
+            self.assertNotIn(f"--attr-source={pushed}", argv)
+
     def test_pruned_new_head_and_the_record_is_cleared(self) -> None:
         """Q43, first variant [N-11]."""
         self.s.advance_base({"base.txt": "b\n"})
@@ -1840,7 +2156,7 @@ class DocumentationTests(unittest.TestCase):
 
     def test_every_cause_and_recovery_is_documented(self) -> None:
         section = self.section()
-        for cause in branch_sync.CAUSES:
+        for cause in sorted(ledger.SYNC_CAUSES):
             self.assertIn(f"`{cause}`", section)
         for key, template in branch_sync.RECOVERY.items():
             with self.subTest(key=key):

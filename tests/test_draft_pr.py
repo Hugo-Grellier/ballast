@@ -1466,17 +1466,21 @@ class LockWaitTests(unittest.TestCase):
 
 
 class StaleEvidenceSectionTests(unittest.TestCase):
-    """T035 [AC-018, FR-015]: dated stale-evidence entries in the Ballast section."""
+    """T035 [AC-018, FR-015, SEC-003]: dated stale-evidence entries in the section."""
 
     def setUp(self) -> None:
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         git(self.root, "init", "-q")
+        self.enterContext(
+            patch.dict(os.environ, {"XDG_STATE_HOME": str(operator_state(self))})
+        )
+        self.directory = draft_pr.stale_dir(self.root, FEATURE)
         self.run = draft_pr._Run(self.root, RUN, feature=FEATURE, issue=17)  # noqa: SLF001
 
-    def stale(self, run_id: str, name: str, **changes: object) -> None:
-        record = {
+    def record(self, run_id: str, name: str, **changes: object) -> dict:
+        return {
             "event_id": name,
             "run_id": run_id,
             "feature": FEATURE,
@@ -1489,13 +1493,15 @@ class StaleEvidenceSectionTests(unittest.TestCase):
             "truncated": False,
             **changes,
         }
-        path = self.root / ".git/speckit-runs" / run_id / "branch-sync" / f"{name}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(record))
+
+    def stale(self, run_id: str, name: str, **changes: object) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.directory / f"{name}.json"
+        path.write_text(json.dumps(self.record(run_id, name, **changes)))
 
     def section(self) -> list[str]:
         text = draft_pr._section(self.run, FIXED)  # noqa: SLF001
-        return [line for line in text.splitlines() if line.startswith("  - 2026")]
+        return [line for line in text.splitlines() if line.startswith("  - ")]
 
     def test_entries_across_runs_oldest_first(self) -> None:
         self.stale(
@@ -1504,20 +1510,19 @@ class StaleEvidenceSectionTests(unittest.TestCase):
         self.stale(RUN, "e1")
         self.stale("run3", "other", feature="specs/18-other")
         self.stale("run4", "bad", base_after="nope")
-        (self.root / ".git/speckit-runs/run5/branch-sync").mkdir(parents=True)
-        (self.root / ".git/speckit-runs/run5/branch-sync/x.json").write_text("{")
+        (self.directory / "x.json").write_text("{")
         self.assertEqual(
             self.section(),
             [
                 (
                     "  - 2026-10-05T10:00:00Z: main moved aaaaaaaaaaaa..bbbbbbbbbbbb; "
                     "plan and review evidence may be stale; files changed on both "
-                    "sides: tools/a.py"
+                    "sides: `tools/a.py`"
                 ),
                 (
                     "  - 2026-10-05T11:00:00Z: main moved aaaaaaaaaaaa..bbbbbbbbbbbb; "
                     "plan evidence may be stale; files changed on both sides: "
-                    "tools/a.py"
+                    "`tools/a.py`"
                 ),
             ],
         )
@@ -1526,14 +1531,41 @@ class StaleEvidenceSectionTests(unittest.TestCase):
             draft_pr._section(self.run, FIXED),  # noqa: SLF001
         )
 
-    def test_paths_are_escaped_and_bounded(self) -> None:
-        paths = ["<script>@x\n.py", *[f"f{n}.py" for n in range(30)]]
+    def test_paths_are_code_spans_and_bounded(self) -> None:
+        paths = [
+            "<script>@x\n.py",
+            "[review passed](https://example.test)",
+            "a`b`c.md",
+            *[f"f{n}.py" for n in range(30)],
+        ]
         self.stale(RUN, "e1", paths=paths)
         (entry,) = self.section()
-        self.assertIn("&lt;script&gt;&#64;x\\n.py", entry)
-        self.assertIn("f18.py", entry)
-        self.assertNotIn("f19.py", entry)
+        self.assertIn("`<script>@x\\n.py`", entry)
+        self.assertIn("`[review passed](https://example.test)`", entry)
+        self.assertIn("`abc.md`", entry)
+        self.assertIn("`f16.py`", entry)
+        self.assertNotIn("f17.py", entry)
         self.assertTrue(entry.endswith(" and more"))
+
+    def test_planted_or_oversized_records_stay_bounded(self) -> None:
+        for number in range(500):
+            observed = f"2026-10-05T10:{number // 60:02d}:{number % 60:02d}+00:00"
+            self.stale(RUN, f"e{number:03d}", observed_at=observed)
+        huge = self.directory / "huge.json"
+        with huge.open("wb") as handle:
+            handle.truncate(100 * 1024 * 1024)  # sparse: cheap to plant
+        lines = self.section()
+        self.assertEqual(len(lines), draft_pr.STALE_ENTRIES + 1)
+        self.assertEqual(lines[0], "  - and 480 earlier")
+        self.assertTrue(lines[-1].startswith("  - 2026-10-05T10:08:19Z:"))
+        body = draft_pr._section(self.run, FIXED)  # noqa: SLF001
+        self.assertLess(len(body), 10_000)
+
+    def test_records_in_the_git_directory_are_ignored(self) -> None:
+        old = self.root / ".git/speckit-runs" / RUN / "branch-sync" / "e1.json"
+        old.parent.mkdir(parents=True)
+        old.write_text(json.dumps(self.record(RUN, "e1")))
+        self.assertEqual(self.section(), [])
 
     def test_no_record_means_no_entry(self) -> None:
         self.assertEqual(self.section(), [])

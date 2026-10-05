@@ -56,29 +56,17 @@ NO_MAINTENANCE = (
     "gc.auto=0",
     "-c",
     "fetch.writeCommitGraph=false",
+    # Nor trust a commit-graph an agent can forge in the shared store (SEC-004).
+    "-c",
+    "core.commitGraph=false",
 )
 # The checkout's `submodule.recurse` would make `read-tree -u` run Git inside
-# submodules, under their own agent-writable configuration.
-NO_RECURSION = ("-c", "submodule.recurse=false")
+# submodules, under their own agent-writable configuration. An agent-written
+# commit-graph could answer ancestry questions falsely (SEC-004).
+NO_RECURSION = ("-c", "submodule.recurse=false", "-c", "core.commitGraph=false")
 LS_REMOTE_TIMEOUT = 30
 NETWORK_TIMEOUT = 600
 LOCAL_TIMEOUT = 600
-CAUSES = (
-    "dirty",
-    "conflict",
-    "fetch-failed",
-    "unknown-base",
-    "in-progress",
-    "wrong-branch",
-    "diverged",
-    "push-failed",
-    "protected-input",
-    "busy",
-    "not-feature-branch",
-    "git-unavailable",
-    "internal-error",
-)
-OUTCOMES = ("up-to-date", "synchronized", "blocked")
 REF = ledger.REF
 COMMIT = ledger.COMMIT
 IN_PROGRESS_MARKERS = (
@@ -120,8 +108,19 @@ CONFLICT_PATHS = 20
 PROTECTED_NAMES = 10
 OVERLAP_PATHS = 200
 SHORT = 12
+# old_base and new_base: the replay's bases, so a completion from the record
+# can still report stale evidence (E-03); None for a fast-forward.
 RECORD_FIELDS = frozenset(
-    {"branch", "old_head", "new_head", "published_old", "run_id", "written_at"}
+    {
+        "branch",
+        "old_head",
+        "new_head",
+        "published_old",
+        "old_base",
+        "new_base",
+        "run_id",
+        "written_at",
+    }
 )
 REMOTE = "origin"
 
@@ -132,6 +131,7 @@ RECOVERY = {
     "git-old": "put a system git 2.41 or later on PATH ahead of any checkout directory",
     "shallow": "git fetch --unshallow, then {rerun}",
     "partial": "clone the repository again without --filter, then {rerun}",
+    "alternates": "clone the repository again without alternates, then {rerun}",
     "in-progress": "finish or abort the {operation} yourself, then {rerun}",
     "index-lock": "if no git process is running, remove {path}, then {rerun}",
     "wrong-branch": "git switch {pinned}, then {rerun}",
@@ -230,11 +230,21 @@ class Result:
 
 
 class _Block(Exception):  # noqa: N818 - Control flow, not an error.
-    def __init__(self, cause: str, detail: str | None, recovery: str) -> None:
+    def __init__(
+        self,
+        cause: str,
+        detail: str | None,
+        recovery: str,
+        *,
+        retryable: bool | None = None,
+        interrupted: bool = False,
+    ) -> None:
         super().__init__(cause)
         self.cause = cause
         self.detail = detail
         self.recovery = recovery
+        self.retryable = retryable
+        self.interrupted = interrupted
 
 
 # --- test seams -------------------------------------------------------------
@@ -275,10 +285,7 @@ def _git_version(git: str) -> tuple[int, int] | None:
 
 # --- text -------------------------------------------------------------------
 
-
-def _text(value: object) -> str:
-    """Untrusted text for display: control characters escaped."""
-    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in str(value))
+_text = draft_pr.printable  # one escaping rule for the CLI and the PR body
 
 
 def _short(commit: str | None) -> str:
@@ -324,7 +331,10 @@ def _stale_note(outcome: Outcome) -> str | None:
 
 def format_lines(outcome: Outcome) -> list[tuple[str, str]]:
     """(stream, line) pairs `run.py` prints: one line, or a block and recovery."""
-    branch, base = _text(outcome.branch or "HEAD"), _text(outcome.base_ref or "base")
+    branch, base = (
+        _text(outcome.branch or "HEAD"),
+        _text(outcome.base_ref or "base"),
+    )
     if outcome.outcome == "blocked":
         line = f"BLOCKED_UPSTREAM_SYNC ({outcome.cause})"
         if outcome.detail:
@@ -401,7 +411,7 @@ def _pin_path(root: Path, run_id: str) -> Path:
 
 
 def read_pin(root: Path, run_id: str) -> dict[str, str]:
-    """Return a run's pin (#17 branch, #18 base and base_commit); {} when absent.
+    """Return a run's pin (#17 branch, #18 base, base_commit, feature); {} if absent.
 
     Fields that are not valid are left out; `continue` passes the source run's
     `branch` and `base` back into `synchronize`.
@@ -421,7 +431,15 @@ def read_pin(root: Path, run_id: str) -> dict[str, str]:
     commit = data.get("base_commit")
     if isinstance(commit, str) and COMMIT.fullmatch(commit):
         pin["base_commit"] = commit
+    feature = data.get("feature")
+    if isinstance(feature, str) and FEATURE_PATTERN.fullmatch(feature):
+        pin["feature"] = feature
     return pin
+
+
+def _issue(feature: str | None) -> int | None:
+    match = draft_pr.ISSUE.match(feature) if feature else None
+    return int(match.group(1)) if match else None
 
 
 def _status_entries(output: str) -> list[tuple[str, str]]:
@@ -504,8 +522,9 @@ class _Sync:
             if isinstance(feature, str) and FEATURE_PATTERN.fullmatch(feature)
             else None
         )
-        match = draft_pr.ISSUE.match(self.feature) if self.feature else None
-        self.issue = int(match.group(1)) if match else None
+        # The Issue number decides what may be rewritten: from the operator's
+        # command at start, from the operator's pin afterwards (SEC-002).
+        self.issue = _issue(self.feature) if starting else None
         self.starting = starting
         self.given_branch = branch
         self.given_base = base
@@ -524,7 +543,6 @@ class _Sync:
         self.bare: Path | None = None
         self.objects: Path | None = None
         self.pin: dict[str, str] = {}
-        self.new_pin: dict[str, str] = {}
         self.branch: str | None = None
         self.head_before: str | None = None
         self.head: str | None = None
@@ -546,6 +564,8 @@ class _Sync:
         self.note: str | None = None
         self.overlap: list[str] = []
         self.stale: list[str] = []
+        # The bases of the replay being written, for the write-ahead record.
+        self.sync_bases: tuple[str, str] | None = None
 
     # --- runners --------------------------------------------------------------
 
@@ -557,6 +577,10 @@ class _Sync:
             and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
         }
         env["PATH"] = draft_pr._child_path(self.root)  # noqa: SLF001
+        # Replace refs and grafts in the agent-writable .git could make a
+        # branch that lacks the base look up to date (SEC-004).
+        env["GIT_NO_REPLACE_OBJECTS"] = "1"
+        env["GIT_GRAFT_FILE"] = os.devnull
         return env
 
     def _run(  # noqa: PLR0913 - One bounded command.
@@ -617,8 +641,10 @@ class _Sync:
         timeout: float = LOCAL_TIMEOUT,
     ) -> Result:
         """Run one command in the throwaway repository, never with maintenance."""
-        assert args[0] in THROWAWAY_COMMANDS, args[0]  # noqa: S101 - contract
-        assert self.bare is not None  # noqa: S101
+        if args[0] not in THROWAWAY_COMMANDS or self.bare is None:
+            # Not an assert: it must hold under python -O too (SEC-006).
+            message = f"git {args[0]} is not allowed in the throwaway"
+            raise RuntimeError(message)
         prefix = [f"--attr-source={attr_source}"] if attr_source else []
         argv = [self.git, *prefix, *autonomy.GIT_HARDENING, *NO_MAINTENANCE, *args]
         if ARGV_LOG is not None:
@@ -693,9 +719,20 @@ class _Sync:
             head_before=self.head_before,
             head_after=self.head,
             pushed=self.pushed or None,
-            retryable=getattr(block, "retryable", None),
-            interrupted=block.detail == "interrupted",
+            retryable=block.retryable,
+            interrupted=block.interrupted,
+            # E-03: a protected-input block keeps the synchronization.
+            **(self.stale_fields() if block.cause == "protected-input" else {}),
         )
+
+    def stale_fields(self) -> dict[str, Any]:
+        if not self.overlap:
+            return {}
+        return {
+            "overlap": len(self.overlap),
+            "stale_plan": "plan" in self.stale,
+            "stale_review": "review" in self.stale,
+        }
 
     # --- the R4 steps ---------------------------------------------------------
 
@@ -751,38 +788,51 @@ class _Sync:
         if self.starting:
             current = self.current_branch()
             if current is None:
-                self.stop("wrong-branch", "HEAD is detached", "wrong-branch", pinned="")
+                # R4: an operation in progress is reported before identity (E-02).
+                self.in_progress()
+                self.stop(
+                    "wrong-branch",
+                    "HEAD is detached",
+                    "wrong-branch",
+                    pinned=self.feature_branch(),
+                )
             self.pin = read_pin(self.root, self.run_id)
             if "branch" not in self.pin:
                 self.pin = {"branch": current}
+                if self.feature:
+                    self.pin["feature"] = self.feature
                 self.save_pin()
             return self.pin["branch"]
+        run = self.source_run if self.continuing else self.run_id
+        pinned = read_pin(self.root, str(run))
         if self.continuing:
             self.pin = {
                 key: value
                 for key, value in (
                     ("branch", self.given_branch),
                     ("base", self.given_base),
+                    ("feature", pinned.get("feature")),
                 )
                 if value
             }
-            run = self.source_run
         else:
-            self.pin = read_pin(self.root, self.run_id)
-            run = self.run_id
-        if "branch" not in self.pin:
+            self.pin = pinned
+        missing = [name for name in ("branch", "feature") if name not in self.pin]
+        if missing:
+            # DEC-0006: never trust what an agent step could have changed.
             self.stop(
                 "wrong-branch",
-                f"run {run} has no branch pin (started before branch pinning)",
+                f"run {run} has no {' or '.join(missing)} pin "
+                "(started before branch pinning)",
                 "unpinned",
             )
-        if self.continuing:
-            self.new_pin = dict(self.pin)
+        self.feature = self.pin["feature"]
+        self.issue = _issue(self.feature)
         return self.pin["branch"]
 
-    def save_pin(self) -> None:
+    def save_pin(self, *, final: bool = False) -> None:
         """Write the pin; a continuation's waits for a non-blocked outcome (N-07)."""
-        if self.continuing:
+        if self.continuing and not final:
             return
         _write_json(_pin_path(self.root, self.run_id), self.pin)
 
@@ -798,6 +848,16 @@ class _Sync:
         )
         if partial.returncode == 0 or (promisor.returncode == 0 and promisor.stdout):
             self.stop("git-unavailable", "partial clone", "partial")
+        # The throwaway shares the object store: alternates would let it read
+        # and push objects of any store the operator can read (SEC-005).
+        alternates = self.value(
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects/info/alternates",
+        )
+        if os.path.lexists(alternates):
+            self.stop("git-unavailable", "alternate object store", "alternates")
 
     def in_progress(self) -> None:
         names = [name for name, _ in IN_PROGRESS_MARKERS] + ["index.lock"]
@@ -934,7 +994,6 @@ class _Sync:
                 )
             base = default
             self.pin["base"] = base
-            self.new_pin["base"] = base
             self.save_pin()  # N-06: only after the ls-remote that provides it.
         self.base = base
         base_commit = commits.get(f"refs/heads/{base}")
@@ -1034,7 +1093,10 @@ class _Sync:
             "status",
             "--porcelain=v1",
             "-z",
-            "--ignore-submodules=none",
+            # `none` would run `git status` inside each submodule, under its
+            # own configuration's filters (SEC-001); `dirty` still reports a
+            # changed gitlink.
+            "--ignore-submodules=dirty",
             *flags,
         )
         if result.returncode:
@@ -1109,13 +1171,12 @@ class _Sync:
                 isinstance(data[key], str) and COMMIT.fullmatch(data[key])
                 for key in ("old_head", "new_head")
             )
-            and (
-                data["published_old"] is None
-                or (
-                    isinstance(data["published_old"], str)
-                    and COMMIT.fullmatch(data["published_old"])
-                )
+            and all(
+                data[key] is None
+                or (isinstance(data[key], str) and COMMIT.fullmatch(data[key]))
+                for key in ("published_old", "old_base", "new_base")
             )
+            and (data["old_base"] is None) == (data["new_base"] is None)
             and isinstance(data["run_id"], str)
             and RUN_ID_PATTERN.fullmatch(data["run_id"]) is not None
             and isinstance(data["written_at"], str)
@@ -1129,6 +1190,8 @@ class _Sync:
                 "old_head": old,
                 "new_head": new,
                 "published_old": published_old,
+                "old_base": self.sync_bases[0] if self.sync_bases else None,
+                "new_base": self.sync_bases[1] if self.sync_bases else None,
                 "run_id": self.run_id,
                 "written_at": datetime.now(UTC).isoformat(),
             },
@@ -1167,6 +1230,7 @@ class _Sync:
             if local == old and published == new:
                 self.completed(record)  # row 4: push done, local not
                 self.holds = new
+                self.overlap_from(record, old)
                 self.mutate(old, new, observed=new, push=False, onto_base=False)
                 return
             if (
@@ -1177,7 +1241,11 @@ class _Sync:
             ):
                 self.completed(record)  # row 5: commits after the pushed sync
                 self.holds = new
-                replayed = self.replay(old, new, local, pushed=new)
+                self.overlap_from(record, old)
+                # Attributes from the fetched base, never the feature (E-04).
+                replayed = self.replay(
+                    old, new, local, pushed=new, attributes=self.base_after
+                )
                 self.mutate(
                     local, replayed, observed=new, push=replayed != new, onto_base=False
                 )
@@ -1188,6 +1256,14 @@ class _Sync:
     def completed(self, record: dict) -> None:
         self.recovered = True
         self.recovered_from = record["run_id"]
+
+    def overlap_from(self, record: dict, old_head: str) -> None:
+        """E-03: a completed replay still reports stale evidence."""
+        old_base, new_base = record["old_base"], record["new_base"]
+        if old_base is None or not (self.has(old_base) and self.has(new_base)):
+            return
+        self.sync_bases = (old_base, new_base)
+        self.find_overlap(old_base, new_base, old_head)
 
     def interrupted_update(self, old: str, new: str) -> None:
         """Row 3b: `read-tree -m -u` died after writing part of the worktree."""
@@ -1328,6 +1404,7 @@ class _Sync:
         if new == self.base_after:
             self.fast_forwarded = True
         _crash("after-replay")
+        self.sync_bases = (old_base, self.base_after)
         self.mutate(
             old_head,
             new,
@@ -1337,7 +1414,7 @@ class _Sync:
         )
         if self.base_before is None:
             self.base_before = old_base
-        self.find_overlap(old_base, old_head)
+        self.find_overlap(old_base, self.base_after, old_head)
         return self.finish("synchronized")
 
     def feature_branch(self) -> str:
@@ -1354,7 +1431,7 @@ class _Sync:
                     return found
             elif self.is_ancestor(recorded, head):
                 return recorded  # the base was force-pushed
-        else:
+        elif not recorded:  # A recorded base that is gone is unknown (R8, E-06).
             found = self.merge_base(head, self.base_after)
             if found:
                 return found
@@ -1366,9 +1443,19 @@ class _Sync:
         )
 
     def replay(
-        self, old_base: str, new_base: str, head: str, *, pushed: str | None = None
+        self,
+        old_base: str,
+        new_base: str,
+        head: str,
+        *,
+        pushed: str | None = None,
+        attributes: str | None = None,
     ) -> str:
-        """R2: replay old_base..head onto new_base without touching the checkout."""
+        """R2: replay old_base..head onto new_base without touching the checkout.
+
+        `.gitattributes` come from `attributes`, by default new_base: always a
+        fetched base, never the feature branch.
+        """
         listed = self.checkout(
             "rev-list",
             "--reverse",
@@ -1382,6 +1469,9 @@ class _Sync:
         parent = new_base
         parent_tree = self.tree_of(parent)
         for commit in listed.stdout.split():
+            if not COMMIT.fullmatch(commit):  # SEC-004: names are validated data.
+                message = "git rev-list failed"
+                raise RuntimeError(message)
             raw = self.raw_commit(commit)
             headers = _headers(raw)
             if not headers.get("parent"):
@@ -1392,6 +1482,9 @@ class _Sync:
                     base=self.base,
                 )
             original = headers["parent"][0]
+            if not COMMIT.fullmatch(original):
+                message = "malformed commit"
+                raise RuntimeError(message)
             was_empty = headers["tree"][0] == self.tree_of(original)
             merged = self.throwaway(
                 "merge-tree",
@@ -1401,7 +1494,7 @@ class _Sync:
                 "-z",
                 parent,
                 commit,
-                attr_source=new_base,
+                attr_source=attributes or new_base,
             )
             parts = merged.stdout.split("\0")
             if merged.returncode == 1:
@@ -1534,10 +1627,10 @@ class _Sync:
         # 5. Completion.
         if onto_base:
             self.pin["base_commit"] = str(self.base_after)
-            self.new_pin["base_commit"] = str(self.base_after)
             self.save_pin()
         self.clear_record()
         self.holds = None
+        self.sync_bases = None
 
     def dirty_block(self, what: str, paths: list[str], *, files: bool) -> NoReturn:
         detail = f"{what}: {_paths(paths)}" if paths else what
@@ -1591,8 +1684,8 @@ class _Sync:
             or "hook declined" in result.stderr
             or "! [rejected]" in result.stderr
         )
-        block = _Block(
-            "push-failed",
+        raise _Block(
+            "push-failed",  # noqa: EM101 - The cause, not a message.
             f"pushing {_text(self.branch)} failed; a retry "
             f"{'cannot' if rejected else 'can'} succeed alone",
             _recovery(
@@ -1601,9 +1694,8 @@ class _Sync:
                 repo=self.repo,
                 branch=self.branch,
             ),
+            retryable=not rejected,
         )
-        block.retryable = not rejected  # type: ignore[attr-defined]
-        raise block
 
     # --- R4 steps 14 and 15 ---------------------------------------------------
 
@@ -1632,13 +1724,15 @@ class _Sync:
             "protected-input",
         )
 
-    def find_overlap(self, old_base: str, old_head: str) -> None:
-        """R11: files both the base and the feature changed, when evidence exists."""
-        if self.feature is None or self.base_after is None:
+    def find_overlap(self, old_base: str, new_base: str, old_head: str) -> None:
+        """R11: files both the base and the feature changed, when evidence exists.
+
+        Adds to what an earlier completion in the same check found.
+        """
+        if self.feature is None:
             return
-        both = sorted(
-            set(self.diff_tree(old_base, self.base_after))
-            & set(self.diff_tree(old_base, old_head))
+        both = set(self.diff_tree(old_base, new_base)) & set(
+            self.diff_tree(old_base, old_head)
         )
         if not both:
             return
@@ -1650,11 +1744,10 @@ class _Sync:
             except (ledger.LedgerError, OSError, ValueError):
                 events = []
             review = any(e["kind"] in {"review", "convergence"} for e in events)
-        self.stale = [
-            name for name, found in (("plan", plan), ("review", review)) if found
-        ]
-        if self.stale:
-            self.overlap = both
+        stale = {name for name, found in (("plan", plan), ("review", review)) if found}
+        if stale:
+            self.stale = sorted(stale | set(self.stale))
+            self.overlap = sorted(both | set(self.overlap))
 
     def listing(self, commit: str, path: str) -> str:
         result = self.checkout("ls-tree", "-r", "--name-only", "-z", commit, "--", path)
@@ -1663,11 +1756,7 @@ class _Sync:
     def finish(self, outcome: str) -> Outcome:
         self.recheck()
         self.pin["base_commit"] = str(self.base_after)
-        self.new_pin["base_commit"] = str(self.base_after)
-        if self.continuing:
-            _write_json(_pin_path(self.root, self.run_id), self.new_pin)
-        else:
-            self.save_pin()
+        self.save_pin(final=True)
         synchronized = outcome == "synchronized"
         return Outcome(
             outcome,
@@ -1684,10 +1773,8 @@ class _Sync:
             recovered_from=self.recovered_from
             if synchronized and self.recovered
             else None,
-            overlap=len(self.overlap) if self.overlap else None,
-            stale_plan=("plan" in self.stale) if self.overlap else None,
-            stale_review=("review" in self.stale) if self.overlap else None,
             note=self.note,
+            **self.stale_fields(),
         )
 
     # --- recording ------------------------------------------------------------
@@ -1728,11 +1815,10 @@ class _Sync:
         event = ledger.new_event(
             run, self.feature, "branch_sync", "runner", data, self.event_id
         )
-        if self.overlap and outcome.outcome == "synchronized":
+        if outcome.overlap:  # synchronized, or a kept protected-input sync
+            # Operator state: an agent can neither plant nor hide it (SEC-003).
             _write_json(
-                ledger.archive_dir(self.root, run)
-                / "branch-sync"
-                / f"{self.event_id}.json",
+                draft_pr.stale_dir(self.root, self.feature) / f"{self.event_id}.json",
                 {
                     "event_id": self.event_id,
                     "run_id": run,
@@ -1783,6 +1869,7 @@ def synchronize(  # noqa: PLR0913 - The contract's entry point.
                 "internal-error",
                 "interrupted",
                 _recovery("internal-error", rerun=work.rerun),
+                interrupted=True,
             )
         )
     except Exception as error:  # noqa: BLE001 - Any failure is one outcome.

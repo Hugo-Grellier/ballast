@@ -39,7 +39,7 @@ Validation additions:
 - A blocked `continue` records its event in the source run's stream, not under the continuation's ID (research R1, N-07). A blocked `start` does record under its own new run ID: that run was started, so a stream holding only one `branch_sync` event is valid and `report` handles it.
 - No semantic transition rule: the event may follow any event of the run.
 
-No field holds a path, remedy, Git output or free text. Overlapping paths live in `branch-sync/<event_id>.json` beside the stream ([data model](../data-model.md#stale-evidence-record)). The base name is the only name recorded, under the strict `ref` type, because FR-009 requires the base reference.
+No field holds a path, remedy, Git output or free text. Overlapping paths live in operator state, `<state_dir>/branch-sync/stale/<key>/<event_id>.json` ([data model](../data-model.md#stale-evidence-record)). `overlap`, `stale_plan` and `stale_review` appear on `synchronized` and on a `blocked` `protected-input`, which keeps the synchronization. The base name is the only name recorded, under the strict `ref` type, because FR-009 requires the base reference.
 
 ## Report
 

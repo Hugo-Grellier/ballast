@@ -3064,13 +3064,39 @@ class BranchSyncCallTests(unittest.TestCase):
                 self.assertTrue(self.dump.exists())
                 self.assertIn("Branch sync: up-to-date feat-x with main", out)
 
+    def test_start_needs_one_valid_feature_directory(self) -> None:
+        """E-01 [FR-009]: refused before any check, pin or agent step."""
+        for args in (
+            ("start",),
+            ("start", "-i", "integration=claude"),
+            ("start", "-i", "feature_directory=nope"),
+            (
+                "start",
+                "-i",
+                f"feature_directory={FEATURE}",
+                "--input",
+                f"feature_directory={FEATURE}",
+            ),
+        ):
+            with self.subTest(args=args):
+                self.calls.clear()
+                status, _, err = self.main(*args)
+                self.assertEqual(status, 2)
+                self.assertIn(
+                    "start needs one -i feature_directory=specs/<issue>-<slug>", err
+                )
+                self.assertEqual(self.calls, [])
+                self.assertFalse(self.dump.exists(), "an agent step started")
+                pins = autonomy.state_dir(self.repo.root) / "draft-pr"
+                self.assertEqual(list(pins.glob("*.json")) if pins.exists() else [], [])
+
     def test_publish_never_runs_the_check(self) -> None:
         self.main("publish", "run42")
         self.assertEqual(self.calls, [])
 
     def test_every_block_stops_before_any_agent_and_any_checkpoint(self) -> None:
         bs = self.run.branch_sync
-        for cause in bs.CAUSES:
+        for cause in sorted(bs.ledger.SYNC_CAUSES):
             for interrupted in (False, True) if cause == "internal-error" else (False,):
                 with self.subTest(cause=cause, interrupted=interrupted):
                     self.dump.unlink(missing_ok=True)
@@ -3190,6 +3216,23 @@ class BranchSyncEndToEndTests(unittest.TestCase):
         status, out = self.main("start", "-i", f"feature_directory={self.feature}")
         self.assertEqual(status, 0, out)
         self.scratch.git("merge-base", "--is-ancestor", new, self.head_file.read_text())
+
+    def test_resume_takes_the_issue_number_from_the_pin(self) -> None:
+        """SEC-002: an agent-written inputs.json cannot widen the rewrite rule."""
+        scratch = self.scratch
+        scratch.git("checkout", "-q", "-b", "release/3")
+        scratch.publish("release/3")
+        scratch.pin(self.run_id, branch="release/3")
+        inputs = scratch.root / ".specify/workflows/runs" / self.run_id / "inputs.json"
+        inputs.write_text(json.dumps({"inputs": {"feature_directory": "specs/3-x"}}))
+        scratch.advance_base({"base.txt": "b\n"})
+        before = scratch.snapshot("release/3")
+        status, _ = self.main("resume", self.run_id)
+        self.assertEqual(status, 1)
+        self.assertFalse(self.head_file.exists())
+        self.assertEqual(scratch.snapshot("release/3"), before)
+        (event,) = scratch.events(self.run_id)
+        self.assertEqual(event["cause"], "not-feature-branch")
 
     def test_blocked_resume_starts_no_engine(self) -> None:
         self.scratch.advance_base({"base.txt": "b\n"})

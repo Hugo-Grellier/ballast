@@ -29,8 +29,11 @@ step) brings the run's branch onto its base: the base the run recorded, or
 the default branch of the `[github] repository` pinned in ballast.toml. It
 prints one line, `Branch sync: up-to-date ...` or `Branch sync:
 synchronized ...`. When the branch cannot be updated safely it changes
-nothing, prints `BLOCKED_UPSTREAM_SYNC (CAUSE): DETAIL` and one `Recovery:`
-action, starts no agent and exits 1 (130 when interrupted). Only the feature
+nothing (see the policy for the two exceptions: a protected-input change
+and a block after a push), prints `BLOCKED_UPSTREAM_SYNC (CAUSE): DETAIL`
+and one `Recovery:` action, starts no agent and exits 1 (130 when
+interrupted). A human-gated `start` needs exactly one valid
+`-i feature_directory`. Only the feature
 branch named for the Issue is rebased, and a published one is pushed only
 with a lease. The causes and their recovery actions are in
 docs/policies/spec-kit-workflow.md, "Branch synchronization". `publish`
@@ -291,12 +294,19 @@ def _sync_block(run_id: str, outcome: branch_sync.Outcome) -> int:
 
 
 def _option_feature(options: list[str]) -> str | None:
-    """Return `-i feature_directory=...` of a human-gated start, if given."""
-    for flag, pair in itertools.pairwise(options):
-        name, _, value = pair.partition("=")
-        if flag in {"-i", "--input"} and name == "feature_directory":
-            return value
-    return None
+    """Return the one valid `-i feature_directory=...` of a start, else None.
+
+    The check pins it, and its Issue number decides which branch may be
+    rewritten, so a missing, invalid or repeated value is refused (E-01).
+    """
+    found = [
+        pair.partition("=")[2]
+        for flag, pair in itertools.pairwise(options)
+        if flag in {"-i", "--input"} and pair.partition("=")[0] == "feature_directory"
+    ]
+    if len(found) != 1 or not autonomy.FEATURE.fullmatch(found[0]):
+        return None
+    return found[0]
 
 
 def _run_feature(run_id: str) -> str | None:
@@ -925,6 +935,8 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
             return _refuse("--mode must be human-gated or autonomous")
         if mode != "autonomous" and len(flags) > ("--mode" in flags):
             return _refuse("--wall-time and --max-agent-steps need --mode autonomous")
+        if mode != "autonomous" and _option_feature(options) is None:
+            return _refuse("start needs one -i feature_directory=specs/<issue>-<slug>")
     if argv[0] == "resume":
         rest = options[1:]
         if not options or not RUN_ID.fullmatch(options[0]):

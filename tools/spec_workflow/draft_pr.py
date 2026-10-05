@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -456,7 +457,24 @@ def _section(run: _Run, checked_at: datetime) -> str:
 
 
 STALE_PATHS = 20
+STALE_ENTRIES = 20
+STALE_RECORD_BYTES = 16 * 1024  # ample for branch_sync's 200 paths
 STALE_KINDS = frozenset({"plan", "review"})
+
+
+def stale_dir(root: Path, feature: str) -> Path:
+    """Operator-state directory of a feature's stale-evidence records (#18).
+
+    Keyed by feature, so a continuation keeps its source run's entries; an
+    agent can neither plant nor delete them (SEC-003).
+    """
+    key = hashlib.sha256(feature.encode("utf-8", "surrogateescape")).hexdigest()
+    return state_dir(root) / "branch-sync" / "stale" / key[:16]
+
+
+def _code(text: str) -> str:
+    """Render a path as a Markdown code span: never a link, mention or markup."""
+    return "`" + printable(text).replace("`", "") + "`"
 
 
 def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:
@@ -488,7 +506,7 @@ def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:
     except ValueError:
         return None
     moved = f"{before[:12]}..{after[:12]}" if before else f"to {after[:12]}"
-    shown = ", ".join(_escape(_printable(path)) for path in paths[:STALE_PATHS])
+    shown = ", ".join(_code(path) for path in paths[:STALE_PATHS])
     more = len(paths) - STALE_PATHS
     if more > 0 or data["truncated"]:
         shown += " and more"
@@ -500,34 +518,55 @@ def _stale_record(data: object, feature: str | None) -> tuple[str, str] | None:
     return observed, entry
 
 
-def _printable(text: str) -> str:
-    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in text)
+def printable(text: object) -> str:
+    """Untrusted text for display: control characters escaped."""
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in str(text))
+
+
+def _small_json(path: Path) -> object:
+    """Parse a regular file of at most STALE_RECORD_BYTES; else ValueError."""
+    handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(handle, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            message = "not a regular file"
+            raise ValueError(message)
+        raw = stream.read(STALE_RECORD_BYTES + 1)
+    if len(raw) > STALE_RECORD_BYTES:
+        message = "record too large"
+        raise ValueError(message)
+    return json.loads(raw.decode("utf-8"))
 
 
 def _stale_entries(run: _Run) -> list[str]:
     """Dated stale-evidence entries for the feature, oldest first (#18 R11).
 
-    Read from every run archive of the clone: a continuation has a new run
-    ID, so the source run's staleness must stay visible. Unreadable or
-    foreign records are skipped; nothing here clears an entry.
+    Read from operator state, keyed by feature: a continuation has a new run
+    ID, so the source run's staleness must stay visible. Unreadable, oversized
+    or foreign records are skipped; nothing here clears an entry. At most the
+    newest STALE_ENTRIES are shown, so the PR body stays bounded.
     """
+    if run.feature is None:
+        return []
     try:
-        parent = ledger.common_dir(run.root) / "speckit-runs"
-    except (ledger.LedgerError, OSError):
+        directory = stale_dir(run.root, run.feature)
+        paths = sorted(directory.iterdir()) if directory.is_dir() else []
+    except (OSError, ValueError):
         return []
     found: list[tuple[str, str]] = []
-    if not parent.is_dir() or parent.is_symlink():
-        return []
-    for path in sorted(parent.glob("*/branch-sync/*.json")):
-        if path.is_symlink() or not path.is_file():
+    for path in paths:
+        if path.suffix != ".json":
             continue
         try:
-            record = _stale_record(json.loads(path.read_text("utf-8")), run.feature)
-        except (OSError, ValueError):
+            record = _stale_record(_small_json(path), run.feature)
+        except (OSError, ValueError, MemoryError, RecursionError):
             continue
         if record is not None:
             found.append(record)
-    return [entry for _, entry in sorted(found)]
+    entries = [entry for _, entry in sorted(found)]
+    if len(entries) > STALE_ENTRIES:
+        hidden = len(entries) - STALE_ENTRIES
+        entries = [f"and {hidden} earlier", *entries[-STALE_ENTRIES:]]
+    return entries
 
 
 class _Checkpoint:

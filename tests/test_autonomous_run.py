@@ -833,13 +833,13 @@ class RunBlockTests(RunCase):
         self.assertEqual(code, 2)
 
     def test_resume_of_human_gated_run_is_unchanged(self) -> None:
-        # What `ballast run start` leaves: the engine inputs and the branch pin.
+        # What `ballast run start` leaves: the engine inputs and the pin (SEC-002).
         inputs = self.root / ".specify/workflows/runs/abc123/inputs.json"
         inputs.parent.mkdir(parents=True)
         inputs.write_text(json.dumps({"inputs": {"feature_directory": FEATURE}}))
         run.branch_sync._write_json(  # noqa: SLF001
             run.branch_sync._pin_path(self.root, "abc123"),  # noqa: SLF001
-            {"branch": "27-demo-run"},
+            {"branch": "27-demo-run", "feature": FEATURE},
         )
         code, out, err = self.main("resume", "abc123")
         self.assertEqual(code, 0, out + err)
@@ -960,7 +960,12 @@ class UpstreamSyncRunTests(RunCase):
         self.assertIn("Branch sync: synchronized 27-demo-run onto main", out)
         self.assertEqual(
             run.branch_sync.read_pin(self.root, new_id),
-            {"branch": "27-demo-run", "base": "main", "base_commit": new_base},
+            {
+                "branch": "27-demo-run",
+                "feature": FEATURE,
+                "base": "main",
+                "base_commit": new_base,
+            },
         )
         self.assertEqual(len(autonomy.read_human_decisions(self.root, run_id)), 1)
         self.assertEqual(
@@ -1008,7 +1013,7 @@ class UpstreamSyncRunTests(RunCase):
             "continue", run_id, "--reason", "block-resolved", "--ref", "x"
         )
         self.assertEqual(code, 1)
-        self.assertIn(f"run {run_id} has no branch pin", err)
+        self.assertIn(f"run {run_id} has no branch or feature pin", err)
         self.assertIn("Recovery: start a new run", err)
         self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
 

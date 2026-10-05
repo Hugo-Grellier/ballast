@@ -649,19 +649,27 @@ starts no agent and runs no check. Bugfix and assess runs started with
   branch is never rewritten or pushed; when it is behind, the run blocks. A
   branch that is strictly behind its own published branch and clean is
   fast-forwarded to it first; nothing is pushed then.
-- **The pin**: `ballast run start` pins the branch before the first agent step;
-  a continuation uses its source run's pin. A `resume` or `continue` of a run
-  that has no pin (started before branch pinning) blocks and asks for a new
-  run. The run must be on its pinned branch.
+- **The pin**: `ballast run start` pins the branch and the feature directory
+  (whose Issue number decides which branch may be rewritten) in your state
+  directory before the first agent step; a continuation uses its source run's
+  pin. A human-gated `start` without exactly one valid `-i
+  feature_directory=specs/<issue>-<slug>` is refused before any check. A
+  `resume` or `continue` of a run whose pin lacks the branch or the feature
+  (started before branch pinning) blocks and asks for a new run. The run must
+  be on its pinned branch.
 - **Requirements**: `git` 2.41 or later on `PATH`, outside every checkout and
   temp directory (`ballast doctor` checks it). Shallow checkouts and partial
-  clones are refused; unshallow the checkout, or clone it again without
-  `--filter`.
+  clones are refused, as are checkouts that borrow objects through
+  `objects/info/alternates`; unshallow the checkout, or clone it again without
+  `--filter` or alternates.
 - **Plan and review evidence**: when the base and the feature both changed a
   file and the feature has a `plan.md` or review evidence, the line names that
   evidence as possibly stale, the ledger event records it, and the Draft PR's
-  Ballast section lists the dated entry and its files. No gate is added and no
-  review re-runs; the human approving the merge sees the staleness.
+  Ballast section lists the dated entry and its files (the newest 20 entries,
+  from your state directory). This also holds for a synchronization kept by a
+  `protected-input` block or finished from a write-ahead record. No gate is
+  added and no review re-runs; the human approving the merge sees the
+  staleness.
 
 When the branch cannot be updated safely, the launcher changes nothing, starts
 no agent, prints `BLOCKED_UPSTREAM_SYNC (CAUSE): DETAIL` and one `Recovery:`
@@ -679,14 +687,15 @@ your `ballast run continue` command.
 | `git-unavailable` | no trusted `git`, or one older than 2.41 | put a system git 2.41 or later on PATH ahead of any checkout directory |
 | `git-unavailable` | shallow checkout | git fetch --unshallow, then rerun |
 | `git-unavailable` | partial clone | clone the repository again without --filter, then rerun |
+| `git-unavailable` | alternate object store | clone the repository again without alternates, then rerun |
 | `in-progress` | a rebase, merge, cherry-pick, revert or bisect is in progress | finish or abort the {operation} yourself, then rerun |
 | `in-progress` | `index.lock` exists | if no git process is running, remove {path}, then rerun |
-| `wrong-branch` | detached HEAD, or not the pinned branch | git switch {pinned}, then rerun |
-| `wrong-branch` | the run has no branch pin | start a new run: your ballast run start command |
+| `wrong-branch` | detached HEAD, or not the pinned branch (at `start`, `{pinned}` is the feature's branch name) | git switch {pinned}, then rerun |
+| `wrong-branch` | the run has no branch or feature pin | start a new run: your ballast run start command |
 | `unknown-base` | no `[github] repository` in `ballast.toml` | declare [github] repository and run ballast trust |
 | `unknown-base` | the base or a default branch does not exist on the repository | restore {base} on {repo}; Ballast never substitutes another base |
 | `fetch-failed` | the repository cannot be reached or read | check network access and credentials for {repo} (Ballast cannot answer a prompt), then rerun |
-| `not-feature-branch` | behind on a branch that is not the feature branch, or no feature directory | synchronize {branch} yourself, or run the feature on its own branch: git switch -c {feature_branch} |
+| `not-feature-branch` | behind on a branch that is not the feature branch of the pinned feature | synchronize {branch} yourself, or run the feature on its own branch: git switch -c {feature_branch} |
 | `diverged` | the branch and its published branch both have commits, or the published branch moved during the check | reconcile by hand: git pull --rebase {remote} {branch}, then rerun |
 | `diverged` | the base was rewritten and the old base is unknown | rebase by hand onto {base}, then rerun |
 | `diverged` | the base branch itself has local commits | git switch -c {new_branch} |

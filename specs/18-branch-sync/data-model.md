@@ -11,10 +11,11 @@ Entities the check reads and writes. Rationale is in [research.md](research.md);
 | `branch` | string | at `start` (the current branch, before the first agent step), or for a continuation on a non-blocked outcome (the source run's branch). Never at `resume` (DEC-0006). | Local branch the run works on; also the published branch name. Never changed afterwards. |
 | `base` | ref | after the `ls-remote` that provides it succeeded: at `start`, or on the first check of a pin that lacks it (N-06) | Authoritative base (FR-002). Never changed afterwards (A-3). |
 | `base_commit` | commit | after every `up-to-date` or `synchronized` outcome | Base commit last observed; old base for a rewritten base (R8) and a fetch negotiation hint. Never used as the current base (FR-003). |
+| `feature` | `specs/<N>-<slug>` | with `branch` at `start`, from the operator's `-i feature_directory`; a continuation copies its source run's | Feature directory whose Issue number decides which branch may be rewritten (R15). `resume` and `continue` read it here, never from agent-writable run state (SEC-002). |
 
 - `ref`: `[A-Za-z0-9._/-]{1,200}`, not starting with `-` or `/`, no `..`, `//`, `@{` or trailing `.lock`/`/`. A recorded or remote name that fails this is `unknown-base`.
 - `commit`: `[0-9a-f]{40}` or `[0-9a-f]{64}`.
-- A `resume` or `continue` whose run (for `continue`, the source run) has no pin, or a pin without `branch`, blocks as `wrong-branch` (DEC-0006).
+- A `resume` or `continue` whose run (for `continue`, the source run) has no pin, or a pin without `branch` or `feature`, blocks as `wrong-branch` (DEC-0006).
 
 ## Write-ahead record
 
@@ -26,6 +27,7 @@ Entities the check reads and writes. Rationale is in [research.md](research.md);
 | `old_head` | commit | branch HEAD before the mutation |
 | `new_head` | commit | branch HEAD the mutation moves to |
 | `published_old` | commit or null | observed published commit, the push lease; null for an unpublished branch and for the base-branch fast-forward. The record records a push exactly when it is non-null and differs from `new_head`; the AC-015 fast-forward records `published_old == new_head` and pushes nothing (P-01) |
+| `old_base`, `new_base` | commit or null, both or neither | the replay's old and new base, so a completion from the record reports stale evidence (R11, E-03); null for a fast-forward |
 | `run_id` | run ID | run that wrote it; reported as `recovered_from` when completed |
 | `written_at` | timestamp | when it was written |
 
@@ -61,7 +63,7 @@ Exactly one per invocation that reaches the check (FR-009).
 | --- | --- | --- |
 | `up-to-date` | `base_ref`, `base_after`, `head_before`, `head_after` (= `head_before`, or the published commit after an AC-015 fast-forward) | `base_before`, `fast_forwarded` |
 | `synchronized` | `base_ref`, `base_after`, `head_before`, `head_after`, `pushed` | `base_before`, `fast_forwarded`, `recovered`, `overlap`, `stale_plan`, `stale_review` |
-| `blocked` | `cause` | every field known when the block occurred; `retryable` for `push-failed` |
+| `blocked` | `cause` | every field known when the block occurred; `retryable` for `push-failed`; `overlap`, `stale_plan`, `stale_review` for `protected-input`, which keeps the synchronization |
 
 ### Causes
 
@@ -129,7 +131,7 @@ The run status becomes `stopped` (`run._stop`). No decision record is written (F
 
 ## Stale evidence record
 
-`<git common dir>/speckit-runs/<run_id>/branch-sync/<event_id>.json`, written only for a `synchronized` outcome with a non-empty overlap and existing evidence (R11):
+`<state_dir>/branch-sync/stale/<sha256(feature)[:16]>/<event_id>.json`, in operator state (SEC-003), same writer and modes as the pin, written for a kept synchronization (`synchronized`, or blocked `protected-input`) with a non-empty overlap and existing evidence (R11):
 
 ```json
 {"event_id": "…", "run_id": "…", "feature": "specs/N-slug",
@@ -138,4 +140,4 @@ The run status becomes `stopped` (`run._stop`). No decision record is written (F
  "paths": ["tools/x.py", "…"], "truncated": false}
 ```
 
-`paths` holds at most 200 entries. The Draft PR section reads every such file whose `feature` matches, across all of the clone's run archives, oldest first. A continuation has a new run ID, so this is what keeps a source run's staleness visible.
+`paths` holds at most 200 entries. The Draft PR section reads the feature's directory: it skips a file that is not regular, is over 16 KiB or does not parse, or whose `feature` does not match, and shows the newest 20 entries oldest first, with "and N earlier" before them, each path as a code span with backticks removed. Keyed by feature, not run, so a continuation keeps its source run's staleness visible.
