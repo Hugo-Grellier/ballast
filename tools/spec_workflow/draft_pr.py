@@ -282,14 +282,13 @@ def _child_path(root: Path) -> str:
 def _pin_path(root: Path, run_id: str) -> Path | None:
     """Return the pin's path, or None when an agent could write it.
 
-    That is state under the checkout or a temp root, e.g. XDG_STATE_HOME=/tmp/x.
+    state_dir refuses state under the checkout or a temp root, e.g.
+    XDG_STATE_HOME=/tmp/x.
     """
-    path = state_dir(root) / "draft-pr" / f"{run_id}.json"
-    resolved = path.resolve()
-    writable = (root.resolve(), *ledger.agent_temp_roots())
-    if any(resolved.is_relative_to(base) for base in writable):
+    try:
+        return state_dir(root) / "draft-pr" / f"{run_id}.json"
+    except OSError:
         return None
-    return path
 
 
 def pin_branch(root: Path, run_id: str) -> str | None:
@@ -351,11 +350,16 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _untrusted_marker(root: Path) -> str | None:
+def _untrusted(root: Path) -> str | None:
+    """Why the checkout or operator state cannot be trusted, if it cannot."""
     if os.path.lexists(root / TAMPER_MARKER):
-        return TAMPER_MARKER
-    if os.path.lexists(state_dir(root) / IN_PROGRESS):
-        return IN_PROGRESS
+        return f"{TAMPER_MARKER} exists; restore the checkout"
+    try:
+        state = state_dir(root)
+    except OSError as error:
+        return str(error)
+    if os.path.lexists(state / IN_PROGRESS):
+        return f"{IN_PROGRESS} exists; restore the checkout"
     return None
 
 
@@ -499,9 +503,9 @@ class _Checkpoint:
 
     def execute(self) -> Outcome:
         run = self.run
-        marker = _untrusted_marker(run.root)
-        if marker:
-            return Outcome("skipped", remedy=f"{marker} exists; restore the checkout")
+        untrusted = _untrusted(run.root)
+        if untrusted:
+            return Outcome("skipped", remedy=untrusted)
         self.identify()
         self.lookup_issue()
         settled = self.settle()

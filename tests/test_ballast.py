@@ -21,6 +21,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT / "tests"))
+from test_autonomy import operator_state  # noqa: E402
+
+sys.path.pop(0)
 SHIM = ROOT / "tools/ballast"
 _loader = SourceFileLoader("ballast", str(SHIM))
 shim = module_from_spec(spec_from_loader("ballast", _loader))
@@ -474,7 +479,7 @@ class CompatibilityTests(unittest.TestCase):
         self.env = {
             **os.environ,
             "XDG_DATA_HOME": str(base / "data"),
-            "XDG_STATE_HOME": str(base / "state"),
+            "XDG_STATE_HOME": str(operator_state(self) / "state"),
         }
         self.env.pop("BALLAST_STANDARD_DIR", None)
 

@@ -81,14 +81,29 @@ def served_pr(number: int, body: str, **changes: object) -> dict:
     }
 
 
+# Beside the real default: bwrap gives ~/.cache a writable overlay, which the
+# confinement self-test rightly treats as reachable state.
+STATE_PARENT = Path.home() / ".local/state/ballast-tests"
+
+
+def operator_state(case: unittest.TestCase | None = None) -> Path:
+    """Return a fresh XDG_STATE_HOME, removed after the test (or module).
+
+    Never under a temp root or a checkout: state_dir refuses those, because an
+    agent could write them (#34).
+    """
+    STATE_PARENT.mkdir(parents=True, exist_ok=True)
+    state = TemporaryDirectory(dir=STATE_PARENT)
+    (case.addCleanup if case else unittest.addModuleCleanup)(state.cleanup)
+    return Path(state.name)
+
+
 def isolate_operator_state() -> None:
-    """Point operator state at a module-scoped temp dir, never the real one.
+    """Point operator state at a module-scoped directory, never the real one.
 
     record-intent registers approvals there; call from setUpModule.
     """
-    state = TemporaryDirectory()
-    unittest.addModuleCleanup(state.cleanup)
-    patcher = patch.dict(os.environ, {"XDG_STATE_HOME": state.name})
+    patcher = patch.dict(os.environ, {"XDG_STATE_HOME": str(operator_state())})
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
 
@@ -145,7 +160,7 @@ class AutonomyCase(unittest.TestCase):
         self.bin = trusted_directory(self)
         self.gh_dir = self.base / "gh"
         self.gh_dir.mkdir()
-        self.state = self.base / "state"
+        self.state = operator_state(self)
         gitconfig = self.base / "gitconfig"
         origin = self.base / "origin.git"
         # origin is the pinned GitHub repository by name; pushes reach the
