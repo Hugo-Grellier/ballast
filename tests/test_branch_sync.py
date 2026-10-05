@@ -850,7 +850,8 @@ class BlockedCauseTests(SyncCase):
         )
         self.assertEqual(
             outcome.recovery,
-            f"rebase by hand: git rebase main, resolve, then ballast run resume {RUN}",
+            "rebase by hand: git pull --rebase origin main, resolve, then ballast run "
+            f"resume {RUN}",
         )
         self.s.assert_unchanged(before)
         self.s.git("reset", "-q", "--hard", "HEAD~1")
@@ -1652,6 +1653,41 @@ class PublishedBranchTests(SyncCase):
         self.assertTrue(outcome.pushed)
         self.assertEqual(self.s.published(), self.s.head())
         self.assertTrue(branch_sync.format_lines(outcome)[0][1].endswith(", pushed"))
+
+    def test_conflict_recovery_works_as_printed(self) -> None:
+        """Pilot finding [SC-003]: local `main` is stale; the branch is published."""
+        self.s.commit({"tools/a.py": "a = 2\n"}, "feature edits a")
+        self.s.publish()
+        published = self.s.published()
+        self.s.advance_base({"tools/a.py": "a = 3\n"})
+        outcome = self.s.check()
+        self.assertBlocked(outcome, "conflict")
+        self.assertEqual(
+            outcome.recovery,
+            "rebase by hand: git pull --rebase origin main, resolve, git push "
+            f"--force-with-lease={BRANCH}:{published} origin {BRANCH}, then ballast "
+            f"run resume {RUN}",
+        )
+        # Follow it literally: the pull conflicts, the operator resolves, pushes.
+        # `origin` names the pinned repository; point it at the scratch remote.
+        origin = f"url.{self.s.url}.insteadOf=https://github.com/o/r.git"
+        self.s.git(
+            "-c", origin, "pull", "-q", "--rebase", "origin", "main", check=False
+        )
+        self.assertTrue(self.s.git("diff", "--name-only", "--diff-filter=U"))
+        (self.s.root / "tools/a.py").write_text("a = 4\n")
+        self.s.git("add", "tools/a.py")
+        self.s.git("-c", "core.editor=true", "rebase", "--continue")
+        self.s.git(
+            "-c",
+            origin,
+            "push",
+            "-q",
+            f"--force-with-lease={BRANCH}:{published}",
+            "origin",
+            BRANCH,
+        )
+        self.assertEqual(self.s.check().outcome, "up-to-date")
 
     def test_both_sides_have_commits(self) -> None:
         """Q15 [AC-013]."""

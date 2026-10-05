@@ -159,3 +159,7 @@ The operator approved in conversation at 21:54 CEST ("approve all"):
 - ADR-0005, now `Accepted`.
 
 I1–I6 and T1 are resolved by A-1..A-9.
+
+## Pilot fix (2026-10-05)
+
+The scratch-repository pilot (T052) showed the `conflict` recovery `git rebase {base}` did nothing: the check observes the base with `ls-remote` and never updates the local base or its remote-tracking ref. For a published branch the by-hand rebase also rewrote the published commits, so the next invocation would block `diverged`. Defect fix, no requirement change: the recovery is now `git pull --rebase origin {base}`, plus `git push --force-with-lease={branch}:{published} origin {branch}` when the branch is published (`branch_sync.RECOVERY["conflict-published"]`). `run.py` also flushes stdout after the sync line so a piped log shows it before the engine's output. Evidence: `reviews/pilot.md`, `PublishedBranchTests.test_conflict_recovery_works_as_printed`.

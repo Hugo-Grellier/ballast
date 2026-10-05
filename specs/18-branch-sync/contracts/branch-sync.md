@@ -54,7 +54,7 @@ Block, on stderr, exit status 1:
 
 ```text
 BLOCKED_UPSTREAM_SYNC (conflict): replaying 4d3c2b1a0f9e conflicts in tools/a.py, docs/b.md
-Recovery: rebase by hand: git rebase main, resolve, then ballast run resume RUN_ID
+Recovery: rebase by hand: git pull --rebase origin main, resolve, then ballast run resume RUN_ID
 ```
 
 Names and paths are data. Names are shell-quoted when they appear in a command and stripped of control characters everywhere else. Git's own output is never printed.
@@ -82,7 +82,7 @@ Exactly one recovery action per cause and detail (SC-003). `{…}` are quoted va
 | `dirty` (completing a synchronization already pushed) | "a previous synchronization already pushed {new_head}; uncommitted changes: {paths}" | "move these changes aside without committing them (Ballast never stashes or discards them), then rerun to finish the synchronization" (N-03) |
 | `dirty` (completing a synchronization already pushed) | "a previous synchronization already pushed {new_head}; ignored files would be overwritten: {paths}" or "…; untracked files are in the way: {paths}" (P-06) | "move or commit these files, then rerun to finish the synchronization" |
 | `dirty` (recovery row 3b: an update interrupted during `read-tree`) | "an interrupted update left these files at the synchronized content: {paths}" (P-03) | "git restore --source={new_head} --staged --worktree ., then rerun to finish the synchronization" |
-| `conflict` | "replaying {commit} conflicts in {paths}" | "rebase by hand: git rebase {base}, resolve, then rerun" |
+| `conflict` | "replaying {commit} conflicts in {paths}" | "rebase by hand: git pull --rebase origin {base}, resolve, then rerun"; for a published branch, also "git push --force-with-lease={branch}:{published} origin {branch}" before the rerun |
 | `conflict` (recovery row 5: commits made after a pushed synchronization) | "replaying {commit} onto the already pushed {new_head} conflicts in {paths}" | "git rebase --onto {new_head} {old_head} {branch}, resolve, then rerun" |
 | `push-failed` | "pushing {branch} failed; a retry {can / cannot} succeed alone" | retryable: "rerun"; not: "check {repo}'s branch rules for {branch} (protection, required signatures), then rerun" |
 | `protected-input` | "the base changed protected inputs: {names}" (or "the published branch changed ...") | "review these changes, then run ballast trust (operator only)" |

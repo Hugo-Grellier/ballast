@@ -261,6 +261,8 @@ def _sync(  # noqa: PLR0913 - branch_sync's entry point, one call site each.
     )
     for stream, line in branch_sync.format_lines(outcome):
         (sys.stdout if stream == "stdout" else sys.stderr).write(line + "\n")
+    # Flush before the engine writes: a piped log must show the check first.
+    sys.stdout.flush()
     return outcome
 
 

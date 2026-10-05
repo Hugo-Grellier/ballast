@@ -165,7 +165,14 @@ RECOVERY = {
         "git restore --source={new_head} --staged --worktree ., then {rerun} to "
         "finish the synchronization"
     ),
-    "conflict": "rebase by hand: git rebase {base}, resolve, then {rerun}",
+    "conflict": (
+        "rebase by hand: git pull --rebase {remote} {base}, resolve, then {rerun}"
+    ),
+    "conflict-published": (
+        "rebase by hand: git pull --rebase {remote} {base}, resolve, "
+        "git push --force-with-lease={branch}:{published} {remote} {branch}, "
+        "then {rerun}"
+    ),
     "conflict-pushed": (
         "git rebase --onto {new_head} {old_head} {branch}, resolve, then {rerun}"
     ),
@@ -1537,10 +1544,21 @@ class _Sync:
                 old_head=old_base,
                 branch=self.branch,
             )
+        if self.published:  # The by-hand rebase rewrites a published branch.
+            self.stop(
+                "conflict",
+                f"replaying {_short(commit)} conflicts in {shown}",
+                "conflict-published",
+                remote=REMOTE,
+                base=self.base,
+                branch=self.branch,
+                published=self.published,
+            )
         self.stop(
             "conflict",
             f"replaying {_short(commit)} conflicts in {shown}",
             "conflict",
+            remote=REMOTE,
             base=self.base,
         )
 
