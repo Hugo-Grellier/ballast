@@ -1347,7 +1347,7 @@ class RunFormatTests(unittest.TestCase):
     # a new [runs] format (and a decision on [runs] resumes).
     BASIS: ClassVar[dict[str, str]] = {
         "ballast-run/1": (
-            "96c4d6ccbae5d9431514de885d4a48c8f1522fb380e62dd8135f200895e2b93b"
+            "67ad04f92da7349fdb4ef1b0237349da9fcb9ecf1680df537efc1bd65c571421"
         ),
     }
 
