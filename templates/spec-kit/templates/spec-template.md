@@ -13,6 +13,20 @@
 Give each acceptance scenario a stable ID (`AC-001`, `AC-002`, ...). Task and test descriptions cite the IDs they satisfy, so review can trace each criterion to evidence.
 
 <!--
+  When the feature has a discovery brief (discovery.md), write this spec from it:
+  - Number every acceptance scenario as `N. **AC-NNN**: **Given** ...`.
+  - End every functional requirement and acceptance criterion with a provenance
+    marker: [S: source] (an Issue, comment, IAC-n or repository path), [B: brief
+    item or D-NN], [I] (an inference, also listed under Assumptions), [O: D-NN]
+    (an operator answer, human-gated) or [P: D-NN] (an agent-provisional
+    assumption, Autonomous). A Markdown link alone is not a marker.
+  - Cite every Issue acceptance criterion IAC-n of the brief in an acceptance
+    criterion's marker, or list it under a "Non-goals" heading with the reason.
+  validate-spec fails on an unnumbered scenario, an unmarked criterion or an
+  uncovered IAC-n. The brief stays input evidence; this spec is the authority.
+-->
+
+<!--
   IMPORTANT: User stories should be PRIORITIZED as user journeys ordered by importance.
   Each user story/journey must be INDEPENDENTLY TESTABLE - meaning if you implement just ONE of them,
   you should still have a viable MVP (Minimum Viable Product) that delivers value.

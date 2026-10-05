@@ -374,6 +374,34 @@ class ClarificationTests(RecorderCase):
         )
         self.failed(self.check("clarified-spec"), "NEEDS CLARIFICATION")
 
+    def test_discovery_assumption_is_a_clarification(self) -> None:
+        """#16 T024 [AC-010]: discover's assumptions reuse this point."""
+        brief = f"{FEATURE}/discovery.md"
+        (self.root / brief).write_text("# Discovery brief\n")
+        draft = self.draft(
+            "clarification",
+            summary="D-01: assume plain text output",
+            artifact=brief,
+            evidence=[brief],
+            assumption={
+                "question": "D-01: Which format?",
+                "default": "Plain text",
+                "reversible": True,
+            },
+        )
+        self.step({"clarification-discovery-1.json": draft})
+        self.ok(self.record("clarification"))
+        (entry,) = self.decisions()
+        self.assertEqual(
+            (entry["point"], entry["decision"]), ("clarification", "assume")
+        )
+        self.assertTrue(entry["assumption"]["question"].startswith("D-01:"))
+        record = (self.feature / "autonomous/record.md").read_text()
+        self.assertIn(
+            "| clarification | assume (agent-provisional) | D-01: assume plain text",
+            record,
+        )
+
 
 class ProvisionalIntentTests(RecorderCase):
     """FR-011, FR-012, AC-008: intent is provisional and bound to the spec."""

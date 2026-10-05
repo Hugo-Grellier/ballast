@@ -14,8 +14,11 @@
 `ballast` is the installed copy of launcher.py, which verifies the
 checkout before executing this file; see docs/policies/spec-kit-workflow.md.
 
-Without `--mode` (or with `--mode human-gated`) `start` runs ballast-feature
-exactly as before. `--mode autonomous` checks eligibility, writes the operator
+Without `--mode` (or with `--mode human-gated`) `start` runs ballast-feature.
+Both modes first write the run's Issue snapshot (body and comments, untrusted
+data) that the discover step reads; a human-gated start whose Issue cannot be
+read writes a snapshot saying so and goes on. `--mode autonomous` checks
+eligibility, writes the operator
 run record (autonomy.py) and runs ballast-autonomous, which has no approval
 gate; when it completes, this runner (never an agent) commits, pushes and opens
 one Draft PR. A stopped Autonomous run records a block; it continues only
@@ -497,7 +500,9 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         sys.stderr.write(autonomy.HUMAN_GATED_ALTERNATIVE + "\n")
         return EXIT_REFUSED
     try:
-        autonomy.write_issue_snapshot(ROOT, result["issue"], result["scope_comment"])
+        autonomy.write_issue_snapshot(
+            ROOT, result["issue"], result["scope_comment"], result["comments"]
+        )
         autonomy.write_feature_json(ROOT, feature)
     except (autonomy.AutonomyError, OSError, ValueError, KeyError) as error:
         return _refuse(f"cannot write the run's Issue snapshot or feature: {error}")
@@ -552,6 +557,43 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
     finally:
         _archive_operator(run_id)
         _checkpoint(run_id)
+
+
+def _input(options: list[str], name: str) -> str | None:
+    """Return the value of `-i NAME=VALUE` among Spec Kit start options."""
+    for flag, pair in itertools.pairwise(options):
+        key, equals, value = pair.partition("=")
+        if flag in {"-i", "--input"} and key == name and equals:
+            return value
+    return None
+
+
+def _snapshot_issue(options: list[str]) -> None:
+    """Write the Issue snapshot discovery reads, before a human-gated run.
+
+    An unreadable Issue (no gh, no network, no pin) does not stop the run:
+    the snapshot says so, and discovery lists the Issue as unavailable.
+    """
+    match = autonomy.FEATURE.fullmatch(_input(options, "feature_directory") or "")
+    if match is None:
+        return  # The preflight's feature check reports it.
+    number = int(match.group(1))
+    try:
+        issue, scope, comments = autonomy.read_issue(ROOT, number)
+        autonomy.write_issue_snapshot(ROOT, issue, scope, comments)
+    except (autonomy.AutonomyError, OSError, ValueError, KeyError) as error:
+        reason = str(error) or type(error).__name__
+        try:
+            autonomy.write_unavailable_snapshot(ROOT, number, reason)
+        except (autonomy.AutonomyError, OSError) as failure:
+            sys.stderr.write(f"ballast: cannot write the Issue snapshot: {failure}\n")
+            return
+        sys.stdout.write(
+            f"Issue #{number} could not be read ({reason}); discovery lists it "
+            "as unavailable.\n"
+        )
+        return
+    sys.stdout.write(f"Issue snapshot: {autonomy.issue_snapshot_path(number)}\n")
 
 
 def _engine_state(run_id: str) -> dict:
@@ -920,6 +962,21 @@ def _resume_refusal(run_id: str) -> str | None:
     return autonomy.RESUME_REFUSAL.format(run_id=run_id)
 
 
+def _point_feature(feature: str | None) -> int | None:
+    """Point `.specify/feature.json` at the run's feature; a refusal on failure.
+
+    Discovery runs before speckit.specify sets the pointer: never let it read
+    another feature's directory left by an earlier run.
+    """
+    if feature is None or not autonomy.FEATURE.fullmatch(feature):
+        return None
+    try:
+        autonomy.write_feature_json(ROOT, feature)
+    except (autonomy.AutonomyError, OSError) as error:
+        return _refuse(f"cannot point .specify/feature.json at {feature}: {error}")
+    return None
+
+
 def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve runner exit.
     """Launch Spec Kit with the wrapper environment."""
     if len(argv) < 1 or argv[0] not in {"start", "resume", "continue", "publish"}:
@@ -974,14 +1031,27 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]
         command = [specify, "workflow", "run", WORKFLOW, *options]
-        outcome = _sync(run_id, feature=_option_feature(options), starting=True)
+        feature = _option_feature(options)
+        outcome = _sync(run_id, feature=feature, starting=True)
     else:
         run_id = options[0]
         command = [specify, "workflow", "resume", *options]
-        outcome = _sync(run_id, feature=_run_feature(run_id))
+        feature = _run_feature(run_id)
+        outcome = _sync(run_id, feature=feature)
     blocked = _sync_status(outcome)
     if blocked is not None:
         return blocked  # No agent step, and no Draft PR checkpoint (R13).
+    if argv[0] == "start":
+        # After the check: the snapshot is a new file it would count as dirty.
+        _snapshot_issue(options)
+    # SEC-002: a resume's feature is the pinned one the check used, never inputs.json.
+    refusal = _point_feature(
+        feature
+        if argv[0] == "start"
+        else branch_sync.read_pin(ROOT, run_id).get("feature")
+    )
+    if refusal is not None:
+        return refusal
     try:
         return _launch(command, run_id, start=argv[0] == "start")
     finally:
