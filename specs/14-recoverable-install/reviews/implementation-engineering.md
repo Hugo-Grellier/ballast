@@ -3,7 +3,7 @@
 - Role: code reviewer (requirement coverage, architecture, failure behavior, data integrity, complexity)
 - Agent/model: claude/claude-opus-5-5, the driving agent; reduced independence (same model as the author; Codex unavailable, see the security review)
 - Base: `1176309..bf5359c`
-- Artifacts: [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [decisions.md](../decisions.md), ADR-0002, ADR-0006, ADR-0007, `docs/policies/engineering.md`
+- Artifacts: [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [decisions.md](../decisions.md), ADR-0002, ADR-0007, ADR-0008, `docs/policies/engineering.md`
 - Verdict: approved
 
 ## What was checked

@@ -22,4 +22,4 @@
 ## DEC-0002 — Resolution
 
 - **Status**: decided by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05); listed for the merge review.
-- **Decision**: accept the proposal. Implemented in `tools/setup` (`copy_kept`, `finish`) and recorded in [data-model.md](data-model.md#installation), [contracts/operator-state.md](contracts/operator-state.md) and ADR-0006; evidence `RecoverableSetupTests.test_rollback_reuses_the_previous_installation` (downloads and Spec Kit calls denied).
+- **Decision**: accept the proposal. Implemented in `tools/setup` (`copy_kept`, `finish`) and recorded in [data-model.md](data-model.md#installation), [contracts/operator-state.md](contracts/operator-state.md) and ADR-0007; evidence `RecoverableSetupTests.test_rollback_reuses_the_previous_installation` (downloads and Spec Kit calls denied).

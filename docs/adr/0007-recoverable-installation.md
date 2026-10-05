@@ -1,4 +1,4 @@
-# ADR-0006: Setup stages, journals and switches an installation
+# ADR-0007: Setup stages, journals and switches an installation
 
 - Status: proposed (with the plan of [feature 14](../../specs/14-recoverable-install/plan.md), 2026-10-06); accepted when its PR merges
 - Feature: [14-recoverable-install](../../specs/14-recoverable-install/spec.md), FR-001 to FR-014, FR-019, AC-001 to AC-015, AC-022, AC-023

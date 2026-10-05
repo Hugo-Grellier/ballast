@@ -133,8 +133,8 @@ description: "Task list for recoverable installs and pin updates"
 
 ## Phase 6: Polish and cross-cutting
 
-- [x] T026 [P] `docs/adr/0006-recoverable-installation.md` and `docs/adr/0007-verified-cache-and-update-preview.md` (status Proposed; accepted when the PR merges) (depends on T017, T022)
-  - Evidence: `docs/adr/0006-recoverable-installation.md`, `docs/adr/0007-verified-cache-and-update-preview.md`.
+- [x] T026 [P] `docs/adr/0007-recoverable-installation.md` and `docs/adr/0008-verified-cache-and-update-preview.md` (status Proposed; accepted when the PR merges) (depends on T017, T022)
+  - Evidence: `docs/adr/0007-recoverable-installation.md`, `docs/adr/0008-verified-cache-and-update-preview.md`.
 - [x] T027 [P] Module docstrings and usage in `tools/setup` and `tools/ballast` match the new states and commands; `IGNORE_PROBES` gains `.ballast/setup/` (depends on T017, T022)
   - Evidence: Module docstrings of `tools/setup` and `tools/ballast` (states, `preview`, cache), `IGNORE_PROBES` entry for `.ballast/setup/`; `ReadmeUpdateTests` reads the CLI docstring.
 - [x] T028 End-to-end check on a scratch project with `BALLAST_STANDARD_DIR` pointing at this working copy ([quickstart](quickstart.md#end-to-end-full-gate-network)): setup, trust, a failing patch keeps the previous installation and `status --json` stays clear, a rerun prints `nothing changed`, a `kill -9` during Spec Kit steps is recovered; record the commands and results [AC-002, AC-004, AC-007, AC-012] (depends on T017, T011)

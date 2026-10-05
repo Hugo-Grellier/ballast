@@ -2,7 +2,7 @@
 
 - Role: security reviewer (R2: what `ballast` downloads and executes, the paths `tools/setup` installs, moves and removes, the launcher's trust model)
 - Agent/model: claude/claude-opus-5-5, the driving agent. Reduced independence: the same model wrote the change. The cross-provider pass (Codex CLI, read-only sandbox) could not run: `You've hit your usage limit … try again at Oct 10th, 2026`.
-- Base: `1176309..bf5359c` (`tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/spec_workflow/run.py`, `tools/cli.toml`, tests, README, ADR-0006/0007)
+- Base: `1176309..bf5359c` (`tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/spec_workflow/run.py`, `tools/cli.toml`, tests, README, ADR-0007/0008)
 - Artifacts: [spec.md](../spec.md), [research.md](../research.md), [contracts/](../contracts/), [decisions.md](../decisions.md), `docs/policies/security.md`, `docs/policies/project/workflow.md`, constitution BL-INV-001 to BL-INV-006
 - Verdict: approved
 

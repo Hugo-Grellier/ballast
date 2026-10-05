@@ -3,7 +3,7 @@
 - Role: reconciliation reviewer
 - Agent/model: claude/claude-opus-5-5, the driving agent; reduced independence (see [the security review](implementation-security.md))
 - Base: `52031c1..HEAD` (the whole feature branch)
-- Artifacts: [intent.md](../intent.md), [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [tasks.md](../tasks.md), [decisions.md](../decisions.md), the implementation reviews, `tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/spec_workflow/run.py`, `tools/cli.toml`, the tests, `README.md`, ADR-0006, ADR-0007
+- Artifacts: [intent.md](../intent.md), [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [tasks.md](../tasks.md), [decisions.md](../decisions.md), the implementation reviews, `tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/spec_workflow/run.py`, `tools/cli.toml`, the tests, `README.md`, ADR-0007, ADR-0008
 - Converge: every task in `tasks.md` is checked with evidence; comparing the plan, contracts and data model with the code appended no task.
 - Verdict: CONVERGED
 
@@ -33,8 +33,8 @@
 
 | Gap | Diagnosis | Correction |
 |---|---|---|
-| FR-009, FR-012, AC-010, AC-013 hold only with a CLI that includes this feature. | New knowledge (the cache lives in the per-machine CLI; the minimum cannot name an unreleased CLI). | DEC-0001, resolved and listed for the merge review; README and ADR-0007 state it. The spec text is not edited to excuse it. |
-| AC-022's "without a network request" was not reachable by the plan: a full build downloads Spec Kit sources. | New knowledge. | DEC-0002 (kept installation); data model, operator-state and setup contracts, ADR-0006 updated. |
+| FR-009, FR-012, AC-010, AC-013 hold only with a CLI that includes this feature. | New knowledge (the cache lives in the per-machine CLI; the minimum cannot name an unreleased CLI). | DEC-0001, resolved and listed for the merge review; README and ADR-0008 state it. The spec text is not edited to excuse it. |
+| AC-022's "without a network request" was not reachable by the plan: a full build downloads Spec Kit sources. | New knowledge. | DEC-0002 (kept installation); data model, operator-state and setup contracts, ADR-0007 updated. |
 | Plan-review findings F-001 to F-007. | Plan defects found before tasks. | Resolved in the design and implemented; see [plan.md](plan.md) review Resolution. |
 | Implementation review findings ENG-001, TST-001, SEC-001, SEC-002, DOC-001. | Implementation wrong. | Fixed test-first in `bf5359c`. |
 
