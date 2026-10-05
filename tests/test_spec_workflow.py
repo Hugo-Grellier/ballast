@@ -3217,6 +3217,15 @@ class BranchSyncCallTests(unittest.TestCase):
             status = self.run.main(list(args))
         return status, out.getvalue(), err.getvalue()
 
+    def test_start_points_feature_json_at_the_run_before_the_engine(self) -> None:
+        """Pilot finding (#16): discovery read a feature left by an earlier run."""
+        pointer = self.repo.root / ".specify/feature.json"
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text('{"feature_directory": "specs/4-admin-token"}\n')
+        status, _, _ = self.main("start", "-i", f"feature_directory={FEATURE}")
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(pointer.read_text())["feature_directory"], FEATURE)
+
     def test_called_once_before_the_engine_for_start_and_resume(self) -> None:
         for args, run_id, starting in (
             (("start", "-i", f"feature_directory={FEATURE}"), "new18xxx", True),

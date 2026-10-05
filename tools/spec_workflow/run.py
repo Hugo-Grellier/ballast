@@ -962,6 +962,21 @@ def _resume_refusal(run_id: str) -> str | None:
     return autonomy.RESUME_REFUSAL.format(run_id=run_id)
 
 
+def _point_feature(feature: str | None) -> int | None:
+    """Point `.specify/feature.json` at the run's feature; a refusal on failure.
+
+    Discovery runs before speckit.specify sets the pointer: never let it read
+    another feature's directory left by an earlier run.
+    """
+    if feature is None or not autonomy.FEATURE.fullmatch(feature):
+        return None
+    try:
+        autonomy.write_feature_json(ROOT, feature)
+    except (autonomy.AutonomyError, OSError) as error:
+        return _refuse(f"cannot point .specify/feature.json at {feature}: {error}")
+    return None
+
+
 def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve runner exit.
     """Launch Spec Kit with the wrapper environment."""
     if len(argv) < 1 or argv[0] not in {"start", "resume", "continue", "publish"}:
@@ -1017,14 +1032,19 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
         run_id = uuid.uuid4().hex[:8]
         _snapshot_issue(options)
         command = [specify, "workflow", "run", WORKFLOW, *options]
-        outcome = _sync(run_id, feature=_option_feature(options), starting=True)
+        feature = _option_feature(options)
+        outcome = _sync(run_id, feature=feature, starting=True)
     else:
         run_id = options[0]
         command = [specify, "workflow", "resume", *options]
-        outcome = _sync(run_id, feature=_run_feature(run_id))
+        feature = _run_feature(run_id)
+        outcome = _sync(run_id, feature=feature)
     blocked = _sync_status(outcome)
     if blocked is not None:
         return blocked  # No agent step, and no Draft PR checkpoint (R13).
+    refusal = _point_feature(feature)
+    if refusal is not None:
+        return refusal
     try:
         return _launch(command, run_id, start=argv[0] == "start")
     finally:
