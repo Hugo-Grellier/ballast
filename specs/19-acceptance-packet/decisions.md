@@ -18,3 +18,15 @@
 - **Rationale**: it delivers every link that exists without a new command path (option 2 is R2), and narrows the promise only where no URL can exist. The test-file check uses `git cat-file -e`, already in ADR-0006's read list, so R1 holds.
 - **Changed now**: spec AC-002, AC-009 and FR-006; plan summary; [packet-format.md](contracts/packet-format.md) link forms, example row and rules; data-model `Criterion.ci` and `TestEvidence.file`/`source`; quickstart AC-002 row; tasks T019, T022, T025, T028 and the analyze-findings section. Also folded in from the analyze report: A1, I2 and F3 into T048; I1 and F2 in research R17 and R12; [P] dropped from T039. C2 is unchanged: T036 keeps the contents-API read (PD-0004, PD-0005), because reading the base from local Git would add a `base-not-local` failure (R10).
 - **Tests**: T019 (AC-002 links, `file not found at head`, CI present and absent) and T028 (ledger references only for ledger-held records).
+
+## DEC-0002 — Proposal
+
+- **Found during**: the independent documentation and engineering reviews of T053 ([documentation-1.md](reviews/documentation-1.md) DOC-001, [engineering-1.md](reviews/engineering-1.md) ENG-005), 2026-10-05.
+- **Conflict**: US3 says the packet "stays current" as work continues, and the policy told the operator to record `ballast ledger check` evidence and let "the next checkpoint (`ballast run resume`, `continue` or `publish`)" show it. For an Autonomous run none of these refreshes it: `resume` is refused for an Autonomous run, `ballast run publish` runs no checkpoint (and refuses a run already `published`), and `continue` starts a new run whose packet reads only the new run's ledger and records, so evidence recorded under the Autonomous run ID never appears. The packet's own hint (`ballast ledger check RUN_ID AC-NNN TEST`) therefore leads nowhere on an Autonomous PR, which is this feature's main use. The `pending/head-not-local` remedy ("fetch the feature branch, then resume") has the same gap.
+- **Label**: proposed product change (a new operator entry point), with a spec ambiguity in US3 (which run's evidence a packet reads).
+- **Options**:
+  1. Add `ballast run checkpoint RUN_ID`: run only the Draft PR checkpoint and packet for an existing run, no agent step, allowed for any run status. Smallest change; R1 if it reuses the #17 checkpoint unchanged.
+  2. Let `ballast run publish` also run the checkpoint for a `published` run.
+  3. Keep the behavior; the packet of a finished Autonomous run is final, and the policy says so (done now as the truthful interim).
+- **Interim**: the policy now states option 3's behavior truthfully (no behavior change). The implementation is unchanged.
+- **Needs**: an operator decision before v1.0; options 1 and 2 change the launcher's command surface and need their own Issue.

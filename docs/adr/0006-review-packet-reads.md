@@ -10,7 +10,7 @@ The Draft PR checkpoint (#17) is the only place Ballast uses GitHub authority. F
 
 ## Decision
 
-- The packet is built by the trusted module `packet.py`, imported with `draft_pr.py` at `run.py` startup, and runs only inside the #17 checkpoint, after its outcome is recorded and only when that outcome is `created` or `reused`. It uses the checkpoint's resolved `git` and `gh`, its hardened environment and its `_command` seam.
+- The packet is built by the trusted module `packet.py`, imported with `draft_pr.py` at `run.py` startup, and runs only inside the #17 checkpoint, after its outcome is recorded and only when that outcome is `created` or `reused`. It uses the checkpoint's resolved `git` and `gh`, its hardened environment and its `_command` seam, except for the implementation fingerprint, which needs a private `GIT_INDEX_FILE` that `_command` removes: `ledger.commit_tree` runs Git resolved outside every working tree, with filter drivers, hooks (including `post-index-change`) and fsmonitor disabled.
 - The allowlist gains these read calls:
   - `gh api repos/<o>/<r>/pulls/<n>` (already used for the re-read), for the head and base commits;
   - `gh api --paginate --slurp repos/<o>/<r>/commits/<head>/check-runs?per_page=100`;

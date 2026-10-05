@@ -931,8 +931,13 @@ authoritative. It is rebuilt from those sources at every checkpoint.
 Per-criterion evidence comes only from `ballast ledger check RUN_ID AC-NNN
 tests.test_module.Class.test_method` on a clean checkout of the pushed
 commit. `run-checks` runs whole suites, so an Autonomous run's packet shows its
-mapped criteria as `not run` until you record those checks; the next
-checkpoint (`ballast run resume`, `continue` or `publish`) then shows them.
+mapped criteria as `not run`. The packet is rebuilt only at a checkpoint, at
+the end of `ballast run start`, `resume` and `continue`, from that run's own
+ledger and records: record checks for a human-gated run under its run ID, then
+resume it. A finished Autonomous run cannot be resumed and `ballast run
+publish` runs no checkpoint, so its packet keeps the states it was published
+with; `ballast run continue` starts a new run whose packet reads only the new
+run's ledger.
 
 Optional review sections come from the `[review]` table of `ballast.toml`,
 which agents cannot change (run `ballast trust` after editing it):
@@ -967,7 +972,8 @@ The packet section is replaced in place, appended again after a human deletes
 it, and left unedited when nothing but its generation time changed. When the
 PR description has no room, the packet keeps its header, every criterion not
 `verified`, every open finding and every provisional decision, and shortens the
-rest. Every checkpoint that builds a packet writes the complete text to
+rest, and a list longer than 50 lines is cut in the PR. Every checkpoint that
+builds a packet writes the complete text to
 `speckit-runs/<run>/acceptance-packet.md` under the clone's Git common
 directory (mode 0600). Agent-written text is shown as inert data: it cannot end
 the section, form a link or mention, or change a state or label.
