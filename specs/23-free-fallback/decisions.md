@@ -65,3 +65,8 @@
   3. Replace `--oss` with a wrapper-defined custom provider: `-c model_provider=NAME -c 'model_providers.NAME={…base_url=…}'` against Ollama's OpenAI-compatible endpoint. The base URL is then pinned by `--config` as R6 intended, but the candidate in R1 changes and Ollama's Responses API support needs its own pilot. It also needs the Ollama upgrade.
   4. Reject the candidate for now. Record that no zero-cost fallback qualifies on this host and close the feature with evidence (SC-004 "refused with a recorded cause" does not cover a candidate that never runs).
 - **Needs**: an operator resolution, and the Ollama upgrade for options 1 to 3, before T001 is completed and the implement step continues. Upgrading a host package is outside an agent's authority.
+
+## DEC-0003 — Resolution
+
+- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The Ollama upgrade to 0.13.4 or newer is an operator host action, requested 2026-10-06.
+- **Resolution**: option 1. The fallback talks only to Ollama's default loopback endpoint `127.0.0.1:11434`; `--local-fallback-endpoint` is dropped, and the wrapper keeps stripping `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, so nothing an agent or the checkout controls can redirect the provider. No boundary widens. The pilot's `--oss` run (and whether it needs a login) is repeated after the upgrade, before T001 is ticked.
