@@ -3,12 +3,14 @@ schema_version: "1.0"
 workflow:
   id: ballast-autonomous
   name: Ballast Autonomous Feature Workflow
-  version: 1.1.0
+  version: 1.2.0
   author: Ballast
   description: >-
     Feature lifecycle without approval prompts: every human gate of
     ballast-feature becomes an agent-provisional decision recorded by a trusted
     step, every postcondition stays, and the human approves once, at merge.
+    Implementation findings and failed checks get a bounded fix loop of three
+    cycles per run.
 
 requires:
   speckit_version: ">=1.0.11"
@@ -187,6 +189,12 @@ steps:
     type: shell
     run: python3 -I -S .ballast/spec_workflow/artifacts.py implementation --run {{ context.run_id }}
 
+  # The [checks] commands as feedback for the fix loop: a failure is
+  # recorded for the reviews and the fix step, not a block (#21).
+  - id: checks-implementation
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
+
   - id: review-implementation
     command: speckit.ballast.review
     integration: "{{ inputs.review_integration }}"
@@ -202,6 +210,94 @@ steps:
   - id: record-implementation-review
     type: shell
     run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point implementation-review
+
+  # Fix loop (#21): three cycles, run only while the operator record's fix
+  # state asks for them. A cycle that has nothing to do costs no agent step:
+  # the wrapper skips its agent steps and its shell steps write nothing.
+
+  - id: fix-1
+    command: speckit.ballast.fix
+    integration: "{{ inputs.integration }}"
+
+  - id: record-fix-1
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-fix --run {{ context.run_id }}
+
+  - id: checks-fix-1
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
+
+  - id: review-fix-1
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: implementation-recheck
+
+  - id: review-specialists-fix-1
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: specialists-recheck
+
+  - id: record-fix-review-1
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point implementation-review --recheck
+
+  - id: fix-2
+    command: speckit.ballast.fix
+    integration: "{{ inputs.integration }}"
+
+  - id: record-fix-2
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-fix --run {{ context.run_id }}
+
+  - id: checks-fix-2
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
+
+  - id: review-fix-2
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: implementation-recheck
+
+  - id: review-specialists-fix-2
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: specialists-recheck
+
+  - id: record-fix-review-2
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point implementation-review --recheck
+
+  - id: fix-3
+    command: speckit.ballast.fix
+    integration: "{{ inputs.integration }}"
+
+  - id: record-fix-3
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-fix --run {{ context.run_id }}
+
+  - id: checks-fix-3
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
+
+  - id: review-fix-3
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: implementation-recheck
+
+  - id: review-specialists-fix-3
+    command: speckit.ballast.review
+    integration: "{{ inputs.review_integration }}"
+    input:
+      args: specialists-recheck
+
+  - id: record-fix-review-3
+    type: shell
+    run: python3 -I -S .ballast/spec_workflow/artifacts.py record-decision --run {{ context.run_id }} --point implementation-review --recheck
 
   - id: resolve-decisions
     command: speckit.ballast.resolve

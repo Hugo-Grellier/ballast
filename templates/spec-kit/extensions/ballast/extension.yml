@@ -3,8 +3,8 @@ schema_version: "1.0"
 extension:
   id: ballast
   name: "Ballast Workflow Commands"
-  version: "1.1.0"
-  description: "Discovery briefs for feature runs; agent-provisional decisions, clarification, reviews and resolutions for Autonomous runs"
+  version: "1.2.0"
+  description: "Discovery briefs for feature runs; agent-provisional decisions, clarification, reviews, fixes and resolutions for Autonomous runs"
   category: "process"
   effect: "read-write"
   author: "Ballast"
@@ -32,6 +32,9 @@ provides:
     - name: "speckit.ballast.resolve"
       file: "commands/speckit.ballast.resolve.md"
       description: "Give each open implementation discovery an agent-provisional resolution"
+    - name: "speckit.ballast.fix"
+      file: "commands/speckit.ballast.fix.md"
+      description: "Fix the findings and failed checks of an Autonomous fix cycle"
 
 tags:
   - "ballast"

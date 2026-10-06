@@ -110,6 +110,10 @@ A decision block:
    - Otherwise, block: write `<f>/autonomous/drafts/block.json` with `"category": "contradiction"` for conflicting sources or `"category": "decision"` when no safe default exists, the `condition` naming the decision and its sources, `no_safe_default` (required for `decision`), at least two `options` with their `consequence`, the `recovery` (what the operator decides, then continue human-gated) and `evidence`, as described in `speckit.ballast.decide`. Print exactly `RECONCILE_STATUS: BLOCKED_DECISION` and stop.
 7. Write `## Question metrics` with `Rounds: 0`, `Questions asked: 0` and `Assumptions adopted` equal to the number of `assumed` decisions (0 in a human-gated run). In a human-gated run `validate-discovery` replaces these counts with the ones it records.
 
+## Recorder limits
+
+The trusted recorder refuses a draft that breaks these limits; the run then reruns this step with the recorder's message, at most twice, and each rerun counts against the run's agent-step limit. `summary`: 1–500 characters on one line. `basis`: 1–2000. A finding `reason`: 1–1000. An assumption's `question` and `default`: 1–1000 each. A block's `condition` and `no_safe_default`: 1–2000 each, `recovery` 1–1000, each `option` 1–500 and its `consequence` 1–1000. `boundaries` and `privileged_actions`: at most 20 entries of at most 100 characters. `evidence`: 1–20 existing repository paths or `https://` links. Put longer detail in the report or artifact you cite.
+
 ## Never
 
 - Ask the operator a question or wait for input.
