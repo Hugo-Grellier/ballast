@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from typing import TYPE_CHECKING
+
 from test_autonomy import (
     FEATURE,
     TOOLS,
@@ -23,6 +25,9 @@ from test_autonomy import (
     autonomy,
     isolate_operator_state,
 )
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 sys.path.pop(0)
 
@@ -776,6 +781,81 @@ class ImplementationReviewTests(RecorderCase):
         required = self.hint()["required"]
         for kind in ("architecture", "security", "documentation", "dependency"):
             self.assertIn(kind, required)
+
+    def artifacts(self) -> ModuleType:
+        sys.path.insert(0, str(TOOLS))
+        try:
+            import artifacts  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        return artifacts
+
+    def hint_file(self) -> dict:
+        name = Path(FEATURE).name
+        path = self.root / f".specify/workflow-state/required-reviews/{name}.json"
+        return json.loads(path.read_text())
+
+    def test_requested_kinds_reach_the_specialists_hint(self) -> None:
+        """#83: the engineering review's required_kinds update the hint file."""
+        artifacts = self.artifacts()
+        feature = artifacts.Feature(self.root, FEATURE, "run42")
+        feature.run = autonomy.read_run(self.root, "run42")
+        artifacts.write_required_reviews(feature)
+        self.assertNotIn("dependency", self.hint_file()["required"])
+        drafts = self.reviews()
+        drafts["implementation-review.json"]["review"]["required_kinds"] = [
+            "dependency"
+        ]
+        self.step(drafts, role="reviewer")
+        step = autonomy.unconsumed_steps(self.root, "run42")[-1]
+        artifacts.merge_requested_kinds(feature, step)
+        self.assertIn("dependency", self.hint_file()["required"])
+        # The recorder's final check agrees: dependency is required.
+        self.failed(self.record("implementation-review"), "dependency")
+
+    def test_unknown_requested_kinds_are_not_merged(self) -> None:
+        artifacts = self.artifacts()
+        feature = artifacts.Feature(self.root, FEATURE, "run42")
+        feature.run = autonomy.read_run(self.root, "run42")
+        artifacts.write_required_reviews(feature)
+        before = self.hint_file()
+        drafts = self.reviews()
+        drafts["implementation-review.json"]["review"]["required_kinds"] = ["bogus"]
+        self.step(drafts, role="reviewer")
+        step = autonomy.unconsumed_steps(self.root, "run42")[-1]
+        artifacts.merge_requested_kinds(feature, step)
+        self.assertEqual(self.hint_file(), before)
+
+    def test_workflow_uses_line_requires_dependency(self) -> None:
+        for relative in (
+            ".github/workflows/ci.yml",
+            "templates/github/workflows/ci.yml",
+            ".github/actions/setup/action.yml",
+            "templates/github/actions/setup/action.yml",
+        ):
+            with self.subTest(path=relative):
+                path = self.root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("steps:\n  - uses: actions/checkout@v4\n")
+                self.assertIn("dependency", self.hint()["required"])
+                path.write_text("steps:\n  - run: echo hi\n")
+                self.assertNotIn("dependency", self.hint()["required"])
+                path.unlink()
+
+    def test_quoted_and_flow_style_uses_require_dependency(self) -> None:
+        path = self.root / ".github/actions/setup/action.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for line in (
+            '  - "uses": actions/checkout@v4',
+            "  - {uses: actions/checkout@v4}",
+            "  - {name: x, uses: actions/checkout@v4}",
+            "  - { 'uses': actions/checkout@v4 }",
+        ):
+            with self.subTest(line=line):
+                path.write_text(f"steps:\n{line}\n")
+                self.assertIn("dependency", self.hint()["required"])
+        path.write_text("steps:\n  - run: echo reuses actions\n")
+        self.assertNotIn("dependency", self.hint()["required"])
 
     def test_draft_templates_cite_only_existing_evidence(self) -> None:
         """Pilot: a decide agent cited AGENTS.md in a project without one."""

@@ -76,7 +76,7 @@ if drafts:
     for name in os.environ.get("FAKE_DRAFT_NAMES", "").split(","):
         if name:
             with open(os.path.join(drafts, name), "w") as handle:
-                handle.write('{"point": "plan"}')
+                handle.write(os.environ.get("FAKE_DRAFT_BODY", '{"point": "plan"}'))
 if os.environ.get("FAKE_SLEEP"):
     time.sleep(float(os.environ["FAKE_SLEEP"]))
 print(os.environ.get("FAKE_STDOUT", "done"))
@@ -310,6 +310,95 @@ class AgentWrapperAutonomousTests(WrapperCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("confinement unavailable", result.stderr)
         self.assertIsNone(self.ran())
+
+
+class RequestedKindsHookTests(WrapperCase):
+    """#83: the wrapper shares the review's required_kinds with the specialists."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        feature = self.root / FEATURE
+        (feature / "reviews").mkdir(parents=True)
+        (feature / "spec.md").write_text("# Feature Specification: Demo\n")
+        runs = self.root / ".specify/workflows/runs/run42"
+        runs.mkdir(parents=True)
+        (runs / "inputs.json").write_text(
+            json.dumps({"inputs": {"feature_directory": FEATURE}})
+        )
+        (runs / "state.json").write_text(
+            json.dumps({"workflow_id": "ballast-autonomous"})
+        )
+        self.make_run()
+        tree = subprocess.run(
+            ["git", "write-tree"],  # noqa: S607
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        state = self.root / ".specify/workflow-state/run42"
+        state.mkdir(parents=True)
+        (state / "implementation-baseline.json").write_text(
+            json.dumps({"feature": FEATURE, "tree": tree})
+        )
+        self.hint = (
+            self.root
+            / f".specify/workflow-state/required-reviews/{Path(FEATURE).name}.json"
+        )
+
+    def review(self, point: str, kind: str, *, required: list[str]) -> str:
+        report = self.root / FEATURE / "reviews" / f"{kind}.md"
+        report.write_text(f"# {kind} review\n\nLooks consistent.\n")
+        return json.dumps(
+            {
+                "point": point,
+                "decision": autonomy.POINT_DECISION[point],
+                "summary": f"{point} accepted",
+                "basis": "Matches the spec.",
+                "evidence": [f"{FEATURE}/spec.md"],
+                "artifact": f"{FEATURE}/spec.md",
+                "model": "model-x",
+                "material": False,
+                "supersedes": None,
+                "privileged_actions": [],
+                "review": {
+                    "kind": kind,
+                    "verdict": "approved",
+                    "report": f"{FEATURE}/reviews/{kind}.md",
+                    "findings": [],
+                    "required_kinds": required,
+                },
+                "assumption": None,
+            }
+        )
+
+    def review_step(self, scope: str, point: str, kind: str) -> str:
+        drafts = autonomy.drafts_dir(self.root, FEATURE)
+        result = self.wrapper(
+            prompt=f"/speckit-ballast-review {scope}",
+            FAKE_DRAFTS=str(drafts),
+            FAKE_DRAFT_NAMES=f"{point}.json",
+            FAKE_DRAFT_BODY=self.review(point, kind, required=["dependency"]),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stderr
+
+    def test_implementation_review_requests_reach_the_hint(self) -> None:
+        self.review_step("implementation", "implementation-review", "engineering")
+        self.assertIn("dependency", json.loads(self.hint.read_text())["required"])
+
+    def test_a_failed_hint_write_names_its_cause_on_stderr(self) -> None:
+        directory = self.hint.parent
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        directory.symlink_to(self.base)
+        stderr = self.review_step(
+            "implementation", "implementation-review", "engineering"
+        )
+        self.assertIn("required-reviews hint not updated:", stderr)
+
+    def test_a_plan_review_leaves_the_hint_alone(self) -> None:
+        self.review_step("plan", "plan-review", "plan")
+        self.assertFalse(self.hint.exists())
 
 
 class RunCase(WrapperCase):

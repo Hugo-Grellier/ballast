@@ -2237,11 +2237,42 @@ def _changed_since_baseline(feature: Feature) -> list[str]:
     ).splitlines()
 
 
+WORKFLOW_YAML = re.compile(
+    r"(?:\.github|templates/github)/(?:workflows/.+|actions/.+/action)\.ya?ml"
+)
+ADDED_USES = re.compile(
+    r"""^\+(?:\s*(?:-\s+)?|.*[{,]\s*)["']?uses["']?\s*:""", re.MULTILINE
+)
+
+
+def _adds_action_reference(feature: Feature, names: list[str]) -> bool:
+    """Return whether a changed workflow file adds or edits a `uses:` line (#83)."""
+    paths = [name for name in names if WORKFLOW_YAML.fullmatch(name)]
+    if not paths:
+        return False
+    diff = _git(
+        feature.root,
+        "diff-tree",
+        "-r",
+        "-p",
+        "-U0",
+        "--end-of-options",
+        _baseline_tree(feature),
+        worktree_tree(feature.root),
+        "--",
+        *paths,
+    )
+    return bool(ADDED_USES.search(diff))
+
+
 def required_kinds(feature: Feature, reviews: list[dict]) -> set[str]:
     """Review kinds an Autonomous implementation review must cover (R-08)."""
     run = _require_run(feature)
     required = {"engineering", "test", "security"}
-    for name in _changed_since_baseline(feature):
+    changed = _changed_since_baseline(feature)
+    if _adds_action_reference(feature, changed):
+        required.add("dependency")
+    for name in changed:
         base = name.rsplit("/", 1)[-1]
         parts = name.split("/")
         if name.startswith(".github/"):
@@ -2266,17 +2297,37 @@ def required_kinds(feature: Feature, reviews: list[dict]) -> set[str]:
 REQUIRED_REVIEWS_DIR = ".specify/workflow-state/required-reviews"
 
 
-def write_required_reviews(feature: Feature) -> Path:
+def write_required_reviews(feature: Feature, reviews: list[dict] | None = None) -> Path:
     """Tell the specialists step which kinds the recorder will require.
 
-    The same computation as `record-decision --point implementation-review`,
-    before reviewer-declared kinds. Under `.specify/`, which agent steps see
-    read-only; the recorder still recomputes it.
+    The same computation as `record-decision --point implementation-review`;
+    `reviews` carries kinds a reviewer already declared. Under `.specify/`,
+    which agent steps see read-only; the recorder still recomputes it.
     """
-    required = sorted(required_kinds(feature, []))
+    required = sorted(required_kinds(feature, reviews or []))
     relative = f"{REQUIRED_REVIEWS_DIR}/{Path(feature.relative).name}.json"
     text = json.dumps({"feature": feature.relative, "required": required}) + "\n"
     return autonomy.replace_file(feature.root, relative, text)
+
+
+def merge_requested_kinds(feature: Feature, step: dict) -> None:
+    """Add the kinds the engineering review requests to the specialists hint (#83).
+
+    Called by the wrapper once an implementation review step is accepted, before
+    the specialists step starts. Anything but a list of known kinds is left to
+    the recorder, which rejects it.
+    """
+    if "implementation-review.json" not in (step.get("drafts") or {}):
+        return
+    data = _step_draft(feature, step, "implementation-review.json")
+    review = data.get("review") if isinstance(data, dict) else None
+    kinds = review.get("required_kinds") if isinstance(review, dict) else None
+    if (
+        isinstance(kinds, list)
+        and kinds
+        and all(k in autonomy.REVIEW_KINDS for k in kinds)
+    ):
+        write_required_reviews(feature, [{"required_kinds": kinds}])
 
 
 def _frozen_check(feature: Feature, *, required: bool = False) -> None:
