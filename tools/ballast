@@ -1235,12 +1235,24 @@ def ignore_block(standard: Path) -> tuple[str | None, list[tuple[str, bool]]]:
     return (block if isinstance(block, str) else None), probes
 
 
+# Repository config an agent can write must not run a program (a pager,
+# core.fsmonitor, hooks) as the operator: the same prefix as tools/setup.
+GIT = (
+    "git",
+    "--no-pager",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+)
+
+
 def git_output(root: Path, *args: str, data: str | None = None) -> str:
     """Run a read-only git command in root."""
     result = subprocess.run(  # noqa: S603 - fixed git subcommands
-        ["git", *args],  # noqa: S607 - as tools/setup does
+        [*GIT, *args],
         cwd=root,
-        input=data,
+        input=data or "",
         capture_output=True,
         text=True,
         check=False,
