@@ -3,13 +3,13 @@
 - Role: engineering and architecture reviewer
 - Agent/model: claude/claude-opus-5-5 (the driving agent, plus the independent fresh-context pass recorded in the [security review](implementation-security.md)); reduced independence
 - Base: `1ce1f9a..HEAD`
-- Artifacts: [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [contracts/](../contracts/), ADR-0007, ADR-0009, `docs/policies/engineering.md`
+- Artifacts: [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [contracts/](../contracts/), ADR-0007, ADR-0011, `docs/policies/engineering.md`
 - Verdict: approved (after the fixes below)
 
 ## What was examined
 
 - **Requirement coverage.** FR-001 to FR-015 against the code paths: CLI trigger (`before_launcher`, `needs_installation`, `prepare`), declaration (`Declarations.prepare`), local-only attempt (`Setup.prepare`, `hold`, `settled`, `candidates`, `copy_candidate`, `mismatch`, `fill_from_candidates`, `check_unchanged`), recovery (`recover` with `mode`), launcher messages and refusals. Mapping in [quickstart.md](../quickstart.md).
-- **Architecture.** Preparation is ADR-0007's attempt with another `fill` function: one stage, journal, switch, verification and recovery implementation; the CLI decides whether, the pinned setup decides how (ADR-0002). ADR-0009 records the extension and stays proposed until merge.
+- **Architecture.** Preparation is ADR-0007's attempt with another `fill` function: one stage, journal, switch, verification and recovery implementation; the CLI decides whether, the pinned setup decides how (ADR-0002). ADR-0011 records the extension and stays proposed until merge.
 - **Source authority.** Installation records stay in operator state, written only by `tools/setup`; the CLI reads the manifest as data; no second store.
 - **Partial failure and concurrency.** Kill points staging (mid-copy, after copy), switching, mid-rename and committed; a committed preparation at another fingerprint is rolled back; ten concurrent worktrees on two pins, 20 times; two commands in one worktree.
 - **Compatibility.** Old CLI with this standard: launcher refusal naming setup. This CLI with an old standard: CLI refusal naming setup for run/ledger/intake/trust/discard-runs. Old records without `executable` stay valid for `ballast setup`'s copy and are never a preparation source.

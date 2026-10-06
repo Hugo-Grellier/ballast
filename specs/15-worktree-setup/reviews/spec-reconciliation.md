@@ -3,7 +3,7 @@
 - Role: reconciliation reviewer
 - Agent/model: claude/claude-opus-5-5, the driving agent; reduced independence (see the [security review](implementation-security.md))
 - Base: `1ce1f9a..HEAD` (the whole feature branch)
-- Artifacts: [intent.md](../intent.md), [discovery.md](../discovery.md), [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [tasks.md](../tasks.md), [decisions.md](../decisions.md), the implementation reviews, `tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/cli.toml`, the tests, `README.md`, ADR-0009
+- Artifacts: [intent.md](../intent.md), [discovery.md](../discovery.md), [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [tasks.md](../tasks.md), [decisions.md](../decisions.md), the implementation reviews, `tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/cli.toml`, the tests, `README.md`, ADR-0011
 - Converge: every task T001 to T035 is checked with evidence; comparing the plan, research, data model and contracts with the code appended no task.
 - Verdict: CONVERGED
 
@@ -33,8 +33,8 @@
 ## Gaps and how they were closed
 
 - **Spec missing accepted behavior**: removal of a stale baseline at a reused path was in the plan (R8) but not in the spec (analyze U1). Recorded as DEC-0002; FR-009 updated.
-- **Spec gap found in review**: an unfinished agent step in an uninstalled checkout had no way out (ENG-001). Recorded as DEC-0001; FR-012, AC-005's contract and ADR-0009 updated.
-- **Contract refinements**: candidates are only checkouts with a record or kept copy; parent-link rejection; F-001 checked first under the shared lock with a bounded retry; the stage-changed failure; the safe copy; the reworded baseline line. Contracts, data model and ADR-0009 updated in the same documentation commit.
+- **Spec gap found in review**: an unfinished agent step in an uninstalled checkout had no way out (ENG-001). Recorded as DEC-0001; FR-012, AC-005's contract and ADR-0011 updated.
+- **Contract refinements**: candidates are only checkouts with a record or kept copy; parent-link rejection; F-001 checked first under the shared lock with a bounded retry; the stage-changed failure; the safe copy; the reworded baseline line. Contracts, data model and ADR-0011 updated in the same documentation commit.
 - **Not covered by an automated test**: `ballast preview` on an uninstalled worktree (unchanged code, needs network), the full doctor report (its probes are checked directly). Listed in the [test review](implementation-tests.md).
 
 No proposed product change remains open; both decisions are resolved and listed for the merge review.

@@ -2,8 +2,8 @@
 
 - Role: security reviewer (R2: the paths `tools/setup` installs and where it copies them from, what the CLI executes before the launcher, the launcher's trust model)
 - Agent/model: claude/claude-opus-5-5. Two passes: an independent fresh-context pass (same model, no authoring context, read-only, with two scratch reproductions) and the driving agent's own pass. Reduced independence: no cross-provider reviewer ran.
-- Base: `1ce1f9a..HEAD` (`tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/cli.toml`, tests, README, ADR-0009)
-- Artifacts: [spec.md](../spec.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [decisions.md](../decisions.md), `docs/policies/security.md`, `docs/policies/project/workflow.md`, constitution BL-INV-001 to BL-INV-006, ADR-0007, ADR-0009
+- Base: `1ce1f9a..HEAD` (`tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/cli.toml`, tests, README, ADR-0011)
+- Artifacts: [spec.md](../spec.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [decisions.md](../decisions.md), `docs/policies/security.md`, `docs/policies/project/workflow.md`, constitution BL-INV-001 to BL-INV-006, ADR-0007, ADR-0011
 - Verdict: approved (after the fixes below)
 
 ## What was examined

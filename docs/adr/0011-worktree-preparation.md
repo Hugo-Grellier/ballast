@@ -1,4 +1,4 @@
-# ADR-0009: A new worktree is prepared from a verified local installation
+# ADR-0011: A new worktree is prepared from a verified local installation
 
 - Status: proposed (with the plan of [feature 15](../../specs/15-worktree-setup/plan.md), 2026-10-06); accepted when its PR merges
 - Feature: [15-worktree-setup](../../specs/15-worktree-setup/spec.md); decisions R1 to R9 in its [research](../../specs/15-worktree-setup/research.md)
