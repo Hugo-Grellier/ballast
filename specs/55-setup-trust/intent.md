@@ -22,8 +22,8 @@ As approved in [`spec.md`](spec.md) at the digest recorded under Authority. The 
 - **Status**: agent-provisional, not human-approved
 - **Decision**: PD-0005
 - **Decided by**: claude/claude-opus-5-5 (author)
-- **Recorded**: 2026-10-06T17:57:50+00:00
-- **Source**: ballast-autonomous run (b48b609a)
+- **Recorded**: 2026-10-06T18:37:13+00:00
+- **Source**: ballast-autonomous run (38380ec3)
 - **Spec**: specs/55-setup-trust/spec.md
-- **Provisional spec digest**: sha256:34ce48963133916962cb9664ea93b310525f2df7ff962312b25ca4d9725ea3d1
+- **Provisional spec digest**: sha256:4b7ebd8ada20ce7322ad486124518108f6e39aebd57c1093a2f9ac1f94c094f2
 <!-- workflow-provisional: end -->

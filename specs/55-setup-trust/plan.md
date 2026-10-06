@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `specs/55-setup-trust/spec.md` (intent agent-provisional, PD-0005, digest in [intent.md](intent.md))
 
-**Risk**: R2. The plan changes the launcher's trust model and who may record a trust baseline ([R2 boundaries](../../docs/policies/project/workflow.md#r2-boundaries)), and adds a network read with the operator's Git credentials to setup. This is Autonomous run `b48b609a`: every design decision below is agent-provisional, not human-approved, and merging the PR is the single human approval (BL-INV-006). D-01, D-02 (with its refinement) and D-03 are the operator's answers; D-04, D-05 and clarification 1 are agent-provisional (PD-0002 to PD-0004).
+**Risk**: R2. The plan changes the launcher's trust model and who may record a trust baseline ([R2 boundaries](../../docs/policies/project/workflow.md#r2-boundaries)), and adds a network read with the operator's Git credentials to setup. This is Autonomous run `38380ec3`: every design decision below is agent-provisional, not human-approved, and merging the PR is the single human approval (BL-INV-006). D-01, D-02 and D-03 are the operator's answers recorded in the [discovery brief](discovery.md) (commit f290079); D-04, D-05 and the reviewed-repositories record are agent-provisional (PD-0002 to PD-0004). Two agent inferences only narrow D-02 and are listed for merge review: the default branch is observed live from the pinned repository, and only a repository the operator already reviewed counts.
 
 ## Summary
 
@@ -108,4 +108,4 @@ specs/55-setup-trust/
 | --- | --- | --- |
 | BL-INV-002 amended: a baseline may be recorded by the operator's setup or preparation, not only by `ballast trust` | Issue #55's outcome; the operator chose it in D-01, and the constitution's governance allows it as an R2 change with a recorded reason (R17) | D-01 option B (messages only) does not remove the per-checkout human command the Issue targets |
 | A machine-wide reviewed-repositories record | Without it, a repointed `[github] repository` whose default branch carries the same changed file would be trusted (AC-016, FR-005) | Trusting whichever repository `ballast.toml` names fails open; per-checkout records never exist in a fresh clone or worktree |
-| A network read in setup and in preparation (which ADR-0011 kept offline) | D-02 refinement: the reviewed default branch must be observed live, never from agent-writable local refs | Local remote-tracking ref: agent-writable; offline-only operation: covered by the operator-baseline alternative, but cannot trust fresh clones |
+| A network read in setup and in preparation (which ADR-0011 kept offline) | Agent inference narrowing D-02 (listed for merge review): the reviewed default branch must be observed live, never from agent-writable local refs | Local remote-tracking ref: agent-writable; offline-only operation: covered by the operator-baseline alternative, but cannot trust fresh clones |
