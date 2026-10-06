@@ -44,6 +44,7 @@ import autonomy
 import draft_pr
 import launcher
 import ledger
+import setup_trust
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN
 
 GIT_FLOOR = (2, 41)
@@ -93,16 +94,9 @@ THROWAWAY_COMMANDS = frozenset(
         "push",
     }
 )
-DROPPED_ENV = frozenset(
-    {
-        *draft_pr.GIT_LOCATION,
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_NAMESPACE",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_COUNT",
-    }
-)
+# One copy of the Git environment rules, shared with setup's observation of the
+# pinned repository's default branch (ADR-0014; plan-review F-002).
+DROPPED_ENV = setup_trust.DROPPED_ENV
 DIRTY_PATHS = 10
 CONFLICT_PATHS = 20
 PROTECTED_NAMES = 10
@@ -263,14 +257,12 @@ class _Block(Exception):  # noqa: N818 - Control flow, not an error.
 # --- test seams -------------------------------------------------------------
 
 
-def _url(root: Path, owner: str, name: str, *, origin: str = "") -> str:  # noqa: ARG001
+def _url(root: Path, owner: str, name: str, *, origin: str = "") -> str:
     """Return the pinned repository's URL, in the scheme `origin` uses.
 
     Only the scheme is read from `origin`; the repository never is.
     """
-    if origin.startswith("https://"):
-        return f"https://github.com/{owner}/{name}.git"
-    return f"ssh://git@github.com/{owner}/{name}.git"
+    return setup_trust.repository_url(root, owner, name, origin=origin)
 
 
 def _crash(point: str) -> None:
@@ -588,18 +580,7 @@ class _Sync:
     # --- runners --------------------------------------------------------------
 
     def _env(self) -> dict[str, str]:
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in DROPPED_ENV
-            and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
-        }
-        env["PATH"] = draft_pr._child_path(self.root)  # noqa: SLF001
-        # Replace refs and grafts in the agent-writable .git could make a
-        # branch that lacks the base look up to date (SEC-004).
-        env["GIT_NO_REPLACE_OBJECTS"] = "1"
-        env["GIT_GRAFT_FILE"] = os.devnull
-        return env
+        return setup_trust.base_environment(self.root)
 
     def _run(  # noqa: PLR0913 - One bounded command.
         self,
@@ -667,18 +648,8 @@ class _Sync:
         argv = [self.git, *prefix, *autonomy.GIT_HARDENING, *NO_MAINTENANCE, *args]
         if ARGV_LOG is not None:
             ARGV_LOG.append(("throwaway", argv))
-        env = self._env()
-        for name in ("SSH_ASKPASS", "DISPLAY", "WAYLAND_DISPLAY"):
-            env.pop(name, None)
-        env |= {
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_NO_LAZY_FETCH": "1",
-            # `push` failures are told apart by Git's English messages.
-            "LC_ALL": "C",
-            "GIT_ASKPASS": "",
-            "SSH_ASKPASS_REQUIRE": "never",
-            "GIT_CEILING_DIRECTORIES": str(self.bare.parent),
-        }
+        env = setup_trust.throwaway_environment(self.root)
+        env["GIT_CEILING_DIRECTORIES"] = str(self.bare.parent)
         if args[0] != "init":
             env |= {
                 "GIT_DIR": str(self.bare),

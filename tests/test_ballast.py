@@ -993,7 +993,12 @@ class PrepareTriggerTests(unittest.TestCase):
 
     def test_run_prepares_then_reaches_preflight(self) -> None:
         # AC-001, AC-002, SC-001: one command, no setup, no download.
-        prepared = setup_tests.PREPARED.format(ref="vA", source=self.primary)
+        # #55: a worktree whose configuration pins no repository says why no
+        # baseline was recorded (setup records one only for a reviewed repository).
+        prepared = (
+            "No trust baseline recorded: ballast.toml names no valid [github] "
+            "repository.\n"
+        ) + setup_tests.PREPARED.format(ref="vA", source=self.primary)
         cached = setup_tests.tree(self.data)
         for args in (("run", "start"), ("ledger", "report", "--all"), ("intake",)):
             with self.subTest(command=args[0]):

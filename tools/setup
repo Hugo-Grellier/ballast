@@ -21,7 +21,14 @@ and writes nothing.
 copies the first installation recorded on this machine for this repository
 (this checkout's kept copy, then each worktree's live and kept ones) whose
 pin and fingerprint equal this checkout's and whose copy matches its record,
-file modes included. It never records or reads a trust baseline.
+file modes included. It never downloads the standard and never reads or copies
+another checkout's trust baseline.
+
+Once an installation is in place, setup and a preparation record this checkout's
+trust baseline themselves when it holds exactly what they installed from
+configuration a human reviewed and no agent has run there (ADR-0014,
+`spec_workflow/setup_trust.py` decides); otherwise they record nothing and
+`ballast trust` stays the operator's step. `--check` never does.
 
 The project commits `ballast.toml` and its own overrides only. Everything this
 script writes is rebuildable and must be ignored; see GITIGNORE below.
@@ -301,6 +308,12 @@ RETRY = "rerun `ballast setup`; if it fails again, restore the previous pin"
 # What wrote a journal or holds the lock: `ballast setup`, or a preparation by
 # the first `run`, `ledger` or `intake` in a new worktree (#15).
 SETUP, PREPARE = "setup", "prepare"
+SETUP_REMINDER = [
+    (
+        "Review the changed protected inputs, then run `ballast trust` "
+        "before the next workflow run."
+    )
+]
 # How long a preparation retries a lock another preparation holds for a moment.
 LOCK_RETRY_SECONDS = 2.0
 
@@ -357,6 +370,8 @@ class Setup:
         self.config = tomllib.loads(self.config_bytes.decode())
         self.ref = launcher.pinned_ref(project)
         self.mode = SETUP
+        # `ballast init` installs through this class and never records trust.
+        self.records_trust = True
         self.source_record: dict | None = None  # what a preparation copied
         self._fingerprint: str | None = None
 
@@ -516,19 +531,20 @@ class Setup:
                 )
             if self.current(state):
                 say(f"nothing changed: {self.ref} is set up and verified")
+                for line in self.closing(self.settle(state), unchanged=True):
+                    say(line)
                 return
             self.check_links(PARENTS)
             self.check_ignored()
             reused = self.attempt(state, self.build)
+            verdict = self.settle(state)
         finally:
             os.close(lock)
         if reused:
             say(f"Reused the previous installation ({self.ref})")
-        sys.stdout.write(
-            f"Spec Kit {VERSION} and the standard are set up.\n"
-            "Review the changed protected inputs, then run `ballast trust` "
-            "before the next workflow run.\n"
-        )
+        say(f"Spec Kit {VERSION} and the standard are set up.")
+        for line in self.closing(verdict):
+            say(line)
 
     def prepare(self) -> None:
         """Install a new worktree from a verified local installation (#15).
@@ -562,7 +578,9 @@ class Setup:
                     "run `ballast setup` to recover",
                 )
             if self.recover(state):
-                return  # a committed preparation was finished: complete
+                # A committed preparation was finished: complete.
+                self.report_recovered(self.settle(state))
+                return
             if os.path.lexists(state / launcher.IN_PROGRESS):
                 refuse(
                     "an agent step did not finish",
@@ -581,12 +599,56 @@ class Setup:
             self.check_links(PARENTS)
             self.check_ignored()
             source = self.attempt(state, self.fill_from_candidates)
+            verdict = self.settle(state)
         finally:
             os.close(lock)
-        sys.stdout.write(
+        self.report_prepared(source, verdict)
+
+    def report_recovered(self, verdict: object) -> None:
+        """Say the baseline's fate after finishing a recovered preparation."""
+        for line in verdict.lines():
+            say(line)
+
+    def report_prepared(self, source: object, verdict: object) -> None:
+        """Say what a preparation did.
+
+        A skipped verdict's reason comes first, so its last lines stay the
+        preparation's own and its `ballast trust` step.
+        """
+        prepared = (
             f"Prepared the {self.ref} installation from {printable(source)} (verified, "
-            "nothing downloaded).\n"
-            "Review this worktree's protected inputs, then run `ballast trust`.\n"
+            "nothing downloaded)."
+        )
+        if verdict.kind == "skipped":
+            say(verdict.reason_line)
+            lines = [prepared, verdict.remedy]
+        else:
+            lines = [prepared, *verdict.lines()]
+        for line in lines:
+            say(line)
+
+    def closing(self, verdict: object, *, unchanged: bool = False) -> list[str]:
+        """Return the lines that say what happened to the trust baseline."""
+        if verdict is None:  # trust is not recorded here: today's reminder
+            return [] if unchanged else SETUP_REMINDER
+        return verdict.lines()
+
+    def settle(self, state: Path) -> object:
+        """Record the trust baseline if eligible, under the lock; the verdict.
+
+        Called once the installation is complete and the journal is gone, with
+        the checkout lock still held, so no run sees a half-written baseline.
+        """
+        if not self.records_trust:
+            return None
+        path = str(STANDARD / "tools/spec_workflow")
+        if path not in sys.path:
+            sys.path.insert(0, path)
+        import setup_trust  # noqa: PLC0415 - only after an installation, never in --check
+
+        record = self.recorded(state) if self.current(state) else None
+        return setup_trust.settle(
+            self.root, state, record, standard=STANDARD, mode=self.mode
         )
 
     def settled(self, state: Path) -> bool:
@@ -972,6 +1034,7 @@ class Setup:
         # Nothing was installed here, so a baseline in this checkout's state
         # predates it: its path was reused (research R8). Never read it.
         trusted = state / launcher.TRUSTED
+        _remove_file(state / launcher.TRUSTED_SOURCE)
         if os.path.lexists(trusted):
             _remove_file(trusted)
             sys.stdout.write(
@@ -1733,7 +1796,8 @@ def cli(argv: list[str]) -> int:
     modes.add_argument(
         "--prepare",
         action="store_true",
-        help="install a new worktree from a verified local installation, offline",
+        help="install a new worktree from a verified local installation, "
+        "downloading nothing",
     )
     arguments = parser.parse_args(argv)
     try:

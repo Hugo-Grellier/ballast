@@ -1362,7 +1362,9 @@ class Init:
     def install(self) -> None:
         """Install through this version's setup, in process (R11, FR-014)."""
         try:
-            setup.Setup(self.root).main()
+            installation = setup.Setup(self.root)
+            installation.records_trust = False  # init never records trust
+            installation.main()
         except setup.RefusedError as refusal:
             refused(f"install: {refusal}", FIX)
         except (setup.StageFailedError, RuntimeError, ValueError, OSError) as error:
