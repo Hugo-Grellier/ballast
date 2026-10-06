@@ -5,6 +5,7 @@ Run `3ee0601b` for #13 (`specs/13-adaptive-init`). Generated from the operator r
 ## Mode and risk
 
 - Mode start: autonomous at 2026-10-06T10:42:33+00:00 by operator
+- Mode lower: human-gated at 2026-10-06T15:00:00+00:00 by operator, decision HD-0002: block-resolved
 - Risk: R2 (scope-record); history: R2 at 2026-10-06T10:42:33+00:00
 - Limits (default): 240 minutes wall time, 40 agent steps
 - Spend: bounded by the agent-step limit; every agent step, retry and fix cycle counts; monetary spend is not measured
@@ -278,6 +279,7 @@ Reduced independence: reviews used the authoring provider.
 ## Block resolutions
 
 - HD-0001 at 2026-10-06T13:50:59+00:00 by operator: resolved the postcondition block at validate-implementation; resumed in Autonomous at validate-tasks; changed during the block: `outside`, `specs/13-adaptive-init/tasks.md`; reference: operator resumed after the postcondition block at validate-implementation
+- HD-0002 at 2026-10-06T15:00:00+00:00 by operator: resolved the block; the run continued human-gated; reference: Fix-cycle limit was environmental (pinned v0.7.0 sandbox could not run ruff/tests, fixed by #82); host gate 1243 OK; reviews resolved; e2e PASS in specs/13-adaptive-init/reviews/
 
 ## Checks
 
