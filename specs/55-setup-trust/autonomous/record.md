@@ -90,6 +90,7 @@ Reduced independence: reviews used the authoring provider.
 - HD-0001 at 2026-10-06T17:45:45+00:00 by operator: resolved the upstream-sync block at discover; resumed in Autonomous at discover; changed during the block: `specs/55-setup-trust/discovery.md`; reference: operator resumed after the upstream-sync block at discover
 - HD-0002 at 2026-10-06T17:48:28+00:00 by operator: resolved the postcondition block at validate-discovery; resumed in Autonomous at validate-discovery; changed during the block: `specs/55-setup-trust/discovery.md`; reference: operator resumed after the postcondition block at validate-discovery
 - HD-0003 at 2026-10-06T17:52:27+00:00 by operator: resolved the contradiction block at clarify; resumed in Autonomous at validate-discovery; changed during the block: `specs/55-setup-trust/discovery.md`; reference: operator resumed after the contradiction block at clarify
+- HD-0004 at 2026-10-06T18:28:44+00:00 by operator: resolved the upstream-sync block at record-plan; resumed in Autonomous at decide-plan; reference: operator resumed after the upstream-sync block at record-plan
 
 ## Checks
 

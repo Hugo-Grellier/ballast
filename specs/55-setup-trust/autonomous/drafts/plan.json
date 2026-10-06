@@ -2,7 +2,7 @@
   "point": "plan",
   "decision": "accept",
   "summary": "Plan for #55 meets the spec and stays fail-closed: a trusted setup_trust module records the baseline through one launcher writer only for exactly-installed inputs with reviewed configuration; ADR-0014 and the BL-INV-002 amendment carried; agent-provisional.",
-  "basis": "plan.md traces every FR-001..FR-020 to research R1-R19 and every AC-001..AC-027 to a test or review step in quickstart.md. The data-model eligibility order puts all local refusals before the single network step, so an ineligible checkout makes no request (FR-004, AC-014..AC-016). The launcher stays the single owner of trusted.json and the reviewed-repositories record through record_baseline; the comparison, refusal messages and BALLAST_TAMPERED are unchanged (FR-015, AC-023). The default branch is observed live through ADR-0005's hardened throwaway path, never from agent-writable refs, matching the D-02 refinement in the agent-provisional intent PD-0005. The Constitution Check passes with one justified amendment: BL-INV-002 is amended through governance as the operator chose in D-01 (recorded in discovery.md, commit f290079), with ADR-0014 superseding the ADR-0007 and ADR-0011 clauses; both stay proposed until merge. The independent plan review (PD-0006, reviews/plan.md) verified the code claims against the tree and found no fail-open path. Its two medium items (ADR-0011 network wording to supersede in ADR-0014; share the branch-sync Git environment builder instead of restating it) and three low items are fixable while writing the ADR, module and tasks, and are carried to tasks and to security and architecture review. The decision is material because it amends a constitutional invariant and accepted ADRs. Risk stays R2 per docs/policies/project/workflow.md (launcher trust model, agent authority). Before merge, the quickstart's networked end-to-end check needs the operator: a scratch GitHub repository and an operator-run ballast trust, which only the operator may run.",
+  "basis": "plan.md traces every FR-001..FR-020 to research R1-R19 and every AC-001..AC-027 to a test or review step in quickstart.md. The data-model eligibility order puts all local refusals before the single network step, so an ineligible checkout makes no request (FR-004, AC-014..AC-016). The launcher stays the single owner of trusted.json and the reviewed-repositories record through record_baseline; the comparison, refusal messages and BALLAST_TAMPERED are unchanged (FR-015, AC-023). The default branch is observed live through ADR-0005's hardened throwaway path, never from agent-writable refs, matching the D-02 refinement in the agent-provisional intent PD-0005. The Constitution Check passes with one justified amendment: BL-INV-002 is amended through governance as the operator chose in D-01 (recorded in discovery.md, commit f290079), with ADR-0014 superseding the ADR-0007 and ADR-0011 clauses; both stay proposed until merge. The independent plan review (PD-0006, reviews/plan.md) verified code claims against the tree and found no fail-open path. Its two medium items (supersede ADR-0011's network wording in ADR-0014; share the branch-sync Git environment builder) and three low items are fixable while writing the ADR, module and tasks, and are carried to tasks and to security and architecture review. Material: it amends a constitutional invariant and accepted ADRs. Risk stays R2 per docs/policies/project/workflow.md. Before merge, the quickstart's networked end-to-end check needs ballast trust and the scratch GitHub repository; the operator listed exactly these two actions in ballast.toml [autonomous] on 2026-10-06 (#92).",
   "evidence": [
     "specs/55-setup-trust/plan.md",
     "specs/55-setup-trust/spec.md",
@@ -12,11 +12,13 @@
     "specs/55-setup-trust/data-model.md",
     "specs/55-setup-trust/quickstart.md",
     "specs/55-setup-trust/contracts/setup-trust.md",
+    "specs/55-setup-trust/contracts/launcher-and-doctor.md",
     "specs/55-setup-trust/discovery.md",
     "docs/policies/project/workflow.md",
     "docs/policies/workflow.md",
     "docs/policies/spec-kit-workflow.md",
-    "AGENTS.md"
+    "AGENTS.md",
+    "ballast.toml"
   ],
   "artifact": "specs/55-setup-trust/plan.md",
   "model": "claude-opus-5-5",
@@ -25,8 +27,8 @@
   "risk": null,
   "boundaries": ["launcher trust model", "agent authority"],
   "privileged_actions": [
-    "Operator runs ballast trust in the networked end-to-end check",
-    "Scratch GitHub repository for the networked end-to-end check"
+    "operator runs ballast trust in the networked end-to-end check",
+    "scratch github repository for the networked end-to-end check"
   ],
   "review": null,
   "assumption": null
