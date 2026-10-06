@@ -5,6 +5,7 @@ Run `d6b5dff2` for #22 (`specs/22-ui-demo`). Generated from the operator records
 ## Mode and risk
 
 - Mode start: autonomous at 2026-10-06T12:19:11+00:00 by operator
+- Mode lower: human-gated at 2026-10-06T15:38:36+00:00 by operator, decision HD-0003: block-resolved
 - Risk: R2 (scope-record); history: R2 at 2026-10-06T12:19:11+00:00
 - Limits (default): 240 minutes wall time, 40 agent steps
 - Spend: bounded by the agent-step limit; every agent step, retry and fix cycle counts; monetary spend is not measured
@@ -106,6 +107,7 @@ Reduced independence: reviews used the authoring provider.
 
 - HD-0001 at 2026-10-06T12:51:37+00:00 by operator: resolved the postcondition block at specify; resumed in Autonomous at specify; reference: operator resumed after the postcondition block at specify
 - HD-0002 at 2026-10-06T13:11:03+00:00 by operator: resolved the review-finding block at record-plan-review; resumed in Autonomous at validate-spec; changed during the block: `specs/22-ui-demo/contracts/`, `specs/22-ui-demo/data-model.md`, `specs/22-ui-demo/decisions.md`, `specs/22-ui-demo/plan.md`, `specs/22-ui-demo/quickstart.md`, `specs/22-ui-demo/research.md`, `specs/22-ui-demo/spec.md`; reference: operator resumed after the review-finding block at record-plan-review
+- HD-0003 at 2026-10-06T15:38:36+00:00 by operator: resolved the block; the run continued human-gated; reference: Required dependency review written outside the run (#83); implementation reviews resolved; reconciliation CONVERGED in specs/22-ui-demo/reviews/
 
 ## Checks
 
