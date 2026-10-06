@@ -21,6 +21,7 @@ import sys
 import time
 import tomllib
 import unittest
+from collections.abc import Iterator
 from contextlib import nullcontext, redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -2253,6 +2254,35 @@ class RunHistoryTests(unittest.TestCase):
             [event["data"]["choice"] for event in events if event["kind"] == "gate"],
             ["unobserved"],
         )
+
+
+class CheckStepTimeoutTests(unittest.TestCase):
+    """Spec Kit shell steps default to 300 s; run-checks must outlast that."""
+
+    def test_run_checks_steps_outlast_the_longest_configured_check(self) -> None:
+        longest = autonomy.CHECK_TIMEOUT[1] * 60  # [checks] timeout_minutes maximum
+
+        def shell_steps(node: object) -> Iterator[dict]:
+            if isinstance(node, dict):
+                if node.get("type") == "shell":
+                    yield node
+                for value in node.values():
+                    yield from shell_steps(value)
+            elif isinstance(node, list):
+                for item in node:
+                    yield from shell_steps(item)
+
+        seen = 0
+        for path in (ROOT / "templates/spec-kit/workflows").glob("*/workflow.yml"):
+            for step in shell_steps(yaml.safe_load(path.read_text())):
+                if "run-checks" in step.get("run", ""):
+                    seen += 1
+                    self.assertGreaterEqual(
+                        step.get("timeout", 300),
+                        longest,
+                        f"{path.parent.name}/{step['id']}",
+                    )
+        self.assertGreaterEqual(seen, 5)
 
 
 AUTONOMOUS_WORKFLOW = ROOT / "templates/spec-kit/workflows/autonomous/workflow.yml"
