@@ -1683,7 +1683,7 @@ class PrepareTests(WorktreeCase):
         self.assertEqual(
             out,
             f"skipped {self.root}: its content differs from its record at "
-            ".specify/scripts/x??[2K?Prepared.py\n",
+            ".specify/scripts/x\\n\\x1b[2K\\rPrepared.py\n",
         )
         self.assert_uninstalled(worktree)
 
@@ -1987,6 +1987,52 @@ class PrepareConcurrencyTests(WorktreeCase):
                         result,
                     )
             self.assertEqual(self.check(root).stdout, "current\n")
+
+
+class ControlCharacterOutputTests(ProjectCase):
+    """Checkout file names never reach the operator's terminal raw."""
+
+    worktree = WorktreeCopyTests.worktree
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.installed()
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "project")
+        self.count = 0
+
+    EVIL = ".specify/scripts/x\n\x1b[2Kcurrent"
+
+    def assertPrintable(self, text: str, lines: int) -> None:  # noqa: N802
+        self.assertNotIn("\x1b", text)
+        self.assertEqual(text.count("\n"), lines, text)
+        self.assertNotIn("\ncurrent", text)
+
+    def test_check_escapes_a_modified_file_name(self) -> None:
+        (self.root / self.EVIL).write_text("added\n")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertPrintable(result.stdout, 1)
+        self.assertEqual(
+            result.stdout, "modified: .specify/scripts/x\\n\\x1b[2Kcurrent\n"
+        )
+
+    def test_setup_escapes_a_primary_file_name(self) -> None:
+        (self.root / self.EVIL).write_text("added\n")
+        code, out, err = self.setup(self.worktree())
+        self.assertEqual(code, 0, err)
+        line = next(x for x in out.splitlines() if x.startswith("full installation"))
+        self.assertPrintable(line + "\n", 1)
+        self.assertTrue(line.endswith("record at .specify/scripts/x\\n\\x1b[2Kcurrent"))
+
+    def test_refusal_and_failure_escape_their_cause(self) -> None:
+        for error in (
+            setup.RefusedError("bad \x1b]0;t\x07name\nforged", "act"),
+            setup.StageFailedError("switch", OSError(2, "gone", "a\n\x1b[2Kb")),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.assertNotIn("\x1b", str(error))
+                self.assertNotIn("\n", str(error))
 
 
 class ChatInstallTests(unittest.TestCase):
