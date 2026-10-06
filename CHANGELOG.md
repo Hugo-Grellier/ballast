@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.1](https://github.com/Hugo-Grellier/ballast/compare/v0.7.0...v0.7.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **agent:** give confined Claude steps a login without refresh tokens ([#72](https://github.com/Hugo-Grellier/ballast/issues/72)) ([3f7180f](https://github.com/Hugo-Grellier/ballast/commit/3f7180f23357723ed7e77eafc8b3a3e0ac5e601b))
+* **agent:** give confined Codex steps a login without refresh tokens ([#80](https://github.com/Hugo-Grellier/ballast/issues/80)) ([11134f1](https://github.com/Hugo-Grellier/ballast/commit/11134f1a395cdaec7822135459eb17abd981c616))
+* **agent:** let confined steps run the project's checks ([#82](https://github.com/Hugo-Grellier/ballast/issues/82)) ([b90ea0f](https://github.com/Hugo-Grellier/ballast/commit/b90ea0f790f67ee701b38cc41281f1b1371c3922))
+* **setup:** edit every installed integration's tasks skill by content ([#73](https://github.com/Hugo-Grellier/ballast/issues/73)) ([e401a6d](https://github.com/Hugo-Grellier/ballast/commit/e401a6d88c2d4d253c58053da69dd59ea720bf5a))
+* **setup:** name the installed Python prerequisites script in the tasks skill ([#78](https://github.com/Hugo-Grellier/ballast/issues/78)) ([a31c737](https://github.com/Hugo-Grellier/ballast/commit/a31c73799af3cb159b9697be60eda6bfb92d28da))
+
 ## [0.7.0](https://github.com/Hugo-Grellier/ballast/compare/v0.6.0...v0.7.0) (2026-10-06)
 
 
