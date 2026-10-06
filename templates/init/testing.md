@@ -8,4 +8,4 @@ Run these before a change is accepted, and record the exact commands and results
 
 {{gates}}
 
-Commands marked `inferred` are not active checks: a manifest or `Makefile` only suggests them, or CI runs something other than a known verifier. Confirm each one, then move it to `[checks] commands` in `ballast.toml`.
+Commands marked `inferred` are not active checks: a manifest or `Makefile` only suggests them, or CI runs something other than a known verifier. Confirm each one, then move it to `[checks] commands` in `ballast.toml`. Active checks run repository code too (scripts, test configuration, `Makefile` targets); review them like any other change to `ballast.toml` before `ballast trust`.
