@@ -109,6 +109,7 @@ Project membership. `gh` authentication is required for live GitHub writes.
 |---|---|
 | New feature or meaningful behavior change | Full `ballast-feature` lifecycle below. |
 | Eligible feature the operator chooses to run unattended | `ballast-autonomous`: the same lifecycle with agent-provisional decisions instead of human gates, ending in a Draft PR (see [Autonomous runs](#autonomous-runs)). |
+| Feature the operator wants to shape in conversation, one step at a time | Chat mode, `ballast run start --mode chat`: the same phases, checks and human approvals, driven by the operator through `ballast run` (see [Chat runs](#chat-runs)). |
 | Small bug with a narrow fix | Official `bugfix` bundle: assess the report, review its proposed fix at a human gate, then fix and verify. Keep the Issue as the tracker and avoid creating a full feature spec. Promote to a feature if intent, contract, scope, or architecture changes. |
 | Investigation, spike, or architectural research | Official `assess` bundle for intake, research, shaping, and a human verdict. If findings should persist, write a focused note under `docs/research/`. A `go` verdict is a request to start a feature spec, not approval to implement. |
 
@@ -476,6 +477,20 @@ publication) empties each configured filter driver, so no `clean`, `smudge` or
 or a failed confinement self-test refuses the start. Wall-time and agent-step
 limits are enforced by the wrapper (exit 5).
 
+**Chat runs.** `ballast run start --mode chat` drives the `ballast-feature`
+phases one operator action at a time (see [Chat runs](#chat-runs)); the rows
+below extend the runner contract for it. Every validator above runs unchanged,
+in process, on the run's feature.
+
+| Action | Run by | Valid when |
+|---|---|---|
+| Entry of a `step` | trusted `chat.py` | The phase's cumulative checks and current human approvals pass now; each evaluation is recorded in the run's hash-chained event log in operator state. A refused phase names its first failing check. |
+| Interactive agent step | confined agent behind a wrapper-owned pty | Runs only after the launcher's checks and branch synchronization in the same invocation; anything its permission rules do not allow is denied without a prompt. |
+| Close of a `step` | trusted `chat.py` | The agent's scope is confirmed stopped, protected inputs are unchanged, the phase's postcondition passes and the step changed only its write scope (`specs/<f>/` before `implement`, `specs/<f>/reviews/` for a review). |
+| `approve`, `reject`, `resolve` | the operator, from a terminal | No step is active, the gate's precondition passes, and the operator types the confirmation; the human decision is bound to the artifact's digest and is current only while it matches. |
+| `checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry runs and its result is recorded with the tree it ran on; no `[checks]` table is recorded as unavailable. |
+| `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR. |
+
 **Upstream candidates** (github/spec-kit; this workflow does not wait for them):
 per-step artifact postconditions and gate preconditions in the workflow schema;
 tee semantics that stream and persist command output in run state; semantic
@@ -549,7 +564,80 @@ starts `ballast-continue`, which has only validators and the human gates from
 `approve-intent` to `final-acceptance`. Earlier provisional decisions stay in
 the log and in `record.md`; the human approvals given in the continuation
 supersede them. Missing producer work is done interactively, as in any
-human-gated run. Raising a run to Autonomous after start is never possible.
+human-gated run. With `--mode chat`, `continue` lowers the run to chat and
+continues it as a linked [Chat run](#chat-runs) instead. Raising a run to
+Autonomous after start is never possible.
+
+## Chat runs
+
+Chat mode is the third per-run mode, beside human-gated and Autonomous. The
+operator works conversationally with the agent during a step, chooses the next
+step, and inspects or edits files between steps. Ballast keeps every guarantee
+of a headless run: the trusted preflight before each agent step, the same
+confinement, the artifact postconditions, the run's evidence record and the
+human approvals. Chat changes who orders the steps and how the operator talks to
+the agent; it does not change who approves, what is checked or which artifacts
+are canonical. **Working in a plain Claude Code or Codex session outside
+`ballast run` gives none of these guarantees.**
+
+Each action is one `ballast run` invocation through the trusted launcher, so
+each agent step is the only agent step of its invocation:
+
+| Command | What it does |
+|---|---|
+| `ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: ..."] [-i integration=auto\|claude\|codex] [-i model=NAME]` | Records the run in operator state, synchronizes and pins the branch, archives the `ballast-feature` definition, prints the handoff summary and runs the Draft PR checkpoint. No agent runs. |
+| `ballast run step RUN PHASE [--kind KIND]` | Runs one phase: `specify`, `clarify`, `plan`, `tasks`, `analyze`, `implement`, `reconcile-intent`, `converge`, or `review --kind plan\|implementation\|security\|test\|documentation\|spec-reconciliation`. |
+| `ballast run status RUN` | Prints the handoff summary from the run record: mode and history, feature identity, completed steps, failed checks, gates (current, stale, rejected, pending), open decisions, changes made outside agent steps, and the allowed next actions. It needs no conversation log. |
+| `ballast run approve RUN GATE`, `ballast run reject RUN GATE --reason TEXT` | Records a human decision for `scope`, `intent`, `plan`, `tasks`, `implementation`, `spec-reconciliation` or `final`, bound to the artifact's digest. `approve intent` writes the registered approval block in `intent.md`; `approve tasks` records the implementation baseline. |
+| `ballast run resolve RUN DEC-NNNN` | Records the human resolution of a decision proposal, bound to its resolution text. A resolution an agent writes resolves nothing. |
+| `ballast run checks RUN` | Runs the `[checks] commands`, confined, and records the result for the current tree. |
+| `ballast run mode RUN chat\|human-gated --reason TEXT` | Switches the run. In human-gated mode each `step` runs headless through the agent wrapper, with the same checks, gates and records. A paused `ballast-feature` engine run switched to chat continues as a linked Chat run. |
+| `ballast run continue RUN --reason block-resolved\|changes-requested --ref TEXT --mode chat` | Continues a stopped Autonomous run as a linked Chat run (see [Autonomous runs](#autonomous-runs)). |
+| `ballast run publish RUN` | After a current final approval, commits, pushes and writes the Chat section into the feature's single Draft PR. |
+
+**Preflight before every step.** The launcher refuses on a changed trust
+baseline, a tamper marker or an unfinished step, as for any `ballast run`; then
+`step` runs [branch synchronization](#branch-synchronization) before the agent,
+with `ballast run step RUN PHASE` as its recovery command. Stop between steps
+whenever you like and come back from any terminal: `status` shows where the run
+stands, and the next `step` runs the whole preflight again. `ballast run resume`
+refuses a Chat run and names `step` and `status`.
+
+**Allowed steps.** A step starts only when its cumulative upstream checks and
+current approvals pass at that moment, and a refusal names the first failing
+check. A failed check keeps blocking every dependent step, whatever the mode,
+until a later run of the same check passes; the failure stays in the record. An
+earlier phase can always be run again; a step or an edit that changes an
+artifact makes every approval bound to it stale.
+
+**Interactive confinement.** An interactive step runs `claude --permission-mode
+dontAsk` (or `codex --ask-for-approval never`) with the headless permission
+rules, inside the same bubblewrap confinement and systemd scope as an Autonomous
+step, plus read-only `.claude/` and `.codex/` in the checkout: anything the rules
+do not allow is denied without a prompt, and nothing granted inside the session
+gets past bubblewrap. `bwrap` with user namespaces is therefore a Chat
+prerequisite; an integration that cannot run confined (for example Codex when its
+own sandbox cannot start inside `bwrap`) is refused for Chat and the other one is
+named. The agent's terminal is a pty the wrapper owns; press `Ctrl-]` twice to
+end a step while the agent is still working. When a step ends, normally or not,
+Ballast confirms its processes are gone before it runs the postcondition; when
+it cannot, the unfinished-step refusal applies until `ballast discard-runs`
+confirms them stopped, and the next invocation closes the step as interrupted.
+
+**Human approvals only through `ballast run approve`.** Nothing an agent writes,
+prints or says opens a gate, records a passing check, resolves a decision or
+changes the mode: approvals exist only as operator commands from a terminal,
+refused while a step is active. Chat asks for every human approval the
+human-gated mode asks for and never records an agent-provisional decision. A
+continued Autonomous run's provisional decisions stay labeled agent-provisional,
+in its record and in the Draft PR, even after a Chat approval supersedes them.
+
+**Evidence and logs.** A Chat run records its steps, checks, reviews and
+approvals in its operator record and in the same local ledger as a headless run,
+with `mode: chat`; `ballast ledger report --run RUN` reports it against the
+`ballast-feature` steps and gates. Conversation logs stay in ignored
+`.specify/workflow-state/<run>/agents/` like any agent log, and are never
+attached to, quoted in or linked from an Issue or a PR.
 
 ## Local agent-run evidence
 
@@ -682,9 +770,13 @@ and PRs manually.
 ## Branch synchronization
 
 Before the first agent step of every `ballast run start`, `resume` and
-`continue`, the launcher checks the run's branch against its base. `publish`
-starts no agent and runs no check. Bugfix and assess runs started with
-`specify` directly do not pass through `ballast run` and are not synchronized.
+`continue`, the launcher checks the run's branch against its base. A [Chat
+run](#chat-runs) checks it at `start --mode chat`, at `continue --mode chat`
+and before the agent of every `step`, whose recovery line names `ballast run
+step RUN PHASE`; `status`, `approve`, `reject`, `resolve`, `checks` and `mode`
+start no agent and run no check. `publish` starts no agent and runs no check.
+Bugfix and assess runs started with `specify` directly do not pass through
+`ballast run` and are not synchronized.
 
 - **The base** is the base the run recorded, or else the default branch of the
   `[github] repository` pinned in `ballast.toml`. It is fetched from that
