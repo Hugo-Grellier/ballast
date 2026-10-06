@@ -56,3 +56,18 @@
 
 - Decision: accepted. Decided by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05). Listed for the merge review.
 - Rationale: FR-008 and FR-010 require a failed check to block until it passes. Without this rule the write-scope check could fail and still let the out-of-scope change through. The operator keeps full authority over the tree between steps.
+
+## DEC-0004 — Proposal
+
+- **Observed during**: pilot (T075, `reviews/pilot.md`)
+- **Classification**: verification-scope
+- **Observation**: T075's interactive pilot checks need a person at a real terminal with the real agent TUIs and a scratch GitHub remote: P-3 (terminal restored after a resize, Ctrl-C and `/exit`), P-4 (Shift+Tab out of `dontAsk` is denied by the Chat hook without a prompt), P-5 (saving a `/permissions` rule is refused) and quickstart scenarios 1–7 with a real interactive session. A driving agent cannot run them.
+- **Proposed decision**: move these checks to #24 (cross-repository v1.0 qualification), which the operator runs. P-1, P-2 and the Codex sandbox nesting probe are done and stay recorded in `reviews/pilot.md`.
+- **Evidence**: every boundary these checks exercise has a deterministic test, including real `systemd-run` plus `bwrap` confinement (`StepCloseTests.test_real_scope_and_bwrap_step_is_confirmed_stopped`, `StepEntryTests.test_real_bwrap_keeps_protected_and_operator_paths_out_of_reach`, `StepEntryTests.test_real_bwrap_keeps_installed_skills_read_only`, `ForgeryTests.test_operator_records_are_out_of_reach_under_real_bwrap`, `StepEntryTests.test_chat_settings_deny_prompts_outside_dont_ask`); see the AC traceability in `tasks.md`.
+- **Affected artifacts**: `tasks.md` T075; `reviews/pilot.md`
+- **Status**: resolved below
+
+## DEC-0004 — Resolution
+
+- Decision: accepted. Decided by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05). Listed for the merge review.
+- Rationale: the checks add evidence about real TUIs, not coverage of a boundary: each boundary they touch is already tested deterministically, with real confinement. #24 runs the same checks across repositories with a person at the terminal, so they lose nothing by moving there.
