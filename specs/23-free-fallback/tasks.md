@@ -34,7 +34,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 **Purpose**: Pin the host facts the design leaves open (research R10) and build the offline test harness.
 
-- [ ] T001 Run the host pilot of research R10 (items 1, 2, 4 and 5) on the qualified operator host. Run every probe from the operator's terminal, not from inside a confined agent step. Record each command, its outcome and the context it ran in, in a "Pilot" section of `specs/23-free-fallback/evaluation.md`:
+- [X] T001 Run the host pilot of research R10 (items 1, 2, 4 and 5) on the qualified operator host. Run every probe from the operator's terminal, not from inside a confined agent step. Record each command, its outcome and the context it ran in, in a "Pilot" section of `specs/23-free-fallback/evaluation.md`:
   - versions and help: `codex --version`; `codex exec --help` (does it list `--oss`, `--local-provider` and `--json`?); `ollama --version`;
   - the exact `--config` key that pins the Ollama provider's base URL;
   - the `/api/version`, `/api/tags` and `/api/show` response fields for one local tag and one cloud tag (`remote_host`, `remote_model`, `size`, `digest`);
@@ -45,6 +45,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - quota-exhausted and provider-unavailable messages from `claude` and `codex`, with account, quota and credential details redacted. Each one comes from a captured run, the CLI's source or documentation, or an earlier run's logs (research R2), and its source is recorded. When a cause has no signature for an integration, list it.
 
   Record a discovery in `specs/23-free-fallback/decisions.md` and stop when any of these holds: the host cannot run the probes; the candidate is rejected outright (`--oss` missing, or the model cannot answer); no quota signature can be found for any integration; or the configuration layers cannot be established. Never switch backend silently.
+  Done 2026-10-06: items 1 to 9 and the 16k rerun in [evaluation.md](evaluation.md#pilot) (item 10: `qwen3:4b-16k` answered `ok` under `codex exec --oss --json`, exit 0, `turn.completed` input_tokens 11905). DEC-0002 to DEC-0004 are resolved.
 - [ ] T002 Create `tests/test_fallback.py` with the shared harness (depends on T001):
   - `StubOllama`, a loopback `http.server` on an ephemeral `127.0.0.1` port that serves configurable `/api/version`, `/api/tags` and `/api/show` responses, with an optional delay, and records every request;
   - helpers that write fake `claude` and `codex` executables into a temporary `PATH` directory. They record argv, environment, `CODEX_HOME` contents and prompt to a file, and print configurable output (including `--json` event streams) and exit codes;
@@ -124,20 +125,22 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
     - `test_fallback_runs_under_same_confinement`: Autonomous; the same `confined_argv` call as the primary;
     - `test_user_codex_config_not_read`: the user's `~/.codex/config.toml` defines `mcp_servers`, a `notify` program and a default `profile`. The fake Codex sees a `CODEX_HOME` that is not the user's, is empty at start and is removed after the attempt. No MCP server or notify program from the user configuration is started.
 - [ ] T011 [US1] Implement `classify(integration, exit_code, blocked, contained, tail, *, cli_found)` in `tools/spec_workflow/fallback.py` per [data-model.md](data-model.md#normalized-cause) (depends on T001, T010). It checks reserved wrapper exit codes and the blocking status first, then the per-integration signature tables pinned from T001, matched only against the last 64 KiB of stdout and stderr. Anything unmatched is `unrecognized`.
+- [ ] T037 [US1] Add `ProbeContextTests` to `tests/test_fallback.py` (depends on T010; tests first, so T013 depends on this task): against a stub Ollama, `/api/show` with `num_ctx 16384` or more passes; `num_ctx 4096`, a missing `num_ctx` and an unparsable one each refuse as `incompatible-capability` with the detail `served context below 16384` or `served context unknown` [FR-006, DEC-0004]. The stub shape comes from [evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06) item 10.
 - [ ] T012 [US1] Implement the invocation helpers in `tools/spec_workflow/fallback.py` (depends on T011):
   - `codex_prompt`;
   - `fallback_argv`: research R6, with the `--config` key recorded in T001;
   - `fallback_env(env, codex_home)`: `autonomy.confined_env(env, None)` minus the three OSS variables, with `CODEX_HOME=codex_home`;
   - `permission_mismatch(argv, env, codex_home)`, against the canonical headless Codex profile: `workspace-write`, `network_access=false`, `writable_roots=[]`, no `FORBIDDEN` token; no extra `--sandbox`, `--add-dir`, `--dangerously-*` or `--profile`; no `-c`/`--config` key outside the allowlist; no environment variable beyond `confined_env` except `CODEX_HOME` equal to `codex_home`;
   - `parse_events`: raises `EventError` on an unparsable stream; `complete` only when every turn reported usage.
-- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt)` in `tools/spec_workflow/fallback.py` (depends on T012). It runs research R5 checks 5 to 11 in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
+- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt)` in `tools/spec_workflow/fallback.py` (depends on T012, T037). It runs research R5 checks 5 to 11 in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
   1. the endpoint is a loopback literal;
   2. `GET /api/version`;
   3. `GET /api/tags` lists the exact name with a nonzero size and digest;
   4. there is no `remote_host`/`remote_model` in the tag entry or in `POST /api/show`, and no cloud tag;
   5. a trusted `codex` via `autonomy.trusted_program`, whose `codex exec --help` lists `--oss` and `--local-provider`; and, when `codex_prompt(prompt)` starts with `$<command>`, the project's Codex skill for that command at the path T001 recorded (a regular file inside `root`, checked with `lstat`, never followed through a symlink); a missing skill refuses as `incompatible-capability` with the detail `codex skill <command> is not installed`;
   6. Codex's sandbox starts: `autonomy.codex_sandbox_nests` for Autonomous, and for human-gated the same `codex sandbox` probe without bubblewrap, added as a helper in `tools/spec_workflow/autonomy.py` if none exists;
-  7. no Codex configuration layer outside the private home exists among those T001 found, and the layer list is known.
+  7. no Codex configuration layer outside the private home exists among those T001 found, and the layer list is known;
+  8. the model's served context is at least `MIN_SERVED_CONTEXT` (16384; the pilot's trivial prompt needed 11905 input tokens), read from `POST /api/show` `parameters` (`num_ctx NNNN`); a missing `num_ctx`, which means the server default, counts as unknown and refuses (T037, DEC-0004).
 
   It returns the fixed refusal reason with a fixed detail phrase, or `None`.
 - [ ] T014 [US1] Wire the selected path into `tools/spec_workflow/agent.py` (depends on T013):
@@ -367,7 +370,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 - Tests are written first and fail before implementation.
 - `fallback.py` comes before the `agent.py` integration.
-- Tasks that write the same file are chained by explicit dependencies: `tests/test_fallback.py` (T002, T006, T008, T010, T015, T018, T024, T034), `tools/spec_workflow/fallback.py` (T007, T009, T011, T012, T013, T017, T019), `tools/spec_workflow/agent.py` (T014, T016, T020), `tools/spec_workflow/autonomy.py` (T009, T013, T022, T027) and `tools/spec_workflow/ledger.py` (T004, T023).
+- Tasks that write the same file are chained by explicit dependencies: `tests/test_fallback.py` (T002, T006, T008, T010, T037, T015, T018, T024, T034), `tools/spec_workflow/fallback.py` (T007, T009, T011, T012, T013, T017, T019), `tools/spec_workflow/agent.py` (T014, T016, T020), `tools/spec_workflow/autonomy.py` (T009, T013, T022, T027) and `tools/spec_workflow/ledger.py` (T004, T023).
 
 ### Parallel Opportunities
 
@@ -408,12 +411,13 @@ Wave 6:
 
 Wave 7:
   T011  [US1] classify (depends on T001, T010)
+  T037  [US1] Served-context probe tests (depends on T010)
 
 Wave 8:
   T012  [US1] argv, env, private CODEX_HOME, permission comparison, events (depends on T011)
 
 Wave 9:
-  T013  [US1] Probes, config layers, deadline (depends on T012)
+  T013  [US1] Probes, config layers, served context, deadline (depends on T012, T037)
 
 Wave 10:
   T014  [US1] Wrapper selected path (depends on T013)

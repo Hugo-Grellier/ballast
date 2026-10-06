@@ -5,7 +5,7 @@ How to show the feature works. Behavior is described in [contracts/](contracts/)
 ## Prerequisites
 
 - Fast gate: `uv`, Python 3.13. CI runs the offline tests below.
-- Full local gate and pilot: the qualified Linux host with a systemd user session, `bwrap`, the Codex CLI with `--oss`, Ollama on `127.0.0.1:11434` with `qwen3:4b` pulled, the Spec Kit CLI.
+- Full local gate and pilot: the qualified Linux host with a systemd user session, `bwrap`, the Codex CLI with `--oss`, Ollama on `127.0.0.1:11434` with a local variant of `qwen3:4b` with `PARAMETER num_ctx 16384` (for example `qwen3:4b-16k`) created, the Spec Kit CLI.
 
 ## Offline gate
 

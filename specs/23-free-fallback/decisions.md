@@ -81,3 +81,13 @@
   2. Qualify a different, larger-context local model. The operator pulls it, and the pilot reruns with that tag. R1 and the quickstart name the new tag.
   3. Reject the candidate for now: record that no zero-cost fallback qualifies on this host and close the feature with evidence.
 - **Needs**: an operator resolution and a host change (options 1 or 2) before T001 is ticked. T001 stays open and the implement step does not continue.
+
+## DEC-0004 — Resolution
+
+- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The model variant is an operator host action, done 2026-10-06.
+- **Resolution**: option 1, adapted. The operator created `qwen3:4b-16k` (`FROM qwen3:4b`, `PARAMETER num_ctx 16384`) rather than changing the server setting. It answers under Codex ([evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06)). The qualified candidate is a local model variant whose served context is at least 16384 tokens. Research R5 gains check 11a, which reads `num_ctx` from `/api/show` `parameters` and refuses a model below the minimum or with no `num_ctx`. Tasks T037 (tests first) and T013 add it. No boundary widens.
+
+## DEC-0002 — Resolution
+
+- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review.
+- **Resolution**: option 1. The operator ran the T001 probes from the host shell and the results are in the Pilot section of `evaluation.md` (items 1 to 10). No spec, plan or task change from this decision.

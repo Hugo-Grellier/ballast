@@ -29,7 +29,7 @@ The fallback reuses the primary attempt's code path: scope, subreaper, bubblewra
 
 **Language/Version**: Python ≥ 3.11 standard library only, run under `python3 -I -S` (workflow tools) and the wrapper's existing interpreter flags.
 
-**Primary Dependencies**: None new in Python. Runtime, optional and operator-installed: the Codex CLI with `--oss`/`--local-provider`/`--json`, and Ollama serving on loopback. Neither is installed or downloaded by Ballast. `urllib.request` for three loopback probe requests.
+**Primary Dependencies**: None new in Python. Runtime, optional and operator-installed: the Codex CLI with `--oss`/`--local-provider`/`--json`, and Ollama serving on loopback. The model must be served with a context of at least 16384 tokens (research R5 check 11a). Neither is installed or downloaded by Ballast. `urllib.request` for three loopback probe requests.
 
 **Storage**: Files only. New `fallback.json` in the run's operator directory (`$XDG_STATE_HOME/ballast/<key>/runs/<run>/`); new `usage.json` in a fallback step's log directory; optional fields in `steps.jsonl` and the step's `meta.json`; additive `route` enum values and fields in the ledger (schema stays 1). See [data-model.md](data-model.md).
 
