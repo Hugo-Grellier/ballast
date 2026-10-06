@@ -770,6 +770,49 @@ class PolicyTests(AutonomyCase):
 class GitHelperTests(AutonomyCase):
     """Hardened Git, tree digests and the configuration scans."""
 
+    def test_digest_refuses_embedded_repositories(self) -> None:
+        """PR #85 review: `git add --all` would record a step's repository."""
+        make_submodule(self)
+        autonomy.tree_digest(self.root)  # an initialized submodule is fine
+        artifacts.worktree_tree(self.root)
+        ledger.implementation_tree(self.root)
+
+        def repository(path: Path) -> Path:
+            path.mkdir(exist_ok=True)
+            for args in (("init", "-q"), ("commit", "-q", "--allow-empty", "-m", "x")):
+                subprocess.run(["git", *args], cwd=path, check=True)  # noqa: S603, S607
+            return path
+
+        forged = repository(self.base / "forged")
+        pointer = (self.root / "sub/.git").read_text()
+        cases = {
+            "new": lambda: repository(self.root / "new"),
+            "broken": lambda: [
+                (self.root / f"broken/{n}").write_text("x") for n in (".git", "f")
+            ],
+            # A step populating a submodule the operator never initialized.
+            "sub": lambda: (self.root / "sub/.git").write_text(
+                f"gitdir: {forged}/.git\n"
+            ),
+        }
+        for name, plant in cases.items():
+            with self.subTest(name=name):
+                (self.root / name).mkdir(exist_ok=True)
+                plant()
+                try:
+                    with self.assertRaisesRegex(autonomy.AutonomyError, f": {name}$"):
+                        autonomy.tree_digest(self.root)
+                    with self.assertRaisesRegex(artifacts.ContractError, f": {name}$"):
+                        artifacts.worktree_tree(self.root)
+                    with self.assertRaisesRegex(ledger.LedgerError, f": {name}$"):
+                        ledger.implementation_tree(self.root)
+                finally:
+                    if name == "sub":
+                        (self.root / "sub/.git").write_text(pointer)
+                    else:
+                        shutil.rmtree(self.root / name)
+        autonomy.tree_digest(self.root)
+
     def test_digest_ignores_protected_inputs_and_exclusions(self) -> None:
         before = autonomy.tree_digest(self.root)
         (self.root / "ballast.toml").write_text("changed = true\n")
@@ -1583,6 +1626,33 @@ class ChatRecordTests(AutonomyCase):
             autonomy.set_status(autonomous, "active")
 
 
+def make_submodule(case: AutonomyCase, *, nested: bool = False) -> None:
+    """Add an initialized submodule `sub` (with `sub/inner` when nested)."""
+
+    def run(cwd: Path, *args: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "-c", "protocol.file.allow=always", *args],  # noqa: S607
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+        )
+
+    sources = []
+    for name in ("inner", "outer"):
+        source = case.base / f"{name}-src"
+        source.mkdir()
+        run(source, "init", "-q")
+        (source / "f.txt").write_text(name)
+        run(source, "add", "f.txt")
+        if name == "outer" and nested:
+            run(source, "submodule", "add", "-q", str(sources[0]), "inner")
+        run(source, "commit", "-q", "-m", name)
+        sources.append(source)
+    run(case.root, "submodule", "add", "-q", str(sources[1]), "sub")
+    run(case.root, "submodule", "update", "-q", "--init", "--recursive")
+    run(case.root, "commit", "-q", "-m", "submodule")
+
+
 @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
 class RealConfinementTests(AutonomyCase):
     """Probes from inside a real bubblewrap sandbox."""
@@ -1691,6 +1761,23 @@ class RealConfinementTests(AutonomyCase):
         # Like the primary checkout's read-only `.git`: the wrapper commits.
         add = self.confined("git", "add", "new.txt", root=linked)
         self.assertNotEqual(add.returncode, 0)
+
+    def test_submodule_pointers_and_admin_files_are_read_only(self) -> None:
+        """PR #85 review: a submodule's `.git` is the same pointer, one level down."""
+        make_submodule(self, nested=True)
+        modules = self.root / ".git/modules"
+        for target in (
+            self.root / "sub/.git",
+            self.root / "sub/inner/.git",
+            modules / "sub/config",
+            modules / "sub/HEAD",
+            modules / "sub/modules/inner/config",
+        ):
+            with self.subTest(target=target):
+                before = target.read_text()
+                self.assertNotEqual(self.write(target), 0)
+                self.assertEqual(target.read_text(), before)
+        self.assertEqual(self.write(self.root / "sub/f.txt"), 0)
 
     def test_agent_home_writes_do_not_persist(self) -> None:
         claude = autonomy.agent_homes(Path.home(), dict(os.environ))[0]
@@ -2441,6 +2528,35 @@ class PublisherTests(AutonomyCase):
         self.assertEqual(result["category"], category, result)
         self.assertIn(text, result["message"])
         self.assertFalse((self.gh_dir / "pr-body.md").exists())
+
+    def embed(self) -> None:
+        """Plant the reviewer's scenario: a step-made repository with a program."""
+        evil = self.root / "src/evil"
+        evil.mkdir()
+        for args in (
+            ("init", "-q"),
+            ("commit", "-q", "--allow-empty", "-m", "x"),
+            ("config", "core.fsmonitor", f"touch {self.base / 'pwned'}; false"),
+        ):
+            subprocess.run(["git", *args], cwd=evil, check=True, capture_output=True)  # noqa: S603, S607
+
+    def test_embedded_repository_is_refused(self) -> None:
+        head = self.git("rev-parse", "HEAD")
+        self.embed()
+        self.refused("postcondition", "embedded Git repository: src/evil")
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
+        self.assertFalse((self.base / "pwned").exists())
+
+    def test_publisher_refuses_an_embedded_repository_itself(self) -> None:
+        """Even past the checked-tree comparison, the staged gitlink is refused."""
+        head = self.git("rev-parse", "HEAD")
+        checked = autonomy.read_run(self.root, "run42")["checked_tree"]
+        self.embed()
+        with patch.object(autonomy, "checked_digest", return_value=checked):
+            self.refused("postcondition", "embedded Git repository: src/evil")
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
 
     def test_changed_tree_is_refused(self) -> None:
         (self.root / "src/late.py").write_text("x")

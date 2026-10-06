@@ -477,6 +477,16 @@ def worktree_tree(root: Path) -> str:
             shutil.copyfile(index, temporary)
         env = {**os.environ, "GIT_INDEX_FILE": str(temporary)}
         _git(root, "add", "--all", "--", ".", env=env)
+        try:
+            base = _git(root, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+        except ContractError:
+            base = None
+        try:
+            autonomy.refuse_embedded(
+                root, base, lambda *args: _git(root, *args, env=env)
+            )
+        except autonomy.AutonomyError as error:
+            raise ContractError(str(error)) from error
         return _git(root, "write-tree", env=env)
 
 
