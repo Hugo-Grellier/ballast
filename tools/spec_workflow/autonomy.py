@@ -1948,9 +1948,7 @@ def codex_homes(home: Path, env: dict[str, str]) -> list[Path]:
     return list(dict.fromkeys((selected, home / ".codex")))
 
 
-def agent_homes(home: Path, env: dict[str, str]) -> list[Path]:
-    """Agent CLI homes and caches that get a throwaway overlay."""
-    return [*claude_homes(home, env), *codex_homes(home, env), home / ".cache"]
+AGENT_HOMES = {"claude": claude_homes, "codex": codex_homes}
 
 
 def _without_refresh_tokens(value: object) -> object:
@@ -2214,6 +2212,85 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
+def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
+    """Refuse a home of one CLI inside the other's: one mount would reveal it."""
+    claude, codex = (homes(home, env) for homes in AGENT_HOMES.values())
+    for path in claude:
+        for other in codex:
+            if path.is_relative_to(other) or other.is_relative_to(path):
+                message = (
+                    f"agent homes {path} and {other} are nested: give Claude "
+                    "and Codex separate home directories"
+                )
+                raise AutonomyError(message, "ineligible")
+
+
+def _agent_home_binds(
+    home: Path, env: dict[str, str], private: Path, integration: str | None
+) -> list[str]:
+    """Show a step only its own CLI's homes and login; empty the others (#81).
+
+    Its homes and the caches get a throwaway overlay and its login a copy
+    without refresh tokens; only a Claude step gets a copy of
+    `~/.claude.json`, which can hold an API key.
+    """
+    args: list[str] = []
+    _refuse_nested_agent_homes(home, env)
+    own = AGENT_HOMES[integration](home, env) if integration else []
+    # bwrap applies mounts in order and the later one wins: overlays first,
+    # the hiding tmpfs last, so a home inside ~/.cache stays hidden.
+    for path in [home / ".cache", *own]:
+        if path.is_dir() and not path.is_symlink():
+            args += ["--overlay-src", str(path), "--tmp-overlay", str(path)]
+    login, copy = {
+        "claude": (".credentials.json", "credentials"),
+        "codex": ("auth.json", "codex-auth"),
+    }.get(integration or "", ("", ""))
+    for index, path in enumerate(own):
+        if os.path.lexists(path / login):
+            agent = _agent_login(path / login, private / f"{copy}-{index}.json")
+            args += ["--ro-bind", agent, str(path / login)]
+    for homes in AGENT_HOMES.values():
+        for path in homes(home, env):
+            if path not in own and path.is_dir():
+                args += ["--tmpfs", str(path)]
+    return args + _claude_state_bind(home, private, integration)
+
+
+def _claude_state_bind(home: Path, private: Path, integration: str | None) -> list:
+    """Give a Claude step a throwaway `~/.claude.json`; hide it from the rest."""
+    settings = home / ".claude.json"
+    if integration != "claude":
+        # bwrap cannot mount over a link: bind the file it resolves to, and
+        # nothing for a dangling or non-regular target (it holds no content).
+        target = settings.resolve()
+        if os.path.lexists(settings) and target.is_file():
+            return ["--ro-bind", "/dev/null", str(target)]
+        return []
+    if not settings.is_file() or settings.is_symlink():
+        return []
+    shutil.copyfile(settings, private / "claude.json")
+    return ["--bind", str(private / "claude.json"), str(settings)]
+
+
+def _refuse_credentials_in_worktree(
+    root: Path, home: Path, env: dict[str, str]
+) -> None:
+    """Refuse a credential path inside the worktree: `--bind root root` exposes it."""
+    inside = Path(root).resolve()
+    paths = [home, home / ".netrc"]
+    for homes in AGENT_HOMES.values():
+        paths += homes(home, env)
+    paths += [Path(env[name]) for name in CREDENTIAL_LOCATIONS if env.get(name)]
+    for path in paths:
+        if path.resolve().is_relative_to(inside):
+            message = (
+                f"{path} is inside the worktree {inside}, which would expose "
+                "it to the step: move it outside the checkout"
+            )
+            raise AutonomyError(message, "ineligible")
+
+
 def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     root: Path,
     command: list[str],
@@ -2224,15 +2301,19 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     home: Path | None = None,
     interactive_pty: bool = False,
     readonly_extra: tuple[str, ...] = (),
+    integration: str | None,
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
-    `private` is a wrapper-owned temporary directory for the per-step copies
-    of `~/.claude.json` and the Claude and Codex logins (without refresh
-    tokens). Agent homes and caches get throwaway overlays, credential paths
-    are hidden, and the agent cannot reach the operator's processes, user bus
-    or runtime sockets. Pass the operator's environment, not
-    `confined_env()`'s: it names the credential locations to hide.
+    `integration` is the agent CLI the step runs, or None for a step that
+    runs none (check commands). Only its homes get a throwaway overlay, with
+    its login (without refresh tokens) and, for Claude, `~/.claude.json`
+    copied into `private`, a wrapper-owned temporary directory; every other
+    agent home is emptied and `~/.claude.json` hidden (#81). Caches get a
+    throwaway overlay, credential paths are hidden, and the agent cannot
+    reach the operator's processes, user bus or runtime sockets. Pass the
+    operator's environment, not `confined_env()`'s: it names the credential
+    locations to hide (and confined_env() drops the other CLI's keys).
 
     `readonly_extra` names checkout paths (such as `.claude`) bound read-only
     when they exist. `interactive_pty=True` omits `--new-session`, and only a
@@ -2240,6 +2321,9 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     terminal, passes it (#20 D-3): TIOCSTI then reaches only the agent's own
     pty. Every other caller keeps `--new-session`.
     """
+    if integration is not None and integration not in AGENT_HOMES:
+        message = f"unknown integration {integration!r}"
+        raise ValueError(message)
     extra = []
     for name in readonly_extra:
         parts = Path(name).parts
@@ -2256,6 +2340,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         raise AutonomyError(message, "ineligible")
     env = dict(os.environ if env is None else env)
     home = home or Path.home()
+    _refuse_credentials_in_worktree(root, home, env)
     args = [
         bwrap,
         "--ro-bind",
@@ -2292,24 +2377,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         path = home / name
         if os.path.lexists(path):
             args += ["--ro-bind", "/dev/null", str(path)]
-    for path in agent_homes(home, env):
-        if path.is_dir() and not path.is_symlink():
-            args += ["--overlay-src", str(path), "--tmp-overlay", str(path)]
-    logins = [
-        (claude / ".credentials.json", f"credentials-{index}.json")
-        for index, claude in enumerate(claude_homes(home, env))
-    ] + [
-        (codex / "auth.json", f"codex-auth-{index}.json")
-        for index, codex in enumerate(codex_homes(home, env))
-    ]
-    for login, name in logins:
-        if os.path.lexists(login):
-            args += ["--ro-bind", _agent_login(login, private / name), str(login)]
-    settings = home / ".claude.json"
-    if settings.is_file() and not settings.is_symlink():
-        copy = private / "claude.json"
-        shutil.copyfile(settings, copy)
-        args += ["--bind", str(copy), str(settings)]
+    args += _agent_home_binds(home, env, private, integration)
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature)
     args += _installed_skill_binds(root)
@@ -2378,19 +2446,21 @@ def confinement_self_test(root: Path, *, env: dict[str, str] | None = None) -> N
         targets.append(str(home / ".config/.ballast-probe"))
     if (root / ".specify").is_dir():
         targets.append(str(root / ".specify/.ballast-probe"))
-    claude = agent_homes(home, env)[0]
+    claude = claude_homes(home, env)[0]
     persist = claude / ".ballast-probe"
     payload = json.dumps(
         [targets, str(persist), env.get("XDG_RUNTIME_DIR", ""), os.getpid()]
     )
     state_dir(root).mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix="ballast-confine-") as private:
+        # A Claude step's homes: the probe checks their overlay is throwaway.
         argv = confined_argv(
             root,
             [python, "-I", "-S", "-c", PROBE, payload],
             private=Path(private),
             env=env,
             home=home,
+            integration="claude",
         )
         try:
             result = subprocess.run(  # noqa: S603 - resolved bwrap, argument list
@@ -2447,7 +2517,9 @@ def codex_sandbox_nests(root: Path, *, env: dict[str, str] | None = None) -> boo
     ]
     with tempfile.TemporaryDirectory(prefix="ballast-confine-") as private:
         try:
-            argv = confined_argv(root, command, private=Path(private), env=env)
+            argv = confined_argv(
+                root, command, private=Path(private), env=env, integration="codex"
+            )
             argv.insert(argv.index("--"), "--unshare-net")
             result = subprocess.run(  # noqa: S603 - resolved bwrap, argument list
                 argv,
