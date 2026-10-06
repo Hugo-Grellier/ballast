@@ -560,13 +560,15 @@ point. Every block names its class, printed as
 | exhausted limits | `limit` (the agent-step limit, the wall-time limit, the three fix cycles, or the two draft retries) |
 | unsafe uncertainty | `decision`, `postcondition`, `tamper`, `unfinished-step`, `interrupted`, `upstream-sync` |
 
-A confined Claude step reads the operator's login without its refresh token,
-so it can never rotate the operator out of their session. When the access token
-expires during a step, the step stops with a `credential` block: sign in again
-outside the sandbox (run `claude` once, or `claude /login`), then
-`ballast run resume RUN_ID` re-enters at the failed step. Every Claude home a
-step could read gets this treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude` when
-both exist. A human-gated or Chat step that hits the same error fails with
+A confined Claude or Codex step reads the operator's login without its refresh
+token, so it can never rotate the operator out of their session. When the
+access token expires during a step, the step stops with a `credential` block:
+sign in again outside the sandbox (for Claude, run `claude` once, or
+`claude /login`; for Codex, `codex login`), then `ballast run resume RUN_ID`
+re-enters at the failed step. Every agent home a step could read gets this
+treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude`, `$CODEX_HOME` and `~/.codex`,
+when both exist. A Codex API-key login has no refresh token and keeps working.
+A human-gated or Chat step that hits the same error fails with
 `Blocked (credential)` and the same remedy.
 
 **Fix loop.** After implementation the trusted runner runs the `[checks]`

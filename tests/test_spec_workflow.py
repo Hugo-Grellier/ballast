@@ -649,6 +649,39 @@ class AgentWrapperTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 6)
                 self.assertIn("claude /login", result.stderr)
 
+    def test_codex_login_failure_is_reported_as_an_authentication_block(
+        self,
+    ) -> None:
+        """#76: Codex's own refresh and 401 errors become the same exit."""
+        for message in (
+            (
+                "ERROR: Failed to refresh token: 400 Bad Request: Invalid "
+                "'refresh_token': empty string."
+            ),
+            (
+                "ERROR: Your access token could not be refreshed because your "
+                "refresh token was already used. Please log out and sign in again."
+            ),
+            (
+                "ERROR: unexpected status 401 Unauthorized: Missing bearer or "
+                "basic authentication in header, url: https://api.openai.com/v1/r"
+            ),
+        ):
+            with self.subTest(message=message):
+                result = self.run_wrapper(
+                    "codex",
+                    "exec",
+                    "$speckit-implement",
+                    FAKE_STDOUT=message,
+                    FAKE_EXIT="1",
+                )
+                self.assertEqual(result.returncode, 6)
+                self.assertIn("codex login", result.stderr)
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-implement", FAKE_STDOUT="boom", FAKE_EXIT="1"
+        )
+        self.assertEqual(result.returncode, 1)
+
     def test_failed_attempt_leaves_no_login_copy(self) -> None:
         """#65 SEC-002: the private login copy is removed when the step raises."""
         sys.path.insert(0, str(ROOT / "tools/spec_workflow"))

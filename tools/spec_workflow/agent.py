@@ -8,7 +8,7 @@ EXECUTABLE at `bin/claude` / `bin/codex` (symlinks to this file), which:
 - add the bounded permission model (never a permission or sandbox bypass);
 - tee stdout/stderr to the terminal and to ignored run state;
 - fail the step when the agent reports `RECONCILE_STATUS: BLOCKED_*`;
-- exit EXIT_AUTH, with the remedy, when the Claude CLI cannot authenticate;
+- exit EXIT_AUTH, with the remedy, when the agent CLI cannot authenticate;
 - fail the step when the agent changed run state, workflow machinery, their
   bytecode, or the checkout's virtual environment;
 - stop every process the agent left behind before that check (Linux child
@@ -69,14 +69,25 @@ from launcher import (  # noqa: E402
 NOFOLLOW_WRITE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
 
 HERE = Path(__file__).resolve().parent
-# The Claude CLI's own login errors (#65): its token expired or was refused.
-AUTH_FAILURE = re.compile(
-    rb"^(?:Failed to authenticate|Not logged in|Invalid API key)\b", re.MULTILINE
-)
-AUTH_REASON = (
-    "the claude CLI could not authenticate: its login expired or was refused. "
-    "Sign in again outside the sandbox (run `claude` once, or `claude /login`)"
-)
+# Each agent CLI's own login errors: its token expired or was refused (#65,
+# #76). Codex prints `ERROR: ` before a failed refresh or a refused request.
+AUTH_FAILURES = {
+    "claude": re.compile(
+        rb"^(?:Failed to authenticate|Not logged in|Invalid API key)\b", re.MULTILINE
+    ),
+    "codex": re.compile(
+        rb"^ERROR: (?:Failed to refresh token|Your (?:access token|authentication "
+        rb"session) could not be refreshed|unexpected status 401 Unauthorized)",
+        re.MULTILINE,
+    ),
+}
+AUTH_REASONS = {
+    "claude": "the claude CLI could not authenticate: its login expired or was "
+    "refused. Sign in again outside the sandbox (run `claude` once, or "
+    "`claude /login`)",
+    "codex": "the codex CLI could not authenticate: its login expired or was "
+    "refused. Sign in again outside the sandbox (run `codex login`)",
+}
 SETTINGS = HERE / "claude-settings.json"
 # The Chat-only additions to the headless rules (#20 contracts/step-runner.md).
 CHAT_SETTINGS = HERE / "claude-chat-settings.json"
@@ -991,7 +1002,7 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
 def _attempt(root: Path, **kwargs: object) -> tuple[int, dict]:
     """Run `_attempt_in` with a private directory that never outlives it.
 
-    The directory holds the step's copy of the Claude login (an access token),
+    The directory holds the step's copies of the agent logins (access tokens),
     so it is removed however the attempt ends (#65 SEC-002).
     """
     with tempfile.TemporaryDirectory(
@@ -1137,13 +1148,12 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         thread.join(None if contained else 1.0)
 
     reason = "wall-time limit exhausted during the step" if limit_hit else None
-    if (
-        integration == "claude"
-        and exit_code not in {0, EXIT_LIMIT, EXIT_INTERRUPTED}
-        and AUTH_FAILURE.search(b"".join(stdout + stderr))
-    ):
-        sys.stderr.write(f"spec workflow agent wrapper: {AUTH_REASON}\n")
-        exit_code, reason = EXIT_AUTH, AUTH_REASON
+    if exit_code not in {0, EXIT_LIMIT, EXIT_INTERRUPTED} and AUTH_FAILURES[
+        integration
+    ].search(b"".join(stdout + stderr)):
+        reason = AUTH_REASONS[integration]
+        sys.stderr.write(f"spec workflow agent wrapper: {reason}\n")
+        exit_code = EXIT_AUTH
     blocked = BLOCKING.findall(b"".join(stdout).decode("utf-8", "replace"))
     if exit_code == 0 and blocked:
         sys.stderr.write(

@@ -2518,6 +2518,14 @@ class HeadlessForgeryTests(ChatCase):
 
     def test_headless_login_failure_is_a_credential_block(self) -> None:
         """#65 SEC-003: Chat maps the wrapper's exit 6 like headless runs do."""
+        self.assert_credential_block(["claude", "-p"])
+
+    def test_headless_codex_login_failure_names_codex_login(self) -> None:
+        """#76: the remedy names the CLI that failed."""
+        text = self.assert_credential_block(["codex", "exec"])
+        self.assertIn("codex login", text)
+
+    def assert_credential_block(self, argv: list[str]) -> str:
         run_id = self.start()
         self.approve_in_process(run_id, "scope")
         result = self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
@@ -2527,17 +2535,19 @@ class HeadlessForgeryTests(ChatCase):
             "interrupted": False,
             "scope_stopped": True,
             "stopped_descendants": 0,
-            "argv": ["claude", "-p"],
+            "argv": argv,
             "error": None,
             "headless_code": agent.EXIT_AUTH,
         }
         with patch.object(chat, "_headless", lambda *_: dict(failed)):
             step = self.call(chat.run_step, self.root, run_id, "specify", None, [])
         self.assertEqual(step.code, chat.EXIT_BLOCKED, step.text)
-        self.assertIn(f"Blocked (credential): {agent.AUTH_REASON}", step.text)
+        reason = agent.AUTH_REASONS[argv[0]]
+        self.assertIn(f"Blocked (credential): {reason}", step.text)
         self.assertNotIn("exited with status", step.text)
         close = self.record(run_id).steps[-1]
         self.assertEqual((close["outcome"], close["block"]), ("failed", "credential"))
+        return step.text
 
     def test_headless_step_keeps_todays_argv(self) -> None:
         run_id = self.start()

@@ -832,6 +832,7 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["category"], "credential")
         self.assertIn(reason, block["condition"])
         self.assertIn("claude /login", block["recovery"])
+        self.assertIn("codex login", block["recovery"])  # #76
         self.assertIn("then resume", block["recovery"])
         # #65 SEC-006: resume re-enters at the failed step (#21).
         self.assertEqual(block["command"], f"ballast run resume {run_id}")
