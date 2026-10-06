@@ -8,7 +8,7 @@ This repository is the source of the standard. Projects pin a version and instal
 
 - [`specs/PRODUCT-SPEC.md`](specs/PRODUCT-SPEC.md) describes the users, problem, goals, and product boundaries.
 - [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) describes the repository structure and the conventions for template content.
-- [`tools/ballast`](tools/ballast) is the global command; [`tools/setup`](tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](tools/spec_workflow/) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](tools/feature_intake.py) is the GitHub intake helper, run as `ballast intake`.
+- [`tools/ballast`](tools/ballast) is the global command; [`tools/init`](tools/init) adopts a blank or established repository (`ballast init`) from the generic templates in [`templates/init/`](templates/init/); [`tools/setup`](tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](tools/spec_workflow/) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](tools/feature_intake.py) is the GitHub intake helper, run as `ballast intake`.
 - [`templates/policies/`](templates/policies/) are the base policies installed into `docs/policies/`; [`templates/skills/`](templates/skills/) are the `ballast-*` skills; [`templates/spec-kit/`](templates/spec-kit/) holds the feature workflow and Spec Kit templates.
 - [`templates/AGENTS.md`](templates/AGENTS.md) and [`templates/github/`](templates/github/) (PR template, Dependabot configuration, Conventional Commit PR-title workflow) are copy-once templates. Stack-specific CI stays in each project.
 - `profiles/` is reserved for curated combinations of templates and will be added later.
@@ -51,7 +51,29 @@ To develop the standard itself, install from a reviewed checkout of this reposit
 
 ## Installing the Spec Kit workflow
 
-`tools/setup` installs pinned Spec Kit sources and this standard's workflow tooling into a project. Everything it writes is rebuildable and git-ignored; the project commits only its own files. Projects reach it through one global command:
+`tools/setup` installs pinned Spec Kit sources and this standard's workflow tooling into a project. Everything it writes is rebuildable and git-ignored; the project commits only its own files. Projects reach it through one global command.
+
+### Adopting a repository with `ballast init`
+
+Once per machine, install the `ballast` command (see [Installing the Ballast CLI](#installing-the-ballast-cli)) and run `ballast doctor`. Then, from the root of a blank directory or an established repository:
+
+```bash
+ballast init                        # blank: asks for a one-line description and a stack
+ballast init --description "Billing service" --stack python   # no questions
+ballast trust                       # after reviewing what init wrote
+```
+
+`init` pins this CLI's own release (or `--ref REF`; on a rerun it keeps the existing pin), fetches that version and runs its `tools/init`:
+
+- It reads a fixed, size-bounded list of evidence files as data (manifests, lockfiles, `Makefile`, `.github/workflows/`, existing instructions, architecture documents, `docs/policies/project/`) and never runs a command it finds. Git runs with hooks, pager and fsmonitor disabled; a linked evidence file is skipped and reported, and a linked path init would write through refuses.
+- It creates only absent files: `ballast.toml` (CI steps and named manifest scripts become active `[checks]` with their evidence; inferred commands and every `extra_allow` suggestion stay commented), `.specify/memory/constitution.md`, `AGENTS.md` with a `CLAUDE.md` link (only when neither exists), and `docs/policies/project/testing.md` when CI evidence names a gate. Unknown values read `TO CONFIRM`. `git init` runs only when there is no repository.
+- The only change to an existing file is appending the ignore block to `.gitignore` when it is missing. Every other proposal (the Ballast section for an existing `AGENTS.md` or `CLAUDE.md`, a rule that un-ignores an installed path, new evidence on a rerun) goes into one ignored patch, `.ballast/init/proposed.patch`, which you may apply with `git apply`; the trusted preflight does not depend on it.
+- It installs through `ballast setup`'s own code and ends with a readiness report (instructions, ignored paths, pinned version, trust boundary, check commands) and the next action. A blank repository asks at most two questions; without a terminal, pass `--description` and `--stack` (`python`, `node`, `rust`, `go` or `neutral`).
+- It never records trust, commits, pushes, adds a remote or writes the copy-once GitHub files or stack CI; the report lists those with how to add them. A rerun changes no tracked file and reports the same readiness.
+
+A pinned version older than `init` makes the CLI refuse with the remedy; use the manual steps below.
+
+### Manual adoption
 
 1. Once per machine, install the `ballast` command (see [Installing the Ballast CLI](#installing-the-ballast-cli)) and run `ballast doctor`.
 2. Add `ballast.toml` at the project root. It pins the standard version (a tag or commit) and can extend the headless-agent permissions:
