@@ -266,19 +266,46 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
 
 
 def _installed_skills(root: Path) -> dict[str, str]:
-    """Hash the installed workflow skills and their `.claude/skills` links.
+    """Hash the installed workflow skills as the agent CLIs will resolve them.
 
     A human-gated run has no bwrap to keep them read-only, and a skill an
-    agent rewrites steers every later step (SEC-001, #66).
+    agent rewrites steers every later step (SEC-001, #66). Each parent is
+    recorded by type (a swapped-in link changes it), `skills/` by its full
+    entry list (an added sibling skill changes it), and a `.claude/skills`
+    link by the content of the target it resolves to, not by its text.
     """
     found: dict[str, str] = {}
+    roots = [(root / ".agents/skills").resolve(), (root / ".claude/skills").resolve()]
+    for name in (".agents", ".agents/skills", ".claude", ".claude/skills"):
+        parent = root / name
+        if parent.is_symlink():
+            found[name + "/"] = "link:" + str(parent.readlink())
+        elif parent.is_dir():
+            found[name + "/"] = "dir"
+        else:
+            found[name + "/"] = "absent"
+        if name.endswith("skills") and found[name + "/"] == "dir":
+            found[name + "/entries"] = json.dumps(
+                sorted(p.name for p in parent.iterdir())
+            )
     for parent in (root / ".agents/skills", root / ".claude/skills"):
         for pattern in ("ballast-*", "speckit-*"):
             for path in sorted(parent.glob(pattern)):
-                if path.is_symlink():
-                    found[str(path.relative_to(root))] = "link:" + str(path.readlink())
-                else:
+                key = str(path.relative_to(root))
+                if not path.is_symlink():
                     found.update(digests(root, [path], []))
+                    continue
+                target = path.resolve()
+                found[key] = "link:" + str(path.readlink())
+                if any(target.is_relative_to(r) for r in roots):
+                    found.update(
+                        {
+                            f"{key}->{k}": v
+                            for k, v in digests(root, [target], []).items()
+                        }
+                    )
+                else:
+                    found[key] += " outside:" + str(target)
     return found
 
 
@@ -1108,31 +1135,36 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
     except StepInProgressError as error:
         sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
         return EXIT_REFUSED, {}
-    protected = _protected_state(root, log_dir)
-    log_fd = os.open(log_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    logs = {name: _open_log(log_fd, name) for name in LOG_FILES}
-    meta_file = logs["meta.json"]
-    os.close(log_fd)
     in_progress = state_dir(root) / IN_PROGRESS
-    argv = [
-        systemd_run,
-        "--user",
-        "--scope",
-        "--quiet",
-        "--collect",
-        f"--unit={unit.removesuffix('.scope')}",
-        *scope_options,
-        "--",
-        *argv,
-    ]
-    stdout: list[bytes] = []
-    stderr: list[bytes] = []
-    process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-    )
+    try:
+        protected = _protected_state(root, log_dir)
+        log_fd = os.open(log_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        logs = {name: _open_log(log_fd, name) for name in LOG_FILES}
+        meta_file = logs["meta.json"]
+        os.close(log_fd)
+        argv = [
+            systemd_run,
+            "--user",
+            "--scope",
+            "--quiet",
+            "--collect",
+            f"--unit={unit.removesuffix('.scope')}",
+            *scope_options,
+            "--",
+            *argv,
+        ]
+        stdout: list[bytes] = []
+        stderr: list[bytes] = []
+        process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+    except BaseException:
+        # No agent exists yet, so nothing is left to be unsure about.
+        in_progress.unlink(missing_ok=True)
+        raise
     assert process.stdout is not None  # noqa: S101 - set by PIPE above
     assert process.stderr is not None  # noqa: S101 - set by PIPE above
     threads = [

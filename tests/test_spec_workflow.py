@@ -446,6 +446,13 @@ with open(os.environ["FAKE_ARGV"], "w") as handle:
 if os.environ.get("FAKE_TAMPER"):
     with open(os.environ["FAKE_TAMPER"], "w") as handle:
         handle.write('{"current_step_index": 99}')
+if os.environ.get("FAKE_RELINK"):
+    import shutil
+    path, _, target = os.environ["FAKE_RELINK"].partition("=")
+    shutil.rmtree(path)
+    os.symlink(target, path)
+if os.environ.get("FAKE_MKDIR"):
+    os.makedirs(os.environ["FAKE_MKDIR"])
 if os.environ.get("FAKE_IGNORE_INTERRUPT"):
     import signal, time
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -768,6 +775,70 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn("speckit-plan/extra.md", result.stderr)
+
+    def installed_skill(self) -> Path:
+        skill = self.root / ".agents/skills/ballast-x"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("good\n")
+        link = self.root / ".claude/skills/ballast-x"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("../../.agents/skills/ballast-x")
+        return skill
+
+    def test_redirecting_the_claude_skills_parent_fails_the_step(self) -> None:
+        """Review of #96: a parent link with identical link text must not pass."""
+        self.installed_skill()
+        evil = self.root / "e/.agents/skills/ballast-x"
+        evil.mkdir(parents=True)
+        (evil / "SKILL.md").write_text("evil\n")
+        (self.root / "e/v/skills").mkdir(parents=True)
+        (self.root / "e/v/skills/ballast-x").symlink_to(
+            "../../.agents/skills/ballast-x"
+        )
+        result = self.run_wrapper(
+            "codex",
+            "exec",
+            "$speckit-plan",
+            FAKE_RELINK=f"{self.root}/.claude/skills={self.root}/e/v/skills",
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".claude/skills", result.stderr)
+
+    def test_adding_a_sibling_skill_fails_the_step(self) -> None:
+        self.installed_skill()
+        result = self.run_wrapper(
+            "codex",
+            "exec",
+            "$speckit-plan",
+            FAKE_MKDIR=str(self.root / ".claude/skills/Ballast-review"),
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".claude/skills/entries", result.stderr)
+
+    def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
+        """Review of #96: nothing ran, so the marker must not strand the run."""
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        state = Path(self.env["XDG_STATE_HOME"]) / "ballast" / "x"
+        with (
+            patch.object(agent, "state_dir", return_value=state),
+            patch.object(agent, "_protected_state", side_effect=OSError("denied")),
+            TemporaryDirectory() as private,
+            self.assertRaises(OSError),
+        ):
+            agent._attempt_in(  # noqa: SLF001
+                self.root,
+                private=Path(private),
+                integration="codex",
+                argv=["codex"],
+                scope=("systemd-run", []),
+                record=None,
+                prompt="$speckit-plan",
+            )
+        self.assertFalse((state / "in-progress").exists())
 
     def test_concurrent_steps_never_share_the_marker(self) -> None:
         """SEC-009, #66: the second step refuses and the first marker survives."""
