@@ -2516,6 +2516,17 @@ class HeadlessForgeryTests(ChatCase):
         self.assertFalse(record.run["active_step"]["scope_stopped"])
         self.assertIn("scope_stopped", record.run["active_step"])
 
+    def test_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
+        """Review of #96: nothing ran, so the claimed marker is released."""
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        with (
+            patch.object(chat, "_write_settings", side_effect=OSError("denied")),
+            self.assertRaises(OSError),
+        ):
+            self.call(chat.run_step, self.root, run_id, "specify", None, [], typed="")
+        self.assertFalse((launcher.state_dir(self.root) / "in-progress").exists())
+
     def test_headless_login_failure_is_a_credential_block(self) -> None:
         """#65 SEC-003: Chat maps the wrapper's exit 6 like headless runs do."""
         self.assert_credential_block(["claude", "-p"])
@@ -2975,6 +2986,26 @@ class InterruptionTests(ChatCase):
         self.assertIn(f"step {step}", refused.err)
         self.assertEqual([s["entry"] for s in self.record(run_id).steps], ["start"])
         self._kill(agent_pid)
+
+    def test_late_close_never_overwrites_another_runs_marker(self) -> None:
+        """Review of #96: an unstoppable scope re-arms the marker exclusively."""
+        state = self.root / "state"
+        state.mkdir()
+        (state / launcher.IN_PROGRESS).write_text("other\n")
+        unit = "ballast-agent-run1-20260101T000000000000Z-specify-claude.scope"
+        run = SimpleNamespace(
+            root=self.root,
+            id="run1",
+            record={"active_step": {"step": "s", "phase": "specify", "unit": unit}},
+        )
+        with (
+            patch.object(launcher, "state_dir", return_value=state),
+            patch.object(launcher, "stop_scope", return_value=False),
+            patch.object(chat, "_closed", return_value=False),
+            self.assertRaises(chat.Refused),
+        ):
+            chat.late_close(run)
+        self.assertEqual((state / launcher.IN_PROGRESS).read_text(), "other\n")
 
 
 class ConcurrencyTests(ChatCase):

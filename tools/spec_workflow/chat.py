@@ -1426,9 +1426,9 @@ def late_close(run: Run) -> None:
     unit = active.get("unit")
     stopped = launcher.stop_scope(unit) if unit else True
     if not stopped:
-        marker = launcher.state_dir(run.root) / launcher.IN_PROGRESS
-        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        marker.write_text(str(unit) + "\n")
+        # Exclusive: another run's marker also blocks, so keep it as it is.
+        with contextlib.suppress(launcher.StepInProgressError):
+            launcher.claim_in_progress(launcher.state_dir(run.root), str(unit))
         message = (
             f"the processes of step {step} of run {run.id} could not be confirmed "
             "stopped; run `ballast discard-runs`"
@@ -1826,55 +1826,66 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
         settings = (
             f".specify/workflow-state/{run.id}/agents/{name}/claude-settings.json"
         )
-        if interactive and integration == "claude":
-            # Before the protected snapshot: the agent sees it read-only.
-            _write_settings(log_dir)
-        tree_before = current_manifest(run)
-        run.record["last_manifest"] = tree_before
-        protected = agent._protected_state(root, log_dir)  # noqa: SLF001
-        started_at = _now()
-        run.record["active_step"] = {
-            "step": name,
-            "phase": phase,
-            "unit": unit if interactive else None,
-            "started_at": started_at,
-        }
-        run.save()
-        line = _log_line(run)
-        start_entry = {
-            "step": name,
-            "entry": "start",
-            "phase": phase,
-            "review_kind": kind,
-            "driver": "interactive" if interactive else "headless",
-            "integration": integration,
-            "model": model or "unreported",
-            "role": role,
-            "tree_before": tree_before,
-            "started_at": started_at,
-            "log_line": line,
-        }
-        run.step_entry(start_entry)
-        step_id = (
-            REVIEW_KINDS[str(kind)]["step_id"]
-            if phase == "review"
-            else PHASES[phase]["step_id"]
-        )
-        _ledger(
-            run,
-            "step",
-            {
-                "action": "started",
-                "step_id": step_id,
-                "step_type": "command",
-                "log_line": line,
-            },
-        )
-        lock.describe(f"step {name}")
         if interactive:
-            marker = launcher.state_dir(root) / launcher.IN_PROGRESS
-            marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            marker.write_text(unit + "\n")
+            try:
+                launcher.claim_in_progress(launcher.state_dir(root), unit)
+            except launcher.StepInProgressError as error:
+                raise _refuse(
+                    run, "step", str(error), EXIT_REFUSED, phase=phase
+                ) from None
+        try:
+            if interactive and integration == "claude":
+                # Before the protected snapshot: the agent sees it read-only.
+                _write_settings(log_dir)
+            tree_before = current_manifest(run)
+            run.record["last_manifest"] = tree_before
+            protected = agent._protected_state(root, log_dir)  # noqa: SLF001
+            started_at = _now()
+            run.record["active_step"] = {
+                "step": name,
+                "phase": phase,
+                "unit": unit if interactive else None,
+                "started_at": started_at,
+            }
+            run.save()
+            line = _log_line(run)
+            start_entry = {
+                "step": name,
+                "entry": "start",
+                "phase": phase,
+                "review_kind": kind,
+                "driver": "interactive" if interactive else "headless",
+                "integration": integration,
+                "model": model or "unreported",
+                "role": role,
+                "tree_before": tree_before,
+                "started_at": started_at,
+                "log_line": line,
+            }
+            run.step_entry(start_entry)
+            step_id = (
+                REVIEW_KINDS[str(kind)]["step_id"]
+                if phase == "review"
+                else PHASES[phase]["step_id"]
+            )
+            _ledger(
+                run,
+                "step",
+                {
+                    "action": "started",
+                    "step_id": step_id,
+                    "step_type": "command",
+                    "log_line": line,
+                },
+            )
+            lock.describe(f"step {name}")
+        except BaseException:
+            # The agent has not started: nothing is left to be unsure about.
+            if interactive:
+                marker = launcher.state_dir(root) / launcher.IN_PROGRESS
+                marker.unlink(missing_ok=True)
+            raise
+        if interactive:
             result = _interactive(
                 run,
                 name,

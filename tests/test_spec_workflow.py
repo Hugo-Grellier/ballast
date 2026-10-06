@@ -446,6 +446,13 @@ with open(os.environ["FAKE_ARGV"], "w") as handle:
 if os.environ.get("FAKE_TAMPER"):
     with open(os.environ["FAKE_TAMPER"], "w") as handle:
         handle.write('{"current_step_index": 99}')
+if os.environ.get("FAKE_RELINK"):
+    import shutil
+    path, _, target = os.environ["FAKE_RELINK"].partition("=")
+    shutil.rmtree(path)
+    os.symlink(target, path)
+if os.environ.get("FAKE_MKDIR"):
+    os.makedirs(os.environ["FAKE_MKDIR"])
 if os.environ.get("FAKE_IGNORE_INTERRUPT"):
     import signal, time
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -575,6 +582,11 @@ class AgentWrapperTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def clear_marker(self) -> None:
+        """Clear the marker a tampering step keeps for the operator."""
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
+        (state / "in-progress").unlink(missing_ok=True)
 
     def argv(self) -> list[str]:
         return json.loads((self.root / "argv.json").read_text())
@@ -728,6 +740,7 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn(".specify/workflows/runs/run42/state.json", result.stderr)
+        self.clear_marker()
         untouched = self.run_wrapper("claude", "-p", "/speckit-plan")
         self.assertEqual(untouched.returncode, 0, untouched.stderr)
 
@@ -739,6 +752,107 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn("ballast.toml", result.stderr)
+
+    def test_rewriting_an_installed_skill_fails_the_step(self) -> None:
+        """SEC-001, #66: a human-gated step has no bwrap to keep skills read-only."""
+        skill = self.root / ".agents/skills/ballast-engineering-review/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("review carefully\n")
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(skill)
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(
+            ".agents/skills/ballast-engineering-review/SKILL.md", result.stderr
+        )
+
+    def test_adding_a_file_to_an_installed_skill_fails_the_step(self) -> None:
+        skill = self.root / ".agents/skills/speckit-plan"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("plan\n")
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(skill / "extra.md")
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn("speckit-plan/extra.md", result.stderr)
+
+    def installed_skill(self) -> Path:
+        skill = self.root / ".agents/skills/ballast-x"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("good\n")
+        link = self.root / ".claude/skills/ballast-x"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("../../.agents/skills/ballast-x")
+        return skill
+
+    def test_redirecting_the_claude_skills_parent_fails_the_step(self) -> None:
+        """Review of #96: a parent link with identical link text must not pass."""
+        self.installed_skill()
+        evil = self.root / "e/.agents/skills/ballast-x"
+        evil.mkdir(parents=True)
+        (evil / "SKILL.md").write_text("evil\n")
+        (self.root / "e/v/skills").mkdir(parents=True)
+        (self.root / "e/v/skills/ballast-x").symlink_to(
+            "../../.agents/skills/ballast-x"
+        )
+        result = self.run_wrapper(
+            "codex",
+            "exec",
+            "$speckit-plan",
+            FAKE_RELINK=f"{self.root}/.claude/skills={self.root}/e/v/skills",
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".claude/skills", result.stderr)
+
+    def test_adding_a_sibling_skill_fails_the_step(self) -> None:
+        self.installed_skill()
+        result = self.run_wrapper(
+            "codex",
+            "exec",
+            "$speckit-plan",
+            FAKE_MKDIR=str(self.root / ".claude/skills/Ballast-review"),
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".claude/skills/entries", result.stderr)
+
+    def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
+        """Review of #96: nothing ran, so the marker must not strand the run."""
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        state = Path(self.env["XDG_STATE_HOME"]) / "ballast" / "x"
+        with (
+            patch.object(agent, "state_dir", return_value=state),
+            patch.object(agent, "_protected_state", side_effect=OSError("denied")),
+            TemporaryDirectory() as private,
+            self.assertRaises(OSError),
+        ):
+            agent._attempt_in(  # noqa: SLF001
+                self.root,
+                private=Path(private),
+                integration="codex",
+                argv=["codex"],
+                scope=("systemd-run", []),
+                record=None,
+                prompt="$speckit-plan",
+            )
+        self.assertFalse((state / "in-progress").exists())
+
+    def test_concurrent_steps_never_share_the_marker(self) -> None:
+        """SEC-009, #66: the second step refuses and the first marker survives."""
+        state = Path(self.env["XDG_STATE_HOME"]) / "ballast"
+        result = self.run_wrapper("codex", "exec", "$speckit-plan")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (state,) = state.iterdir()
+        other = "ballast-agent-run7-20260101T000000000000Z-plan-claude.scope"
+        (state / "in-progress").write_text(other + "\n")
+        refused = self.run_wrapper("codex", "exec", "$speckit-plan")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("run run7", refused.stderr)
+        self.assertIn("20260101T000000000000Z-plan-claude", refused.stderr)
+        self.assertEqual((state / "in-progress").read_text().strip(), other)
 
     def test_planted_bytecode_fails_the_step(self) -> None:
         cache = self.root / ".ballast/spec_workflow/__pycache__"
@@ -862,6 +976,12 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, -signal.SIGKILL)
         (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
         self.assertTrue((state / "in-progress").exists())
+        # SEC-009: the leftover marker is never overwritten; only discarding
+        # the unfinished step clears it.
+        again = self.run_wrapper("codex", "exec", "$speckit-plan")
+        self.assertEqual(again.returncode, 2)
+        self.assertTrue((state / "in-progress").exists())
+        (state / "in-progress").unlink()
         clean = self.run_wrapper("codex", "exec", "$speckit-plan")
         self.assertEqual(clean.returncode, 0, clean.stderr)
         self.assertFalse((state / "in-progress").exists())
@@ -912,6 +1032,7 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertIn(".specify/extensions.yml", result.stderr)
         (self.root / "BALLAST_TAMPERED").unlink()
+        self.clear_marker()
         feature = self.run_wrapper(
             "codex",
             "exec",
