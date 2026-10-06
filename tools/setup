@@ -216,7 +216,7 @@ class RefusedError(RuntimeError):
 
     def __init__(self, reason: str, action: str) -> None:
         """Keep the reason and the operator's next action."""
-        super().__init__(f"{reason}. Next: {action}")
+        super().__init__(f"{printable(reason)}. Next: {action}")
 
 
 class StageFailedError(Exception):
@@ -225,10 +225,20 @@ class StageFailedError(Exception):
     def __init__(self, stage: str, cause: object, action: str = RETRY) -> None:
         """Name the stage, its cause and the operator's next action."""
         super().__init__(
-            f"{stage} failed: {str(cause).rstrip('.')}. The previous installation "
-            "was kept. "
+            f"{stage} failed: {printable(cause).rstrip('.')}. "
+            "The previous installation was kept. "
             f"Next: {action}"
         )
+
+
+def printable(text: object) -> str:
+    """Checkout text for display: control characters escaped (as draft_pr)."""
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in str(text))
+
+
+def say(line: str) -> None:
+    """Write one line of output, never a forged line or terminal sequence."""
+    sys.stdout.write(printable(line) + "\n")
 
 
 def refuse(reason: str, action: str) -> NoReturn:
@@ -363,10 +373,10 @@ class Setup:
         try:
             state = launcher.state_dir(self.root)
         except OSError as error:
-            sys.stdout.write(f"unverified: {error}\n")
+            say(f"unverified: {error}")
             return False
         status = self.status(state)
-        sys.stdout.write(status + "\n")
+        say(status)
         return status == "current"
 
     def status(self, state: Path) -> str:
@@ -411,9 +421,7 @@ class Setup:
                     "review the checkout, then run `ballast discard-runs`",
                 )
             if self.current(state):
-                sys.stdout.write(
-                    f"nothing changed: {self.ref} is set up and verified\n"
-                )
+                say(f"nothing changed: {self.ref} is set up and verified")
                 return
             self.check_links(PARENTS)
             self.check_ignored()
@@ -421,7 +429,7 @@ class Setup:
         finally:
             os.close(lock)
         if reused:
-            sys.stdout.write(f"Reused the previous installation ({self.ref})\n")
+            say(f"Reused the previous installation ({self.ref})")
         sys.stdout.write(
             f"Spec Kit {VERSION} and the standard are set up.\n"
             "Review the changed protected inputs, then run `ballast trust` "
@@ -696,7 +704,7 @@ class Setup:
             return self.copy_verified(self.root / KEPT, kept, stage) is None
         except OSError as error:
             message = f"the kept installation is unreadable: {error}"
-            sys.stdout.write(f"full installation: {message}\n")
+            say(f"full installation: {message}")
             return False
 
     def primary(self) -> Path | None:
@@ -755,7 +763,7 @@ class Setup:
             if held is not None:
                 os.close(held)
         if reason:
-            sys.stdout.write(f"full installation: {reason}\n")
+            say(f"full installation: {reason}")
             return False
         sys.stdout.write("Copied the installation from the primary checkout\n")
         return True
@@ -1086,7 +1094,7 @@ class Setup:
                 line = f"the previous installation{shown} is in place"
             else:
                 line = "no installation was in place before it; none is now"
-        sys.stdout.write(recovered + line + "\n")
+        say(recovered + line)
         return complete and preparing
 
     def discard_work(self, *, keep_kept: bool, only: str | None = None) -> None:
@@ -1289,11 +1297,6 @@ def merge_permissions(settings: dict, config: dict) -> dict:
             raise ValueError(message)
         permissions[key] = list(dict.fromkeys([*permissions[key], *rules]))
     return settings
-
-
-def printable(text: object) -> str:
-    """Show checkout text with control characters replaced by `?` (SEC2-004)."""
-    return "".join(c if c.isprintable() else "?" for c in str(text))
 
 
 def executables(root: Path, files: dict[str, str]) -> list[str]:
@@ -1604,7 +1607,7 @@ def cli(argv: list[str]) -> int:
         sys.stderr.write(f"setup: {failure}\n")
         return EXIT_FAILED
     except (RuntimeError, ValueError, OSError) as error:
-        sys.stderr.write(f"setup: {error}\n")
+        sys.stderr.write(f"setup: {printable(error)}\n")
         return EXIT_FAILED
     return 0
 
