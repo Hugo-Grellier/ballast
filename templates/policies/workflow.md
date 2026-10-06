@@ -49,7 +49,7 @@ Use independent reviewers where possible. A reviewer reports concrete findings w
 | Normal feature | [Engineering/correctness](../../.agents/skills/ballast-engineering-review/SKILL.md) + [test](../../.agents/skills/ballast-test-review/SKILL.md) |
 | Authentication, authorization, access rules, user-facing search/retrieval, secrets, agent authority | Engineering + test + [security](../../.agents/skills/ballast-security-review/SKILL.md) |
 | Resource identity or architecture boundary | Engineering + test + architecture review against the relevant ADR or architecture section; add security if disclosure changes |
-| Significant dependency or lockfile change | [Dependency evaluation](../../.agents/skills/ballast-dependency-evaluation/SKILL.md); [migration](../../.agents/skills/ballast-dependency-migration/SKILL.md) for foundational replacement |
+| Significant dependency, lockfile or GitHub Action change | [Dependency evaluation](../../.agents/skills/ballast-dependency-evaluation/SKILL.md); [migration](../../.agents/skills/ballast-dependency-migration/SKILL.md) for foundational replacement |
 | Database migration | [Database migration](../../.agents/skills/ballast-database-migration/SKILL.md) + test; add security for permissions or access rules |
 | User, configuration or API behavior | [Documentation](../../.agents/skills/ballast-documentation-review/SKILL.md) |
 | Significant feature before PR | Spec Kit converge + [spec reconciliation](../../.agents/skills/ballast-spec-reconciliation/SKILL.md) |

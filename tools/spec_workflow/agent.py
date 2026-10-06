@@ -882,6 +882,20 @@ def _check_drafts(root: Path, record: dict, prompt: str, entry: dict) -> str | N
     return None
 
 
+def _share_requested_kinds(root: Path, record: dict, prompt: str, entry: dict) -> None:
+    """Tell the specialists step the kinds the engineering review requested (#83).
+
+    Best effort: the recorder recomputes the required kinds from the drafts.
+    """
+    if "implementation-review" not in artifacts.step_points(prompt):
+        return
+    feature = artifacts.Feature(root, record["feature"], record["run_id"])
+    feature.run_id = record["run_id"]
+    feature.run = record
+    with suppress(artifacts.ContractError, autonomy.AutonomyError, OSError):
+        artifacts.merge_requested_kinds(feature, entry)
+
+
 def _move_refused(root: Path, record: dict, step: str, attempt: int) -> None:
     """Keep a refused attempt's drafts in operator state, out of the agent's reach."""
     directory = autonomy.drafts_dir(root, record["feature"])
@@ -977,6 +991,7 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
         entry |= {"attempt": attempt, "refusals": list(refusals)}
         if refused is None:
             autonomy.append_step(root, record["run_id"], entry)
+            _share_requested_kinds(root, record, prompt, entry)
             return exit_code
         refusals.append(refused)
         entry["refused"] = refused
