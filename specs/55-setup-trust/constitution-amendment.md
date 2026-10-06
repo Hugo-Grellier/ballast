@@ -1,6 +1,6 @@
 # Constitution amendment for #55: setup may record the trust baseline
 
-Apply this to `.specify/memory/constitution.md`, which is a protected input an agent never edits (as for #27): the operator replaces BL-INV-002, adds the amendment history entry and updates the version line. The change is MINOR: the launcher's refusal, its fail-closed checks and the comparison stay as they are; only who may record the baseline widens, and only under the conditions of [ADR-0015](../../docs/adr/0015-setup-recorded-trust-baseline.md). Per the constitution's governance it needs explicit human approval as R2 and a recorded reason; this feature's PR merge is that approval.
+Applied to `.specify/memory/constitution.md` in this PR on the operator's choice A (2026-10-06); as for #27, the operator's merge of this PR is the approval. It replaces BL-INV-002, adds the amendment history entry and updates the version line. The change is MINOR: the launcher's refusal, its fail-closed checks and the comparison stay as they are; only who may record the baseline widens, and only under the conditions of [ADR-0015](../../docs/adr/0015-setup-recorded-trust-baseline.md). Per the constitution's governance it needs explicit human approval as R2 and a recorded reason; this feature's PR merge is that approval.
 
 ## Principle 2 (BL-INV-002), replacement text
 
