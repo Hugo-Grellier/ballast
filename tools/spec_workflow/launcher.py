@@ -55,6 +55,10 @@ CHECKOUT_LOCK = "checkout.lock"
 STAMP = ".ballast/.setup-version"
 UNFINISHED = "setup did not finish in this checkout; run `ballast setup` to recover"
 SETUP_RUNNING = "ballast setup is running in this checkout; wait for it to finish"
+NOT_INSTALLED = (
+    "nothing is installed in this checkout; run `ballast setup`, or `ballast run`, "
+    "`ledger` or `intake` to prepare it from a verified installation on this machine"
+)
 # Executable workflow inputs: the launcher's own tools, Spec Kit's engine
 # configuration, extensions and scripts, and the environment validators and
 # operator checks may run.
@@ -292,7 +296,15 @@ def _trust_refusal(root: Path, state: Path) -> str | None:
     try:
         trusted = json.loads((state / TRUSTED).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return "no trusted baseline; review the checkout, then run `trust`"
+        present = [
+            str(path.relative_to(root))
+            for path in input_bases(root)
+            if os.path.lexists(path)
+        ]
+        return (
+            "no trusted baseline for this checkout; review its protected inputs "
+            f"({', '.join(present)}), then run `ballast trust`"
+        )
     current = trusted_inputs(root)
     changed = sorted(
         name
@@ -411,12 +423,17 @@ def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
     if not argv or argv[0] not in {*COMMANDS, "intake", "trust", "discard-runs"}:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
+    # Before the lock: an uninstalled checkout gets no state file (#15).
+    recording = argv[0] in {"trust", "discard-runs"}
+    if recording and not installed:
+        sys.stderr.write(f"ballast: refusing: {NOT_INSTALLED}\n")
+        return EXIT_REFUSED
     held = _hold(root)
     if held:
         sys.stderr.write(f"ballast: refusing: {held}\n")
         return EXIT_REFUSED
     if not installed:
-        sys.stderr.write(__doc__ or "")
+        sys.stderr.write(f"ballast: refusing: {NOT_INSTALLED}\n")
         return EXIT_REFUSED
     if argv[0] in {"trust", "discard-runs"}:
         state = state_dir(root)

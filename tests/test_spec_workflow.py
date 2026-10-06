@@ -1202,7 +1202,11 @@ class TrustedLauncherTests(unittest.TestCase):
             self.status(),
             {
                 "installed": True,
-                "refusal": "no trusted baseline; review the checkout, then run `trust`",
+                "refusal": (
+                    "no trusted baseline for this checkout; review its protected "
+                    "inputs (.ballast/spec_workflow, .specify, .venv, .git), then run "
+                    "`ballast trust`"
+                ),
             },
         )
         self.assertEqual(list(state.iterdir()), [])
@@ -1219,6 +1223,54 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertIn("did not finish", self.status()["refusal"])
         (self.tools / "run.py").unlink()
         self.assertEqual(self.status(), {"installed": False, "refusal": None})
+
+    def test_no_baseline_names_the_inputs_to_review(self) -> None:
+        # #15 AC-002: only the protected inputs that exist are listed.
+        self.assert_refused(
+            "no trusted baseline for this checkout; review its protected inputs "
+            "(.ballast/spec_workflow, .specify, .venv, .git), then run "
+            "`ballast trust`"
+        )
+        shutil.rmtree(self.root / ".venv")
+        (self.root / ".git").unlink()
+        (self.root / "ballast.toml").write_text('[standard]\nref = "vA"\n')
+        self.assert_refused(
+            "review its protected inputs (ballast.toml, .ballast/spec_workflow, "
+            ".specify), then run `ballast trust`"
+        )
+
+    def test_uninstalled_checkout_is_refused_without_writing(self) -> None:
+        # #15 AC-005, plan review F-003: no state directory, no checkout.lock.
+        (self.tools / "run.py").unlink()
+        state_home = Path(self.env["XDG_STATE_HOME"])
+        message = (
+            "ballast: refusing: nothing is installed in this checkout; run "
+            "`ballast setup`, or `ballast run`, `ledger` or `intake` to prepare it "
+            "from a verified installation on this machine\n"
+        )
+        commands = (
+            ("trust",),
+            ("discard-runs",),
+            ("run", "start"),
+            ("ledger", "check", "r1"),
+            ("intake", "--repo", "o/r"),
+        )
+        for args in commands:
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual((result.returncode, result.stderr), (2, message))
+                self.assertEqual(list(state_home.iterdir()), [])
+        # An existing state directory gains no lock from trust or discard-runs.
+        key = hashlib.sha256(str(self.root.resolve()).encode()).hexdigest()[:16]
+        state = state_home / "ballast" / key
+        state.mkdir(parents=True)
+        for args in commands[:2]:
+            with self.subTest(args=args, state="exists"):
+                result = self.launch(*args)
+                self.assertEqual((result.returncode, result.stderr), (2, message))
+                self.assertEqual(list(state.iterdir()), [])
+        self.assertFalse(self.ran.exists())
+        self.assertTrue((self.root / ".specify/workflows/runs/r1").is_dir())
 
     def test_tamper_marker_and_unfinished_step_are_refused(self) -> None:
         self.assertEqual(self.launch("trust").returncode, 0)
