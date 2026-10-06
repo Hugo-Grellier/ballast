@@ -45,3 +45,23 @@
   2. The operator grants the implement step the probe commands (read-only `codex`, `ollama` and loopback `curl` probes), and the step reruns T001 itself. The pilot record must then say that the probes ran inside a confined step, which T001 forbids. Changing that would be a task change on an R2 boundary.
   3. Implement T002 to T036 against placeholder host facts that fail closed: an unknown config key, event shape or layer list always refuses. The fallback could never be selected until a later pilot fills them in. AC-001 to AC-004 and AC-018 would stay unproven, so the feature would not meet its intent.
 - **Needs**: an operator resolution before the implement step continues. Option 1 is the narrowest and keeps the tasks as written.
+
+## DEC-0003 — Discovery
+
+- **Found during**: task T001, the host pilot, run on 2026-10-06 from the operator side under DEC-0002 option 1. Evidence is in [evaluation.md](evaluation.md#pilot).
+- **Conflict**:
+  1. Candidate rejected on this host as it stands. `codex exec --oss --local-provider ollama -m qwen3:4b --json` exits 1 before sending any model request: `OSS setup failed: Ollama 0.6.8 is too old. Codex requires Ollama 0.13.4 or newer.` (Codex 0.155.1). The model cannot answer through the candidate, so T001's stop rule applies. The `--json` shape of a real `--oss` run, and whether `--oss` needs a login, also stay unproven. The event shape was observed only with a loopback stub provider.
+  2. Research R6 and contracts/wrapper-fallback.md expect a `--config` key that pins the Ollama provider's base URL. No such key exists. `-c model_providers.ollama.*` is refused ("reserved built-in provider IDs … cannot be overridden"). The only overrides are the environment variables `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, which R6 removes and the permission comparison forbids. Without one of them, `--oss` uses the default `127.0.0.1:11434`, so a non-default `--local-fallback-endpoint` could not be honoured.
+  3. Smaller findings for the plan, none blocking on its own:
+     - R5 check 6 should also refuse an Ollama older than the minimum Codex requires;
+     - `/api/show` carries no `size` or `digest`, so check 7 uses the `/api/tags` entry;
+     - in `--json` mode, request failures are printed on stdout and a successful run can emit an `item.completed` of type `error`;
+     - `codex exec` has more widening flags than the plan lists: `--ignore-user-config`, `--enable/--disable`, `--approve-for-me`, `--dangerously-bypass-hook-trust`, `--worktree`;
+     - skills also load from `~/.agents/skills` outside `CODEX_HOME`.
+- **Label**: spec ambiguity (item 1: the host cannot run the qualified candidate) and architecture issue (item 2: R6's pinning mechanism does not exist).
+- **Options**:
+  1. The operator upgrades Ollama on the host to 0.13.4 or newer, and keeps the endpoint fixed at the default `http://127.0.0.1:11434`. `--local-fallback-endpoint` is dropped, or limited to that default, and `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT` stay removed. The pilot's item 4 is then rerun and T001 is completed. Contracts/operator-cli.md and R4, R5 and R6 change, and the operator-visible option shrinks.
+  2. The operator upgrades Ollama. The wrapper sets `CODEX_OSS_BASE_URL` itself from the operator setting, as the one allowed value beside `CODEX_HOME`, and the permission comparison accepts exactly that value. This widens the environment allowlist on an R2 boundary.
+  3. Replace `--oss` with a wrapper-defined custom provider: `-c model_provider=NAME -c 'model_providers.NAME={…base_url=…}'` against Ollama's OpenAI-compatible endpoint. The base URL is then pinned by `--config` as R6 intended, but the candidate in R1 changes and Ollama's Responses API support needs its own pilot. It also needs the Ollama upgrade.
+  4. Reject the candidate for now. Record that no zero-cost fallback qualifies on this host and close the feature with evidence (SC-004 "refused with a recorded cause" does not cover a candidate that never runs).
+- **Needs**: an operator resolution, and the Ollama upgrade for options 1 to 3, before T001 is completed and the implement step continues. Upgrading a host package is outside an agent's authority.
