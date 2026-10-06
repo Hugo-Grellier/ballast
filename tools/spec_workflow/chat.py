@@ -2145,7 +2145,7 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917 - steps 9 to 12, 
     checkpoint(run)
     _out(f"Step {name}: {outcome}")
     if credential:  # the cause of any failed check, so it comes first
-        _out(f"Blocked (credential): {agent.AUTH_REASON}.")
+        _out(f"Blocked (credential): {agent.AUTH_REASONS[result['argv'][0]]}.")
     elif failures:
         check, event_id, detail = failures[0]
         _out(f"Failed check: {check} ({event_id}): {_first_line(detail)}")

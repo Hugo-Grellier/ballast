@@ -1196,7 +1196,8 @@ RECOVERY = {
     "interrupted": "Review the checkout, then resume, or continue human-gated.",
     "upstream-sync": "Remove the cause shown, then start the run again.",
     "credential": "Sign the agent CLI in again outside the sandbox (run `claude` "
-    "once, or `claude /login`), then resume, or continue human-gated.",
+    "once, or `claude /login`; for Codex, `codex login`), then resume, or "
+    "continue human-gated.",
 }
 # Limits that a fix by hand, then a resume, can recover from.
 LIMIT_RECOVERY = {
@@ -1934,16 +1935,26 @@ def claude_homes(home: Path, env: dict[str, str]) -> list[Path]:
     return list(dict.fromkeys((selected, home / ".claude")))
 
 
+def codex_homes(home: Path, env: dict[str, str]) -> list[Path]:
+    """Every Codex home a step could read: the selected one first (#76)."""
+    selected = Path(env.get("CODEX_HOME") or home / ".codex")
+    return list(dict.fromkeys((selected, home / ".codex")))
+
+
 def agent_homes(home: Path, env: dict[str, str]) -> list[Path]:
     """Agent CLI homes and caches that get a throwaway overlay."""
-    codex = Path(env.get("CODEX_HOME") or home / ".codex")
-    return [*claude_homes(home, env), codex, home / ".cache"]
+    return [*claude_homes(home, env), *codex_homes(home, env), home / ".cache"]
 
 
 def _without_refresh_tokens(value: object) -> object:
+    """Drop Claude's `refreshToken`s; blank Codex's `refresh_token`s.
+
+    Codex refuses an `auth.json` without the field (#76), and an empty one
+    fails its refresh request outright.
+    """
     if isinstance(value, dict):
         return {
-            key: _without_refresh_tokens(item)
+            key: "" if key == "refresh_token" else _without_refresh_tokens(item)
             for key, item in value.items()
             if key != "refreshToken"
         }
@@ -1953,7 +1964,7 @@ def _without_refresh_tokens(value: object) -> object:
 
 
 def _agent_login(login: Path, copy: Path) -> str:
-    """Copy the Claude login for the agent, without its refresh tokens.
+    """Copy a Claude or Codex login for the agent, without its refresh tokens.
 
     Refresh tokens are single-use: a refresh inside the throwaway overlay
     rotates the operator's token, then loses the new one at step end, and the
@@ -2091,11 +2102,11 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
     `private` is a wrapper-owned temporary directory for the per-step copies
-    of `~/.claude.json` and the Claude login (without refresh tokens). Agent
-    homes and caches get throwaway overlays, credential paths are hidden, and
-    the agent cannot reach the operator's processes, user bus or runtime
-    sockets. Pass the operator's environment, not `confined_env()`'s: it names
-    the credential locations to hide.
+    of `~/.claude.json` and the Claude and Codex logins (without refresh
+    tokens). Agent homes and caches get throwaway overlays, credential paths
+    are hidden, and the agent cannot reach the operator's processes, user bus
+    or runtime sockets. Pass the operator's environment, not
+    `confined_env()`'s: it names the credential locations to hide.
 
     `readonly_extra` names checkout paths (such as `.claude`) bound read-only
     when they exist. `interactive_pty=True` omits `--new-session`, and only a
@@ -2156,11 +2167,16 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     for path in agent_homes(home, env):
         if path.is_dir() and not path.is_symlink():
             args += ["--overlay-src", str(path), "--tmp-overlay", str(path)]
-    for index, claude in enumerate(claude_homes(home, env)):
-        login = claude / ".credentials.json"
+    logins = [
+        (claude / ".credentials.json", f"credentials-{index}.json")
+        for index, claude in enumerate(claude_homes(home, env))
+    ] + [
+        (codex / "auth.json", f"codex-auth-{index}.json")
+        for index, codex in enumerate(codex_homes(home, env))
+    ]
+    for login, name in logins:
         if os.path.lexists(login):
-            copy = private / f"credentials-{index}.json"
-            args += ["--ro-bind", _agent_login(login, copy), str(login)]
+            args += ["--ro-bind", _agent_login(login, private / name), str(login)]
     settings = home / ".claude.json"
     if settings.is_file() and not settings.is_symlink():
         copy = private / "claude.json"
