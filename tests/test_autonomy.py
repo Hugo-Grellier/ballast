@@ -974,6 +974,41 @@ class ConfinementTests(AutonomyCase):
         with patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
             self.assertTrue(autonomy.state_dir(self.root).is_relative_to(state))
 
+    def test_linked_worktree_git_pointer_and_admin_dir_are_read_only(self) -> None:
+        """A linked worktree's `.git` is a pointer file; its admin dir holds HEAD."""
+        linked = self.base / "linked"
+        self.git("worktree", "add", "-q", str(linked), "-b", "linked")
+        private = self.base / "private"
+        private.mkdir(exist_ok=True)
+        argv = autonomy.confined_argv(
+            linked, ["true"], private=private, home=self.base / "home", env={}
+        )
+        joined = " ".join(argv)
+        pointer = linked / ".git"
+        admin = (self.root / ".git/worktrees/linked").resolve()
+        for path in (pointer, admin):
+            with self.subTest(path=path):
+                bind = f"--ro-bind {path} {path}"
+                self.assertIn(bind, joined)
+                self.assertGreater(
+                    joined.index(bind), joined.index(f"--bind {linked} {linked}")
+                )
+
+    def test_symlinked_git_entry_refuses(self) -> None:
+        linked = self.base / "linked"
+        self.git("worktree", "add", "-q", str(linked), "-b", "linked")
+        pointer = linked / ".git"
+        target = self.base / "pointer"
+        pointer.rename(target)
+        pointer.symlink_to(target)
+        private = self.base / "private"
+        private.mkdir(exist_ok=True)
+        with self.assertRaises(autonomy.AutonomyError) as caught:
+            autonomy.confined_argv(
+                linked, ["true"], private=private, home=self.base / "home", env={}
+            )
+        self.assertEqual(caught.exception.category, "ineligible")
+
     def test_agent_gets_the_claude_login_without_refresh_tokens(self) -> None:
         """#65: a confined refresh would rotate away the operator's login."""
         home = self.base / "home"
@@ -1631,6 +1666,31 @@ class RealConfinementTests(AutonomyCase):
         self.assertNotEqual(self.write(self.root / ".git/probe", root=linked), 0)
         result = self.confined("git", "status", "--porcelain", root=linked)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_linked_worktree_pointer_and_admin_files_are_read_only(self) -> None:
+        """PR #82 review: a rewritten `.git` pointer would reach operator git."""
+        linked = self.base / "linked"
+        self.git("worktree", "add", "-q", str(linked), "-b", "linked")
+        admin = self.root / ".git/worktrees/linked"
+        (admin / "config.worktree").write_text("")
+        pointer = (linked / ".git").read_text()
+        for target in (
+            linked / ".git",
+            admin / "commondir",
+            admin / "gitdir",
+            admin / "config.worktree",
+            admin / "HEAD",
+        ):
+            with self.subTest(target=target):
+                self.assertNotEqual(self.write(target, root=linked), 0)
+        self.assertEqual((linked / ".git").read_text(), pointer)
+        (linked / "new.txt").write_text("x")
+        status = self.confined("git", "status", "--porcelain", root=linked)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn("new.txt", status.stdout)
+        # Like the primary checkout's read-only `.git`: the wrapper commits.
+        add = self.confined("git", "add", "new.txt", root=linked)
+        self.assertNotEqual(add.returncode, 0)
 
     def test_agent_home_writes_do_not_persist(self) -> None:
         claude = autonomy.agent_homes(Path.home(), dict(os.environ))[0]

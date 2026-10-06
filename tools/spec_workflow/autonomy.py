@@ -2025,9 +2025,31 @@ def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
                 if path.is_symlink():
                     continue
             args += ["--bind", str(path), str(path)]
-    git = root / ".git"
-    if git.is_dir() and not git.is_symlink():
-        args += ["--ro-bind", str(git), str(git)]
+    return args + _git_binds(root)
+
+
+def _git_binds(root: Path) -> list[str]:
+    """Read-only binds for `.git` and the Git directories it names.
+
+    A linked worktree's `.git` is a pointer file: read-only like a primary
+    `.git` directory, or a rewritten pointer would hand the operator's next
+    git a forged config (core.fsmonitor, hooks). Its admin directory under
+    the common dir (HEAD, index, gitdir, commondir, config.worktree) too.
+    """
+    args: list[str] = []
+    pointer = root / ".git"
+    if pointer.is_symlink():
+        message = f"{pointer} is a symlink; refusing to confine a step"
+        raise AutonomyError(message, "ineligible")
+    if os.path.lexists(pointer):
+        args += ["--ro-bind", str(pointer), str(pointer)]
+    checkout = root.resolve()
+    for flag in ("--absolute-git-dir", "--git-common-dir"):
+        found = git(root, "rev-parse", "--path-format=absolute", flag, check=False)
+        path = Path(found.stdout.strip()).resolve() if found.returncode == 0 else None
+        # Never a directory holding the checkout: that would make it read-only.
+        if path and path.is_dir() and not checkout.is_relative_to(path):
+            args += ["--ro-bind", str(path), str(path)]
     return args
 
 
