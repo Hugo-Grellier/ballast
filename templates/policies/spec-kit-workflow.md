@@ -651,8 +651,11 @@ records no human decision until the synchronization passes.
 **Continue.** `continue` lowers a run to human-gated after implementation:
 
 - `ballast run continue RUN_ID --reason block-resolved --ref TEXT` after
-  resolving a block; a run blocked before implementation refuses and points to
-  `ballast run resume RUN_ID`, and an `upstream-sync` block at start means
+  resolving a block; before implementation, a human-gated `continue` refuses
+  and points to `ballast run resume RUN_ID` (or, for a step or wall-time
+  limit, to a new run), because `ballast-continue` only gates an existing
+  implementation, while `--mode chat` continues the run in Chat, which can do
+  the missing work; an `upstream-sync` block at start means
   removing the cause and starting again with your
   `ballast run start --mode autonomous` command;
 - `ballast run continue RUN_ID --reason changes-requested --ref PR-REVIEW-URL`

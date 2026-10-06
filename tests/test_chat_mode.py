@@ -3647,7 +3647,9 @@ class ModeSwitchTests(ChatCase):
 class ContinueTests(ChatCase):
     """T061 [AC-022, FR-021, FR-022, BL-INV-006]: an Autonomous run goes on in Chat."""
 
-    def stopped_autonomous(self, status: str = "stopped") -> str:
+    def stopped_autonomous(
+        self, status: str = "stopped", limit: str | None = None
+    ) -> str:
         record = self.make_run("auto0001")
         self.feature_file("spec.md", SPEC)
         digest = artifacts.spec_digest(SPEC)
@@ -3688,7 +3690,12 @@ class ContinueTests(ChatCase):
             autonomy.record_block(
                 self.root,
                 "auto0001",
-                autonomy.make_block("postcondition", "plan failed", run_id="auto0001"),
+                autonomy.make_block(
+                    "limit" if limit else "postcondition",
+                    "plan failed",
+                    run_id="auto0001",
+                    limit=limit,
+                ),
             )
         else:
             autonomy.set_status(record, "completed")
@@ -3761,6 +3768,28 @@ class ContinueTests(ChatCase):
             "- PD-0001 (intent, agent-provisional): superseded by HD-0001", section
         )
         self.assertEqual(len(autonomy.read_decisions(self.root, source)), 1)
+
+    def assert_refused_only_human_gated(self, limit: str | None, pointer: str) -> None:
+        source = self.stopped_autonomous(limit=limit)
+        argv = ("run", "continue", source, "--reason", "block-resolved", "--ref", "x")
+        for mode in ((), ("--mode", "human-gated")):
+            refused = self.ballast(*argv, *mode)
+            self.assertEqual(refused.code, 2, refused.text)
+            self.assertIn(pointer, refused.err)
+        self.assertEqual(autonomy.read_human_decisions(self.root, source), [])
+        self.assertEqual(self.run_ids(), [])
+        result = self.ballast(*argv, "--mode", "chat")
+        self.assertEqual(result.code, 0, result.text)
+        self.assertEqual(autonomy.read_run(self.root, source)["status"], "continued")
+        self.assertEqual(len(self.run_ids()), 1)
+
+    def test_pre_implementation_block_refuses_only_human_gated(self) -> None:
+        """#21 DEC-0002 [AC-011, AC-022]: human-gated points to resume; Chat goes on."""
+        self.assert_refused_only_human_gated(None, "ballast run resume auto0001")
+
+    def test_pre_implementation_limit_refuses_only_human_gated(self) -> None:
+        """#21 DEC-0002 [AC-011, AC-022]: human-gated names restart; Chat goes on."""
+        self.assert_refused_only_human_gated("agent-steps", autonomy.RESTART_COMMAND)
 
     def test_changes_requested_continues_the_same_way(self) -> None:
         source = self.stopped_autonomous(status="completed")

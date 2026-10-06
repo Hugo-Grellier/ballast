@@ -25,7 +25,7 @@ For a run without an operator run record (human-gated), nothing changes.
 
 ## `ballast run continue`
 
-Unchanged, plus these refusals, checked after the existing `upstream-sync` refusal (FR-011, AC-011):
+Unchanged, plus these refusals, checked after the existing `upstream-sync` refusal (FR-011, AC-011). The lock applies to every continuation; the two pre-implementation refusals apply only to a human-gated continuation (`--mode human-gated`, the default). `--mode chat` keeps #20's source refusals and continues a pre-implementation block in a linked Chat run (DEC-0002):
 
 | Situation | Result |
 | --- | --- |

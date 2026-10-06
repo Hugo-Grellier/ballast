@@ -1259,8 +1259,13 @@ def _restart_only(run_id: str, block: dict | None) -> bool:
     )
 
 
-def _continue_refusal(source: dict, reason: str) -> str | None:  # noqa: PLR0911
-    """Return why a source run cannot be continued, or None."""
+def _continue_refusal(source: dict, reason: str, mode: str) -> str | None:  # noqa: PLR0911
+    """Return why a source run cannot be continued in MODE, or None.
+
+    The pre-implementation refusals apply only to human-gated continuation:
+    ballast-continue only gates an existing implementation, while a Chat run
+    can do the missing work (#20 AC-022; #21 DEC-0002).
+    """
     run_id = source["run_id"]
     if source["status"] not in {"stopped", "completed", "published"}:
         return (
@@ -1277,6 +1282,10 @@ def _continue_refusal(source: dict, reason: str) -> str | None:  # noqa: PLR0911
             f"run {run_id} stopped before its first agent step; there is nothing "
             "to continue. Remove the cause, then start again."
         )
+    if reason == "block-resolved" and block is None:
+        return f"run {run_id} has no block to resolve"
+    if mode == "chat":
+        return None
     if _restart_only(run_id, block):
         return (
             f"run {run_id} reached its fixed limit before implementation; nothing "
@@ -1289,8 +1298,6 @@ def _continue_refusal(source: dict, reason: str) -> str | None:  # noqa: PLR0911
             f"run {run_id} stopped before implementation; resume it in "
             f"Autonomous: ballast run resume {run_id}"
         )
-    if reason == "block-resolved" and block is None:
-        return f"run {run_id} has no block to resolve"
     return None
 
 
@@ -1336,7 +1343,9 @@ def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) ->
     source = _source_run(run_id)
     if isinstance(source, str):
         return _refuse(source)
-    refusal = _continue_refusal(source, flags["--reason"])
+    refusal = _continue_refusal(
+        source, flags["--reason"], flags.get("--mode", "human-gated")
+    )
     if refusal is not None:
         return _refuse(refusal)
     if flags.get("--mode") == "chat":

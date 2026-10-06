@@ -15,7 +15,7 @@ ADR-0004 made every blocked Autonomous run continue human-gated "until #18". In 
 - **Bounded fix loop** (R1–R3). `ballast-autonomous` 1.2.0 runs the `[checks]` commands as feedback after implementation, then up to three fix cycles per run (fix, feedback checks, the reviews again). The count lives in operator state and survives a resume. Check output reaches the fix agent only as a read-only data file the recorder writes. After the third cycle, a high or critical finding, a non-approved verdict or a failed check blocks the run as an exhausted limit.
 - **Correctable draft retries** (R4). The agent wrapper runs the recorders' own draft checks after an Autonomous agent step; a refusal the agent can correct in its draft reruns the step with the validator's message, at most twice per step, each attempt counted. State refusals stay terminal and no validator is relaxed.
 - **Active wall time** (R8, R9). The wall-time limit counts only time inside invocations; the agent-step limit, now 40 by default, counts every attempt and is the spend bound.
-- `continue` stays the human-gated path after implementation; before implementation it points to `resume`.
+- `continue` stays the human-gated path after implementation; before implementation a human-gated `continue` points to `resume`, while `continue --mode chat` (#20) still continues in Chat.
 
 ## Consequences
 
