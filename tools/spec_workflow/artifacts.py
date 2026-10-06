@@ -3083,6 +3083,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                 private=Path(private),
                 feature=feature,
                 env=dict(os.environ),
+                integration=None,  # no agent CLI: neither login (#81)
             )
             timeout = timeout_minutes * 60
             started = time.monotonic()

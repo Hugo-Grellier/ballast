@@ -720,6 +720,7 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
             env=env,
             interactive_pty=True,
             readonly_extra=(".claude", ".codex"),
+            integration=integration,
         )
         env = autonomy.confined_env(env, integration)
         command = [
@@ -1057,7 +1058,12 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             ]
         # The operator's environment names the credential locations to hide.
         argv = autonomy.confined_argv(
-            root, argv, private=private, feature=feature, env=env
+            root,
+            argv,
+            private=private,
+            feature=feature,
+            env=env,
+            integration=integration,
         )
         env = autonomy.confined_env(env, integration)
     meta = {

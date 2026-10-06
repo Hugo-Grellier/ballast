@@ -565,9 +565,12 @@ token, so it can never rotate the operator out of their session. When the
 access token expires during a step, the step stops with a `credential` block:
 sign in again outside the sandbox (for Claude, run `claude` once, or
 `claude /login`; for Codex, `codex login`), then `ballast run resume RUN_ID`
-re-enters at the failed step. Every agent home a step could read gets this
-treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude`, `$CODEX_HOME` and `~/.codex`,
-when both exist. A Codex API-key login has no refresh token and keeps working.
+re-enters at the failed step. Every home of the CLI the step runs gets this
+treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude` for Claude, `$CODEX_HOME` and
+`~/.codex` for Codex, when both exist. A step sees only its own CLI's
+credentials: the other CLI's homes are empty, its API-key variables are
+dropped, and only a Claude step sees `~/.claude.json`; `[checks]` commands
+see neither CLI's. A Codex API-key login has no refresh token and keeps working.
 A human-gated or Chat step that hits the same error fails with
 `Blocked (credential)` and the same remedy.
 

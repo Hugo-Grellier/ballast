@@ -194,6 +194,30 @@ class AgentWrapperAutonomousTests(WrapperCase):
         )
         self.assertRegex(step["tree_before"], r"^[0-9a-f]{40}$")
 
+    def test_each_wrapper_step_gets_only_its_own_cli_credentials(self) -> None:
+        """#81: a Claude step never sees Codex's login or key, nor the reverse."""
+        home = self.base / "home"
+        for name in (".claude", ".codex"):
+            (home / name).mkdir(parents=True)
+        (home / ".claude/.credentials.json").write_text('{"claudeAiOauth": {}}')
+        (home / ".codex/auth.json").write_text('{"OPENAI_API_KEY": "synthetic"}')
+        keys = {"claude": "ANTHROPIC_API_KEY", "codex": "OPENAI_API_KEY"}
+        for name, other in (("claude", "codex"), ("codex", "claude")):
+            with self.subTest(name=name):
+                (self.base / "bwrap.log").unlink(missing_ok=True)
+                self.make_run()
+                result = self.wrapper(name, HOME=str(home), OPENAI_API_KEY="o")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bwrap = json.loads(
+                    (self.base / "bwrap.log").read_text().splitlines()[-1]
+                )
+                joined = " ".join(bwrap)
+                self.assertIn(f"--tmp-overlay {home / f'.{name}'}", joined)
+                self.assertIn(f"--tmpfs {home / f'.{other}'}", joined)
+                env = self.ran()["env"]
+                self.assertIn(keys[name], env)
+                self.assertNotIn(keys[other], env)
+
     def test_reviewer_role(self) -> None:
         self.make_run()
         # An argument with no draft contract: the fake writes no valid draft,
