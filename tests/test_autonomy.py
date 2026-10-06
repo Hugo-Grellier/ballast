@@ -687,8 +687,10 @@ class PolicyTests(AutonomyCase):
         limits = autonomy.resolve_limits(defaults)
         self.assertEqual(
             (limits["wall_time_minutes"], limits["max_agent_steps"], limits["source"]),
-            (240, 30, "default"),
+            (240, 40, "default"),
         )
+        # #21 R8: the wall time is active minutes, so no fixed deadline.
+        self.assertNotIn("deadline", limits)
 
     def test_narrowing_and_ignored_widening(self) -> None:
         policy, _, warnings = self.policy(
@@ -728,11 +730,9 @@ class PolicyTests(AutonomyCase):
             ),
             (5, 24, "operator"),
         )
-        start = datetime(2026, 10, 3, 12, tzinfo=UTC)
-        limits = autonomy.resolve_limits({}, wall_time=1, start=start)
-        self.assertEqual(
-            datetime.fromisoformat(limits["deadline"]), start + timedelta(minutes=1)
-        )
+        limits = autonomy.resolve_limits({}, wall_time=1)
+        self.assertEqual(limits["wall_time_minutes"], 1)
+        self.assertNotIn("deadline", limits)
         for table in (
             "wall_time_minutes = 0",
             "max_agent_steps = 201",
@@ -2524,3 +2524,425 @@ class PublisherTests(AutonomyCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecoveryConstantsTests(unittest.TestCase):
+    """#21 T003 [FR-022]: bounds of the fix loop, retries and the step default."""
+
+    def test_constants(self) -> None:
+        self.assertEqual((autonomy.FIX_CYCLES, autonomy.DRAFT_RETRIES), (3, 2))
+        self.assertEqual(autonomy.AGENT_STEPS, (1, 200, 40))
+        self.assertEqual(autonomy.WALL_TIME, (1, 1440, 240))
+        steps = autonomy.AUTONOMOUS_STEPS
+        self.assertEqual(len(steps), len(set(steps)))
+        after = steps.index("validate-implementation") + 1
+        self.assertEqual(steps[after], "checks-implementation")
+        start = steps.index("record-implementation-review") + 1
+        cycles = [
+            f"{name}-{n}"
+            for n in (1, 2, 3)
+            for name in (
+                "fix",
+                "record-fix",
+                "checks-fix",
+                "review-fix",
+                "review-specialists-fix",
+                "record-fix-review",
+            )
+        ]
+        self.assertEqual(list(steps[start : start + 18]), cycles)
+        self.assertEqual(steps[start + 18], "resolve-decisions")
+        for shell in ("record-fix-2", "checks-fix-3", "run-checks", "renew-intent"):
+            self.assertIn(shell, autonomy.AUTONOMOUS_SHELL_STEPS)
+        for agent in ("fix-1", "review-fix-2", "implement", "converge"):
+            self.assertNotIn(agent, autonomy.AUTONOMOUS_SHELL_STEPS)
+
+
+class ActiveRecordTests(AutonomyCase):
+    """#21 T004 [FR-021]: optional record fields and active wall time."""
+
+    def test_optional_fields_validate(self) -> None:
+        record = self.make_run()
+        self.assertEqual(record["active_seconds"], 0)
+        self.assertEqual(autonomy.fix_state(record), {"cycles": 0, "state": "idle"})
+        for key, value, text in (
+            ("active_seconds", -1, "active time"),
+            ("active_seconds", True, "active time"),
+            ("fix", {"cycles": 4, "state": "idle"}, "fix state"),
+            ("fix", {"cycles": 1, "state": "fixing"}, "fix state"),
+            ("fix", [], "fix state"),
+            ("resumes", [{"decision_id": "PD-0001"}], "resume entry"),
+            ("resumes", [{"decision_id": "HD-0001", "reentry_step": "x"}], "resume"),
+            ("invocation_started_at", "yesterday", "timestamp"),
+        ):
+            with self.subTest(key=key, value=value):
+                broken = {**record, key: value}
+                with self.assertRaisesRegex(autonomy.AutonomyError, text):
+                    autonomy.validate_run(broken, "run42")
+        good = {
+            **record,
+            "fix": {"cycles": 3, "state": "review-pending"},
+            "resumes": [{"decision_id": "HD-0001", "reentry_step": "decide-tasks"}],
+        }
+        autonomy.validate_run(good, "run42")
+
+    def test_new_records_have_active_time_and_legacy_ones_a_deadline(self) -> None:
+        record = self.make_run()
+        no_clock = {k: v for k, v in record.items() if k != "active_seconds"}
+        with self.assertRaisesRegex(autonomy.AutonomyError, "no active time"):
+            autonomy.validate_run(no_clock, "run42")
+        legacy = {
+            **no_clock,
+            "limits": {**record["limits"], "deadline": autonomy.now()},
+        }
+        autonomy.validate_run(legacy, "run42")
+
+    def test_remaining_counts_closed_and_open_invocations(self) -> None:
+        record = self.make_run()
+        t0 = datetime(2026, 10, 6, 12, tzinfo=UTC)
+        self.assertEqual(autonomy.remaining_seconds(record, t0), 240 * 60)
+        autonomy.open_invocation(record, t0)
+        later = t0 + timedelta(minutes=30)
+        self.assertEqual(autonomy.remaining_seconds(record, later), 210 * 60)
+        autonomy.close_invocation(record, later)
+        self.assertIsNone(record["invocation_started_at"])
+        self.assertEqual(record["active_seconds"], 30 * 60)
+        # A ten-hour pause between invocations costs nothing (AC-027).
+        resumed = later + timedelta(hours=10)
+        autonomy.open_invocation(record, resumed)
+        self.assertEqual(autonomy.remaining_seconds(record, resumed), 210 * 60)
+        self.assertLess(
+            autonomy.remaining_seconds(record, resumed + timedelta(minutes=211)), 0
+        )
+        # A clock that runs backwards never lowers the active time.
+        autonomy.close_invocation(record, resumed - timedelta(hours=1))
+        self.assertEqual(record["active_seconds"], 30 * 60)
+
+    def test_crashed_invocation_closes_at_its_last_record(self) -> None:
+        record = self.make_run()
+        t0 = datetime(2026, 10, 6, 12, tzinfo=UTC)
+        autonomy.open_invocation(record, t0)
+        autonomy.write_run(self.root, record)
+        autonomy.append_step(
+            self.root,
+            "run42",
+            {"step": "s", "ran": True, "at": (t0 + timedelta(minutes=5)).isoformat()},
+        )
+        latest = autonomy.latest_recorded(self.root, record)
+        self.assertEqual(latest, (t0 + timedelta(minutes=5)).isoformat())
+        autonomy.close_crashed_invocation(record, latest)
+        self.assertEqual(record["active_seconds"], 300)
+
+    def test_legacy_deadline_is_seeded_once(self) -> None:
+        record = self.make_run()
+        start = datetime.fromisoformat(record["started_at"])
+        del record["active_seconds"]
+        record["limits"]["deadline"] = (start + timedelta(minutes=240)).isoformat()
+        latest = (start + timedelta(minutes=50)).isoformat()
+        autonomy.seed_active_time(record, latest)
+        self.assertNotIn("deadline", record["limits"])
+        self.assertEqual(record["active_seconds"], 50 * 60)
+        autonomy.validate_run(record, "run42")
+        capped = self.make_run()
+        del capped["active_seconds"]
+        capped["limits"]["deadline"] = autonomy.now()
+        autonomy.seed_active_time(capped, (start + timedelta(days=2)).isoformat())
+        self.assertEqual(capped["active_seconds"], 240 * 60)
+
+
+OPTIONS = [
+    {"option": "Keep X", "consequence": "a"},
+    {"option": "Drop X", "consequence": "b"},
+]
+
+
+class RecoveryBlockTests(AutonomyCase):
+    """#21 T005 [FR-023]: block classes, limit kinds, inputs and recovery."""
+
+    def test_every_category_has_a_class(self) -> None:
+        self.assertEqual(set(autonomy.BLOCK_CLASSES), set(autonomy.BLOCK_CATEGORIES))
+        self.assertEqual(
+            set(autonomy.BLOCK_CLASSES.values()),
+            {"conflict", "missing authority", "exhausted limits", "unsafe uncertainty"},
+        )
+        block = autonomy.make_block(
+            "contradiction", "x", run_id="run42", options=OPTIONS
+        )
+        self.assertEqual(autonomy.block_class(block), "conflict")
+
+    def test_resume_is_the_recovery_where_it_applies(self) -> None:
+        resume = "ballast run resume run42"
+        for category in (
+            "decision",
+            "contradiction",
+            "review-finding",
+            "postcondition",
+            "ineligible",
+            "interrupted",
+        ):
+            with self.subTest(category=category):
+                block = autonomy.make_block(
+                    category, "x", run_id="run42", options=OPTIONS
+                )
+                self.assertEqual(block["command"], resume)
+                self.assertIn("resume", block["recovery"])
+        for limit in ("fix-cycles", "retries"):
+            block = autonomy.make_block("limit", "x", run_id="run42", limit=limit)
+            self.assertEqual((block["command"], block["limit"]), (resume, limit))
+        for limit in ("agent-steps", "wall-time", None):
+            block = autonomy.make_block("limit", "x", run_id="run42", limit=limit)
+            self.assertIn("ballast run continue run42", block["command"])
+            self.assertIn("never raises a limit", block["recovery"])
+        self.assertEqual(
+            autonomy.make_block("forge", "x", run_id="run42")["command"],
+            "ballast run publish run42",
+        )
+        self.assertEqual(
+            autonomy.make_block("tamper", "x", run_id="run42")["command"],
+            "ballast discard-runs",
+        )
+        self.assertEqual(
+            autonomy.make_block("upstream-sync", "x", run_id="run42")["command"],
+            autonomy.RESTART_COMMAND,
+        )
+        # A resume's own sync block names resume.
+        sync = autonomy.make_block(
+            "upstream-sync",
+            "x",
+            run_id="run42",
+            command=resume,
+            recovery=autonomy.SYNC_RESUME_RECOVERY,
+        )
+        self.assertEqual(sync["command"], resume)
+
+    def test_limit_field_and_inputs_are_checked(self) -> None:
+        with self.assertRaisesRegex(autonomy.AutonomyError, "only a limit block"):
+            autonomy.make_block("postcondition", "x", run_id="run42", limit="retries")
+        with self.assertRaisesRegex(autonomy.AutonomyError, "only a limit block"):
+            autonomy.make_block("limit", "x", run_id="run42", limit="money")
+        block = autonomy.make_block("postcondition", "x", run_id="run42")
+        autonomy.record_block(self.root, "run42", block)
+        stored = autonomy.set_block_inputs(self.root, "run42", {"b": "2", "a": "1"})
+        self.assertEqual(list(stored["inputs"]), ["a", "b"])
+        self.assertEqual(
+            autonomy.read_block(self.root, "run42")["inputs"], stored["inputs"]
+        )
+        with self.assertRaisesRegex(autonomy.AutonomyError, "inputs"):
+            autonomy.validate_block({**block, "inputs": {"a": 1}})
+
+    def test_limit_condition_names_the_limit(self) -> None:
+        self.assertEqual(
+            autonomy.limit_condition("fix-cycles", "F-001 still open"),
+            "fix-cycle limit (3) reached: F-001 still open",
+        )
+        self.assertEqual(
+            autonomy.limit_condition("retries", "draft retries (2) used"),
+            "draft retries (2) used",
+        )
+
+    def test_resolved_block_joins_the_history(self) -> None:
+        autonomy.record_block(
+            self.root,
+            "run42",
+            autonomy.make_block("postcondition", "x", run_id="run42"),
+        )
+        autonomy.resolve_block(self.root, "run42")
+        self.assertIsNone(autonomy.read_block(self.root, "run42"))
+        history = (autonomy.run_dir(self.root, "run42") / "blocks.jsonl").read_text()
+        self.assertEqual(json.loads(history)["category"], "postcondition")
+
+
+class ResumeRunTests(AutonomyCase):
+    """#21 T005, T019 [FR-001, FR-010, FR-012, AC-016]: stopped -> active."""
+
+    FIXED = (
+        "mode_history",
+        "risk",
+        "limits",
+        "integration",
+        "review_integration",
+        "cross_provider",
+        "eligibility",
+        "issue",
+        "feature",
+        "workflow",
+    )
+
+    def stopped(self, **changes: object) -> dict:
+        record = self.make_run(**changes)
+        autonomy.set_status(record, "stopped")
+        autonomy.write_run(self.root, record)
+        return record
+
+    def resolution(self) -> str:
+        return autonomy.append_human_decision(
+            self.root, "run42", "block-resolution", "fixed the spec", resolves="block"
+        )["id"]
+
+    def test_needs_a_recorded_block_resolution(self) -> None:
+        record = self.stopped()
+        entry = {"reentry_step": "decide-tasks"}
+        with self.assertRaisesRegex(autonomy.AutonomyError, "block resolution"):
+            autonomy.resume_run(self.root, record, "HD-0001", entry, reset=False)
+        autonomy.append_human_decision(
+            self.root, "run42", "merge-feedback", "x", resolves=None
+        )
+        with self.assertRaisesRegex(autonomy.AutonomyError, "block resolution"):
+            autonomy.resume_run(self.root, record, "HD-0001", entry, reset=False)
+        # set_status still refuses the transition: only resume_run makes it.
+        with self.assertRaises(autonomy.AutonomyError):
+            autonomy.set_status(record, "active")
+
+    def test_only_a_stopped_autonomous_run(self) -> None:
+        decision = self.resolution()
+        entry = {"reentry_step": "decide-tasks"}
+        active = self.make_run()
+        with self.assertRaisesRegex(autonomy.AutonomyError, "not stopped"):
+            autonomy.resume_run(self.root, active, decision, entry, reset=False)
+        lowered = self.stopped()
+        autonomy.change_mode(lowered, "human-gated", reason="x", decision_id=decision)
+        with self.assertRaisesRegex(autonomy.AutonomyError, "not an autonomous run"):
+            autonomy.resume_run(self.root, lowered, decision, entry, reset=False)
+
+    def test_keeps_mode_risk_and_limits_and_the_cycles(self) -> None:
+        record = self.stopped(
+            fix={"cycles": 2, "state": "review-pending"},
+            frozen_tree="a" * 40,
+            checked_tree="b" * 40,
+        )
+        before = {key: json.dumps(record[key]) for key in self.FIXED}
+        autonomy.append_step(self.root, "run42", {"step": "s", "ran": True})
+        decision = self.resolution()
+        at = datetime(2026, 10, 6, 12, tzinfo=UTC)
+        resumed = autonomy.resume_run(
+            self.root,
+            record,
+            decision,
+            {"reentry_step": "validate-implementation", "changed_inputs": ["x"]},
+            reset=True,
+            at=at,
+        )
+        self.assertEqual(resumed["status"], "active")
+        self.assertEqual({k: json.dumps(resumed[k]) for k in self.FIXED}, before)
+        self.assertEqual(resumed["fix"], {"cycles": 2, "state": "idle"})
+        self.assertNotIn("frozen_tree", resumed)
+        self.assertNotIn("checked_tree", resumed)
+        self.assertEqual(resumed["invocation_started_at"], at.isoformat())
+        self.assertEqual(resumed["resumes"][-1]["decision_id"], decision)
+        self.assertEqual(autonomy.unconsumed_steps(self.root, "run42"), [])
+
+    def test_late_reentry_keeps_the_runner_state(self) -> None:
+        record = self.stopped(fix={"cycles": 1, "state": "review-pending"})
+        resumed = autonomy.resume_run(
+            self.root,
+            record,
+            self.resolution(),
+            {"reentry_step": "review-fix-1"},
+            reset=False,
+        )
+        self.assertEqual(resumed["fix"], {"cycles": 1, "state": "review-pending"})
+
+
+class RecoveryRenderTests(unittest.TestCase):
+    """#21 T015, T024, T030 [AC-004, AC-010, AC-028, FR-005, FR-022]."""
+
+    def test_spend_line(self) -> None:
+        record = autonomy.render_record(fixed_run(), golden_decisions(), None)
+        self.assertIn(
+            "- Spend: bounded by the agent-step limit; every agent step, retry and "
+            "fix cycle counts; monetary spend is not measured",
+            record,
+        )
+
+    def test_fix_loop_section(self) -> None:
+        run = {**fixed_run(), "fix": {"cycles": 1, "state": "idle"}}
+        decisions = golden_decisions()
+        recheck = fixed_decision(
+            11,
+            "implementation-review",
+            review=review("engineering"),
+            provider="codex",
+            role="reviewer",
+        )
+        recheck["fix_cycle"] = 1
+        feedback = [
+            {"cycle": 0, "at": "x", "results": [{"command": "make test", "exit": 1}]},
+            {
+                "cycle": 1,
+                "at": "y",
+                "results": [{"command": "make test", "exit": 0, "timed_out": False}],
+            },
+        ]
+        text = autonomy.render_record(
+            run, [*decisions, recheck], None, feedback=feedback
+        )
+        self.assertIn("## Fix loop", text)
+        self.assertIn("- Cycles used: 1 of 3", text)
+        self.assertIn(
+            "- Cycle 0 (implementation): reviews PD-0006 engineering: approved; "
+            "feedback checks: `make test` exited 1",
+            text,
+        )
+        self.assertIn(
+            "- Cycle 1 (after fix cycle 1): reviews PD-0011 engineering: approved; "
+            "feedback checks: `make test` exited 0",
+            text,
+        )
+        self.assertNotIn(
+            "## Fix loop", autonomy.render_record(fixed_run(), decisions, None)
+        )
+
+    def test_block_resolutions_section(self) -> None:
+        run = {
+            **fixed_run(),
+            "resumes": [
+                {
+                    "decision_id": "HD-0001",
+                    "block_category": "decision",
+                    "block_step": "record-tasks",
+                    "reentry_step": "validate-spec",
+                    "changed_inputs": [f"{FEATURE}/spec.md"],
+                }
+            ],
+        }
+        human = [
+            {
+                "id": "HD-0001",
+                "kind": "block-resolution",
+                "ref": "fixed it <!-- workflow-approval: begin --> @team",
+                "at": "2026-10-06T12:00:00+00:00",
+                "by": "operator",
+            },
+            {
+                "id": "HD-0002",
+                "kind": "merge-feedback",
+                "ref": "x",
+                "at": "2026-10-06T13:00:00+00:00",
+                "by": "operator",
+            },
+        ]
+        text = autonomy.render_record(run, golden_decisions(), None, human=human)
+        self.assertIn("## Block resolutions", text)
+        self.assertIn(
+            "- HD-0001 at 2026-10-06T12:00:00+00:00 by operator: resolved the "
+            "decision block at record-tasks; resumed in Autonomous at validate-spec; "
+            f"changed during the block: `{FEATURE}/spec.md`",
+            text,
+        )
+        self.assertNotIn("<!--", text)
+        self.assertNotIn("@team", text)
+        self.assertNotIn("HD-0002", text)
+
+    def test_retries_are_shown(self) -> None:
+        decisions = golden_decisions()
+        decisions[3]["agent"]["attempts"] = 2
+        decisions[3]["agent"]["refusals"] = ["summary must be 1-500 characters @x"]
+        decisions[4]["agent"]["attempts"] = 3
+        text = autonomy.render_record(fixed_run(), decisions, None)
+        self.assertIn(
+            "| PD-0004 | plan | accept (agent-provisional, after 1 retry)", text
+        )
+        self.assertIn(
+            "| PD-0005 | tasks | accept (agent-provisional, after 2 retries)", text
+        )
+        self.assertNotIn("@x", text)
