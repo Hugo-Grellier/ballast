@@ -669,6 +669,25 @@ human-gated run. With `--mode chat`, `continue` lowers the run to chat and
 continues it as a linked [Chat run](#chat-runs) instead. Raising a run to
 Autonomous after start is never possible.
 
+**Refresh.** `ballast run checkpoint RUN_ID` refreshes the Draft PR checkpoint
+and the acceptance packet of an Autonomous run from the current records, in any
+status, `published` included, for example after `ballast ledger check`. It
+starts no agent and changes no decision, mode or status. Without a Draft PR it
+refuses and writes nothing; while another invocation of the run is active it
+refuses. The refreshed packet still lists every decision as agent-provisional.
+
+**Runs started before branch pinning.** A run started before v0.5.0 has a pin
+with only its `branch`, and every `resume` or `continue` blocks it as
+`wrong-branch`, "started before branch pinning". Nothing in Ballast writes the
+missing feature for it: the pin lives in the launcher state directory
+(`$XDG_STATE_HOME/ballast/<checkout>/draft-pr/<RUN_ID>.json`, outside the
+checkout), and only the operator may add it. Read the feature from the run's
+own record (`runs/<RUN_ID>/run.json`, field `feature`, in the same state
+directory, or the `feature_directory` of the start command you used), check
+that it is the feature the branch carries, add `"feature": "specs/<N>-<slug>"`
+to the pin (and `"branch"` when it is missing), then rerun the command. Never
+take the value from a file in the checkout.
+
 ## Chat runs
 
 Chat mode is the third per-run mode, beside human-gated and Autonomous. The
@@ -746,25 +765,6 @@ with `mode: chat`; `ballast ledger report --run RUN` reports it against the
 `ballast-feature` steps and gates. Conversation logs stay in ignored
 `.specify/workflow-state/<run>/agents/` like any agent log, and are never
 attached to, quoted in or linked from an Issue or a PR.
-
-**Refresh.** `ballast run checkpoint RUN_ID` refreshes the Draft PR checkpoint
-and the acceptance packet of an Autonomous run from the current records, in any
-status, `published` included, for example after `ballast ledger check`. It
-starts no agent and changes no decision, mode or status. Without a Draft PR it
-refuses and writes nothing; while another invocation of the run is active it
-refuses. The refreshed packet still lists every decision as agent-provisional.
-
-**Runs started before branch pinning.** A run started before v0.5.0 has a pin
-with only its `branch`, and every `resume` or `continue` blocks it as
-`wrong-branch`, "started before branch pinning". Nothing in Ballast writes the
-missing feature for it: the pin lives in the launcher state directory
-(`$XDG_STATE_HOME/ballast/<checkout>/draft-pr/<RUN_ID>.json`, outside the
-checkout), and only the operator may add it. Read the feature from the run's
-own record (`runs/<RUN_ID>/run.json`, field `feature`, in the same state
-directory, or the `feature_directory` of the start command you used), check
-that it is the feature the branch carries, add `"feature": "specs/<N>-<slug>"`
-to the pin (and `"branch"` when it is missing), then rerun the command. Never
-take the value from a file in the checkout.
 
 ## Local agent-run evidence
 
