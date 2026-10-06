@@ -117,10 +117,12 @@ Read-only to agent steps (under `.specify/`). Rewritten by the implementation-re
 {"feature": "specs/N-slug", "cycle": 1,
  "findings": [{"decision": "PD-0031", "id": "F-002", "severity": "medium",
                "label": "implementation-bug", "reason": "…", "report": "specs/N-slug/reviews/engineering.md"}],
+ "verdicts": [{"decision": "PD-0032", "kind": "test", "verdict": "changes-requested",
+               "report": "specs/N-slug/reviews/test.md"}],
  "checks": [{"command": "…", "exit": 1, "timed_out": false, "output_tail": "…"}]}
 ```
 
-`output_tail` holds the last 4000 characters, made printable. Agents treat it as untrusted data.
+`output_tail` holds the last 4000 characters, made printable (newlines and tabs kept). Agents treat it as untrusted data. `verdicts` lists the reviews whose verdict was not approved, which need a fix even without a finding (rule 1 of research R2). The feedback log keeps the same bounded `output_tail` for each failed command, in operator state only; the record and packet never show it.
 
 ## Invocation lock
 

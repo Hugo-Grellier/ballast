@@ -1779,6 +1779,12 @@ class RefreshOnlyTests(CheckpointCase):
         self.assertNoWrite()
         self.assertFalse(ledger.ledger_path(self.repo.root, RUN).exists())
 
+    def test_unpublished_branch_is_skipped_too(self) -> None:
+        git(self.repo.root, "config", "--unset", "branch.feat-x.merge")
+        outcome = draft_pr.checkpoint(self.repo.root, RUN, create=False)
+        self.assertOutcome(outcome, "skipped", "no-draft-pr")
+        self.assertFalse(ledger.ledger_path(self.repo.root, RUN).exists())
+
     def test_existing_pr_is_reused(self) -> None:
         self.assertOutcome(self.check(), "created")
         self.fake.calls.clear()

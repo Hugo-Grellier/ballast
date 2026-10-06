@@ -1157,6 +1157,10 @@ def checkpoint(root: Path, run_id: str, *, create: bool = True) -> Outcome:
             _outcome("failed-retryable", "internal-error", issue=work.run.issue),
             detail=type(error).__name__,
         )
+    if not create and outcome.state in {"pending", "blocked-unlinked"}:
+        # No published branch or no linked Issue: no Ballast Draft PR can
+        # exist, so a refresh has nothing to update and records nothing.
+        outcome = Outcome("skipped", "no-draft-pr", issue=outcome.issue)
     if outcome.state != "skipped" and work.run.feature is not None:
         try:
             _record(work.run, outcome)

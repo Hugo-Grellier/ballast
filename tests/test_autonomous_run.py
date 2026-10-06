@@ -285,10 +285,6 @@ class AgentWrapperAutonomousTests(WrapperCase):
         self.assertIsNone(self.ran())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RunCase(WrapperCase):
     """run.py in process: real eligibility (fake gh, fake bwrap), fake engine."""
 
@@ -1487,3 +1483,106 @@ class PublisherCheckpointTests(RunCase):
         self.assertIn(f"Autonomous run {run_id} for #27", body)
         self.assertEqual(body.count(run.draft_pr.MARK_BEGIN), 1)
         self.assertTrue(body.rstrip().endswith(run.draft_pr.MARK_END))
+
+
+class InvocationLockTests(RunCase):
+    """#21 T006, R13: one invocation per run; the lock tells live from dead."""
+
+    def test_lock_is_exclusive_and_released(self) -> None:
+        autonomy.run_dir(self.root, "run42").mkdir(parents=True, exist_ok=True)
+        with (
+            run._invocation_lock("run42"),  # noqa: SLF001
+            self.assertRaisesRegex(run.LockHeld, "run run42 has an active"),
+            run._invocation_lock("run42"),  # noqa: SLF001
+        ):
+            pass
+        with run._invocation_lock("run42"):  # noqa: SLF001 - free again
+            pass
+        lock = autonomy.run_dir(self.root, "run42") / "invocation.lock"
+        self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
+
+    def test_publish_refuses_while_held(self) -> None:
+        self.engine.update(status="failed", code=1, step="record-final")
+        self.start()
+        run_id = self.launched[0][1]
+        autonomy.record_block(
+            self.root,
+            run_id,
+            autonomy.make_block("forge", "push failed", run_id=run_id),
+        )
+        with run._invocation_lock(run_id):  # noqa: SLF001
+            code, _, err = self.main("publish", run_id)
+        self.assertEqual(code, 2)
+        self.assertIn("has an active invocation", err)
+
+
+class ReentryTests(unittest.TestCase):
+    """#21 T018, R6: the block step and the inputs that send a resume back."""
+
+    STEPS: ClassVar[list[str]] = list(autonomy.AUTONOMOUS_STEPS)
+
+    def test_block_step(self) -> None:
+        for failed, expected in (
+            ("decide-tasks", "decide-tasks"),
+            ("record-tasks", "decide-tasks"),
+            ("record-scope", "decide-scope"),
+            ("record-provisional-intent", "decide-intent"),
+            ("record-implementation-review", "review-implementation"),
+            ("record-fix-review-2", "review-fix-2"),
+            ("record-fix-3", "fix-3"),
+            ("record-reconciliation", "reconcile-spec"),
+            ("validate-plan", "validate-plan"),
+            ("checks-fix-1", "checks-fix-1"),
+            ("renew-intent", "renew-intent"),
+            (None, None),
+            ("unknown", None),
+        ):
+            with self.subTest(failed=failed):
+                self.assertEqual(run._block_step(failed, self.STEPS), expected)  # noqa: SLF001
+
+    def test_every_input_maps_to_a_validator(self) -> None:
+        for step in run.REENTRY_INPUTS.values():
+            self.assertIn(step, self.STEPS)
+            self.assertTrue(step.startswith("validate-"))
+
+
+class ContinueRefusalTests(RunCase):
+    """#21 T022 [AC-011, FR-011]: continue before implementation points to resume."""
+
+    def test_pre_implementation_continue_points_to_resume(self) -> None:
+        self.engine.update(status="failed", code=1, step="decide-tasks")
+        self.start()
+        run_id = self.launched[0][1]
+        code, _, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
+        self.assertEqual(code, 2)
+        self.assertIn(
+            f"run {run_id} stopped before implementation; resume it in Autonomous: "
+            f"ballast run resume {run_id}",
+            err,
+        )
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+        self.assertEqual(len(self.launched), 1)
+
+
+class HumanGatedUnchangedTests(WrapperCase):
+    """#21 T042 [AC-032, FR-025]: human-gated steps get no gate and no retry."""
+
+    def test_no_skip_and_no_retry_without_an_autonomous_record(self) -> None:
+        drafts = self.root / FEATURE / "autonomous/drafts"
+        result = self.wrapper(
+            prompt="/speckit-ballast-decide plan",
+            FAKE_DRAFTS=str(drafts),
+            FAKE_DRAFT_NAMES="plan.json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ran()["argv"][:2], ["-p", "/speckit-ballast-decide plan"])
+        self.assertNotIn("Ballast retry", " ".join(self.ran()["argv"]))
+        result = self.wrapper(prompt="/speckit-ballast-fix")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("skipped", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

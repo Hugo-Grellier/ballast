@@ -4189,3 +4189,30 @@ class EngineRepositionTests(unittest.TestCase):
             result.stdout + result.stderr,
         )
         self.assertEqual(run_module._engine_state("repo1")["status"], "completed")  # noqa: SLF001
+
+
+class EngineStepListTests(unittest.TestCase):
+    """#21 R7: the step list is read whatever the dump's key order."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.enterContext(patch.object(run_module, "ROOT", self.root))
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_any_key_order_and_indentation(self) -> None:
+        data = yaml.safe_load(AUTONOMOUS_WORKFLOW.read_text())
+        directory = self.root / ".specify/workflows/runs/r1"
+        directory.mkdir(parents=True)
+        expected = [step["id"] for step in data["steps"]]
+        for text in (
+            yaml.safe_dump(data, sort_keys=False),
+            yaml.safe_dump(data, sort_keys=True),
+            AUTONOMOUS_WORKFLOW.read_text(),
+        ):
+            (directory / "workflow.yml").write_text(text)
+            self.assertEqual(run_module._engine_steps("r1"), expected)  # noqa: SLF001
+        (directory / "workflow.yml").write_text("steps:\n- type: shell\n")
+        self.assertEqual(run_module._engine_steps("r1"), [])  # noqa: SLF001

@@ -12,6 +12,8 @@ kills the agent wrapper (an agent step that never finishes its check) and
 `interrupt` sends SIGINT to `$FAKE_INTERRUPT_PID`, Spec Kit and the wrapper
 (an operator Ctrl-C). The
 last two need an unconfined step: bwrap's PID namespace hides both processes.
+When the wrapper reruns a step with its retry note (#21), the fake uses the
+`<directory>-retry/` sibling instead, when there is one.
 """
 
 import os
@@ -31,6 +33,9 @@ step = plan / command
 CONTROL = {"stdout.txt", "tamper", "exec", "kill-parent", "interrupt"}
 if len(words) > 1 and (plan / f"{command}-{words[1]}").is_dir():
     step = plan / f"{command}-{words[1]}"
+# A step the wrapper reruns after a refused draft (#21) reads `<step>-retry`.
+if "Ballast retry" in prompt and step.with_name(step.name + "-retry").is_dir():
+    step = step.with_name(step.name + "-retry")
 if step.is_dir():
     for source in sorted(step.rglob("*")):
         relative = source.relative_to(step)

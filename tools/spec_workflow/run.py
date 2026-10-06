@@ -798,7 +798,8 @@ def _engine_state(run_id: str) -> dict:
     return state if isinstance(state, dict) else {}
 
 
-ENGINE_STEP = re.compile(r"^( *)- id: *['\"]?([A-Za-z0-9_.-]+)['\"]? *$", re.MULTILINE)
+ENGINE_ITEM = re.compile(r"^( *)- (.*)$")
+ENGINE_ID = re.compile(r"^id: *['\"]?([A-Za-z0-9_.-]+)['\"]? *$")
 
 
 def _engine_dir(run_id: str) -> Path:
@@ -812,14 +813,37 @@ def _engine_dir(run_id: str) -> Path:
 def _engine_steps(run_id: str) -> list[str]:
     """Top-level step IDs of the run's own workflow copy, in order (R7).
 
-    Read from its `- id:` lines: no YAML library under `python3 -I -S`.
+    Read from the items of its top-level `steps:` list, whatever their key
+    order (no YAML library under `python3 -I -S`). An item without an ID
+    makes the list unusable: [].
     """
-    text = (_engine_dir(run_id) / "workflow.yml").read_text(encoding="utf-8")
-    found = [(len(m.group(1)), m.group(2)) for m in ENGINE_STEP.finditer(text)]
-    if not found:
+    path = _engine_dir(run_id) / "workflow.yml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
         return []
-    top = min(indent for indent, _ in found)
-    return [step for indent, step in found if indent == top]
+    if "steps:" not in lines:
+        return []
+    steps: list[str | None] = []
+    indent = None
+    for line in lines[lines.index("steps:") + 1 :]:
+        if line and not line[0].isspace() and not line.startswith("-"):
+            break  # the next top-level key
+        item = ENGINE_ITEM.match(line)
+        if item and (indent is None or len(item.group(1)) == indent):
+            indent = len(item.group(1))
+            steps.append(None)
+            body = item.group(2)
+        elif steps and indent is not None and line.startswith(" " * (indent + 2)):
+            body = line[indent + 2 :]
+        else:
+            continue
+        found = ENGINE_ID.match(body)
+        if found and steps[-1] is None:
+            steps[-1] = found.group(1)
+    if not steps or None in steps:
+        return []
+    return [step for step in steps if step is not None]
 
 
 def _reposition_engine(run_id: str, step_id: str) -> None:
@@ -1488,7 +1512,7 @@ def _resume_refusal(  # noqa: C901, PLR0911 - one refusal per eligibility row
             f"run {run_id} stopped before its first agent step; remove the cause, "
             f"then start again: {autonomy.RESTART_COMMAND}"
         )
-    if not autonomy.resumable(category, block.get("limit")):
+    if category == "limit" and not autonomy.resumable(category, block.get("limit")):
         limit = autonomy.LIMIT_LABELS.get(block.get("limit") or "", "limit")
         return (
             f"run {run_id} reached its {limit}, and a resume never raises a limit; "
@@ -1523,7 +1547,10 @@ def _block_step(failed: str | None, steps: list[str]) -> str | None:
 
 def _reentry(run_id: str, record: dict, block: dict) -> tuple[str, list[str]]:
     """Return the earliest of the block step and changed inputs' steps (#21 R6)."""
-    steps = _engine_steps(run_id) or list(autonomy.AUTONOMOUS_STEPS)
+    steps = _engine_steps(run_id)
+    if not steps:
+        message = f"run {run_id}'s workflow copy lists no steps to resume at"
+        raise RuntimeError(message)
     step = _block_step(_engine_state(run_id).get("current_step_id"), steps)
     if step is None:
         message = f"run {run_id}'s workflow state names no step to resume at"
@@ -1638,12 +1665,12 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:
             ref
             or (
                 f"operator resumed after the {block['category']} block at "
-                f"{block.get('step_id') or reentry}"
+                f"{_engine_state(run_id).get('current_step_id') or reentry}"
             ),
             resolves="block",
         )
         autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))
-        steps = _engine_steps(run_id) or list(autonomy.AUTONOMOUS_STEPS)
+        steps = _engine_steps(run_id)
         review = "record-implementation-review"
         reset = review in steps and steps.index(reentry) <= steps.index(review)
         autonomy.resume_run(

@@ -639,6 +639,12 @@ An `active` run whose invocation is gone (the runner was killed) is stopped as
 `interrupted` and resumed. A rewind spends agent steps again; a run that runs
 out of them blocks, and the operator continues it human-gated.
 
+A paused run's work stays uncommitted until publication. When the base
+advanced during the pause, the synchronization therefore blocks the first
+resume with cause `dirty` (it never stashes or commits for you): commit the
+paused run's work on the feature branch, then resume again. The resume
+records no human decision until the synchronization passes.
+
 **Continue.** `continue` lowers a run to human-gated after implementation:
 
 - `ballast run continue RUN_ID --reason block-resolved --ref TEXT` after
