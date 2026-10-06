@@ -20,10 +20,10 @@ As approved in [`spec.md`](spec.md) at the digest recorded under Authority. The 
 
 <!-- workflow-provisional: begin -->
 - **Status**: agent-provisional, not human-approved
-- **Decision**: PD-0007
+- **Decision**: PD-0008
 - **Decided by**: claude/claude-opus-5-5 (author)
-- **Recorded**: 2026-10-06T12:55:05+00:00
+- **Recorded**: 2026-10-06T13:12:19+00:00
 - **Source**: ballast-autonomous run (d6b5dff2)
 - **Spec**: specs/22-ui-demo/spec.md
-- **Provisional spec digest**: sha256:0e63d22f16ebdb7ad130fc7833e940cae2668aa3cfdf4e5cff42a44127d4fc40
+- **Provisional spec digest**: sha256:d02e9b70fd03a9ec7048d18480edc11d56ee5f356c1c34c24ae171bcc545745c
 <!-- workflow-provisional: end -->

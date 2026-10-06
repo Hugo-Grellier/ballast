@@ -163,5 +163,5 @@ Phase 0 decisions for [plan.md](plan.md). Each entry gives the decision, the rat
   - **A feature-branch caller of a reusable workflow pinned to the default branch.** Rejected: the caller file on the branch still needs the same identity check, so it adds a second file and no safety.
 - **Consequences**:
   - A feature branch must contain the same `ballast-demo.yml` as the default branch. A branch cut before the template was installed, or one that changed it, is refused with the remedy to sync the branch with the default branch.
-  - FR-007 and AC-010 described the guarantee as "the definition comes from the default branch". The guarantee is now "the definition is identical to the default branch's, and no PR-head code runs under the default-branch ref". That needs a spec wording change: [decisions.md DEC-0001](decisions.md#dec-0001--proposal).
+  - FR-007 and AC-010 described the guarantee as "the definition comes from the default branch". The guarantee is now "the definition is identical to the default branch's, and no PR-head code runs under the default-branch ref". The spec was reworded to it: [decisions.md DEC-0001](decisions.md#dec-0001--proposal).
   - ADR-0012 records these rules and the race's bound.

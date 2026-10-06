@@ -2,7 +2,7 @@
 
 **Branch**: `feat/22-ui-demo` | **Date**: 2026-10-06 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `specs/22-ui-demo/spec.md` (intent agent-provisional, PD-0007, digest in [intent.md](intent.md))
+**Input**: Feature specification from `specs/22-ui-demo/spec.md` (intent agent-provisional, PD-0008 after the FR-007/AC-010 rewording of DEC-0001, digest in [intent.md](intent.md))
 
 **Risk**: R2, rechecked in [research R14](research.md#r14-risk-recheck). The change adds a path by which `ballast` causes a project command to run (on the forge runner) and one new GitHub write (workflow dispatch), proposed as ADR-0012. **Mode**: Autonomous run `d6b5dff2`. Every decision here is agent-provisional, including the pre-change R2 approval; merging the PR is the only human approval.
 
@@ -55,7 +55,7 @@ The video never changes a criterion's evidence state. Ballast never runs the pro
 - One new test file.
 - Documentation and ADR-0012.
 
-No NEEDS CLARIFICATION remains. All three D-05/D-06/D-07 assumptions and both clarifications (PD-0005, PD-0006) are realized as specified. [Research R7](research.md#r7-ledger-event-demo_capture) adds one presentation note, "declared command changed", to keep AC-007 truthful. It does not change behavior or authority. The plan review's F-001 changed how FR-007 is realized: the capture runs on the PR's head branch with a definition verified identical to the default branch's ([research R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001)). FR-007 and AC-010 need a wording change that keeps their intent; it is recorded in [decisions.md DEC-0001](decisions.md#dec-0001--proposal), and spec.md is not edited by the plan.
+No NEEDS CLARIFICATION remains. All three D-05/D-06/D-07 assumptions and both clarifications (PD-0005, PD-0006) are realized as specified. [Research R7](research.md#r7-ledger-event-demo_capture) adds one presentation note, "declared command changed", to keep AC-007 truthful. It does not change behavior or authority. The plan review's F-001 changed how FR-007 is realized: the capture runs on the PR's head branch with a definition verified identical to the default branch's ([research R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001)). FR-007 and AC-010 were reworded to that guarantee, keeping their intent, as recorded in [decisions.md DEC-0001](decisions.md#dec-0001--proposal); the plan realizes the reworded text.
 
 ## Constitution Check
 
@@ -130,7 +130,7 @@ specs/22-ui-demo/
 ├── discovery.md
 ├── spec.md
 ├── plan.md            # this file
-├── research.md        # Phase 0 decisions R1–R14
+├── research.md        # Phase 0 decisions R1–R15
 ├── data-model.md
 ├── contracts/
 │   ├── demo-config.md
@@ -156,7 +156,7 @@ specs/22-ui-demo/
 - **For the plan gate**:
   - confirm R2 and accept ADR-0012 as an extension of ADR-0003/0006;
   - accept that the command is passed as a dispatch input from the trusted local `ballast.toml` rather than read on the runner ([research R2](research.md#r2-where-the-contract-lives-and-what-the-runner-executes));
-  - accept the capture's execution scope: feature-branch ref with a verified definition instead of default-branch dispatch ([research R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001)), and the FR-007/AC-010 wording change it needs ([decisions.md DEC-0001](decisions.md#dec-0001--proposal));
+  - accept the capture's execution scope: feature-branch ref with a verified definition instead of default-branch dispatch ([research R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001)), and the FR-007/AC-010 rewording it required ([decisions.md DEC-0001](decisions.md#dec-0001--proposal));
   - accept that the live pilot (SC-001) is post-merge operator evidence ([research R13](research.md#r13-pilot-evidence-sc-001)).
 - **Known limit, documented**: captures belong to the run's ledger. A `ballast run continue` starts a new run whose packet lists the scenarios as `not yet requested` until the operator requests again.
 
