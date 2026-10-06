@@ -1,0 +1,1663 @@
+#!/usr/bin/env python3
+"""Adopt a blank or established repository; `ballast init` runs this file.
+
+Usage: tools/init --project ROOT --ref REF [--description TEXT]
+                  [--stack python|node|rust|go|neutral]
+
+Only the global `ballast` command is expected to call it, from the fetched
+standard (or BALLAST_STANDARD_DIR), under `python3 -I -S`. One stage sequence
+serves every repository: `check`, `inspect` (a fixed, size-bounded list of
+evidence files, read as data and never executed), `choose` (a blank
+repository's description and stack: a flag, else a terminal prompt, else a
+refusal), `plan`, then the first write: `git-init` (only without a
+repository), `ignore` (setup's block, appended once), `write` (absent
+project-owned files only, created exclusively and never through a link),
+`patch` (every change to an existing file goes into the ignored
+`.ballast/init/proposed.patch`), `install` (this version's tools/setup),
+`verify` and `report`.
+
+Init never runs a command it detects, never records trust, and never commits,
+pushes or adds a remote. Exit status: 0 when no readiness check is
+`not-ready`; 1 on a failed stage or a `not-ready` check; 2 on a refusal, which
+before `git-init` leaves the directory untouched.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import difflib
+import errno
+import json
+import os
+import posixpath
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+import tomllib
+from datetime import UTC, datetime
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+from typing import NamedTuple, NoReturn
+
+# Nothing init loads may leave bytecode in the standard directory (F-005).
+sys.dont_write_bytecode = True
+STANDARD = Path(__file__).resolve().parent.parent
+# The same version's setup owns the ignore block, its probes, the git prefix
+# and the installation; its launcher owns the pin rule and trust. Init
+# defines none of them again.
+_loader = SourceFileLoader("ballast_setup", str(STANDARD / "tools/setup"))
+setup = module_from_spec(spec_from_loader("ballast_setup", _loader))
+_loader.exec_module(setup)
+launcher = setup.launcher
+printable = setup.printable
+
+EXIT_FAILED, EXIT_REFUSED = 1, 2
+READY, WARNING, NOT_READY = "ready", "warning", "not-ready"
+STACKS = ("python", "node", "rust", "go", "neutral")
+STACK_FLAG = "pass --stack python|node|rust|go|neutral"
+STACK_RULE = f"the stack must be one of {', '.join(STACKS)}"
+DESCRIPTION_FLAG = "pass --description TEXT"
+DESCRIPTION_RULE = (
+    "the description must be one line of 1 to 200 printable characters without a "
+    "backtick"
+)
+MAX_BYTES = 256 * 1024
+MAX_WORKFLOWS = 20
+MAX_TEXT = 200
+CONFIG = "ballast.toml"
+IGNORE_FILE = ".gitignore"
+CONSTITUTION = setup.CONSTITUTION
+TESTING = "docs/policies/project/testing.md"
+AGENTS, CLAUDE = "AGENTS.md", "CLAUDE.md"
+PATCH_DIRECTORY, PATCH_NAME = (".ballast", "init"), "proposed.patch"
+PATCH = f"{'/'.join(PATCH_DIRECTORY)}/{PATCH_NAME}"
+# Created files, in write order (R9).
+WRITE_ORDER = (CONFIG, CONSTITUTION, TESTING, AGENTS, CLAUDE)
+OWNED = (CONFIG, IGNORE_FILE, CONSTITUTION, TESTING, AGENTS, CLAUDE)
+# Every Ballast instruction file links here; its absence means no section (R10).
+MARKER = "docs/policies/spec-kit-workflow.md"
+PROTECTED = ("ballast.toml", ".specify/", ".ballast/spec_workflow/")
+TIMEOUT_MINUTES = 30
+# Lockfiles and markers, by existence only, with the install command each
+# suggests for AGENTS.md (inferred).
+INSTALLS = {
+    "uv.lock": "uv sync --locked",
+    "poetry.lock": "poetry install",
+    "requirements.txt": "pip install -r requirements.txt",
+    "package-lock.json": "npm ci",
+    "pnpm-lock.yaml": "pnpm install --frozen-lockfile",
+    "yarn.lock": "yarn install --frozen-lockfile",
+    "bun.lock": "bun install --frozen-lockfile",
+    "bun.lockb": "bun install --frozen-lockfile",
+    "Cargo.lock": "cargo fetch --locked",
+    "go.sum": "go mod download",
+}
+MANAGERS = (
+    ("pnpm-lock.yaml", "pnpm"),
+    ("yarn.lock", "yarn"),
+    ("bun.lock", "bun"),
+    ("bun.lockb", "bun"),
+)
+MANIFESTS = ("pyproject.toml", "Cargo.toml", "package.json", "go.mod")
+DESCRIPTIONS = (
+    ("pyproject.toml", ("project", "description")),
+    ("package.json", ("description",)),
+    ("Cargo.toml", ("package", "description")),
+)
+MAKEFILES = ("Makefile", "makefile", "GNUmakefile")
+MAKE_TARGET = re.compile(r"^(test|check|lint)\s*:(?!=)")
+ARCHITECTURE = ("ARCHITECTURE.md", "docs/architecture.md", "docs/ARCHITECTURE.md")
+ADR_DIRECTORIES = ("docs/adr", "docs/decisions")
+PYTHON_MARKERS = ("pyproject.toml", "requirements.txt", "uv.lock", "poetry.lock")
+STACK_MARKERS = {
+    "python": PYTHON_MARKERS,
+    "node": ("package.json",),
+    "rust": ("Cargo.toml",),
+    "go": ("go.mod",),
+}
+# A blank repository's usual gate per chosen stack, always inferred.
+STACK_GATES = {
+    "python": "pytest",
+    "node": "npm test",
+    "rust": "cargo test",
+    "go": "go test ./...",
+}
+SCRIPTS = ("test", "lint", "check", "typecheck", "format:check")
+SCRIPT_ARGS = [[name] for name in SCRIPTS]
+# Recognised verifiers (R7): a program and the first arguments that qualify
+# it, None for any. `verifier` adds `python -m` MODULES, `prettier --check`,
+# `make` with a CHECK_TARGETS target, `<pm> test` and `<pm> run` with a SCRIPTS
+# name, and `uv run`/`uvx` only when the program they start is itself direct.
+VERIFIERS: dict[str, frozenset[str] | None] = {
+    **dict.fromkeys(
+        ("pytest", "ruff", "mypy", "pyright", "tox", "nox", "eslint", "tsc"), None
+    ),
+    "golangci-lint": None,
+    "npx": frozenset({"eslint", "tsc", "prettier", "vitest", "jest"}),
+    "cargo": frozenset({"test", "clippy", "fmt"}),
+    "go": frozenset({"test", "vet"}),
+}
+PACKAGE_MANAGERS = frozenset({"npm", "pnpm", "yarn", "bun"})
+CHECK_TARGETS = frozenset({"test", "check", "lint"})
+MODULES = frozenset({"pytest", "unittest", "mypy"})
+# A CI `run:` key, alone or as a sequence item.
+RUN = re.compile(r"^(?P<indent>\s*(?:-\s+)?)run:(?:\s+(?P<value>.*))?$")
+UNSAFE = ("${{", "$", "`", ";", "|", "&", "<", ">")
+WORKFLOW_NAME = re.compile(r"[A-Za-z0-9._-]+\.ya?ml")
+GITHUB_PREFIXES = ("https://github.com/", "git@github.com:", "ssh://git@github.com/")
+OWNER_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# An unreplaced `[UPPERCASE]` placeholder of templates/AGENTS.md, never a link.
+PLACEHOLDER = re.compile(r"\[[A-Z][A-Z0-9 ,]+[A-Z][^\]\n]*\](?!\()")
+MUSTACHE = re.compile(r"\{\{[a-z_]+\}\}")
+LINK = re.compile(r"\]\(([^)\s]+)\)")
+STARTER = "This file is a starting point."
+INVARIANTS = "[PROJECT INVARIANTS, OR A POINTER TO `.specify/memory/constitution.md`]"
+LAYOUT = "[WHERE THE APPLICATION, MIGRATIONS, CLIENTS AND TESTS LIVE]"
+R2_BOUNDARIES = "[PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]"
+# Optional copy-once files init never writes (FR-017): their targets.
+INTEGRATIONS = (
+    ".github/pull_request_template.md",
+    ".github/dependabot.yml",
+    ".github/workflows/pr-title.yml",
+)
+SYMLINK = "symbolic link"
+NOT_REGULAR = "not a regular file"
+LINKED = "init never writes through a link"
+UNLINK = "replace the link with a directory or a file, or remove it"
+DEFECT = "report this defect"
+FIX = "fix the cause above"
+
+
+class Stop(Exception):  # noqa: N818 - a stage outcome, not only an error
+    """A refusal (2) or a failed stage (1), reported with the stage."""
+
+    def __init__(self, cause: str, code: int, action: str) -> None:
+        """Keep the cause, the exit code and the operator's next action."""
+        super().__init__(cause)
+        self.cause, self.code, self.action = cause, code, action
+
+
+class Skipped(Exception):  # noqa: N818 - carries the skip reason
+    """An evidence file init does not use, and why."""
+
+
+class Evidence(NamedTuple):
+    """One entry of the fixed evidence list, used or not (data-model)."""
+
+    path: str
+    kind: str
+    status: str  # read | present | skipped
+    reason: str = ""
+
+
+class Value(NamedTuple):
+    """A detected value with its source and confidence (data-model)."""
+
+    key: str
+    value: str
+    source: str
+    confidence: str  # direct | inferred | operator
+
+
+class Check(NamedTuple):
+    """One readiness line of the report."""
+
+    name: str
+    status: str
+    detail: str
+
+
+def refused(cause: str, action: str) -> NoReturn:
+    """Refuse: exit 2, nothing written before `git-init`."""
+    raise Stop(cause, EXIT_REFUSED, action)
+
+
+def failed(cause: str, action: str = FIX) -> NoReturn:
+    """Fail the current stage: exit 1."""
+    raise Stop(cause, EXIT_FAILED, action)
+
+
+def toml_string(text: str) -> str:
+    """Quote text as a TOML basic string, escaping quotes and controls."""
+    out = []
+    for char in text:
+        if char in '"\\':
+            out.append("\\" + char)
+        elif char.isprintable():
+            out.append(char)
+        elif ord(char) <= 0xFFFF:  # noqa: PLR2004 - the \u escape's range
+            out.append(f"\\u{ord(char):04x}")
+        else:
+            out.append(f"\\U{ord(char):08x}")
+    return '"' + "".join(out) + '"'
+
+
+def plain_command(line: str) -> list[str] | None:
+    """Split a plain command line into words, or None (R7)."""
+    if (
+        not line
+        or len(line) > MAX_TEXT
+        or not line.isprintable()
+        or line.endswith("\\")
+        or any(mark in line for mark in UNSAFE)
+    ):
+        return None
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        return None
+    return words or None
+
+
+def verifier(words: list[str]) -> str | None:
+    """Classify a CI command (R7): "direct", "inferred" or None (not a check).
+
+    Inferred (written commented) is anything of a checking shape that is not a
+    known verifier: `uv run`/`uvx`/`npx` of another program, another `make`
+    target or `<pm> run` script, and pytest loading a plugin (`-p`) (SEC-001).
+    """
+    program, rest = words[0], words[1:]
+    first = rest[0] if rest else ""
+    if program in {"python", "python3"}:
+        module = rest[1] if first == "-m" and len(rest) > 1 else ""
+        if module not in MODULES:
+            return None
+        return verifier(rest[1:]) if module in VERIFIERS else "direct"
+    if (program == "uv" and first == "run") or program == "uvx":
+        inner = rest[1:] if program == "uv" else rest
+        return "direct" if inner and verifier(inner) == "direct" else "inferred"
+    # program: (a checking shape, a known verifier)
+    shapes = {
+        "make": (bool(rest), len(rest) == 1 and first in CHECK_TARGETS),
+        "prettier": ("--check" in rest, True),
+        **dict.fromkeys(
+            PACKAGE_MANAGERS,
+            (first in {"run", "test"}, first == "test" or rest[1:2] in SCRIPT_ARGS),
+        ),
+    }
+    if program in VERIFIERS:
+        allowed = VERIFIERS[program]
+        known = allowed is None or first in allowed
+        plugin = program == "pytest" and any(w.startswith("-p") for w in rest)
+        shapes[program] = (known or program == "npx", known and not plugin)
+    shape, known = shapes.get(program, (False, False))
+    if not shape:
+        return None
+    return "direct" if known else "inferred"
+
+
+def ci_lines(text: str) -> list[tuple[str, int]]:
+    """List the candidate commands of a workflow's `run:` steps, with lines.
+
+    A line scanner, not a YAML parser (FR-023): a single-line `run:` value and
+    each line of a literal `run: |` block; folded blocks are skipped.
+    """
+    lines = text.splitlines()
+    found: list[tuple[str, int]] = []
+    index = 0
+    while index < len(lines):
+        match = RUN.match(lines[index])
+        index += 1
+        if match is None:
+            continue
+        value = (match["value"] or "").strip()
+        if not value.startswith(("|", ">")):
+            found.append((_scalar(value), index))
+            continue
+        column = len(match["indent"])
+        while index < len(lines):
+            line = lines[index]
+            if line.strip() and len(line) - len(line.lstrip(" ")) <= column:
+                break
+            if value.startswith("|"):
+                found.append((line.strip(), index + 1))
+            index += 1
+    return [(c, n) for c, n in found if c and not c.startswith("#")]
+
+
+def _scalar(value: str) -> str:
+    """Read a one-line YAML scalar: quotes removed, a trailing comment dropped."""
+    if len(value) > 1 and value[0] in "'\"" and value[-1] == value[0]:
+        return value[1:-1]
+    return re.split(r"\s+#", value, maxsplit=1)[0].strip()
+
+
+def github_repository(url: str) -> str | None:
+    """Return `OWNER/REPO` of a GitHub `origin` URL, or None (R13)."""
+    for prefix in GITHUB_PREFIXES:
+        if url.startswith(prefix):
+            rest = url[len(prefix) :].removesuffix("/").removesuffix(".git")
+            return rest if OWNER_REPO.fullmatch(rest) else None
+    return None
+
+
+def rule_allows(rule: str, command: str) -> bool:
+    """Whether a Claude `Bash(...)` rule matches a command (as doctor's)."""
+    match = re.fullmatch(r"Bash\((.*)\)", rule)
+    if match is None:
+        return False
+    body = match.group(1)
+    if body.endswith(":*"):
+        return command.startswith(body[:-2])
+    pattern = ".*".join(re.escape(part) for part in body.split("*"))
+    return re.fullmatch(pattern, command) is not None
+
+
+def description_error(text: str) -> str | None:
+    """Say why a description is unusable (R5), or return None."""
+    if not 1 <= len(text) <= MAX_TEXT or not text.isprintable() or "`" in text:
+        return DESCRIPTION_RULE
+    return None
+
+
+def read_file(root: Path, name: str, limit: int = MAX_BYTES) -> bytes:
+    """Read root/name as a regular file, never through a link (R6).
+
+    Raises FileNotFoundError when absent, Skipped with the reason when the
+    file or a parent is unusable.
+    """
+    *parents, leaf = name.split("/")
+    try:
+        fd = setup._open_dir(root, tuple(parents), create=False)  # noqa: SLF001
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        reason = SYMLINK if linked_parent(root, name) else NOT_REGULAR
+        raise Skipped(reason) from error
+    try:
+        found = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+        if not stat.S_ISREG(found.st_mode):
+            raise Skipped(SYMLINK if stat.S_ISLNK(found.st_mode) else NOT_REGULAR)
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+        reader = os.open(leaf, flags, dir_fd=fd)
+        try:
+            opened = os.fstat(reader)
+            if not stat.S_ISREG(opened.st_mode):
+                raise Skipped(NOT_REGULAR)
+            if opened.st_size > limit:
+                raise Skipped(too_large(limit))
+            with open(reader, "rb", closefd=False) as handle:
+                data = handle.read(limit + 1)
+        finally:
+            os.close(reader)
+    finally:
+        os.close(fd)
+    if len(data) > limit:
+        raise Skipped(too_large(limit))
+    return data
+
+
+def too_large(limit: int) -> str:
+    """Name the size limit a file exceeds."""
+    return f"larger than {limit // 1024} KiB"
+
+
+def linked_parent(root: Path, name: str) -> str | None:
+    """Return the first parent of root/name that is a link, if any.
+
+    The errno of a no-follow open does not say it: Linux reports a linked
+    directory as ENOTDIR.
+    """
+    parts = name.split("/")
+    for depth in range(1, len(parts)):
+        parent = "/".join(parts[:depth])
+        if (root / parent).is_symlink():
+            return parent
+    return None
+
+
+def lstat(root: Path, name: str) -> os.stat_result | None:
+    """Return lstat of root/name, or None when absent or reached through a link."""
+    *parents, leaf = name.split("/")
+    try:
+        fd = setup._open_dir(root, tuple(parents), create=False)  # noqa: SLF001
+    except OSError:
+        return None
+    try:
+        return os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def create(root: Path, name: str, content: str, *, link: bool = False) -> None:
+    """Create root/name exclusively, parents included, never through a link.
+
+    Raises FileExistsError when anything, even a dangling link, is there.
+    """
+    *parents, leaf = name.split("/")
+    try:
+        fd = setup._open_dir(root, tuple(parents), create=True)  # noqa: SLF001
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.ENOTDIR} and linked_parent(root, name):
+            refused(f"a parent of {name} is a symbolic link; {LINKED}", UNLINK)
+        raise
+    try:
+        if link:
+            os.symlink(content, leaf, dir_fd=fd)
+            return
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+        writer = os.open(leaf, flags, 0o644, dir_fd=fd)
+        with os.fdopen(writer, "w", encoding="utf-8") as handle:
+            handle.write(content)
+    finally:
+        os.close(fd)
+
+
+def read_template(name: str) -> str:
+    """Read a shipped template of this standard version."""
+    return (STANDARD / "templates" / name).read_text(encoding="utf-8")
+
+
+def fill(template: str, values: dict[str, str]) -> str:
+    """Replace each `{{name}}` in one pass; an unknown one is a defect.
+
+    One pass, so a value holding `{{...}}` (a description) stays verbatim.
+    """
+    unknown = [m[0] for m in MUSTACHE.finditer(template) if m[0][2:-2] not in values]
+    if unknown:
+        failed(f"template placeholder {unknown[0]} has no value", DEFECT)
+    return MUSTACHE.sub(lambda m: values[m[0][2:-2]], template)
+
+
+def _json_line(text: str, key: str) -> str:
+    """Locate `package.json:LINE` of a script key, after the `"scripts"` key."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if '"scripts"' in line), 0)
+    for number in range(start, len(lines)):
+        if re.search(rf'"{re.escape(key)}"\s*:', lines[number]):
+            return f"package.json:{number + 1}"
+    return "package.json"
+
+
+def _toml_line(text: str, header: str) -> str:
+    """Locate `pyproject.toml:LINE` of the first line starting a table."""
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith(header):
+            return f"pyproject.toml:{number}"
+    return "pyproject.toml"
+
+
+class Init:
+    """One adoption of one repository."""
+
+    def __init__(
+        self, root: Path, ref: str, description: str | None, stack: str | None
+    ) -> None:
+        """Keep the arguments; every stage fills the rest."""
+        self.root, self.ref = root, ref
+        self.flags = {"description": description, "stack": stack}
+        self.stage = "check"
+        self.repository = False
+        self.pinned = False
+        self.kind = "established"
+        self.evidence: list[Evidence] = []
+        self.texts: dict[str, str] = {}
+        self.instructions: dict[str, tuple[str, str] | None] = {}
+        self.description: Value | None = None
+        self.stacks: list[Value] = []
+        self.checks: list[Value] = []
+        self.github: Value | None = None
+        self.origin = False
+        self.architecture: str | None = None
+        self.adr: str | None = None
+        self.install_hint: str | None = None
+        self.creates: dict[str, str] = {}
+        self.proposals: dict[str, tuple[str, str, str]] = {}
+        self.planned: list[str] = []
+        self.written: list[str] = []
+        self.appended = False
+        self.owned_ignored: list[str] = []
+        self.patch_state: str | None = None
+        self.patch_text = ""
+
+    # --- running -------------------------------------------------------------
+
+    def main(self) -> int:
+        """Run every stage, then verify and report; return the exit status."""
+        stages = (
+            ("check", self.check),
+            ("inspect", self.inspect),
+            ("choose", self.choose),
+            ("plan", self.plan),
+            ("git-init", self.git_init),
+            ("ignore", self.ignore),
+            ("write", self.write),
+            ("patch", self.write_patch),
+            ("install", self.install),
+        )
+        try:
+            for name, stage in stages:
+                self.stage = name
+                stage()
+        except Stop as stop:
+            self.report_stop(stop)
+            return stop.code
+        except OSError as error:
+            self.report_stop(Stop(str(error), EXIT_FAILED, FIX))
+            return EXIT_FAILED
+        self.stage = "verify"
+        checks = self.verify()
+        self.report(checks)
+        return EXIT_FAILED if any(c.status == NOT_READY for c in checks) else 0
+
+    def git(self, *args: str, data: str | None = None) -> subprocess.CompletedProcess:
+        """Run git in the root: hooks, pager and fsmonitor off, no terminal."""
+        return subprocess.run(  # noqa: S603 - fixed git subcommands, data as arguments
+            [*setup.GIT, *args],
+            cwd=self.root,
+            input=data,
+            stdin=None if data is not None else subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    # --- check ----------------------------------------------------------------
+
+    def check(self) -> None:
+        """Refuse a bad ref, a pin that differs, a nested root or a link."""
+        if not launcher.REF.fullmatch(self.ref) or ".." in self.ref:
+            refused(
+                f"{self.ref} is not a tag or commit of the standard",
+                "pass --ref with a release tag such as v1.2.3",
+            )
+        if not self.root.is_dir():
+            refused(f"{self.root} is not a directory", "cd into it")
+        self.check_links()
+        if os.path.lexists(self.root / CONFIG):
+            self.pinned = True
+            pin = launcher.pinned_ref(self.root)
+            if pin is None:
+                refused(
+                    "ballast.toml is unreadable (a link, not a regular file or "
+                    "larger than 256 KiB) or has no valid [standard] ref",
+                    'make it a regular file with [standard] ref = "vX.Y.Z"',
+                )
+            if pin != self.ref:
+                refused(
+                    f"ballast.toml pins {pin}; init keeps the pin",
+                    f"omit --ref, or move the pin with `ballast preview {self.ref}` "
+                    "and a reviewed edit",
+                )
+        result = self.git("rev-parse", "--show-toplevel")
+        if result.returncode != 0:
+            if os.path.lexists(self.root / ".git"):
+                refused(
+                    f"git cannot read the repository here: {result.stderr.strip()}",
+                    "repair the repository",
+                )
+            return
+        top = Path(result.stdout.strip()).resolve()
+        if top != self.root.resolve():
+            refused(
+                f"inside the repository at {top}; run `ballast init` at its root",
+                f"cd {top}",
+            )
+        self.repository = True
+
+    def check_links(self) -> None:
+        """Refuse a link on .gitignore, ballast.toml or any parent init writes."""
+        names = {*setup.PARENTS, IGNORE_FILE, CONFIG}
+        for name in (*WRITE_ORDER, PATCH):
+            parts = name.split("/")
+            names.update("/".join(parts[:depth]) for depth in range(1, len(parts)))
+        for name in sorted(names):
+            if (self.root / name).is_symlink():
+                refused(f"{name} is a symbolic link; {LINKED}", UNLINK)
+
+    # --- inspect --------------------------------------------------------------
+
+    def note(self, path: str, kind: str, status: str, reason: str = "") -> None:
+        """Record one evidence item."""
+        self.evidence.append(Evidence(path, kind, status, reason))
+
+    def linked(self, name: str) -> str | None:
+        """Return the first parent of name that is a link, if any."""
+        return linked_parent(self.root, name)
+
+    def read(self, name: str, kind: str) -> str | None:
+        """Return an evidence file's text, or None when absent or skipped."""
+        try:
+            data = read_file(self.root, name)
+        except FileNotFoundError:
+            return None
+        except Skipped as skipped:
+            self.note(self.linked(name) or name, kind, "skipped", str(skipped))
+            return None
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.note(name, kind, "skipped", "not UTF-8")
+            return None
+        self.note(name, kind, "read")
+        return text
+
+    def present(self, name: str, kind: str, *, directory: bool = False) -> bool:
+        """Whether an existence-only evidence path is there, not as a link."""
+        found = lstat(self.root, name)
+        if found is None:
+            linked = self.linked(name)
+            if linked:
+                self.note(linked, kind, "skipped", SYMLINK)
+            return False
+        if stat.S_ISLNK(found.st_mode):
+            self.note(name, kind, "skipped", SYMLINK)
+            return False
+        if stat.S_ISDIR(found.st_mode) != directory:
+            return False
+        self.note(name, kind, "present")
+        return True
+
+    def inspect(self) -> None:
+        """Read the fixed evidence list as data (R6); classify the repository."""
+        entries = [p for p in self.root.iterdir() if p.name != ".git"]
+        self.kind = "established" if entries else "blank"
+        self.read_instructions()
+        manifests = self.read_manifests()
+        locks = [name for name in INSTALLS if self.present(name, "lockfile")]
+        self.detect_stacks(manifests, locks)
+        self.description = self.flag_value("description")
+        self.description = self.description or self.manifest_description(manifests)
+        self.checks = self.detect_checks(manifests, locks)
+        self.architecture = next(
+            (p for p in ARCHITECTURE if self.present(p, "architecture")), None
+        )
+        self.adr = next(
+            (d for d in ADR_DIRECTORIES if self.present(d, "adr", directory=True)),
+            None,
+        )
+        self.install_hint = locks[0] if locks else None
+        self.read_origin()
+        self.planned = self.planned_paths(self.candidates())
+
+    def read_instructions(self) -> None:
+        """Record AGENTS.md and CLAUDE.md: a link target, a file's text, or None."""
+        for name in (AGENTS, CLAUDE):
+            found = lstat(self.root, name)
+            if found is None:
+                continue
+            if stat.S_ISLNK(found.st_mode):
+                self.instructions[name] = ("link", str((self.root / name).readlink()))
+                self.note(name, "instructions", "present")
+                continue
+            text = self.read(name, "instructions")
+            self.instructions[name] = None if text is None else ("file", text)
+
+    def read_manifests(self) -> dict[str, object]:
+        """Parse pyproject.toml, Cargo.toml and package.json; read go.mod."""
+        parsed: dict[str, object] = {}
+        for name in MANIFESTS:
+            text = self.read(name, "manifest")
+            if text is None:
+                continue
+            try:
+                data = self.parse(name, text)
+            except ValueError as error:
+                self.evidence.pop()  # the read is replaced by its skip
+                cause = str(error).splitlines()[0] if str(error) else repr(error)
+                self.note(name, "manifest", "skipped", f"parse error: {cause}")
+                continue
+            self.texts[name] = text
+            parsed[name] = data
+        return parsed
+
+    @staticmethod
+    def parse(name: str, text: str) -> object:
+        """Parse one manifest; ValueError when it is malformed."""
+        if name == "go.mod":
+            return text
+        if name != "package.json":
+            return tomllib.loads(text)
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            message = "not a JSON object"
+            raise ValueError(message)  # noqa: TRY004 - a parse error, reported as one
+        return data
+
+    def flag_value(self, key: str) -> Value | None:
+        """Turn an operator flag into a detected value."""
+        value = self.flags[key]
+        return None if value is None else Value(key, value, "operator", "operator")
+
+    def detect_stacks(self, manifests: dict, locks: list[str]) -> None:
+        """Detect stacks from manifests and lockfiles; neutral, inferred, else."""
+        operator = self.flag_value("stack")
+        if operator:
+            self.stacks = [operator]
+            return
+        found = {*manifests, *locks}
+        for stack, markers in STACK_MARKERS.items():
+            source = next((m for m in markers if m in found), None)
+            if source:
+                self.stacks.append(Value("stack", stack, source, "direct"))
+        if not self.stacks and self.kind == "established":
+            neutral = Value("stack", "neutral", "no recognised manifest", "inferred")
+            self.stacks = [neutral]
+
+    @staticmethod
+    def manifest_description(manifests: dict) -> Value | None:
+        """Return the first usable manifest description; never asked (PD-0013)."""
+        for name, keys in DESCRIPTIONS:
+            value: object = manifests.get(name)
+            for key in keys:
+                value = value.get(key) if isinstance(value, dict) else None
+            if isinstance(value, str) and description_error(value.strip()) is None:
+                return Value("description", value.strip(), name, "direct")
+        return None
+
+    def detect_checks(self, manifests: dict, locks: list[str]) -> list[Value]:
+        """Detect direct checks from CI and named scripts, then inferred ones."""
+        found: list[Value] = []
+        for name in self.workflows():
+            text = self.read(name, "ci")
+            for line, number in ci_lines(text or ""):
+                words = plain_command(line)
+                if words and (kind := verifier(words)):
+                    found.append(Value("check", line, f"{name}:{number}", kind))
+        found += self.script_checks(manifests, locks)
+        found += self.make_checks()
+        found += self.manifest_checks(manifests, locks)
+        unique: dict[str, Value] = {}
+        for value in found:
+            unique.setdefault(value.value, value)
+        return list(unique.values())
+
+    def script_checks(self, manifests: dict, locks: list[str]) -> list[Value]:
+        """Collect named package.json scripts, run with the lockfile's manager."""
+        package = manifests.get("package.json")
+        scripts = package.get("scripts") if isinstance(package, dict) else None
+        if not isinstance(scripts, dict):
+            return []
+        manager = next((pm for lock, pm in MANAGERS if lock in locks), "npm")
+        text = self.texts["package.json"]
+        return [
+            Value("check", f"{manager} run {s}", _json_line(text, s), "direct")
+            for s in SCRIPTS
+            if isinstance(scripts.get(s), str)
+        ]
+
+    def make_checks(self) -> list[Value]:
+        """Collect the Makefile targets `test`, `check` and `lint` (inferred)."""
+        for name in MAKEFILES:
+            text = self.read(name, "makefile")
+            if text is None:
+                continue
+            return [
+                Value("check", f"make {match[1]}", f"{name}:{number}", "inferred")
+                for number, line in enumerate(text.splitlines(), 1)
+                if (match := MAKE_TARGET.match(line))
+            ]
+        return []
+
+    def manifest_checks(self, manifests: dict, locks: list[str]) -> list[Value]:
+        """Collect the gates a manifest only suggests (inferred)."""
+        found: list[Value] = []
+        pyproject = manifests.get("pyproject.toml")
+        tool = pyproject.get("tool") if isinstance(pyproject, dict) else None
+        if isinstance(tool, dict):
+            prefix = "uv run " if "uv.lock" in locks else ""
+            text = self.texts["pyproject.toml"]
+            pytest = tool.get("pytest")
+            if isinstance(pytest, dict) and "ini_options" in pytest:
+                source = _toml_line(text, "[tool.pytest.ini_options]")
+                found.append(Value("check", prefix + "pytest", source, "inferred"))
+            if "ruff" in tool:
+                source = _toml_line(text, "[tool.ruff")
+                found.append(Value("check", prefix + "ruff check", source, "inferred"))
+        if "Cargo.toml" in manifests:
+            found.append(Value("check", "cargo test", "Cargo.toml", "inferred"))
+        if "go.mod" in manifests:
+            found.append(Value("check", "go test ./...", "go.mod", "inferred"))
+        return found
+
+    def workflows(self) -> list[str]:
+        """List at most 20 `.github/workflows/*.yml|*.yaml`, by name (R6)."""
+        try:
+            fd = setup._open_dir(self.root, (".github", "workflows"), create=False)  # noqa: SLF001
+        except FileNotFoundError:
+            return []
+        except OSError:
+            linked = self.linked(".github/workflows/x")
+            reason = SYMLINK if linked else NOT_REGULAR
+            self.note(linked or ".github/workflows", "ci", "skipped", reason)
+            return []
+        try:
+            names = sorted(n for n in os.listdir(fd) if n.endswith((".yml", ".yaml")))  # noqa: PTH208 - a directory fd
+        finally:
+            os.close(fd)
+        usable = []
+        for number, name in enumerate(names):
+            path = f".github/workflows/{name}"
+            if number >= MAX_WORKFLOWS:
+                self.note(path, "ci", "skipped", "more than 20 workflows")
+            elif not WORKFLOW_NAME.fullmatch(name):
+                self.note(printable(path), "ci", "skipped", "unusual file name")
+            else:
+                usable.append(path)
+        return usable
+
+    def read_origin(self) -> None:
+        """Read the GitHub repository from `origin` with config-safe git."""
+        if not self.repository:
+            return
+        result = self.git("remote", "get-url", "origin")
+        if result.returncode != 0:
+            return
+        self.origin = True
+        self.note("git remote origin", "remote", "read")
+        repository = github_repository(result.stdout.strip())
+        if repository:
+            self.github = Value("github", repository, "git remote origin", "direct")
+
+    def candidates(self) -> list[str]:
+        """List the project-owned files init would create now."""
+        absent = [n for n in (CONFIG, CONSTITUTION) if not self.exists(n)]
+        if not self.instructions:
+            absent += [AGENTS, CLAUDE]
+        return absent
+
+    def planned_paths(self, creates: list[str]) -> list[str]:
+        """Order every planned write for the stop report."""
+        planned = [] if self.repository else [".git/"]
+        if not self.exists(IGNORE_FILE):
+            planned.append(IGNORE_FILE)
+        planned += [n for n in WRITE_ORDER if n in creates]
+        if self.proposals:
+            planned.append(PATCH)
+        return planned
+
+    def exists(self, name: str) -> bool:
+        """Whether anything, even a dangling link, is at root/name."""
+        return os.path.lexists(self.root / name)
+
+    # --- choose ---------------------------------------------------------------
+
+    def choose(self) -> None:
+        """Settle a blank repository's description and stack (R5); never invent."""
+        if self.description is not None and description_error(self.description.value):
+            refused(DESCRIPTION_RULE, "pass a valid --description TEXT")
+        if self.flags["stack"] not in {None, *STACKS}:
+            refused(STACK_RULE, STACK_FLAG)
+        if self.kind != "blank":
+            return
+        if self.description is None:
+            answer = self.ask(
+                "Product description (one line): ",
+                f"missing the product description; {DESCRIPTION_FLAG}",
+                DESCRIPTION_FLAG,
+            )
+            if description_error(answer):
+                refused(DESCRIPTION_RULE, "pass a valid --description TEXT")
+            self.description = Value("description", answer, "operator", "operator")
+        if not self.stacks:
+            answer = self.ask(
+                "Stack (python, node, rust, go or neutral): ",
+                f"missing the stack; {STACK_FLAG}",
+                STACK_FLAG,
+            )
+            if answer not in STACKS:
+                refused(STACK_RULE, STACK_FLAG)
+            self.stacks = [Value("stack", answer, "operator", "operator")]
+
+    @staticmethod
+    def ask(question: str, missing: str, action: str) -> str:
+        """Ask the operator's terminal once, or refuse without one."""
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            refused(missing, action)
+        try:
+            answer = input(question)
+        except EOFError:
+            refused(missing, action)
+        return answer.strip()
+
+    # --- plan -----------------------------------------------------------------
+
+    def plan(self) -> None:
+        """Render and validate every create and proposal in memory."""
+        stack = self.stacks[0].value if self.stacks else "neutral"
+        if self.kind == "blank" and stack in STACK_GATES:
+            gate = Value("check", STACK_GATES[stack], "the chosen stack", "inferred")
+            self.checks.append(gate)
+        if not self.exists(CONFIG):
+            self.creates[CONFIG] = self.render_config()
+        if not self.exists(CONSTITUTION):
+            self.creates[CONSTITUTION] = self.render_constitution()
+        if self.direct_checks() and not self.exists(TESTING):
+            self.creates[TESTING] = self.render_testing()
+        if not self.instructions:
+            self.creates[AGENTS] = self.render_agents()
+            self.creates[CLAUDE] = AGENTS  # a relative link target
+        self.propose_section()
+        if self.pinned:
+            self.propose_drift()
+        self.planned = self.planned_paths(list(self.creates))
+
+    def direct_checks(self) -> list[Value]:
+        """List the checks with direct evidence: active in ballast.toml."""
+        return [c for c in self.checks if c.confidence == "direct"]
+
+    def inferred_checks(self) -> list[Value]:
+        """List the checks only inferred: commented in ballast.toml."""
+        return [c for c in self.checks if c.confidence == "inferred"]
+
+    def render_config(self) -> str:
+        """Render ballast.toml, parsed back before any write (contract)."""
+        lines = [
+            "# Generated by `ballast init`. Review it, then run `ballast trust`.",
+            "[standard]",
+            f"ref = {toml_string(self.ref)}",
+            *self.checks_lines(),
+            *self.permission_lines(),
+            "",
+            *self.github_lines(),
+        ]
+        text = "\n".join(lines) + "\n"
+        try:
+            config = tomllib.loads(text)
+        except ValueError as error:
+            failed(f"the rendered ballast.toml does not parse: {error}", DEFECT)
+        standard = config.get("standard")
+        if standard != {"ref": self.ref} or "agents" in config:
+            failed("the rendered ballast.toml changes the pin or a permission", DEFECT)
+        return text
+
+    def checks_lines(self) -> list[str]:
+        """Render `[checks]`: direct commands active, inferred ones commented."""
+        direct, inferred = self.direct_checks(), self.inferred_checks()
+        if not direct and not inferred:
+            return []
+        entries = [
+            f"  {toml_string(c.value)},  # evidence: {printable(c.source)}"
+            for c in direct
+        ]
+        entries += [
+            f"  # {toml_string(c.value)},  # inferred from {printable(c.source)}; "
+            "confirm, then uncomment"
+            for c in inferred
+        ]
+        table = ["[checks]", "commands = [", *entries, "]"]
+        table.append(f"timeout_minutes = {TIMEOUT_MINUTES}")
+        if direct:
+            return ["", *table]
+        commented = [
+            "#   " + line[4:] if line.startswith("  # ") else "# " + line
+            for line in table
+        ]
+        note = "# No check command was found in CI or a named manifest script."
+        return ["", note, *commented]
+
+    def permission_lines(self) -> list[str]:
+        """Render the `extra_allow` suggestion, commented and inferred (AC-019)."""
+        if not self.checks:
+            return []
+        rules = [
+            f"#   {toml_string(f'Bash({c.value}*)')},  # inferred" for c in self.checks
+        ]
+        return [
+            "",
+            "# Headless agents may run only what this allowlist names. Inferred from",
+            "# the checks above; confirm, then uncomment.",
+            "# [agents.permissions]",
+            "# extra_allow = [",
+            *rules,
+            "# ]",
+        ]
+
+    def github_lines(self) -> list[str]:
+        """Render `[github]` from a GitHub origin, else its explanatory comment."""
+        if self.github is None:
+            return [
+                (
+                    '# [github] repository = "OWNER/REPO"  # no GitHub origin found;'
+                    " set it for intake and Draft PRs"
+                )
+            ]
+        value = toml_string(self.github.value)
+        return ["[github]", f"repository = {value}  # evidence: git remote origin"]
+
+    def description_text(self) -> tuple[str, str]:
+        """Return the description and its source, or what to confirm."""
+        if self.description is None:
+            return "TO CONFIRM: what this project does", "TO CONFIRM"
+        source = self.description.source
+        if source == "operator":
+            source = "the operator, at `ballast init`"
+        return printable(self.description.value), source
+
+    def stack_text(self) -> tuple[str, str]:
+        """Return the stack and its source."""
+        if not self.stacks:
+            return "neutral", "inferred: no recognised manifest"
+        stacks = ", ".join(s.value for s in self.stacks)
+        first = self.stacks[0]
+        if first.confidence == "operator":
+            return stacks, "operator"
+        if first.confidence == "inferred":
+            return stacks, f"inferred: {first.source}"
+        return stacks, "evidence: " + ", ".join(s.source for s in self.stacks)
+
+    def gate_lines(self, indent: str) -> str:
+        """Render each check as a Markdown list item with its evidence."""
+        lines = [
+            f"{indent}- `{c.value}` (evidence: {printable(c.source)})"
+            for c in self.direct_checks()
+        ]
+        lines += [
+            f"{indent}- `{c.value}` (inferred from {printable(c.source)}; confirm)"
+            for c in self.inferred_checks()
+        ]
+        return "\n".join(lines) or f"{indent}- TO CONFIRM: no gate command was found"
+
+    def render_constitution(self) -> str:
+        """Render the project constitution from templates/init/constitution.md."""
+        description, source = self.description_text()
+        stack, stack_source = self.stack_text()
+        values = {
+            "description": description,
+            "description_source": source,
+            "stack": stack,
+            "stack_source": stack_source,
+            "gates": self.gate_lines("  "),
+            "date": datetime.now(UTC).date().isoformat(),
+        }
+        return fill(read_template("init/constitution.md"), values)
+
+    def render_testing(self) -> str:
+        """Render the project testing addendum (direct check evidence only)."""
+        return fill(read_template("init/testing.md"), {"gates": self.gate_lines("")})
+
+    def agents_values(self) -> dict[str, str]:
+        """Give the value of every templates/AGENTS.md placeholder (contract)."""
+        description, source = self.description_text()
+        if self.description is not None:
+            description = f"{description} (source: {source})"
+        gates = ", ".join(
+            f"`{c.value}` (evidence: {printable(c.source)})"
+            for c in self.direct_checks()
+        )
+        install = "TO CONFIRM: locked dependency install commands"
+        if self.install_hint:
+            hint = self.install_hint
+            install = f"`{INSTALLS[hint]}` (inferred from {hint}; confirm)"
+        found = "(found by `ballast init`)"
+        architecture = self.architecture
+        return {
+            "[PROJECT NAME]": printable(self.root.name).replace("`", ""),
+            "[WHAT THIS PROJECT DOES]": description,
+            LAYOUT: "TO CONFIRM: layout",
+            "[ACCEPTED ARCHITECTURE DOCUMENT]": (
+                f"[{architecture}]({architecture}) {found}"
+                if architecture
+                else "TO CONFIRM: architecture document"
+            ),
+            "[ADR DIRECTORY]": (
+                f"`{self.adr}/` {found}" if self.adr else "TO CONFIRM: ADR directory"
+            ),
+            "[GLOSSARY PATH]": "TO CONFIRM: glossary path",
+            "[LOCKED DEPENDENCY INSTALL COMMANDS]": install,
+            "[COMMAND]": gates or "TO CONFIRM: gate command",
+            INVARIANTS: "See the [constitution](.specify/memory/constitution.md).",
+            R2_BOUNDARIES: (
+                "TO CONFIRM: project R2 boundaries; see `docs/policies/workflow.md`"
+            ),
+            "[RELEASE OR COMMIT-TITLE CONVENTION]": (
+                "TO CONFIRM: release or commit-title convention"
+            ),
+            "[PROCESS OR LINK]": "TO CONFIRM: approval process",
+        }
+
+    def render_agents(self) -> str:
+        """Render AGENTS.md from the copy-once template, starter paragraph removed."""
+        lines = read_template("AGENTS.md").splitlines(keepends=True)
+        starts = [i for i, line in enumerate(lines) if line.startswith(STARTER)]
+        if len(starts) != 1:
+            failed("templates/AGENTS.md has no starter paragraph", DEFECT)
+        del lines[starts[0] : starts[0] + 2]
+        text = "".join(lines)
+        for placeholder, value in self.agents_values().items():
+            text = text.replace(placeholder, value)
+        left = PLACEHOLDER.search(text)
+        if left:
+            failed(f"templates/AGENTS.md placeholder {left[0]} has no value", DEFECT)
+        return text
+
+    def propose_section(self) -> None:
+        """Propose the Ballast section for an existing instruction file (R10)."""
+        agents, claude = self.instructions.get(AGENTS), self.instructions.get(CLAUDE)
+        found = None
+        if agents is not None and agents[0] == "file":
+            found = (AGENTS, agents[1])
+        elif AGENTS not in self.instructions and claude and claude[0] == "file":
+            found = (CLAUDE, claude[1])
+        if found is None or MARKER in found[1]:
+            return
+        name, text = found
+        separator = "" if not text or text.endswith("\n") else "\n"
+        section = read_template("init/agents-section.md")
+        self.proposals[name] = (text, text + separator + section, "Ballast section")
+
+    def propose_drift(self) -> None:
+        """Propose appending what new evidence adds to ballast.toml (R14)."""
+        try:
+            text = read_file(self.root, CONFIG).decode("utf-8")
+        except Skipped as skipped:
+            failed(f"ballast.toml is unusable ({skipped})", "shorten ballast.toml")
+        config = tomllib.loads(text)
+        added = self.checks_drift(config.get("checks"))
+        github = config.get("github")
+        if self.github is not None and not isinstance(github, dict):
+            added += ["", *self.github_lines()]
+        elif self.github is not None and github.get("repository") != self.github.value:
+            value = toml_string(self.github.value)
+            added.append(
+                f"# ballast init found: github repository {value} "
+                "(evidence: git remote origin)"
+            )
+        if added:
+            separator = "" if text.endswith("\n") else "\n"
+            new = text + separator + "\n".join(added) + "\n"
+            self.proposals[CONFIG] = (text, new, "new evidence")
+
+    def checks_drift(self, checks: object) -> list[str]:
+        """Build the lines to append for direct checks `[checks]` lacks."""
+        direct = self.direct_checks()
+        if not isinstance(checks, dict):
+            if not direct:
+                return []
+            entries = [
+                f"  {toml_string(c.value)},  # evidence: {printable(c.source)}"
+                for c in direct
+            ]
+            tail = ["]", f"timeout_minutes = {TIMEOUT_MINUTES}"]
+            return ["", "[checks]", "commands = [", *entries, *tail]
+        commands = checks.get("commands")
+        known = commands if isinstance(commands, list) else []
+        return [
+            f"# ballast init found: {toml_string(c.value)} "
+            f"(evidence: {printable(c.source)})"
+            for c in direct
+            if c.value not in known
+        ]
+
+    # --- git-init and ignore --------------------------------------------------
+
+    def git_init(self) -> None:
+        """Run `git init` only when there is no repository (FR-002)."""
+        if self.repository:
+            return
+        result = self.git("init", "-q", "--template=")
+        if result.returncode != 0:
+            failed(f"git init failed: {result.stderr.strip()}")
+        self.repository = True
+        self.written.append(".git/")
+
+    def ignored(self, names: list[str]) -> set[str]:
+        """Return the given paths the repository's ignore rules ignore."""
+        if not names:
+            return set()
+        data = "\0".join(names) + "\0"
+        result = self.git("check-ignore", "--no-index", "-z", "--stdin", data=data)
+        return set(result.stdout.split("\0")) & set(names)
+
+    def failing_probes(self) -> list[tuple[str, bool]]:
+        """Return setup's IGNORE_PROBES that do not hold."""
+        found = self.ignored([path for path, _ in setup.IGNORE_PROBES])
+        return [(p, want) for p, want in setup.IGNORE_PROBES if (p in found) != want]
+
+    def rule(self, path: str) -> tuple[str, int, str]:
+        """Return the rule deciding whether path is ignored: source, line, pattern."""
+        result = self.git(
+            *("check-ignore", "-v", "-z", "--no-index", "--non-matching", "--stdin"),
+            data=path + "\0",
+        )
+        source, line, pattern, *_ = [*result.stdout.split("\0"), "", "", ""]
+        if not source or not line.isdigit():
+            return "", 0, ""
+        return source, int(line), pattern
+
+    def ignore(self) -> None:
+        """Add setup's block when the probes fail; stop on a conflict (R8)."""
+        if self.failing_probes():
+            self.add_block()
+        failing = self.failing_probes()
+        edits: dict[str, dict[int, str]] = {}
+        causes = []
+        for path, want in failing:
+            source, line, pattern = self.rule(path)
+            shown = f"rule {source}:{line}:{pattern}" if source else "no rule matches"
+            what = "installed paths are not" if want else "project files are"
+            causes.append(f"{what} ignored: {path} ({shown})")
+            verb = "un-ignores" if want else "ignores"
+            self.edit_rule(edits, source, line, f"{verb} {path}")
+        owned = [n for n in WRITE_ORDER if n in self.creates]
+        for path in [n for n in owned if n in self.ignored(owned)]:
+            source, line, _ = self.rule(path)
+            self.owned_ignored.append(f"{path} ({source}:{line})" if source else path)
+            self.edit_rule(edits, source, line, f"ignores {path}")
+        for source, lines in edits.items():
+            self.propose_rule_edits(source, lines)
+        if failing:
+            try:
+                self.write_patch()
+            except OSError:  # keep the ignore cause; print the patch instead
+                self.patch_state = "unwritable"
+            failed("; ".join(causes), "apply the proposed patch or change the rule")
+
+    def add_block(self) -> None:
+        """Create .gitignore with the block, or append the block once (FR-007)."""
+        try:
+            old = read_file(self.root, IGNORE_FILE, limit=4 * MAX_BYTES)
+        except FileNotFoundError:
+            create(self.root, IGNORE_FILE, setup.GITIGNORE)
+            self.written.append(IGNORE_FILE)
+            return
+        except Skipped as skipped:
+            remedy = UNLINK if str(skipped) == SYMLINK else "shrink or replace it"
+            refused(f".gitignore is unusable ({skipped})", remedy)
+        text = old.decode("utf-8", "replace")
+        if setup.GITIGNORE in text:
+            return
+        separator = "\n" if text and not text.endswith("\n") else ""
+        fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
+            writer = os.open(IGNORE_FILE, flags, dir_fd=fd)
+        finally:
+            os.close(fd)
+        with os.fdopen(writer, "w", encoding="utf-8") as handle:
+            handle.write(separator + setup.GITIGNORE)
+        self.appended = True
+
+    @staticmethod
+    def edit_rule(
+        edits: dict[str, dict[int, str]], source: str, line: int, what: str
+    ) -> None:
+        """Note a rule to comment out, when it lives in a .gitignore here."""
+        name = Path(source)
+        if (
+            source
+            and not name.is_absolute()
+            and name.name == IGNORE_FILE
+            and ".." not in name.parts
+            and name.parts[0] != ".git"
+        ):
+            edits.setdefault(source, {})[line] = what
+
+    def propose_rule_edits(self, source: str, lines: dict[int, str]) -> None:
+        """Propose commenting each conflicting rule out, explained, in one hunk set."""
+        try:
+            text = read_file(self.root, source, limit=4 * MAX_BYTES).decode("utf-8")
+        except (OSError, Skipped, UnicodeDecodeError):
+            return
+        old = text.splitlines(keepends=True)
+        new = list(old)
+        for number in sorted(lines, reverse=True):
+            if 0 < number <= len(old):
+                rule = old[number - 1].rstrip("\n")
+                explained = [f"# ballast init: {lines[number]}:\n", f"# {rule}\n"]
+                new[number - 1 : number] = explained
+        if new != old:
+            self.proposals[source] = (text, "".join(new), "conflicting ignore rule")
+
+    # --- write and patch ------------------------------------------------------
+
+    def write(self) -> None:
+        """Create absent files exclusively, never through a link (R9)."""
+        for name in WRITE_ORDER:
+            if name not in self.creates:
+                continue
+            with contextlib.suppress(FileExistsError):
+                create(self.root, name, self.creates[name], link=name == CLAUDE)
+                self.written.append(name)
+
+    def diff(self) -> str:
+        """Build one unified diff of every proposal, `git apply`-able (R10)."""
+        chunks = []
+        for name in sorted(self.proposals):
+            old, new, _ = self.proposals[name]
+            for line in difflib.unified_diff(
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
+                f"a/{name}",
+                f"b/{name}",
+            ):
+                missing = not line.endswith("\n")
+                chunks.append(line + ("\n\\ No newline at end of file\n" * missing))
+        return "".join(chunks)
+
+    def write_patch(self) -> None:
+        """Write, replace or remove the ignored patch; print it when not ignored."""
+        self.patch_text = self.diff()
+        if not self.patch_text:
+            self.patch_state = None
+            with contextlib.suppress(FileNotFoundError):
+                fd = setup._open_dir(self.root, PATCH_DIRECTORY, create=False)  # noqa: SLF001
+                try:
+                    os.unlink(PATCH_NAME, dir_fd=fd)
+                finally:
+                    os.close(fd)
+            return
+        if PATCH not in self.ignored([PATCH]):
+            self.patch_state = "printed"
+            return
+        fd = setup._open_dir(self.root, PATCH_DIRECTORY, create=True)  # noqa: SLF001
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            writer = os.open(PATCH_NAME, flags, 0o644, dir_fd=fd)
+        finally:
+            os.close(fd)
+        with os.fdopen(writer, "w", encoding="utf-8") as handle:
+            handle.write(self.patch_text)
+        self.patch_state = "written"
+
+    # --- install --------------------------------------------------------------
+
+    def install(self) -> None:
+        """Install through this version's setup, in process (R11, FR-014)."""
+        try:
+            setup.Setup(self.root).main()
+        except setup.RefusedError as refusal:
+            refused(f"install: {refusal}", FIX)
+        except (setup.StageFailedError, RuntimeError, ValueError, OSError) as error:
+            failed(f"install: {error}")
+
+    # --- verify ---------------------------------------------------------------
+
+    def verify(self) -> list[Check]:
+        """Run the five readiness checks (R12), reusing setup's and the launcher's."""
+        return [
+            self.verify_instructions(),
+            self.verify_ignored(),
+            self.verify_pin(),
+            self.verify_trust(),
+            self.verify_checks(),
+        ]
+
+    def broken_link(self, name: str, text: str) -> str | None:
+        """Return the first relative Markdown link of name that does not resolve."""
+        base = posixpath.dirname(name)
+        root = self.root.resolve()
+        for target in LINK.findall(text):
+            path = target.split("#", 1)[0]
+            if not path or ":" in path or path.startswith("/"):
+                continue
+            resolved = (self.root / posixpath.join(base, path)).resolve()
+            if not resolved.is_relative_to(root) or not resolved.exists():
+                return path
+        return None
+
+    def instruction_text(self, name: str) -> str | None:
+        """Read the instruction entry point, following a link inside the root."""
+        root = self.root.resolve()
+        resolved = (self.root / name).resolve()
+        if not resolved.is_relative_to(root):
+            return None
+        try:
+            data = read_file(self.root, resolved.relative_to(root).as_posix())
+            return data.decode("utf-8")
+        except (OSError, Skipped, UnicodeDecodeError):
+            return None
+
+    def verify_instructions(self) -> Check:  # noqa: PLR0911 - one return per state
+        """Check the entry point exists, has the Ballast workflow and resolves."""
+        name = next((n for n in (AGENTS, CLAUDE) if self.exists(n)), None)
+        if name is None:
+            return Check("instructions", NOT_READY, "no AGENTS.md or CLAUDE.md")
+        text = self.instruction_text(name)
+        if text is None:
+            return Check("instructions", WARNING, f"{name} could not be read")
+        if MARKER not in text:
+            detail = f"{name} has no Ballast section; see the proposed patch"
+            if name not in self.proposals:
+                target = (self.root / name).resolve().relative_to(self.root.resolve())
+                detail = (
+                    f"{name} links to {target.as_posix()}, which has no Ballast "
+                    "section; add templates/init/agents-section.md there"
+                )
+            return Check("instructions", WARNING, detail)
+        severity = NOT_READY if name in self.written else WARNING
+        broken = self.broken_link(name, text)
+        if broken:
+            detail = f"{name} links to {broken}, which does not resolve"
+            return Check("instructions", severity, detail)
+        claude = self.root / CLAUDE
+        if name == AGENTS and claude.is_symlink():
+            if claude.resolve() != (self.root / AGENTS).resolve():
+                detail = "CLAUDE.md does not resolve to AGENTS.md"
+                return Check("instructions", severity, detail)
+            detail = "AGENTS.md has the Ballast workflow; CLAUDE.md links to it"
+            return Check("instructions", READY, f"{detail}; its links resolve")
+        detail = f"{name} has the Ballast workflow; its links resolve"
+        return Check("instructions", READY, detail)
+
+    def verify_ignored(self) -> Check:
+        """Check every probe holds and no project-owned file is ignored (AC-013)."""
+        failing = self.failing_probes()
+        if failing:
+            shown = ", ".join(path for path, _ in failing)
+            return Check("ignored-paths", NOT_READY, f"probes fail: {shown}")
+        owned = [n for n in WRITE_ORDER if self.exists(n)]
+        ignored = sorted(self.ignored(owned))
+        if ignored or self.owned_ignored:
+            shown = ", ".join(self.owned_ignored or ignored)
+            detail = f"project files are ignored: {shown}; see the proposed patch"
+            return Check("ignored-paths", NOT_READY, detail)
+        count = len(setup.IGNORE_PROBES)
+        detail = f"{count} probes hold; project-owned files are not ignored"
+        return Check("ignored-paths", READY, detail)
+
+    def verify_pin(self) -> Check:
+        """Check the pin is the running version and setup reports it current."""
+        pin = launcher.pinned_ref(self.root)
+        if pin != self.ref:
+            detail = f"ballast.toml pins {pin}, not {self.ref}"
+            return Check("pinned-version", NOT_READY, detail)
+        try:
+            status = setup.Setup(self.root).status(launcher.state_dir(self.root))
+        except (OSError, ValueError) as error:
+            detail = f"setup status unknown: {error}"
+            return Check("pinned-version", NOT_READY, detail)
+        if status != "current":
+            return Check("pinned-version", NOT_READY, f"setup reports {status}")
+        return Check("pinned-version", READY, f"{self.ref} installed and current")
+
+    def verify_trust(self) -> Check:
+        """Check init wrote no baseline: the launcher refuses until trust."""
+        refusal = launcher._refusal(self.root)  # noqa: SLF001 - same standard version
+        if refusal is None:
+            detail = "a trust baseline matches these inputs; `ballast run` is allowed"
+        elif refusal.startswith("no trusted baseline"):
+            detail = "no trust baseline; the launcher refuses until `ballast trust`"
+        elif refusal.startswith("workflow inputs changed since `trust`"):
+            detail = (
+                "the trust baseline predates these inputs; the launcher refuses "
+                "until `ballast trust`"
+            )
+        else:
+            return Check("trust-boundary", NOT_READY, refusal)
+        return Check("trust-boundary", READY, detail)
+
+    def verify_checks(self) -> Check:
+        """Check each active check's program exists, without running it."""
+        try:
+            text = read_file(self.root, CONFIG).decode("utf-8")
+            config = tomllib.loads(text)
+        except (OSError, Skipped, ValueError) as error:
+            return Check("checks", NOT_READY, f"cannot read ballast.toml: {error}")
+        commands = _strings(config, "checks", "commands")
+        if not commands:
+            todo = "confirm the inferred ones"
+            if "# [checks]" not in text:
+                todo = "no check command was found; add the project's gate"
+            detail = f"no active [checks] commands; {todo} in ballast.toml"
+            return Check("checks", WARNING, detail)
+        rules = _strings(config, "agents", "permissions", "extra_allow")
+        programs = dict.fromkeys(
+            (plain_command(c) or c.split() or [""])[0] for c in commands
+        )
+        parts = [f"{p}: {'found' if self.found(p) else 'not found'}" for p in programs]
+        status = READY if all(map(self.found, programs)) else WARNING
+        uncovered = [c for c in commands if not any(rule_allows(r, c) for r in rules)]
+        if uncovered:
+            status = WARNING
+            shown = ", ".join(f'"{c}"' for c in uncovered)
+            parts.append(f"extra_allow does not cover {shown} (see ballast.toml)")
+        return Check("checks", status, "; ".join(parts))
+
+    def found(self, program: str) -> bool:
+        """Whether a check's program exists: on PATH, or as a path in the root."""
+        if "/" in program:
+            root = self.root.resolve()
+            resolved = (root / program).resolve()
+            return resolved.is_relative_to(root) and resolved.exists()
+        return bool(program) and shutil.which(program) is not None
+
+    # --- report ---------------------------------------------------------------
+
+    def patch_lines(self) -> list[str]:
+        """Name the proposed patch, or print it when it could not be written."""
+        if self.patch_state is None:
+            return []
+        proposals = sorted(self.proposals.items())
+        reasons = ", ".join(f"{name}: {why}" for name, (_, _, why) in proposals)
+        if self.patch_state == "written":
+            return [f"Proposed patch: {PATCH} ({reasons})"]
+        return [
+            f"Proposed patch ({reasons}); not written because {PATCH} "
+            + (
+                "is not ignored:"
+                if self.patch_state == "printed"
+                else "cannot be written:"
+            ),
+            *self.patch_text.splitlines(),
+        ]
+
+    def to_confirm(self) -> list[str]:
+        """List the inferred values the operator should confirm."""
+        items = [] if self.description is not None else ["description"]
+        items += [
+            f"stack {s.value} ({s.source})"
+            for s in self.stacks
+            if s.confidence == "inferred"
+        ]
+        items += [f'check "{c.value}" ({c.source})' for c in self.inferred_checks()]
+        return items
+
+    def integrations(self) -> list[str]:
+        """List the optional copy-once files and stack CI this repository lacks."""
+        missing = [target for target in INTEGRATIONS if not self.exists(target)]
+        if not any(e.kind == "ci" and e.status == "read" for e in self.evidence):
+            missing.append("stack CI")
+        return missing
+
+    def github_configured(self) -> bool:
+        """Whether the committed ballast.toml already has a `[github]` table."""
+        try:
+            config = tomllib.loads(read_file(self.root, CONFIG).decode("utf-8"))
+        except (OSError, Skipped, ValueError):
+            return False
+        return isinstance(config.get("github"), dict)
+
+    def kept(self) -> list[str]:
+        """List the project-owned targets that already existed, kept as they are."""
+        return [n for n in OWNED if n not in self.written and self.exists(n)]
+
+    def report(self, checks: list[Check]) -> None:
+        """Print the readiness report (contract init-tool.md)."""
+        lines = [
+            f"ballast init: {self.kind} repository at {self.root} (pin {self.ref})",
+            f"Written: {', '.join(self.written) or 'none'}",
+            f"Kept: {', '.join(self.kept()) or 'none'}",
+        ]
+        if self.appended:
+            lines.append("Appended the Ballast ignore block to .gitignore")
+        skipped = [f"{e.path} ({e.reason})" for e in self.evidence if e.reason]
+        if skipped:
+            lines.append("Skipped evidence: " + "; ".join(skipped))
+        if self.to_confirm():
+            lines.append("To confirm (inferred): " + "; ".join(self.to_confirm()))
+        lines += self.patch_lines()
+        if self.github is None and not self.github_configured():
+            reason = "origin is not on GitHub" if self.origin else "no origin remote"
+            lines.append(
+                f"GitHub repository: not set ({reason}); add [github] repository = "
+                '"OWNER/REPO" to ballast.toml for intake and Draft PRs'
+            )
+        lines.append("Readiness:")
+        lines += [f"  {c.name:<16}{c.status:<11}{c.detail}" for c in checks]
+        if self.integrations():
+            lines.append(
+                f"Not written (optional): {', '.join(self.integrations())}; copy them "
+                "from the standard's templates/github/ (README: Using the copy-once "
+                "templates)"
+            )
+        lines.append(f"Review these protected inputs: {', '.join(PROTECTED)}")
+        lines.append(f"Next: {self.next_action(checks)}")
+        sys.stdout.write("".join(printable(line) + "\n" for line in lines))
+
+    @staticmethod
+    def next_action(checks: list[Check]) -> str:
+        """Name the operator's exact next action."""
+        if any(c.status == NOT_READY for c in checks):
+            return "fix the not-ready checks above, then rerun `ballast init`"
+        trust = next(c for c in checks if c.name == "trust-boundary")
+        if trust.detail.startswith("a trust baseline matches"):
+            return "run `ballast run`"
+        return "review the files above, then run `ballast trust`"
+
+    def report_stop(self, stop: Stop) -> None:
+        """Name the stage, what was and was not written, and what to do next."""
+        missing = [n for n in self.planned if n not in self.written]
+        lines = [
+            f"ballast init: stopped at {self.stage}: {stop.cause}",
+            f"Written: {', '.join(self.written) or 'none'}",
+            f"Not written: {', '.join(missing) or 'none'}",
+            *(["Appended the Ballast ignore block to .gitignore"] * self.appended),
+            *self.patch_lines(),
+            f"Next: {stop.action}, then rerun `ballast init`",
+        ]
+        sys.stdout.write("".join(printable(line) + "\n" for line in lines))
+
+
+def _strings(config: dict, *keys: str) -> list[str]:
+    """Return the strings of a nested list in a parsed TOML document."""
+    value: object = config
+    for key in keys:
+        value = value.get(key) if isinstance(value, dict) else None
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+class Once(argparse.Action):
+    """Store an option given at most once."""
+
+    def __call__(self, parser, namespace, values, option_string=None) -> None:  # noqa: ANN001
+        """Refuse a second value instead of letting it override the first."""
+        if getattr(namespace, self.dest) is not None:
+            parser.error(f"{option_string} is given more than once")
+        setattr(namespace, self.dest, values)
+
+
+def cli(argv: list[str]) -> int:
+    """Parse the arguments and adopt the repository."""
+    parser = argparse.ArgumentParser(
+        prog="ballast init", description=__doc__.splitlines()[0], allow_abbrev=False
+    )
+    # The CLI checked one root and one ref: a second value never overrides them.
+    parser.add_argument("--project", type=Path, required=True, action=Once)
+    parser.add_argument("--ref", required=True, action=Once)
+    parser.add_argument("--description")
+    parser.add_argument("--stack")
+    arguments = parser.parse_args(argv)
+    root = arguments.project.resolve()
+    return Init(root, arguments.ref, arguments.description, arguments.stack).main()
+
+
+if __name__ == "__main__":
+    sys.exit(cli(sys.argv[1:]))
