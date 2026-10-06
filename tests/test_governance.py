@@ -169,10 +169,11 @@ class PolicyWordingTests(unittest.TestCase):
 
 
 # Pre-#21 values: the feature must not widen what a headless agent may do.
+# #79 added chmod, deliberately: bwrap confines it to the worktree.
 SETTINGS_DIGEST = "064a1d2d39e7915c10708c28c52abb88b4556875fc120bc913fd74738599816c"
 CONFINED_ALLOW = tuple(
     f"Bash({command}{rest})"
-    for command in ("ls", "cat", "head", "tail", "wc", "find")
+    for command in ("ls", "cat", "head", "tail", "wc", "find", "chmod")
     for rest in ("", " *")
 )
 CONFINED_DENY = tuple(

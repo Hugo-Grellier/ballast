@@ -81,9 +81,13 @@ def served_pr(number: int, body: str, **changes: object) -> dict:
     }
 
 
-# Beside the real default: bwrap gives ~/.cache a writable overlay, which the
-# confinement self-test rightly treats as reachable state.
-STATE_PARENT = Path.home() / ".local/state/ballast-tests"
+# Beside the real state, never under ~/.cache: bwrap gives ~/.cache a writable
+# overlay, which the confinement self-test rightly treats as reachable state.
+# A confined step's XDG_STATE_HOME is its own throwaway directory (#79).
+STATE_PARENT = (
+    Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    / "ballast-tests"
+)
 
 
 def outside_temp() -> Path:
@@ -956,6 +960,20 @@ class ConfinementTests(AutonomyCase):
         )
         self.assertEqual(argv[-2:], ["--", "true"])
 
+    def test_step_gets_throwaway_state_and_uv_tool_directories(self) -> None:
+        """#79: tests and uvx write state a step owns, never the operator's."""
+        argv = self.argv()
+        joined = " ".join(argv)
+        for name, path in autonomy.STEP_DIRECTORIES.items():
+            with self.subTest(name=name):
+                self.assertTrue(Path(path).is_relative_to("/run"))
+                self.assertIn(f"--dir {path} --setenv {name} {path}", joined)
+                self.assertGreater(joined.index(path), joined.index("--tmpfs /run "))
+        # Outside every temp root, so the tests' state_dir accepts it.
+        state = Path(autonomy.STEP_DIRECTORIES["XDG_STATE_HOME"])
+        with patch.dict(os.environ, {"XDG_STATE_HOME": str(state)}):
+            self.assertTrue(autonomy.state_dir(self.root).is_relative_to(state))
+
     def test_agent_gets_the_claude_login_without_refresh_tokens(self) -> None:
         """#65: a confined refresh would rotate away the operator's login."""
         home = self.base / "home"
@@ -1555,6 +1573,29 @@ class RealConfinementTests(AutonomyCase):
 
     def test_self_test_passes(self) -> None:
         autonomy.confinement_self_test(self.root)
+
+    def test_step_state_is_writable_and_the_operator_state_is_not(self) -> None:
+        """#79: a confined step can create state and run uvx, and none persists."""
+        operator = autonomy.state_dir(self.root)
+        operator.mkdir(parents=True, exist_ok=True)
+        code = (
+            "import os, pathlib, sys\n"
+            "state = pathlib.Path(os.environ['XDG_STATE_HOME'], 'ballast-tests')\n"
+            "state.mkdir(parents=True)\n"
+            "(state / 'probe').write_text('x')\n"
+            "pathlib.Path(os.environ['UV_TOOL_DIR'], 'probe').write_text('x')\n"
+            "try:\n"
+            "    open(sys.argv[1], 'w').write('x')\n"
+            "except OSError:\n"
+            "    sys.exit(0)\n"
+            "sys.exit(3)\n"
+        )
+        probe = operator / ".ballast-probe"
+        result = self.confined("python3", "-I", "-S", "-c", code, str(probe))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(probe.exists())
+        for path in autonomy.STEP_DIRECTORIES.values():
+            self.assertFalse(Path(path).exists())
 
     def test_dns_resolves_inside_when_it_does_outside(self) -> None:
         """Agent steps keep the host network and its resolver configuration."""
