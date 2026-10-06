@@ -36,6 +36,7 @@ Every decision here is agent-provisional (autonomous run `38380ec3`, implemented
 
 - **Classification**: implementation detail serving AC-023.
 - **Decision**: the key is present only when a baseline exists (`"setup"` or `"trust"`); with none it is omitted rather than `null`, so the printed JSON for a checkout without a baseline is byte-identical to before and `PrepareTriggerTests.test_non_preparing_commands` (which compares the whole object) passes unedited. Doctor treats an absent and a `null` key the same.
+- **Residual conflict with AC-023 and SC-003**: FR-013 requires the key once a baseline exists, and two existing launcher tests compare the whole object after `ballast trust` (`TrustedLauncherTests.test_status_reports_the_refusal_without_writing` and `test_pinned_and_installed_versions_differ`). Their three whole-object assertions gain `"baseline_source": "trust"`; no other line of those tests changed and no refusal or comparison assertion was touched. This is the only edit to a launcher trust or refusal test; it is listed for merge review.
 
 ## DEC-0008 - A reviewed repository is not bound to one project (security SEC-004, engineering ENG-009)
 

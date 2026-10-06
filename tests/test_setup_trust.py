@@ -770,7 +770,7 @@ class WorktreePointerTests(TrustWorktreeCase):
 
     def test_a_primary_checkouts_git_directory_is_not_checked(self) -> None:
         self.assertTrue((self.root / ".git").is_dir())
-        self.assertIsNone(setup_trust._check_pointer(self.root))  # noqa: SLF001
+        self.assertIsNone(setup_trust._check_pointer(self.root, {}))  # noqa: SLF001
 
 
 # --- observation -------------------------------------------------------------

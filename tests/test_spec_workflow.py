@@ -1426,7 +1426,11 @@ class TrustedLauncherTests(unittest.TestCase):
         )
         self.assertEqual(list(state.iterdir()), [])
         self.assertEqual(self.launch("trust").returncode, 0)
-        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+        # #55: once a baseline exists, status also says who recorded it.
+        self.assertEqual(
+            self.status(),
+            {"installed": True, "refusal": None, "baseline_source": "trust"},
+        )
         (self.root / ".specify/extensions.yml").write_text("hooks: {x: y}\n")
         self.assertIn("workflow inputs changed", self.status()["refusal"])
         self.assertEqual(self.launch("trust").returncode, 0)
@@ -1437,7 +1441,10 @@ class TrustedLauncherTests(unittest.TestCase):
         (marker_dir / "in-progress").write_text("ballast-agent-r1-step.scope\n")
         self.assertIn("did not finish", self.status()["refusal"])
         (self.tools / "run.py").unlink()
-        self.assertEqual(self.status(), {"installed": False, "refusal": None})
+        self.assertEqual(
+            self.status(),
+            {"installed": False, "refusal": None, "baseline_source": "trust"},
+        )
 
     def test_no_baseline_names_the_inputs_to_review(self) -> None:
         # #15 AC-002: only the protected inputs that exist are listed.
@@ -1629,7 +1636,10 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assert_refused(message)
         self.assertEqual(self.status()["refusal"], message)
         (self.root / ".ballast/.setup-version").write_text("fp older\n")
-        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+        self.assertEqual(
+            self.status(),
+            {"installed": True, "refusal": None, "baseline_source": "trust"},
+        )
 
 
 def _ids(node: object) -> list[str]:
