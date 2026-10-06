@@ -2366,7 +2366,7 @@ agent step of every `ballast run start`, `resume` and `continue`, trusted
 launcher code rebases the run's feature branch onto its authoritative base and
 pushes a published one with a lease, or blocks before any agent with
 `BLOCKED_UPSTREAM_SYNC`. Autonomous `resume` goes through the same
-synchronization since #21 ([`specs/21-autonomous-reviewed-pr/`](21-autonomous-reviewed-pr/spec.md), ADR-0007).
+synchronization since #21 ([`specs/21-autonomous-reviewed-pr/`](21-autonomous-reviewed-pr/spec.md), ADR-0010).
 
 ---
 
@@ -2395,7 +2395,7 @@ PR ready for human merge decision
 
 ```
 
-Branch synchronization (#18) covers every invocation that starts agent steps, including every Chat `step`. Since #21 (ADR-0007) a blocked or interrupted Autonomous run resumes in Autonomous through it, recording the operator's block resolution, or continues human-gated or in Chat; implementation findings get a bounded fix loop (§61) of three cycles per run in `ballast-autonomous` 1.2.0; `ballast run checkpoint` refreshes a finished run's Draft PR evidence.
+Branch synchronization (#18) covers every invocation that starts agent steps, including every Chat `step`. Since #21 (ADR-0010) a blocked or interrupted Autonomous run resumes in Autonomous through it, recording the operator's block resolution, or continues human-gated or in Chat; implementation findings get a bounded fix loop (§61) of three cycles per run in `ballast-autonomous` 1.2.0; `ballast run checkpoint` refreshes a finished run's Draft PR evidence.
 
 Autonomous makes intermediate intent, plan and implementation decisions provisionally and records their basis. For an eligible feature, it requests no human approval until merge. Chat keeps the operator in the conversation while using the same trusted preflight and evidence contracts. Technical failures, conflicts, exhausted limits and unavailable authority may still block a run. No mode silently approves its own PR or merges it.
 

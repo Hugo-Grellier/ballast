@@ -3,7 +3,7 @@
 - Reviewer: Claude Opus 5.5, the driving agent (same provider and session as the author; not independent).
 - Date: 2026-10-06
 - Skill: `.agents/skills/ballast-engineering-review/SKILL.md`
-- Scope: `git diff bc4ea3e..HEAD`; spec FR-001–FR-027; plan, research R1–R20, data model, contracts; ADR-0004, ADR-0005, new ADR-0007.
+- Scope: `git diff bc4ea3e..HEAD`; spec FR-001–FR-027; plan, research R1–R20, data model, contracts; ADR-0004, ADR-0005, new ADR-0010.
 
 ```yaml
 review: engineering
@@ -53,7 +53,7 @@ findings:
 - **Supersession.** A single point recorded again supersedes its current decision; a review point supersedes every current entry of the point (and specialist reviews for implementation review), so the final-acceptance "one current per point" rule holds across fix cycles and resumes. `supersedes` may now be a list; `superseded`, `current_decisions` and `append_decision` accept both forms.
 - **Resume (R5–R8, R13).** Order: arguments, tamper marker, eligibility, lock, eligibility again under the lock, interrupted handling, synchronization, re-entry, decision, `resume_run`, record render, feature pointer, engine reposition, engine, clock close, `_finish`, archive, checkpoint. A failure after the decision blocks the run as a postcondition rather than leaving it active. The block-time input snapshot is kept across a synchronization block (otherwise a change made before the first resume attempt would be lost).
 - **Retries (R4).** `check_step_drafts` calls the recorder's own validators; only `DraftError` is retried; `_qualifying_steps` ignores refused attempts so a refused draft is never recorded.
-- **Architecture.** ADR-0007 records the amendment of ADR-0004's continuation rule; ADR-0005's "synchronize before any agent step" and "pin from operator state only" hold. The default step limit change (30 → 40) is recorded in ADR-0007 and R9. No new dependency; stdlib only (`fcntl` for the lock).
+- **Architecture.** ADR-0010 records the amendment of ADR-0004's continuation rule; ADR-0005's "synchronize before any agent step" and "pin from operator state only" hold. The default step limit change (30 → 40) is recorded in ADR-0010 and R9. No new dependency; stdlib only (`fcntl` for the lock).
 - **Complexity.** The retry loop moved the wrapper body into `_attempt` without changing the human-gated path (a single attempt, no draft check, same argv, `HumanGatedUnchangedTests`). No unrelated refactor.
 
 ## Resolution

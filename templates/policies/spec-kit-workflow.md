@@ -605,7 +605,7 @@ monetary spend, and the record says so. A resume never raises a limit and
 never changes the mode, the risk or the integrations.
 
 **Resume.** `ballast run resume RUN_ID [--ref TEXT]` continues a blocked or
-interrupted Autonomous run in Autonomous, without prompts (ADR-0007). It takes
+interrupted Autonomous run in Autonomous, without prompts (ADR-0010). It takes
 the run's invocation lock, then synchronizes the branch with its base before
 any agent step ([Branch synchronization](#branch-synchronization)); a
 synchronization block, a protected-input change included, stops the resume

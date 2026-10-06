@@ -146,9 +146,9 @@ Tools in `tools/spec_workflow/`, shipped templates in `templates/`, tests in `te
 
 - [x] T037 [US6] Write `ProvisionalGuardTests` in `tests/test_autonomous_artifacts.py`: a fix-step change, a retried draft, a `--ref` on resume and a refreshed packet that present a provisional decision as accepted or as a human approval are each refused by the existing guards, with the guard unchanged [AC-030, FR-024] (depends on T021, T026, T033)
 - [x] T038 [P] [US6] Update `templates/policies/spec-kit-workflow.md` with Autonomous sections for resume (re-entry, block resolution, what refuses), the fix loop, retries, `checkpoint`, active wall time and the spend bound, block classes, and "Runs started before branch pinning" (where the pin file is, how to read the feature from the run record); and in `templates/policies/workflow.md` replace "blocked Autonomous runs continue only human-gated until #18" with resume plus the fix-loop bound, keeping the three-cycle escalation rule. Every section says the path is agent-provisional and merging the PR is the single human approval [FR-014, FR-024]
-- [x] T039 [P] [US6] Write `docs/adr/0007-autonomous-resume-and-bounded-recovery.md` per [research R17](research.md#r17-adr-0007) (status Proposed, agent-provisional; context, decision, consequences including the R7 engine reposition and the step-default change R9) and add an "Amended by ADR-0007" line to the continuation rule in `docs/adr/0004-autonomous-provisional-decisions.md` [FR-015]
+- [x] T039 [P] [US6] Write `docs/adr/0010-autonomous-resume-and-bounded-recovery.md` per [research R17](research.md#r17-adr-0010) (status Proposed, agent-provisional; context, decision, consequences including the R7 engine reposition and the step-default change R9) and add an "Amended by ADR-0010" line to the continuation rule in `docs/adr/0004-autonomous-provisional-decisions.md` [FR-015]
 - [x] T040 [P] [US6] Add one sentence on `ballast run resume` and `ballast run checkpoint` for Autonomous runs to the workflow section of `README.md`
-- [x] T041 [US6] Write `PolicyWordingTests` in `tests/test_governance.py`: the installed policy templates and README describe resume, the fix loop, retries and refresh as agent-provisional and state that merging the PR is the single human approval; ADR-0007 exists and ADR-0004 carries the amendment line [AC-031] (depends on T029, T038, T039, T040)
+- [x] T041 [US6] Write `PolicyWordingTests` in `tests/test_governance.py`: the installed policy templates and README describe resume, the fix loop, retries and refresh as agent-provisional and state that merging the PR is the single human approval; ADR-0010 exists and ADR-0004 carries the amendment line [AC-031] (depends on T029, T038, T039, T040)
 - [x] T042 [US6] Write `PermissionsUnchangedTests` in `tests/test_governance.py` (the `claude-settings.json` template, `CONFINED_ALLOW`/`CONFINED_DENY` and the Codex sandbox arguments equal their pre-feature values) and `HumanGatedUnchangedTests` in `tests/test_autonomous_run.py` (a human-gated `resume` and `continue` produce the same argv and records as before, and the human-gated workflow definition is unchanged) [AC-032, FR-025] (depends on T022, T027, T041)
 
 **Checkpoint**: All user stories are complete and independently tested.
@@ -239,7 +239,7 @@ Task: "T003 Constants in tools/spec_workflow/autonomy.py"
 Task: "T007 DraftError in tools/spec_workflow/artifacts.py"
 Task: "T012 speckit.ballast.fix command"
 Task: "T032 draft_pr create=False"
-Task: "T039 ADR-0007"
+Task: "T039 ADR-0010"
 ```
 
 ---
@@ -258,7 +258,7 @@ Task: "T039 ADR-0007"
 1. US3 retries keep correctable draft errors from ending runs.
 2. US4 checkpoint brings post-publication evidence to the PR.
 3. US5 block classes and active time make every stop actionable.
-4. US6 policies, ADR-0007, README and the unchanged-behavior tests.
+4. US6 policies, ADR-0010, README and the unchanged-behavior tests.
 5. Polish: untrusted-text bounds.
 
 The plan suggested resume and retries before the fix loop. The wave DAG follows that where it can: resume (T018–T021) and the `DraftError` split (T007) start before the fix-loop end-to-end tests, but resume needs the 1.2.0 step list and fix state, so T014 and T015 come first.

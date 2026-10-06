@@ -18,7 +18,7 @@ DEC-0001 (a resume after the base advanced first blocks as `dirty`, per #18) is 
 
 ## Residual items (not material)
 
-- The spec's edge case and assumption still name the old 30-step default (now 40, R9, ADR-0007); `spec.md` left unchanged to keep the provisional intent digest valid.
+- The spec's edge case and assumption still name the old 30-step default (now 40, R9, ADR-0010); `spec.md` left unchanged to keep the provisional intent digest valid.
 - Live checks pending: SC-001 (live Autonomous pilot after merge, quickstart "Live pilot") and a live resume and `ballast run checkpoint` on a real GitHub PR.
 
 - Verdict: CONVERGED

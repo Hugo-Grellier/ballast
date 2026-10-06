@@ -49,7 +49,7 @@ run record (autonomy.py) and runs ballast-autonomous, which has no approval
 gate; when it completes, this runner (never an agent) commits, pushes and opens
 one Draft PR. A stopped Autonomous run records a block, with its class
 (conflict, missing authority, exhausted limits, unsafe uncertainty) and the
-next command. `resume` continues it in Autonomous (#21, ADR-0007): it takes
+next command. `resume` continues it in Autonomous (#21, ADR-0010): it takes
 only `--ref TEXT`, never a mode, limit or input; synchronizes the branch
 first; records the operator's `block-resolution` human decision; and
 re-enters the workflow at the blocked step, or earlier when a spec, plan,

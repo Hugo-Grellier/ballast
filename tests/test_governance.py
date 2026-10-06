@@ -159,13 +159,13 @@ class PolicyWordingTests(unittest.TestCase):
         self.assertIn("`ballast run resume` continues a blocked", readme)
         self.assertIn("merging the PR stays the single human approval", readme)
 
-    def test_adr_0007_amends_adr_0004(self) -> None:
-        adr = ROOT / "docs/adr/0007-autonomous-resume-and-bounded-recovery.md"
+    def test_adr_0010_amends_adr_0004(self) -> None:
+        adr = ROOT / "docs/adr/0010-autonomous-resume-and-bounded-recovery.md"
         text = adr.read_text()
         self.assertIn("- Status: proposed", text)
         self.assertIn("Agent-provisional", text)
         old = (ROOT / "docs/adr/0004-autonomous-provisional-decisions.md").read_text()
-        self.assertIn("Amended by [ADR-0007]", old)
+        self.assertIn("Amended by [ADR-0010]", old)
 
 
 # Pre-#21 values: the feature must not widen what a headless agent may do.

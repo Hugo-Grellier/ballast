@@ -3,7 +3,7 @@
 - Reviewer: Claude Opus 5.5, the driving agent (same provider and same session as the author; not an independent review). A cross-provider security review is still recommended before merge.
 - Date: 2026-10-06
 - Skill: `.agents/skills/ballast-security-review/SKILL.md`
-- Scope: `git diff bc4ea3e..HEAD` on `feat/21-autonomous-reviewed-pr`: `tools/spec_workflow/{run,agent,artifacts,autonomy,draft_pr,branch_sync}.py`, `templates/spec-kit/workflows/autonomous/workflow.yml` 1.2.0, the `ballast` extension commands, policies, ADR-0007.
+- Scope: `git diff bc4ea3e..HEAD` on `feat/21-autonomous-reviewed-pr`: `tools/spec_workflow/{run,agent,artifacts,autonomy,draft_pr,branch_sync}.py`, `templates/spec-kit/workflows/autonomous/workflow.yml` 1.2.0, the `ballast` extension commands, policies, ADR-0010.
 - Focus (R2): decision authority; provisional versus human approval; resume against branch sync, trust and protected inputs; bounds enforced by trusted code; the authority of `resume` and `checkpoint`; untrusted text in prompts, records and PR text.
 
 ```yaml

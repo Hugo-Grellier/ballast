@@ -170,9 +170,9 @@ Limits of this research. The planning step ran confined. It could not read the S
   - `speckit.ballast.decide`, `speckit.ballast.review`, `speckit.ballast.clarify`, `speckit.ballast.discover` and `speckit.ballast.resolve` state the recorder's length limits (R4). Decide and review also tell the agent to paraphrase and cite a sourced human approval, never quote approval wording (FR-018, AC-020, AC-021).
   - `templates/spec-kit/templates/tasks-template.md` says: never create tasks for steps the workflow runs itself (the full gate, quickstart runs, reviews, converge, spec reconciliation), because `validate-implementation` requires every task done before those steps run. `check_implementation` is unchanged (D-07, FR-019, AC-022).
 
-## R17. ADR-0007
+## R17. ADR-0010
 
-- **Decision**: `docs/adr/0007-autonomous-resume-and-bounded-recovery.md`: a blocked or interrupted Autonomous run resumes in Autonomous through branch synchronization (ADR-0005), with a recorded `block-resolution` and re-entry at the earliest changed input. Implementation findings run a bounded fix loop of three cycles per run. Correctable draft refusals retry twice per step. ADR-0004's continuation rule ("a blocked run cannot resume autonomously; recovery is always human-gated until #18") is amended: `continue` stays the human-gated path, and resume no longer lowers. ADR-0004 gets an "Amended by ADR-0007" line (FR-015).
+- **Decision**: `docs/adr/0010-autonomous-resume-and-bounded-recovery.md`: a blocked or interrupted Autonomous run resumes in Autonomous through branch synchronization (ADR-0005), with a recorded `block-resolution` and re-entry at the earliest changed input. Implementation findings run a bounded fix loop of three cycles per run. Correctable draft refusals retry twice per step. ADR-0004's continuation rule ("a blocked run cannot resume autonomously; recovery is always human-gated until #18") is amended: `continue` stays the human-gated path, and resume no longer lowers. ADR-0004 gets an "Amended by ADR-0010" line (FR-015).
 
 ## R18. Mode and authority on resume
 
@@ -185,5 +185,5 @@ Limits of this research. The planning step ran confined. It could not read the S
 
 ## R20. Risk and reviews
 
-- **Decision**: risk stays **R2** (agent authority, approval gates, and what the launcher executes: the engine state rewrite and the retry loop in the wrapper). Required reviews, from the [review matrix](../../docs/policies/workflow.md#review-triggers): engineering, security (agent authority, launcher trust, untrusted check output and validator messages in prompts), test (refusal and tamper paths), documentation (policy, ADR-0007, README) and architecture (ADR-0007 amends ADR-0004).
+- **Decision**: risk stays **R2** (agent authority, approval gates, and what the launcher executes: the engine state rewrite and the retry loop in the wrapper). Required reviews, from the [review matrix](../../docs/policies/workflow.md#review-triggers): engineering, security (agent authority, launcher trust, untrusted check output and validator messages in prompts), test (refusal and tamper paths), documentation (policy, ADR-0010, README) and architecture (ADR-0010 amends ADR-0004).
 - **Note for the plan decision**: the R2 pre-change approval is agent-provisional (PD-0013). Merging is the single human approval.
