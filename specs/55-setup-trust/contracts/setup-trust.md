@@ -25,14 +25,15 @@ setup_trust.settle(root: Path, state: Path, record: dict, *, standard: Path,
 
 ## Order of evaluation
 
-1. **Keep a matching baseline** (FR-011). If `trusted.json` parses and equals a fresh `trusted_inputs(root)` snapshot, return `kept(source)` with the reported source. Nothing is written.
-2. **Local conditions**, first failure wins: data-model eligibility rows 1 to 7.
-3. **Operator baseline** (row 8a): eligible with `operator-baseline`.
-4. **Reviewed repository** (row 8b), then **default branch** (row 9): eligible with `default-branch`.
-5. **Record**: `launcher.record_baseline(root, state, snapshot, source="setup", reference=...)`.
-6. **Recheck**: a second snapshot must equal the first; otherwise remove the baseline and provenance just written and return `skipped("protected inputs changed while setup checked them")`.
+1. **Standard and markers** (data-model rows 1 and 2): the standard outside the checkout, no `BALLAST_TAMPERED`, no in-progress marker. A skipped verdict names the remedy even when a baseline matches (decisions.md DEC-0001).
+2. **Keep a matching baseline** (FR-011), setup only. If `trusted.json` parses and equals a fresh `trusted_inputs(root)` snapshot, return `kept(source)` with the reported source. Nothing is written. A preparation never opens its own baseline (DEC-0004).
+3. **Local conditions**, first failure wins: data-model eligibility rows 3 to 7.
+4. **Operator baseline** (row 8a), setup only: eligible with `operator-baseline`.
+5. **Reviewed repository** (row 8b), then **default branch** (row 9): eligible with `default-branch`.
+6. **Record**: `launcher.record_baseline(state, snapshot, source="setup", reference=...)`.
+7. **Recheck**: a second snapshot must equal the first; otherwise restore the previous `trusted.json` and provenance (or remove both when there were none) and return `skipped("protected inputs changed while setup checked them")`. A failed write is restored the same way.
 
-No step after a failure runs; no network access happens before step 4, and none at all when step 3 succeeds.
+No step after a failure runs; no network access happens before step 5, and none at all when step 4 succeeds.
 
 ## Default-branch observation
 
@@ -46,7 +47,7 @@ As research R9. Only these Git invocations, each with a list argv, absolute Git 
 | throwaway (network, new session) | `fetch --depth=1 --no-tags --no-write-fetch-head --filter=blob:none reviewed +refs/heads/<default>:refs/reviewed/default` with `-c remote.reviewed.url=<url> -c remote.reviewed.promisor=true -c remote.reviewed.partialclonefilter=blob:none` | 120 s |
 | throwaway | `rev-parse --verify refs/reviewed/default^{commit}`; `ls-tree -z <commit> -- ballast.toml .specify/memory/constitution.md` | 30 s |
 
-Every throwaway command adds `autonomy.GIT_HARDENING` and `-c maintenance.auto=false -c gc.auto=0 -c core.commitGraph=false`. The throwaway lives under `<state>/setup-trust/<random hex>/` with its own object store and is removed in a `finally`. `<default>` must match the launcher's `REF` pattern; `<commit>` must be 40 hex digits. Git's output is parsed, never printed.
+Every throwaway command adds `autonomy.GIT_HARDENING` and `-c maintenance.auto=false -c gc.auto=0 -c core.commitGraph=false`. The throwaway lives under `<state>/setup-trust/<random hex>/` with its own object store and is removed in a `finally`. `<default>` must match `ledger.REF` (DEC-0005); `<commit>` must be 40 hex digits. Git's output is parsed, never printed.
 
 ## Output
 
@@ -60,7 +61,7 @@ The installation's lines come first, unchanged. Then one verdict block:
 | skipped, setup | `No trust baseline recorded: <reason>.` / `Review the changed protected inputs, then run ballast trust before the next workflow run.` |
 | skipped, preparation | `No trust baseline recorded: <reason>.` / `Review this worktree's protected inputs, then run ballast trust.` |
 
-`<reason>` is a data-model fixed phrase; any checkout-derived value in it (a path, a branch, a repository name) goes through `printable()`. Today's "Spec Kit ... are set up." and "Prepared the ... installation from ..." lines are unchanged; the old trust line moves into the skipped block with the same wording (backticks kept as today).
+In a preparation, a skipped verdict's `No trust baseline recorded: <reason>.` line comes before the `Prepared the ... installation ...` line, so the output still ends with today's two lines (decisions.md DEC-0003). `<reason>` is a data-model fixed phrase; any checkout-derived value in it (a path, a branch, a repository name) goes through `printable()`. Today's "Spec Kit ... are set up." and "Prepared the ... installation from ..." lines are unchanged; the old trust line moves into the skipped block with the same wording (backticks kept as today).
 
 ## Guarantees
 

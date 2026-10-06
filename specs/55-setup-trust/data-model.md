@@ -19,7 +19,7 @@ All records live in operator state under `$XDG_STATE_HOME/ballast/` (default `~/
 | `reference` | object, `setup` only | `{"kind": "default-branch", "repository": "owner/name", "branch": str, "commit": hex}` or `{"kind": "operator-baseline"}` |
 
 - **Bound**: `baseline` equals the digest of the current `trusted.json` bytes.
-- **Reported source** (`status --json` `baseline_source`): no readable `trusted.json` → `null`; readable, `source == "setup"` and bound → `"setup"`; anything else (missing, unreadable, unbound, unknown schema, `trust`) → `"trust"` (FR-013, AC-024).
+- **Reported source** (`status --json` `baseline_source`): no readable `trusted.json` → the key is omitted; readable, `source == "setup"` and bound → `"setup"`; anything else (missing, unreadable, unbound, unknown schema, `trust`) → `"trust"` (FR-013, AC-024).
 - **Operator-recorded for eligibility** (R7): no provenance file, or readable, `source == "trust"` and bound. Unreadable or unbound is **not** operator-recorded (fail closed).
 - **Write order**: provenance first, then `trusted.json`, each atomic (R12). Removed together with the baseline by preparation at a reused path and by setup's post-write recheck (R3).
 

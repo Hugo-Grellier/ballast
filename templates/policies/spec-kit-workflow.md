@@ -346,6 +346,28 @@ relies on the agent sandbox keeping it read-only. They run `run.py` and
 `ledger.py` under the launcher's own `/usr/bin/python3 -I -S`.
 Bytecode is excluded from the baseline because no workflow tool reads it.
 
+**Setup-recorded baseline.** Only the operator's `ballast trust` records a
+baseline after a review, with one exception that the operator's own
+`ballast setup` (and a new worktree's first-command preparation, which installs
+from a verified local copy) may also record it (ADR-0014). They record it only
+when every protected input is exactly what setup installed (no `.venv`, no
+committed `.specify` file other than the constitution, no edited installed
+file, a linked worktree's `.git` pointer naming a worktree of its own
+repository), `ballast.toml` and the constitution are committed and unchanged,
+and equal either the checkout's earlier baseline from `ballast trust` or the
+default branch of the repository pinned in `[github] repository`. That branch is
+read live, from the pinned repository only, with the operator's own Git
+authority (it needs network access and never prompts), and only for a
+repository `ballast trust` already reviewed on this machine; nothing the
+checkout's Git configuration names is used. Setup records nothing when saved run
+state, an unfinished run, `BALLAST_TAMPERED` or an agent step's marker exists, so
+an agent step can never lead to a recorded baseline; it then says why and that
+`ballast trust` is needed after review. A baseline recorded from the operator's
+earlier one is marked as recorded by setup, so a later setup that records again
+needs the network or `ballast trust`. The launcher compares the baseline exactly
+as before, whoever recorded it, and `ballast doctor` shows which. Only the
+operator runs `ballast trust`; an agent never does.
+
 **Headless permissions.** Start and resume runs only with
 `ballast run`; a `preflight` step fails otherwise. It routes
 Spec Kit's dispatch through `.ballast/spec_workflow/agent.py`, which refuses

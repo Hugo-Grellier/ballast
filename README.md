@@ -95,7 +95,18 @@ The result is Spec Kit with its bugfix and assess bundles, the multi-model-revie
 
 ### Worktrees
 
-The first `ballast run`, `ballast ledger` or `ballast intake` in a new Git worktree prepares its installation without a separate `ballast setup` and without downloading: it copies an installation already on this machine for the same repository (the primary checkout's, another worktree's, or a kept previous one) whose pin and `ballast.toml` match and whose files, execute bits included, still match the record setup kept of it. Then it stops at the trust check, naming the protected inputs to review: trust is per worktree, so run `ballast trust` there. Run state is never copied between worktrees. The first worktree at a new pin or `ballast.toml` still needs `ballast setup`, which may download; later ones are prepared from it. `ballast setup` in a worktree also copies the primary checkout's installation when it matches its record.
+The first `ballast run`, `ballast ledger` or `ballast intake` in a new Git worktree prepares its installation without a separate `ballast setup` and without downloading the standard: it copies an installation already on this machine for the same repository (the primary checkout's, another worktree's, or a kept previous one) whose pin and `ballast.toml` match and whose files, execute bits included, still match the record setup kept of it. Trust is per worktree: when the worktree's committed `ballast.toml` and constitution equal the pinned repository's default branch, the preparation records the worktree's own baseline too (see [Setup records the baseline](#setup-records-the-baseline)) and the command goes on; otherwise it stops at the trust check, naming the protected inputs to review, and you run `ballast trust` there. Run state is never copied between worktrees. The first worktree at a new pin or `ballast.toml` still needs `ballast setup`, which may download; later ones are prepared from it. `ballast setup` in a worktree also copies the primary checkout's installation when it matches its record.
+
+### Setup records the baseline
+
+`ballast setup`, and the preparation of a new worktree, record the checkout's trust baseline themselves, so a fresh clone or an issue worktree of a project needs no `ballast trust`. They do it only when all of this holds, and say so (`Recorded the trust baseline ...`); otherwise they install as before, print `No trust baseline recorded: <reason>.` and leave `ballast trust` to you:
+
+- every protected input is what setup just installed: no `.venv`, no committed `.specify` file other than the constitution, no edited installed file, and a linked worktree's `.git` pointer names a worktree of its own repository;
+- `ballast.toml` and `.specify/memory/constitution.md` are committed and unchanged, and equal either the files on the default branch of the repository pinned in `[github] repository`, or the baseline you earlier recorded with `ballast trust` (no network needed for that one);
+- for the default-branch case, the pinned repository is one you ran `ballast trust` for on this machine, so the first checkout of a project here still needs one `ballast trust`; setup then asks that repository, with your own Git credentials and no prompt, for its default branch (this needs network access and read access; offline, or without access, nothing is recorded);
+- no agent has run in the checkout: no saved run state, no unfinished run, no `BALLAST_TAMPERED` marker and no unfinished agent step. Setup never records a baseline from inside an agent step.
+
+Changing `ballast.toml` in a branch (a pin bump, `[agents.permissions]`) leaves it different from the default branch, so review it and run `ballast trust`. A baseline recorded from your own earlier one is marked as recorded by setup, so a later setup that records again needs the network (the default branch) or `ballast trust`, not your old baseline. After setup recorded a baseline, the launcher compares it exactly as for `ballast trust`, so any later change to a protected input is refused. `ballast doctor` shows who recorded it (`baseline recorded by ballast setup` or `ballast trust`).
 
 ### Running the workflow
 
@@ -107,7 +118,7 @@ ballast run start|resume ...
 ballast ledger snapshot|check|report ...
 ```
 
-Only `setup` and `preview` download; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
+Only `setup` and `preview` download; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, unless setup recorded the baseline for it (see above). To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
 Before the first agent step of every `ballast run start`, `resume` or `continue`, and of every Chat `step`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
 
@@ -170,12 +181,12 @@ Pin changes stay manual and reviewed in Git. Update the `ballast` command first 
 ballast preview vX.Y.Z      # what moving the pin would do; changes nothing
 # set ref = "vX.Y.Z" under [standard] in ballast.toml, review and commit it
 ballast setup               # the previous installation stays until the new one verifies
-ballast trust               # after reviewing the changed protected inputs it lists
+ballast trust               # after reviewing the changed protected inputs it lists, unless setup recorded the baseline
 ```
 
 Then run the project's checks. `ballast preview` (add `--json` for scripts) names the pinned, installed and target versions and the CLI version the target needs, lists each unfinished run with whether the target can resume it, the installed paths it would add, change or remove, any ignore-rule change, and the exact steps above. It builds the target in a disposable directory, so it may need network, and exits 1 when something must happen first, such as finishing or discarding a run the target cannot resume.
 
-When setup fails, it says which stage failed, that the previous installation was kept, and what to do next. At an unchanged pin nothing else is needed: the existing trust still holds and a paused run resumes. If setup was interrupted, every other command refuses until the next `ballast setup`, which first restores the previous installation or completes the new one and says which. A second `ballast setup` in the same checkout refuses while one runs.
+When setup fails, it says which stage failed, that the previous installation was kept, and what to do next. At an unchanged pin nothing else is needed: the existing trust still holds (setup leaves a baseline that still matches untouched) and a paused run resumes. If setup was interrupted, every other command refuses until the next `ballast setup`, which first restores the previous installation or completes the new one and says which. A second `ballast setup` in the same checkout refuses while one runs.
 
 **Retry after a failed update.** With the new pin, the launcher and `ballast doctor` name the pinned and the installed versions. Fix the cause (`ballast doctor` checks network access and tools), then run `ballast setup` again.
 
@@ -183,7 +194,7 @@ When setup fails, it says which stage failed, that the previous installation was
 
 ```bash
 ballast setup               # reuses the previous installation and the cached version: no download
-ballast trust               # nothing is trusted for you
+ballast trust               # unless setup says it recorded the baseline
 ```
 
 The constitution, `docs/policies/project/`, paused runs and their archives are untouched. Versions released before this feature (v0.5.0 and earlier) run their own, older setup: a failure there can still leave the checkout without a usable installation, and `ballast preview` says so. A version cached by an older CLI is downloaded again once.

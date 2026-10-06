@@ -27,7 +27,7 @@ Unchanged: refusals (tamper marker, in-progress marker, not installed, lock, unf
 ```
 
 - `installed` and `refusal`: unchanged, computed exactly as today.
-- `baseline_source`: `null` | `"setup"` | `"trust"`, per the data-model reading rule. Computed without the checkout lock and without writing; an `OSError` from `state_dir` gives `null`.
+- `baseline_source`: `"setup"` | `"trust"`, per the data-model reading rule, present only once a baseline exists (the key is omitted without one, so the output for a checkout with no baseline stays exactly as before: decisions.md DEC-0007). Computed without the checkout lock and without writing; an `OSError` from `state_dir` omits it.
 - The comparison in `_trust_refusal` does not read provenance (FR-015).
 
 ## Doctor `trust` check (`tools/ballast`)
@@ -39,6 +39,6 @@ Status classification (`passing`, `missing`, `inconclusive`) and remedies are un
 | accepted, `setup` | `the launcher accepts this checkout; baseline recorded by ballast setup` |
 | accepted, `trust` | `the launcher accepts this checkout; baseline recorded by ballast trust` |
 | refused, source known | `launcher will refuse: <refusal>; the current baseline was recorded by ballast setup` (or `ballast trust`) |
-| key absent or `null` | today's text |
+| key absent (no baseline, or an older launcher) | today's text |
 
 Doctor never reads `trusted.json`, provenance or the reviewed record itself (ADR-0002, FR-014).
