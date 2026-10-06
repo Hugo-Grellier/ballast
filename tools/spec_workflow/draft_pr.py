@@ -317,6 +317,31 @@ def _branch_pin(root: Path, run_id: str) -> str | None:
     return branch if isinstance(branch, str) and branch else None
 
 
+def _run_feature(root: Path, run_id: str) -> object:
+    """Return a run's feature directory: engine inputs, else operator record, else pin.
+
+    A Ballast-driven Chat run (#20) has no engine `inputs.json`; its feature
+    comes from its operator run record, or from the pin branch_sync wrote at
+    `ballast run start`. Both live in operator state no agent can write.
+    """
+    inputs = root / ".specify/workflows/runs" / run_id / "inputs.json"
+    if inputs.exists() or inputs.is_symlink():
+        return json.loads(inputs.read_text(encoding="utf-8"))["inputs"].get(
+            "feature_directory"
+        )
+    import autonomy  # noqa: PLC0415 - ledger imports it first
+
+    record = autonomy.find_run(root, run_id)
+    if record is not None:
+        return record["feature"]
+    path = _pin_path(root, run_id)
+    try:
+        pin = json.loads(path.read_text(encoding="utf-8")) if path else None
+    except (OSError, ValueError):
+        pin = None
+    return pin.get("feature") if isinstance(pin, dict) else None
+
+
 def _pinned_repository(root: Path) -> tuple[str, str] | None:
     """Return `[github] repository` from the protected ballast.toml.
 
@@ -640,10 +665,7 @@ class _Checkpoint:
         if not RUN_ID_PATTERN.fullmatch(run.run_id):
             message = "invalid run ID"
             raise ValueError(message)
-        inputs = run.root / ".specify/workflows/runs" / run.run_id / "inputs.json"
-        feature = json.loads(inputs.read_text(encoding="utf-8"))["inputs"].get(
-            "feature_directory"
-        )
+        feature = _run_feature(run.root, run.run_id)
         if not isinstance(feature, str) or not FEATURE_PATTERN.fullmatch(feature):
             self.stop("blocked-unlinked", "no-issue-number")
         run.feature = feature

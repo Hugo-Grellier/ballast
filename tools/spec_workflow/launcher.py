@@ -75,6 +75,11 @@ SKIPPED = (
 # A tag or commit of the standard; the same pattern as tools/ballast's REF.
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 SCOPE = re.compile(r"ballast-agent-[A-Za-z0-9_.-]{1,200}\.scope")
+# An agent step's unit is `ballast-agent-<run>-<step>.scope`, and every step
+# name starts with its UTC stamp, so the stamp splits the run from the step.
+STEP_SCOPE = re.compile(
+    r"ballast-agent-(?P<run>[A-Za-z0-9_-]{1,64}?)-(?P<step>[0-9]{8}T[0-9]{6,12}Z-[A-Za-z0-9_.-]{1,120})\.scope"
+)
 SCOPE_SECONDS = 10.0
 # `systemctl is-active` exit status for a stopped unit (3) or a collected one
 # (4); a manager error exits 1 without a state.
@@ -255,6 +260,22 @@ def _setup_refusal(root: Path, state: Path) -> str | None:
     return None
 
 
+def _unfinished(marker: Path) -> str:
+    """Return the unfinished-step refusal, naming the run and step if marked."""
+    try:
+        unit = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        unit = ""
+    named = STEP_SCOPE.fullmatch(unit) if SCOPE.fullmatch(unit) else None
+    if named is None:
+        return "an agent step did not finish its protected-file check"
+    return (
+        f"an agent step is active or did not finish: run {named['run']}, step "
+        f"{named['step']}; wait for it to end, or if no step is running, run "
+        "`ballast discard-runs`"
+    )
+
+
 def _refusal(root: Path) -> str | None:
     try:
         state = state_dir(root)
@@ -267,7 +288,7 @@ def _trust_refusal(root: Path, state: Path) -> str | None:
     if os.path.lexists(root / TAMPER_MARKER):
         return f"{TAMPER_MARKER} exists: an agent changed protected files"
     if os.path.lexists(state / IN_PROGRESS):
-        return "an agent step did not finish its protected-file check"
+        return _unfinished(state / IN_PROGRESS)
     try:
         trusted = json.loads((state / TRUSTED).read_text(encoding="utf-8"))
     except (OSError, ValueError):

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Edit(./**)",
+      "Write(./**)",
+      "Bash(python3 .specify/scripts/python/*)",
+      "Bash(mkdir -p specs/*)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show)",
+      "Bash(git show *)",
+      "Bash(git rev-parse)",
+      "Bash(git rev-parse *)",
+      "Bash(git ls-files)",
+      "Bash(git ls-files *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./**/.env)",
+      "Read(./*.local.md)",
+      "Edit(./.env)",
+      "Edit(./**/.env)",
+      "Edit(./*.local.md)",
+      "Edit(./.git/**)",
+      "Edit(./.github/**)",
+      "Edit(./.claude/**)",
+      "Edit(./.codex/**)",
+      "Edit(./.agents/skills/ballast-*/**)",
+      "Edit(./.agents/skills/speckit-*/**)",
+      "Edit(./.specify/workflows/**)",
+      "Edit(./.specify/workflow-state/**)",
+      "Edit(./.ballast/**)",
+      "Edit(./ballast.toml)",
+      "Bash(git push*)",
+      "Bash(gh *)"
+    ],
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable"
+  },
+  "disableAllHooks": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.ballast/spec_workflow/chat_hook.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

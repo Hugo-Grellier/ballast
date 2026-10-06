@@ -1101,5 +1101,35 @@ class WorktreeCopyTests(ProjectCase):
         )
 
 
+class ChatInstallTests(unittest.TestCase):
+    """#20 T071, BL-INV-001: setup installs Chat mode with the standard."""
+
+    setUp = AutonomousInstallTests.setUp
+    tearDown = AutonomousInstallTests.tearDown
+    setup = AutonomousInstallTests.setup
+
+    def test_installs_chat_and_keeps_project_rules_for_chat_steps(self) -> None:
+        config = '[agents.permissions]\nextra_deny = ["Edit(./secrets/**)"]\n'
+        self.setup(config).install_standard()
+        tools = self.root / ".ballast/spec_workflow"
+        for name in ("chat.py", "claude-chat-settings.json", "agent.py", "run.py"):
+            self.assertTrue((tools / name).is_file(), name)
+        for policy in (ROOT / "templates/policies").glob("*.md"):
+            installed = self.root / "docs/policies" / policy.name
+            self.assertEqual(installed.read_text(), policy.read_text(), policy.name)
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        with (
+            patch.object(agent, "SETTINGS", tools / "claude-settings.json"),
+            patch.object(agent, "CHAT_SETTINGS", tools / "claude-chat-settings.json"),
+        ):
+            merged = agent.chat_settings()["permissions"]
+        self.assertIn("Edit(./secrets/**)", merged["deny"])
+        self.assertIn("Edit(./**)", merged["allow"])
+
+
 if __name__ == "__main__":
     unittest.main()

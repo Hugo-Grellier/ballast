@@ -3048,5 +3048,124 @@ class AcceptancePacketEventTests(unittest.TestCase):
         self.assertNotIn("acceptance_packet", ledger.aggregate(self.root))
 
 
+class ChatModeLedgerTests(unittest.TestCase):
+    """#20 AC-014, FR-013, SC-007: the additive run `mode` field."""
+
+    setUp = LedgerTests.setUp
+    tearDown = LedgerTests.tearDown
+    event = LedgerTests.event
+
+    def test_run_mode_is_optional_and_enumerated(self) -> None:
+        self.assertEqual(ledger.VERSION, 1)
+        for mode in ("human-gated", "autonomous", "chat"):
+            with self.subTest(mode=mode):
+                self.event("run", {"action": "started", "mode": mode})
+        self.event("run", {"action": "started"})
+        with self.assertRaisesRegex(ledger.LedgerError, "unknown mode"):
+            self.event("run", {"action": "started", "mode": "supervised"})
+
+    def test_mode_changed_requires_mode(self) -> None:
+        self.event("run", {"action": "ended", "status": "mode-changed", "mode": "chat"})
+        with self.assertRaisesRegex(ledger.LedgerError, "mode-changed needs mode"):
+            self.event("run", {"action": "ended", "status": "mode-changed"})
+        with self.assertRaisesRegex(ledger.LedgerError, "mode-changed needs mode"):
+            self.event(
+                "run", {"action": "started", "status": "mode-changed", "mode": "chat"}
+            )
+
+    def test_chat_event_order_is_accepted(self) -> None:
+        """One run start, steps closed after their start, gates after a gate step."""
+        sequence = [
+            (
+                "run",
+                {"action": "started", "workflow_id": "ballast-feature", "mode": "chat"},
+            ),
+            ("branch_sync", {"outcome": "blocked", "cause": "dirty"}),
+            (
+                "step",
+                {
+                    "action": "started",
+                    "step_id": "scope-gate",
+                    "step_type": "gate",
+                    "log_line": 1,
+                },
+            ),
+            (
+                "step",
+                {
+                    "action": "completed",
+                    "step_id": "scope-gate",
+                    "step_type": "gate",
+                    "status": "completed",
+                    "log_line": 1,
+                },
+            ),
+            ("gate", {"step_id": "scope-gate", "choice": "approve", "log_line": 1}),
+            (
+                "step",
+                {
+                    "action": "started",
+                    "step_id": "specify",
+                    "step_type": "command",
+                    "log_line": 2,
+                },
+            ),
+            (
+                "step",
+                {
+                    "action": "failed",
+                    "step_id": "specify",
+                    "status": "failed",
+                    "log_line": 2,
+                },
+            ),
+            (
+                "run",
+                {"action": "ended", "status": "mode-changed", "mode": "human-gated"},
+            ),
+            (
+                "step",
+                {
+                    "action": "started",
+                    "step_id": "specify",
+                    "step_type": "command",
+                    "log_line": 3,
+                },
+            ),
+            (
+                "step",
+                {
+                    "action": "completed",
+                    "step_id": "specify",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "log_line": 3,
+                },
+            ),
+            ("run", {"action": "ended", "status": "mode-changed", "mode": "chat"}),
+        ]
+        for index, (kind, data) in enumerate(sequence, start=1):
+            self.assertTrue(
+                ledger.append(self.root, self.event(kind, data, f"e{index}"))
+            )
+        events, problems = ledger.read(self.root, "run_1")
+        self.assertEqual(problems, [])
+        self.assertEqual(len(events), len(sequence))
+
+    def test_gate_without_a_completed_gate_step_is_refused(self) -> None:
+        ledger.append(
+            self.root, self.event("run", {"action": "started", "mode": "chat"})
+        )
+        with self.assertRaisesRegex(ledger.LedgerError, "contradictory gate"):
+            ledger.append(
+                self.root,
+                self.event(
+                    "gate",
+                    {"step_id": "review-plan", "choice": "approve", "log_line": 9},
+                    "e2",
+                ),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

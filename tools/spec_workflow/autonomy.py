@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
 
 # Never read or write checkout bytecode, including for the import below.
@@ -44,8 +45,14 @@ from launcher import state_dir  # noqa: E402
 VERSION = 1
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 FEATURE = re.compile(r"specs/([1-9][0-9]*)-[a-z0-9]+(?:-[a-z0-9]+)*")
-MODES = ("human-gated", "autonomous")
-WORKFLOWS = ("ballast-feature", "ballast-autonomous", "ballast-continue")
+MODES = ("human-gated", "autonomous", "chat")
+WORKFLOWS = (
+    "ballast-feature",
+    "ballast-autonomous",
+    "ballast-continue",
+    "ballast-chat",
+)
+CHAT = "ballast-chat"
 INTEGRATIONS = ("claude", "codex")
 STATUSES = ("active", "stopped", "completed", "published", "continued")
 # Only trusted code moves a run; `stopped` reaches `published` only through
@@ -57,6 +64,23 @@ TRANSITIONS = {
     "published": {"continued"},
     "continued": set(),
 }
+# A Chat run returns to active when a later change makes its final approval
+# stale; publication then needs a new final approval (#20 data model).
+CHAT_TRANSITIONS = {"completed": {"active"}, "published": {"active"}}
+NEVER_RAISED = "autonomy is never raised after start"
+CHAT_GATES = (
+    "scope",
+    "intent",
+    "plan",
+    "tasks",
+    "implementation",
+    "spec-reconciliation",
+    "final",
+)
+DECISION_ID = re.compile(r"DEC-\d{1,6}")
+PD_ID = re.compile(r"PD-\d{4}")
+HD_ID = re.compile(r"HD-\d{4}")
+MANIFEST_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 DECISION_POINTS = (
     "scope",
@@ -132,7 +156,14 @@ FINDING_LABELS = (
     "proposed-product-change",
 )
 DISPOSITIONS = ("resolved", "accepted-provisionally", "open")
-HUMAN_DECISION_KINDS = ("mode-change", "block-resolution", "merge-feedback")
+HUMAN_DECISION_KINDS = (
+    "mode-change",
+    "block-resolution",
+    "merge-feedback",
+    "gate-approval",
+    "gate-rejection",
+    "decision-resolution",
+)
 
 REFUSAL = "not eligible for autonomous: "
 CANNOT_CHECK = "cannot check autonomous eligibility: "
@@ -321,8 +352,15 @@ def new_run(  # noqa: PLR0913 - one record, every field explicit
     limits: dict | None = None,
     continues: str | None = None,
     reason: str | None = None,
+    start_head: str | None = None,
+    last_manifest: str | None = None,
+    decision_id: str | None = None,
 ) -> dict:
-    """Build a fresh, validated run record with status `active`."""
+    """Build a fresh, validated run record with status `active`.
+
+    A `ballast-chat` record also carries `start_head`, `last_manifest`, a
+    `baseline` and an `active_step` (both unset at start), and no limits.
+    """
     review = review_integration or integration
     record = {
         "version": VERSION,
@@ -337,7 +375,7 @@ def new_run(  # noqa: PLR0913 - one record, every field explicit
                 "by": "operator",
                 "action": "start",
                 "reason": reason,
-                "decision_id": None,
+                "decision_id": decision_id,
             }
         ],
         "status": "active",
@@ -354,6 +392,13 @@ def new_run(  # noqa: PLR0913 - one record, every field explicit
         record["eligibility"] = eligibility
     if limits is not None:
         record["limits"] = limits
+    if workflow == CHAT:
+        record |= {
+            "start_head": start_head,
+            "baseline": None,
+            "active_step": None,
+            "last_manifest": last_manifest,
+        }
     return validate_run(record, run_id)
 
 
@@ -362,7 +407,12 @@ def _require(condition: bool, message: str) -> None:  # noqa: FBT001
         raise AutonomyError(message)
 
 
-def _validate_mode_history(history: object) -> None:
+def _validate_mode_history(history: object, workflow: object = None) -> None:
+    """Start once; then only lower from autonomous or switch a Chat run (#20).
+
+    A Chat run switches between chat and human-gated, which have the same
+    approval authority; no later change ever reaches autonomous.
+    """
     _require(
         isinstance(history, list) and bool(history), "run record has no mode history"
     )
@@ -375,12 +425,31 @@ def _validate_mode_history(history: object) -> None:
         action = change.get("action")
         if index == 0:
             _require(action == "start", "the first mode change must be the start")
-        else:
-            _require(action == "lower", "a later mode change can only lower")
+            continue
+        previous, mode = history[index - 1]["mode"], change["mode"]
+        _require(
+            action in {"lower", "switch"},
+            "a later mode change can only lower or switch",
+        )
+        if action == "lower":
             _require(
-                history[index - 1]["mode"] == "autonomous"
-                and change["mode"] == "human-gated",
-                "a mode can only be lowered from autonomous to human-gated",
+                previous == "autonomous" and mode in {"human-gated", "chat"},
+                "a mode can only be lowered from autonomous to human-gated or chat",
+            )
+        else:
+            _require(
+                workflow == CHAT and {previous, mode} == {"chat", "human-gated"},
+                "only a Chat run switches, between chat and human-gated",
+            )
+        if action == "switch" or mode == "chat":
+            _require(
+                isinstance(change.get("reason"), str)
+                and bool(change["reason"].strip()),
+                "a mode switch needs the operator's reason",
+            )
+            _require(
+                bool(HD_ID.fullmatch(str(change.get("decision_id")))),
+                "a mode switch needs its human decision",
             )
 
 
@@ -403,7 +472,7 @@ def validate_run(record: object, run_id: str) -> dict:
     )
     _require(issue == int(match.group(1)), "run record issue differs from feature")
     _require(record.get("workflow") in WORKFLOWS, "run record has an unknown workflow")
-    _validate_mode_history(record.get("mode_history"))
+    _validate_mode_history(record.get("mode_history"), record["workflow"])
     _require(record.get("status") in STATUSES, "run record has an unknown status")
     steps = record.get("agent_steps")
     _require(
@@ -435,7 +504,48 @@ def validate_run(record: object, run_id: str) -> dict:
             )
         _require(record["risk"].get("level") in RISKS, "run record has an unknown risk")
         _parse_time(record["limits"].get("deadline"))
+    if record["workflow"] == CHAT:
+        _validate_chat(record)
     return record
+
+
+def _validate_chat(record: dict) -> None:
+    """Return the Chat fields of a `ballast-chat` record (#20 data model)."""
+    _require(
+        effective_mode(record) in {"chat", "human-gated"},
+        "a Chat run is in chat or human-gated mode",
+    )
+    _require(
+        isinstance(record.get("start_head"), str)
+        and bool(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", record["start_head"])),
+        "Chat run record has no start commit",
+    )
+    _require(
+        isinstance(record.get("last_manifest"), str)
+        and bool(MANIFEST_DIGEST.fullmatch(record["last_manifest"])),
+        "Chat run record has no tree manifest",
+    )
+    baseline = record.get("baseline")
+    if baseline is not None:
+        _require(
+            isinstance(baseline, dict)
+            and set(baseline) == {"tree", "at", "approval"}
+            and bool(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(baseline["tree"])))
+            and bool(HD_ID.fullmatch(str(baseline["approval"]))),
+            "Chat run record has a malformed baseline",
+        )
+        _parse_time(baseline["at"])
+    active = record.get("active_step")
+    if active is not None:
+        _require(
+            isinstance(active, dict)
+            and {"step", "phase", "unit", "started_at"} <= set(active)
+            and bool(re.fullmatch(r"[A-Za-z0-9_.-]{1,200}", str(active["step"])))
+            and isinstance(active["phase"], str)
+            and (active["unit"] is None or isinstance(active["unit"], str)),
+            "Chat run record has a malformed active step",
+        )
+        _parse_time(active["started_at"])
 
 
 def run_file(root: Path, run_id: str) -> Path:
@@ -470,7 +580,10 @@ def effective_mode(record: dict) -> str:
 
 def set_status(record: dict, status: str) -> dict:
     """Move a run along its legal transitions only."""
-    if status not in TRANSITIONS.get(record["status"], set()):
+    allowed = set(TRANSITIONS.get(record["status"], set()))
+    if record.get("workflow") == CHAT:
+        allowed |= CHAT_TRANSITIONS.get(record["status"], set())
+    if status not in allowed:
         message = (
             f"run {record['run_id']} cannot go from {record['status']} to {status}"
         )
@@ -482,27 +595,39 @@ def set_status(record: dict, status: str) -> dict:
 def change_mode(
     record: dict, mode: str, *, reason: str | None, decision_id: str | None
 ) -> dict:
-    """Append a mode change; only lowering a paused Autonomous run exists."""
+    """Append a mode change: lower a paused Autonomous run, or switch a Chat run.
+
+    A paused Autonomous run lowers to human-gated or chat. A `ballast-chat`
+    run switches between chat and human-gated. Nothing reaches autonomous.
+    """
     if mode not in MODES:
         message = f"unknown mode {mode!r}"
         raise AutonomyError(message)
-    if mode == "autonomous" or effective_mode(record) != "autonomous":
-        message = "raising a run's autonomy after start is refused"
+    current = effective_mode(record)
+    switch = record.get("workflow") == CHAT and {current, mode} == {
+        "chat",
+        "human-gated",
+    }
+    if mode == "autonomous" or (current != "autonomous" and not switch):
+        message = f"raising a run's autonomy after start is refused: {NEVER_RAISED}"
         raise AutonomyError(message, "ineligible")
-    if record["status"] == "active":
+    if not switch and record["status"] == "active":
         message = "only a paused autonomous run can be lowered"
         raise AutonomyError(message)
-    record["mode_history"].append(
-        {
-            "mode": "human-gated",
-            "at": now(),
-            "by": "operator",
-            "action": "lower",
-            "reason": reason,
-            "decision_id": decision_id,
-        }
+    entry = {
+        "mode": mode,
+        "at": now(),
+        "by": "operator",
+        "action": "switch" if switch else "lower",
+        "reason": reason,
+        "decision_id": decision_id,
+    }
+    # Validated before it is kept: a refused change leaves the record as it was.
+    validate_run(
+        {**record, "mode_history": [*record["mode_history"], entry]}, record["run_id"]
     )
-    return validate_run(record, record["run_id"])
+    record["mode_history"].append(entry)
+    return record
 
 
 # --- Hash-chained logs ----------------------------------------------------
@@ -612,10 +737,19 @@ def append_decision(root: Path, run_id: str, entry: dict) -> dict:
     return append_log(path, "PD", entry)
 
 
-def append_human_decision(
-    root: Path, run_id: str, kind: str, ref: str, *, resolves: str | None
+def append_human_decision(  # noqa: PLR0913 - complexity inherent to one guarded flow
+    root: Path,
+    run_id: str,
+    kind: str,
+    ref: str,
+    *,
+    resolves: str | None,
+    extra: dict | None = None,
 ) -> dict:
-    """Record an operator decision against a run."""
+    """Record an operator decision against a run.
+
+    The Chat kinds carry the extra fields of `HUMAN_DECISION_FIELDS`.
+    """
     if kind not in HUMAN_DECISION_KINDS:
         message = f"unknown human decision kind {kind!r}"
         raise AutonomyError(message)
@@ -623,14 +757,62 @@ def append_human_decision(
         message = "--ref must be 1-500 characters"
         raise AutonomyError(message)
     entry = {
+        **(extra or {}),
         "kind": kind,
         "ref": ref.strip(),
         "resolves": resolves,
         "at": now(),
         "by": "operator",
     }
+    validate_human_decision(entry)
     path = run_dir(root, run_id) / "human-decisions.jsonl"
     return append_log(path, "HD", entry)
+
+
+def _short_text(value: object, limit: int = 300) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= limit
+
+
+# The extra fields each Chat human-decision kind carries, and their rule.
+HUMAN_DECISION_FIELDS = {
+    "gate-approval": {
+        "gate": lambda v: v in CHAT_GATES,
+        "artifact": _short_text,
+        "digest": lambda v: _short_text(v, 100),
+        "supersedes_provisional": lambda v: (
+            isinstance(v, list)
+            and all(isinstance(i, str) and PD_ID.fullmatch(i) for i in v)
+        ),
+    },
+    "gate-rejection": {
+        "gate": lambda v: v in CHAT_GATES,
+        "artifact": _short_text,
+        "digest": lambda v: _short_text(v, 100),
+    },
+    "decision-resolution": {
+        "decision": lambda v: isinstance(v, str) and bool(DECISION_ID.fullmatch(v)),
+        "digest": lambda v: _short_text(v, 100),
+    },
+}
+
+
+def validate_human_decision(entry: object) -> dict:
+    """Check a human decision's kind, common fields and its kind's extra fields."""
+    _require(isinstance(entry, dict), "human decision must be an object")
+    assert isinstance(entry, dict)  # noqa: S101 - narrowed above
+    kind = entry.get("kind")
+    _require(kind in HUMAN_DECISION_KINDS, f"unknown human decision kind {kind!r}")
+    _require(entry.get("by") == "operator", "a human decision is the operator's")
+    _require(_short_text(entry.get("ref"), 500), "human decision has no reference")
+    _parse_time(entry.get("at"))
+    for name, rule in HUMAN_DECISION_FIELDS.get(str(kind), {}).items():
+        _require(rule(entry.get(name)), f"{kind} has an invalid {name}")
+    if kind == "mode-change" and ("from" in entry or "to" in entry):
+        _require(
+            entry.get("from") in MODES and entry.get("to") in MODES,
+            "mode-change has an invalid mode",
+        )
+    return entry
 
 
 # --- Agent steps and drafts -----------------------------------------------
@@ -1324,6 +1506,23 @@ def agent_homes(home: Path, env: dict[str, str]) -> list[Path]:
     return [claude, codex, home / ".cache"]
 
 
+def _installed_skill_binds(root: Path) -> list[str]:
+    """Bind the installed workflow skills read-only (#20 SEC-001).
+
+    `tools/setup` installs them git-ignored under `.agents/skills/` (and links
+    `.claude/skills/` to them), so no tree check sees an edit: a step could
+    otherwise rewrite the instructions a later review step follows.
+    """
+    skills = root / ".agents" / "skills"
+    if not skills.is_dir() or skills.is_symlink():
+        return []
+    args: list[str] = []
+    for path in sorted(skills.iterdir()):
+        if path.name.startswith(("ballast-", "speckit-")) and not path.is_symlink():
+            args += ["--ro-bind", str(path), str(path)]
+    return args
+
+
 def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
     args = ["--bind", str(root), str(root)]
     for name in PROTECTED:
@@ -1410,7 +1609,7 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
-def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
+def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     root: Path,
     command: list[str],
     *,
@@ -1418,6 +1617,8 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     feature: str | None = None,
     env: dict[str, str] | None = None,
     home: Path | None = None,
+    interactive_pty: bool = False,
+    readonly_extra: tuple[str, ...] = (),
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
@@ -1426,7 +1627,22 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
     credential paths are hidden, and the agent cannot reach the operator's
     processes, user bus or runtime sockets. Pass the operator's environment,
     not `confined_env()`'s: it names the credential locations to hide.
+
+    `readonly_extra` names checkout paths (such as `.claude`) bound read-only
+    when they exist. `interactive_pty=True` omits `--new-session`, and only a
+    Chat step whose stdio is a wrapper-owned pty, already its controlling
+    terminal, passes it (#20 D-3): TIOCSTI then reaches only the agent's own
+    pty. Every other caller keeps `--new-session`.
     """
+    extra = []
+    for name in readonly_extra:
+        parts = Path(name).parts
+        if not name or Path(name).is_absolute() or ".." in parts or "." in parts:
+            message = f"read-only path {name!r} must be inside the checkout"
+            raise AutonomyError(message, "ineligible")
+        path = root / name
+        if os.path.lexists(path):
+            extra += ["--ro-bind", str(path), str(path)]
     bwrap, shadowed = trusted_program("bwrap", root)
     if bwrap is None:
         where = " outside working trees and temp roots" if shadowed else ""
@@ -1478,18 +1694,14 @@ def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
         args += ["--bind", str(copy), str(settings)]
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature)
+    args += _installed_skill_binds(root)
+    args += extra
     for path in hidden:
         args += ["--remount-ro", str(path)]
-    args += [
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--new-session",
-        "--die-with-parent",
-        "--chdir",
-        str(root),
-        "--",
-        *command,
-    ]
+    args += ["--unshare-pid", "--unshare-ipc"]
+    if not interactive_pty:
+        args.append("--new-session")
+    args += ["--die-with-parent", "--chdir", str(root), "--", *command]
     return args
 
 
@@ -2380,7 +2592,57 @@ def _protected_path(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in PROTECTED)
 
 
-def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
+def _publication_target(
+    root: Path, run: dict, adoptable: Callable[[object, str, str], object]
+) -> tuple:
+    """Check the branch, its pin and origin, and find the one PR to reuse.
+
+    Shared by the Autonomous and Chat publishers. Returns (repo, default
+    branch, branch, push URL, adopted PR or None, its current state or None);
+    a refusal raises a `postcondition` AutonomyError.
+    """
+    repo, default_branch = repository(root, "forge")
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if branch in {"", "HEAD", default_branch}:
+        raise AutonomyError(BRANCH_REFUSAL, "postcondition")
+    if run["workflow"] == CHAT:
+        pinned = _trusted()._branch_pin(root, run["run_id"])  # noqa: SLF001
+        if pinned is not None and pinned != branch:
+            message = f"HEAD is {branch}, not the pinned {pinned}"
+            raise AutonomyError(message, "postcondition")
+    if not _origin_is(root, repo):
+        raise AutonomyError(ORIGIN_REFUSAL, "postcondition")
+    push_url = _push_url(root, repo)
+    prs = _gh(
+        root,
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,url,body,isCrossRepository,headRepository,headRepositoryOwner",
+        category="forge",
+    )
+    adopted = adoptable(prs, run["feature"], repo)
+    if prs and adopted is None:
+        message = f"{BRANCH_REFUSAL}; reuse is #17"
+        raise AutonomyError(message, "postcondition")
+    current = None
+    if adopted is not None:
+        # The list entry carries no base or draft state: read the PR back.
+        current = _read_pr(root, repo, adopted[0])
+        problem = _pr_problem(current, repo, default_branch, branch)
+        if problem:
+            message = f"{BRANCH_REFUSAL}; PR #{adopted[0]} {problem}; reuse is #17"
+            raise AutonomyError(message, "postcondition")
+    return repo, default_branch, branch, push_url, adopted, current
+
+
+def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
     """Commit, push and open one Draft PR as the operator.
 
     Returns {"ok": bool, "category": str|None, "message": str, "url": str|None}.
@@ -2392,6 +2654,8 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
 
     try:
         run = read_run(root, run_id)
+        if run["workflow"] == CHAT:
+            return _publish_chat(root, run)
         decisions = read_decisions(root, run_id)
         policy = run["eligibility"]["policy"]
         unauthorized = unauthorized_actions(privileged_union(run, decisions), policy)
@@ -2403,39 +2667,9 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         reasons = risk_reasons(run["risk"]["level"], run["risk"]["boundaries"], policy)
         if reasons:
             return refuse("ineligible", reasons[0])
-        repo, default_branch = repository(root, "forge")
-        branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        if branch in {"", "HEAD", default_branch}:
-            return refuse("postcondition", BRANCH_REFUSAL)
-        if not _origin_is(root, repo):
-            return refuse("postcondition", ORIGIN_REFUSAL)
-        push_url = _push_url(root, repo)
-        prs = _gh(
-            root,
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--head",
-            branch,
-            "--state",
-            "open",
-            "--json",
-            "number,url,body,isCrossRepository,headRepository,headRepositoryOwner",
-            category="forge",
+        repo, default_branch, branch, push_url, adopted, current = _publication_target(
+            root, run, _adoptable
         )
-        adopted = _adoptable(prs, run["feature"], repo)
-        if prs and adopted is None:
-            return refuse("postcondition", f"{BRANCH_REFUSAL}; reuse is #17")
-        if adopted is not None:
-            # The list entry carries no base or draft state: read the PR back.
-            current = _read_pr(root, repo, adopted[0])
-            problem = _pr_problem(current, repo, default_branch, branch)
-            if problem:
-                return refuse(
-                    "postcondition",
-                    f"{BRANCH_REFUSAL}; PR #{adopted[0]} {problem}; reuse is #17",
-                )
         checked = run.get("checked_tree")
         if not checked or checked_digest(root, run["feature"]) != checked:
             return refuse(
@@ -2521,6 +2755,138 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
     except AutonomyError as error:
         return refuse(error.category, str(error))
     return {"ok": True, "category": None, "message": "published", "url": url}
+
+
+def _publish_chat(root: Path, run: dict) -> dict:
+    """Publish a Chat run (#20 D-6): the Autonomous commit, push and PR path.
+
+    `chat.publish` has already checked that the final human approval and the
+    project checks are current for this tree. The body section is rendered
+    from operator records only (`chat.publish_section`); its fixed wording
+    names the operator's approvals, and every agent-derived value is guarded
+    there instead of by the Autonomous `HUMAN_APPROVAL` body guard.
+
+    There is no allowed-path list or start-time Git configuration snapshot as
+    in Autonomous: the operator edits the checkout between steps, so the
+    publishable tree is the one the current final approval is bound to, and
+    `program_findings` still refuses any configured hook, filter or driver.
+    """
+    import chat  # noqa: PLC0415 - chat imports this module
+
+    def refuse(category: str, message: str) -> dict:
+        return {"ok": False, "category": category, "message": message, "url": None}
+
+    try:
+        repo, default_branch, branch, push_url, adopted, current = _publication_target(
+            root, run, _adoptable_chat
+        )
+        findings = program_findings(root) + [
+            f"attribute driver {d} is configured" for d in attribute_drivers(root)
+        ]
+        if findings:
+            return refuse("postcondition", "; ".join(findings))
+        head = run["start_head"]
+        git(root, "add", "--all")
+        staged = git(
+            root, "diff", "--cached", "--name-only", "--no-renames", head
+        ).stdout.split()
+        problems = [p for p in staged if _protected_path(p)] + [
+            p
+            for p in staged
+            if (root / p).is_file() and (root / p).stat().st_size > MAX_PUBLISHED_FILE
+        ]
+        if problems:
+            git(root, "reset", "-q", check=False)
+            return refuse(
+                "postcondition",
+                "refusing to publish protected or oversized paths: "
+                + ", ".join(sorted(set(problems))[:10]),
+            )
+        title = f"feat: {run.get('issue_title') or Path(run['feature']).name}"[:100]
+        if git(root, "diff", "--cached", "--quiet", check=False).returncode != 0:
+            git(
+                root,
+                "commit",
+                "--no-verify",
+                "-q",
+                "-m",
+                title,
+                "-m",
+                f"Refs #{run['issue']}",
+                "-m",
+                f"Chat-Run: {run['run_id']} (mode {effective_mode(run)})",
+            )
+        pushed = _push(root, push_url, branch)
+        if pushed.returncode != 0:
+            return refuse("forge", f"git push failed: {pushed.stderr.strip()[:500]}")
+        section = chat.publish_section(root, run)
+        if adopted is not None:
+            url = _adopt_pr(
+                root,
+                repo,
+                adopted[0],
+                current,
+                section,
+                base=default_branch,
+                branch=branch,
+                merge=_with_chat,
+            )
+        else:
+            url = _create_verified(
+                root,
+                repo,
+                base=default_branch,
+                head=branch,
+                title=title,
+                body=f"{section}\n\nRefs #{run['issue']}\n",
+            )
+    except AutonomyError as error:
+        return refuse(error.category, str(error))
+    return {"ok": True, "category": None, "message": "published", "url": url}
+
+
+CHAT_BEGIN = "<!-- ballast:chat:begin -->"
+CHAT_END = "<!-- ballast:chat:end -->"
+
+
+def _adoptable_chat(  # noqa: PLR0911 - complexity inherent to one guarded flow
+    prs: object, feature: str, repo: str
+) -> tuple[int, str, str] | None:
+    """Return the feature's one open Draft PR: a #17 checkpoint or Chat publication."""
+    found = _adoptable(prs, feature, repo)
+    if found is not None:
+        return found
+    if not isinstance(prs, list) or len(prs) != 1 or not isinstance(prs[0], dict):
+        return None
+    if not _own_head(prs[0], repo):
+        return None
+    number, url, body = (prs[0].get(key) for key in ("number", "url", "body"))
+    if type(number) is not int or not isinstance(url, str) or not isinstance(body, str):
+        return None
+    if body.count(CHAT_BEGIN) != 1 or body.count(CHAT_END) != 1:
+        return None
+    start, stop = body.find(CHAT_BEGIN), body.find(CHAT_END)
+    if stop < start or f"Feature: {feature} {chr(0xB7)}" not in body[start:stop]:
+        return None
+    return number, url, body[start : stop + len(CHAT_END)]
+
+
+def _with_chat(body: str, section: str) -> str:
+    """Body with the Chat section set; every other byte kept.
+
+    Replaces the one existing section, or inserts it before the #17 section.
+    """
+    start, stop = body.find(CHAT_BEGIN), body.find(CHAT_END)
+    if body.count(CHAT_BEGIN) == body.count(CHAT_END) == 1 and start < stop:
+        return body[:start] + section + body[stop + len(CHAT_END) :]
+    at = body.find(_trusted().MARK_BEGIN)
+    if at < 0:
+        message = (
+            "the PR no longer carries Ballast's section; nothing was overwritten, "
+            "ballast run publish retries"
+        )
+        raise AutonomyError(message, "forge")
+    return body[:at] + section + "\n\n" + body[at:]
 
 
 def _guard_body(body: str) -> None:
@@ -2729,13 +3095,16 @@ def _adopt_pr(  # noqa: PLR0913 - every input explicit
     *,
     base: str,
     branch: str,
+    merge: object = None,
 ) -> str:
     """Set the summary on the checkpoint's PR, keeping all other text.
 
     GitHub has no conditional body update (#17 DEC-0007): re-read just before
     writing, and leave a body that changed since it was read; the block is
-    retryable with `ballast run publish`.
+    retryable with `ballast run publish`. `merge` places the section (the
+    Autonomous summary by default, the Chat section for a Chat run).
     """
+    merge = merge or _with_summary
     body = str(read.get("body") or "")
     current = _read_pr(root, repo, number)
     problem = _pr_problem(current, repo, base, branch)
@@ -2757,7 +3126,7 @@ def _adopt_pr(  # noqa: PLR0913 - every input explicit
         repo,
         "--body-file",
         "-",
-        stdin=_with_summary(body, summary),
+        stdin=merge(body, summary),  # type: ignore[operator]
         category="forge",
     )
     return str(read.get("html_url"))

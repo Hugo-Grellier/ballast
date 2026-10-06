@@ -28,17 +28,22 @@ adds evidence and an early stop.
 from __future__ import annotations
 
 import ctypes
+import fcntl
 import hashlib
 import json
 import os
 import re
+import select
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
+import tty
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +68,8 @@ NOFOLLOW_WRITE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
 
 HERE = Path(__file__).resolve().parent
 SETTINGS = HERE / "claude-settings.json"
+# The Chat-only additions to the headless rules (#20 contracts/step-runner.md).
+CHAT_SETTINGS = HERE / "claude-chat-settings.json"
 GUARD = HERE / "guard"
 # Read-only commands a confined Claude step may also run (#37). Bubblewrap,
 # not these rules, bounds what they can reach; the denials only keep `find`
@@ -100,6 +107,16 @@ SPECIFY_WRITABLE = ("feature.json", "extensions/.cache", "workflows/.cache")
 LOG_FILES = ("stdout.log", "stderr.log", "meta.json")
 REAP_SECONDS = 10.0
 INTERRUPT_GRACE_SECONDS = 5.0
+# The operator ends an interactive step with Ctrl-] twice within a second.
+ESCAPE_BYTE = 0x1D
+ESCAPE_SECONDS = 1.0
+HANGUP_GRACE_SECONDS = 2.0
+# Leave the alternate screen; mouse, focus and bracketed-paste reports off;
+# cursor shown; normal keypad; default colors (#20 SEC-006).
+TERMINAL_RESET = (
+    b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l"
+    b"\x1b[?2004l\x1b[?25h\x1b>\x1b[0m"
+)
 
 
 def permission_args(integration: str, args: list[str]) -> list[str]:
@@ -410,6 +427,339 @@ def _role(prompt: str) -> str:
 
 def _review_exclusions(feature: str) -> tuple[str, ...]:
     return (f"{feature}/reviews", f"{feature}/autonomous/drafts")
+
+
+# --- Interactive Chat steps (#20) ---------------------------------------------
+#
+# `chat.run_step` is the only caller. The agent runs with the headless rules,
+# denied anything that would prompt, under bubblewrap and a systemd scope,
+# behind a pty this wrapper owns: the agent's controlling terminal is that
+# pty, and it holds no descriptor to the operator's terminal, which this
+# wrapper relays (contracts/step-runner.md, D-3).
+
+
+def chat_settings() -> dict:
+    """Return an interactive Claude step's settings: every headless rule, plus Chat's.
+
+    The installed `claude-settings.json` already holds the project's
+    `[agents.permissions]` rules (tools/setup merges them), so its allow and
+    deny lists come first; `claude-chat-settings.json` adds `Edit`/`Write`
+    for `dontAsk` and disables the bypass and auto modes. A deny list is
+    therefore always a superset of the headless one.
+    """
+    headless = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    chat = json.loads(CHAT_SETTINGS.read_text(encoding="utf-8"))
+    merged = {**chat, "permissions": dict(chat["permissions"])}
+    for key in ("allow", "deny"):
+        merged["permissions"][key] = list(
+            dict.fromkeys(
+                [
+                    *headless["permissions"].get(key, []),
+                    *chat["permissions"].get(key, []),
+                ]
+            )
+        )
+    # The hook runs this trusted interpreter by absolute path: a `python3`
+    # shadowed on PATH, or one that cannot start, would not block (SEC-003).
+    for group in merged.get("hooks", {}).get("PreToolUse", []):
+        for hook in group["hooks"]:
+            hook["command"] = hook["command"].replace(
+                "python3 ", f"{shlex.quote(sys.executable)} ", 1
+            )
+    return merged
+
+
+def interactive_argv(
+    integration: str,
+    executable: str,
+    prompt: str,
+    model: str | None = None,
+    *,
+    settings: str = ".ballast/spec_workflow/claude-chat-settings.json",
+) -> list[str]:
+    """Return the interactive agent argv: deny without prompting, never a bypass.
+
+    `settings` is the step's generated settings file (`chat_settings`),
+    relative to the checkout root the agent runs in.
+    """
+    for token in (prompt, model or ""):
+        if any(marker in token for marker in FORBIDDEN):
+            message = f"refusing permission bypass flag {token!r}"
+            raise ValueError(message)
+    chosen = ["--model", model] if model else []
+    if integration == "claude":
+        # The prompt precedes the variadic tool lists, which would take it.
+        return [
+            executable,
+            "--permission-mode",
+            "dontAsk",
+            "--setting-sources",
+            "project",
+            "--strict-mcp-config",
+            "--settings",
+            settings,
+            *chosen,
+            prompt,
+            "--allowedTools",
+            *CONFINED_ALLOW,
+            "--disallowedTools",
+            *CONFINED_DENY,
+        ]
+    if integration == "codex":
+        return [
+            executable,
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "never",
+            "--config",
+            "sandbox_workspace_write.network_access=false",
+            "--config",
+            "sandbox_workspace_write.writable_roots=[]",
+            *chosen,
+            prompt,
+        ]
+    message = f"unknown integration {integration!r}"
+    raise ValueError(message)
+
+
+def _copy_size(source: int, target: int) -> None:
+    """Give the step's pty the operator terminal's window size."""
+    with suppress(OSError):
+        size = fcntl.ioctl(source, termios.TIOCGWINSZ, b"\0" * 8)
+        fcntl.ioctl(target, termios.TIOCSWINSZ, size)
+
+
+def _take_terminal() -> None:
+    """In the agent's child, after setsid: the pty slave on fd 0 is its terminal."""
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    while data:
+        try:
+            written = os.write(fd, data)
+        except BlockingIOError:
+            select.select([], [fd], [], 1.0)
+            continue
+        data = data[written:]
+
+
+class _Escape:
+    """Ctrl-] twice within a second ends the step; a lone Ctrl-] is forwarded."""
+
+    def __init__(self) -> None:
+        self.held_at: float | None = None
+
+    def feed(self, data: bytes) -> tuple[bytes, bool]:
+        """Return the bytes to forward and whether the escape was typed."""
+        forward = bytearray()
+        for byte in data:
+            now = time.monotonic()
+            if self.held_at is not None and now - self.held_at > ESCAPE_SECONDS:
+                forward.append(ESCAPE_BYTE)
+                self.held_at = None
+            if byte == ESCAPE_BYTE:
+                if self.held_at is not None:
+                    return bytes(forward), True
+                self.held_at = now
+                continue
+            if self.held_at is not None:
+                forward.append(ESCAPE_BYTE)
+                self.held_at = None
+            forward.append(byte)
+        return bytes(forward), False
+
+    def expired(self) -> bytes:
+        """Return a held Ctrl-] whose second press never came, to forward now."""
+        if (
+            self.held_at is not None
+            and time.monotonic() - self.held_at > ESCAPE_SECONDS
+        ):
+            self.held_at = None
+            return bytes([ESCAPE_BYTE])
+        return b""
+
+
+def _end_session(process: subprocess.Popen, unit: str) -> None:
+    """Hang up the agent's session, then kill what is left of it and its scope."""
+    for number, wait in ((signal.SIGHUP, HANGUP_GRACE_SECONDS), (signal.SIGKILL, 5.0)):
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, number)
+        try:
+            process.wait(wait)
+        except subprocess.TimeoutExpired:
+            continue
+        else:
+            return
+    stop_scope(unit)
+
+
+def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, every input explicit
+    root: Path,
+    *,
+    integration: str,
+    prompt: str,
+    model: str | None,
+    feature: str,
+    unit: str,
+    stdout_log: BinaryIO,
+    settings: str,
+) -> dict:
+    """Run one interactive, confined agent session behind a wrapper-owned pty.
+
+    The session ends when the agent exits, when the operator types Ctrl-]
+    twice, or on SIGHUP, SIGTERM or SIGINT; then the scope is stopped and
+    every descendant reaped before this returns, and later signals are
+    ignored. The operator's terminal attributes are restored on every path.
+    Returns exit_code (None when interrupted), interrupted, scope_stopped,
+    stopped_descendants and argv (program names only).
+    """
+    if not SCOPE.fullmatch(unit):
+        message = f"invalid agent scope name {unit!r}"
+        raise ValueError(message)
+    argv = interactive_argv(
+        integration, _real_executable(integration), prompt, model, settings=settings
+    )
+    systemd_run, scope_options = _containment(root)
+    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
+    git, _ = autonomy.trusted_program("git", root)
+    if git is not None:
+        env["BALLAST_GIT"] = git
+        env["PATH"] = os.pathsep.join((str(GUARD), env.get("PATH", "")))
+    private = Path(tempfile.mkdtemp(prefix="ballast-agent-"))
+    stdin_fd, stdout_fd = sys.stdin.fileno(), sys.stdout.fileno()
+    saved = termios.tcgetattr(stdin_fd) if os.isatty(stdin_fd) else None
+    ending: dict[str, int | None] = {"signal": None}
+
+    def on_signal(number: int, _frame: object) -> None:
+        ending["signal"] = number
+        if saved is not None:
+            with suppress(termios.error):
+                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, saved)
+
+    handlers = {
+        number: signal.signal(number, on_signal)
+        for number in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
+    }
+    master = slave = -1
+    process = None
+    interrupted = False
+    try:
+        confined = autonomy.confined_argv(
+            root,
+            argv,
+            private=private,
+            feature=feature,
+            env=env,
+            interactive_pty=True,
+            readonly_extra=(".claude", ".codex"),
+        )
+        env = autonomy.confined_env(env, integration)
+        command = [
+            systemd_run,
+            "--user",
+            "--scope",
+            "--quiet",
+            "--collect",
+            f"--unit={unit.removesuffix('.scope')}",
+            *scope_options,
+            "--",
+            *confined,
+        ]
+        master, slave = os.openpty()
+        if saved is not None:
+            _copy_size(stdin_fd, slave)
+        process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
+            command,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            env=env,
+            start_new_session=True,
+            preexec_fn=_take_terminal,  # noqa: PLW1509 - no threads in this wrapper
+            close_fds=True,
+        )
+        os.close(slave)
+        slave = -1
+        signal.signal(signal.SIGWINCH, lambda *_: _copy_size(stdin_fd, master))
+        if saved is not None:
+            tty.setraw(stdin_fd)
+        escape = _Escape()
+        reading = True
+        while True:
+            if ending["signal"] is not None:
+                interrupted = True
+                break
+            sources = [master, stdin_fd] if reading else [master]
+            try:
+                ready, _, _ = select.select(sources, [], [], 0.2)
+            except InterruptedError:
+                continue
+            if master in ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    data = b""
+                if not data:
+                    break
+                _write_all(stdout_fd, data)
+                stdout_log.write(data)
+                stdout_log.flush()
+            if stdin_fd in ready:
+                try:
+                    data = os.read(stdin_fd, 4096)
+                except OSError:
+                    data = b""
+                if not data:
+                    reading = False
+                else:
+                    forward, typed = escape.feed(data)
+                    if forward:
+                        _write_all(master, forward)
+                    if typed:
+                        interrupted = True
+                        break
+            held = escape.expired()
+            if held:
+                _write_all(master, held)
+            if process.poll() is not None and master not in ready:
+                break
+    finally:
+        if saved is not None:
+            # Undo modes the agent may have left on, and drop pending input
+            # (late answers to its terminal queries) before the shell reads.
+            with suppress(OSError):
+                _write_all(stdout_fd, TERMINAL_RESET)
+            with suppress(termios.error):
+                termios.tcsetattr(stdin_fd, termios.TCSAFLUSH, saved)
+        for number in handlers:
+            signal.signal(number, signal.SIG_IGN)
+        signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+        if slave >= 0:
+            os.close(slave)
+        if process is not None and process.poll() is None:
+            interrupted = True
+            _end_session(process, unit)
+        scoped = stop_scope(unit) if process is not None else True
+        survivors, contained = _stop_descendants()
+        if master >= 0:
+            with suppress(OSError):
+                while select.select([master], [], [], 0)[0]:
+                    data = os.read(master, 65536)
+                    if not data:
+                        break
+                    stdout_log.write(data)
+            os.close(master)
+        shutil.rmtree(private, ignore_errors=True)
+    stdout_log.flush()
+    return {
+        "exit_code": None if interrupted else process.returncode,
+        "interrupted": interrupted,
+        "scope_stopped": scoped and contained,
+        "stopped_descendants": survivors,
+        "argv": [Path(command[0]).name, *command[1:]],
+    }
 
 
 def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent step

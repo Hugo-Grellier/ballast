@@ -83,7 +83,7 @@ ballast ledger snapshot|check|report ...
 
 Only `setup` and `preview` download; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
-Before the first agent step of every `ballast run start`, `resume` or `continue`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
+Before the first agent step of every `ballast run start`, `resume` or `continue`, and of every Chat `step`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
 
 At the end of every `ballast run start`, `resume` or `continue` invocation, after any Autonomous publication, the launcher makes sure one Draft PR shows an issue-linked feature once its published branch holds a change outside `specs/<feature>/`, and reuses that PR afterwards. It needs `[github] repository = "OWNER/NAME"` in `ballast.toml`, uses your authenticated `gh` 2.48 or later, never pushes (only an Autonomous run's publisher does), and never marks a PR ready, merges or closes it. The [Draft PR section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#draft-pr) lists the reported states and their remedies. The same Draft PR carries an [acceptance packet](templates/policies/spec-kit-workflow.md#acceptance-packet): each acceptance criterion's evidence state at the head commit, the run's decisions, open findings and checks, and links to every source; it is a derived summary, not an approval.
 
@@ -116,6 +116,23 @@ timeout_minutes = 30
 ```
 
 Keys that would widen eligibility, and `merge`, `release`, `deploy` or `mark ready` as authorized actions, are ignored with a warning. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
+
+### Chat runs
+
+Chat mode lets you work through a feature in conversation, one step at a time, while Ballast keeps the guarantees of a headless run: the trusted preflight and branch synchronization before every agent step, the same confinement, the artifact postconditions, the run record and the human approvals. Each action is one `ballast run` command:
+
+```bash
+ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: OUTCOME"]
+ballast run step RUN_ID PHASE [--kind KIND]   # specify, clarify, plan, tasks, analyze, implement, ...
+ballast run status RUN_ID                     # where the run stands and what is allowed next
+ballast run approve RUN_ID GATE               # from your terminal; reject ... --reason TEXT
+ballast run resolve RUN_ID DEC-NNNN
+ballast run checks RUN_ID
+ballast run mode RUN_ID chat|human-gated --reason TEXT
+ballast run publish RUN_ID
+```
+
+A step is an interactive Claude or Codex session for one phase. It runs with the headless permission rules (anything else is denied, never prompted) under the same `bwrap` confinement as an Autonomous step, so Chat needs `bwrap` too. When the session ends (`/exit`, or `Ctrl-]` twice), Ballast confirms the agent is gone and checks the phase's artifact. Every gate needs your `ballast run approve` from a terminal; nothing the agent writes or says approves anything. Leave whenever you like: `status` and the next `step` pick the run up later, from any terminal, after the full preflight. `ballast run continue RUN_ID ... --mode chat` continues a stopped Autonomous run in Chat. Conversation logs stay local. Working in a plain agent session outside `ballast run` gives none of these guarantees.
 
 ### Updating the pinned version
 

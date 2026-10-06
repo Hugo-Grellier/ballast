@@ -8,8 +8,32 @@
         -i feature_directory=specs/N-slug [-i integration=auto|claude|codex]
     ballast run resume RUN_ID [-i integration=claude|codex]
     ballast run continue RUN_ID --reason block-resolved|changes-requested \
-        --ref TEXT
+        --ref TEXT [--mode chat|human-gated]
     ballast run publish RUN_ID
+
+Chat runs (#20), driven by the operator one action at a time:
+
+    ballast run start --mode chat -i feature_directory=specs/N-slug \
+        [-i idea="Issue #N: ..."] [-i integration=auto|claude|codex] \
+        [-i model=NAME]
+    ballast run step RUN_ID PHASE [--kind KIND] [-i integration=claude|codex] \
+        [-i model=NAME]
+    ballast run status RUN_ID
+    ballast run approve RUN_ID GATE
+    ballast run reject RUN_ID GATE --reason TEXT
+    ballast run resolve RUN_ID DEC-NNNN
+    ballast run checks RUN_ID
+    ballast run mode RUN_ID chat|human-gated --reason TEXT
+    ballast run continue RUN_ID --reason ... --ref TEXT --mode chat
+    ballast run publish RUN_ID
+
+PHASE is specify, clarify, plan, tasks, analyze, implement,
+reconcile-intent, converge or review (with --kind plan, implementation,
+security, test, documentation or spec-reconciliation). GATE is scope,
+intent, plan, tasks, implementation, spec-reconciliation or final. Every
+`step` runs branch synchronization before its one agent step, which is
+interactive in chat mode and headless in human-gated mode; every gate needs
+`approve` from a terminal (see chat.py and docs/policies/spec-kit-workflow.md).
 
 `ballast` is the installed copy of launcher.py, which verifies the
 checkout before executing this file; see docs/policies/spec-kit-workflow.md.
@@ -91,6 +115,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import autonomy  # noqa: E402
 import branch_sync  # noqa: E402
+import chat  # noqa: E402
 import draft_pr  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
@@ -121,6 +146,9 @@ RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # declares the same value (a test keeps them equal), and an update preview
 # reads it from the archive to tell whether a target version can resume a run.
 RUN_FORMAT = "ballast-run/1"
+# Ballast-driven Chat subcommands (#20), dispatched to chat.py.
+CHAT_COMMANDS = {"step", "status", "approve", "reject", "resolve", "checks", "mode"}
+COMMANDS = {"start", "resume", "continue", "publish", *CHAT_COMMANDS}
 
 
 def _summary(run_id: str) -> None:
@@ -376,17 +404,28 @@ def _checkpoint(run_id: str) -> None:
 
 
 def _archive_operator(run_id: str) -> None:
-    """Keep an Autonomous run's operator records with the archived run."""
+    """Keep a run's operator records with the archived run.
+
+    Autonomous runs and their continuations keep `autonomous/`; a Chat run's
+    record goes to `operator/` (#20 run-record contract).
+    """
     source = autonomy.run_dir(ROOT, run_id)
     if not source.is_dir() or source.is_symlink():
         return
     try:
+        record = autonomy.find_run(ROOT, run_id)
+    except autonomy.AutonomyError:
+        record = None
+    target = (
+        "operator" if record and record["workflow"] == autonomy.CHAT else "autonomous"
+    )
+    try:
         with archive_lock(ROOT, run_id, exclusive=True):
             shutil.copytree(
-                source, archive_dir(ROOT, run_id) / "autonomous", dirs_exist_ok=True
+                source, archive_dir(ROOT, run_id) / target, dirs_exist_ok=True
             )
     except (OSError, ValueError, RuntimeError) as error:
-        sys.stderr.write(f"autonomous archive failed: {error}\n")
+        sys.stderr.write(f"{target} archive failed: {error}\n")
 
 
 def _split_mode(options: list[str]) -> tuple[dict[str, str], list[str]] | str:
@@ -788,10 +827,107 @@ def _source_run(run_id: str) -> dict | str:
     return record
 
 
-def _publish_command(options: list[str]) -> int:
+def _chat(action: object, *args: object) -> int:
+    """Run a Chat action; its refusals print one reason and keep their exit."""
+    try:
+        return action(*args)  # type: ignore[operator]
+    except chat.Refused as refusal:
+        sys.stderr.write(f"ballast: refusing: {refusal}\n")
+        return refusal.code
+    except (autonomy.AutonomyError, chat.artifacts.ContractError) as error:
+        sys.stderr.write(f"ballast: refusing: {error}\n")
+        return EXIT_REFUSED
+
+
+def _chat_run(run_id: str) -> bool:
+    """Whether `run_id` names a Ballast-driven Chat run."""
+    if not RUN_ID.fullmatch(run_id):
+        return False
+    try:
+        record = autonomy.find_run(ROOT, run_id)
+    except autonomy.AutonomyError:
+        return False
+    return record is not None and record["workflow"] == autonomy.CHAT
+
+
+def _flags(
+    options: list[str], allowed: set[str]
+) -> tuple[dict[str, str], list[str]] | str:
+    """Take `--name VALUE` options out of a Chat command's arguments."""
+    found: dict[str, str] = {}
+    rest: list[str] = []
+    index = 0
+    while index < len(options):
+        option = options[index]
+        name, equals, value = option.partition("=")
+        if name in allowed and not (rest and rest[-1] in {"-i", "--input"}):
+            if not equals:
+                index += 1
+                if index >= len(options):
+                    return f"{name} needs a value"
+                value = options[index]
+            if name in found:
+                return f"{name} given twice"
+            found[name] = value
+        else:
+            rest.append(option)
+        index += 1
+    return found, rest
+
+
+def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - one branch per command
+    """Dispatch `step`, `status`, `approve`, `reject`, `resolve`, `checks`, `mode`."""
+    if not options or not RUN_ID.fullmatch(options[0]):
+        return _refuse(f"{command} needs a valid RUN_ID")
+    run_id, rest = options[0], options[1:]
+    if command == "step":
+        split = _flags(rest, {"--kind"})
+        if isinstance(split, str):
+            return _refuse(split)
+        flags, rest = split
+        if not rest or rest[0].startswith("-"):
+            return _refuse("step needs a PHASE")
+        return _chat(
+            chat.run_step, ROOT, run_id, rest[0], flags.get("--kind"), rest[1:]
+        )
+    if command in {"status", "checks"}:
+        if rest:
+            return _refuse(f"{command} takes only a RUN_ID")
+        return _chat(chat.status if command == "status" else chat.checks, ROOT, run_id)
+    if command == "approve":
+        if len(rest) != 1:
+            return _refuse("approve needs RUN_ID GATE")
+        return _chat(chat.approve, ROOT, run_id, rest[0])
+    if command == "reject":
+        split = _flags(rest, {"--reason"})
+        if isinstance(split, str):
+            return _refuse(split)
+        flags, rest = split
+        if len(rest) != 1:
+            return _refuse("reject needs RUN_ID GATE --reason TEXT")
+        return _chat(chat.reject, ROOT, run_id, rest[0], flags.get("--reason"))
+    if command == "resolve":
+        if len(rest) != 1:
+            return _refuse("resolve needs RUN_ID DEC-NNNN")
+        return _chat(chat.resolve, ROOT, run_id, rest[0])
+    split = _flags(rest, {"--reason"})
+    if isinstance(split, str):
+        return _refuse(split)
+    flags, rest = split
+    if len(rest) != 1:
+        return _refuse("mode needs RUN_ID chat|human-gated --reason TEXT")
+    return _chat(chat.change_mode, ROOT, run_id, rest[0], flags.get("--reason"))
+
+
+def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity inherent to one guarded flow
     """`ballast run publish RUN_ID`: retry publication, never run an agent."""
     if len(options) != 1:
         return _refuse("publish needs exactly one RUN_ID")
+    if _chat_run(options[0]):
+        try:
+            return _chat(chat.publish, ROOT, options[0])
+        finally:
+            _archive_operator(options[0])
     record = _source_run(options[0])
     if isinstance(record, str):
         return _refuse(record)
@@ -842,8 +978,12 @@ def _continue_refusal(source: dict, reason: str) -> str | None:
     return None
 
 
-def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, PLR0911
-    """`ballast run continue`: record the human decision, lower, run gates."""
+def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: C901, PLR0911, PLR0912
+    """`ballast run continue`: record the human decision, lower, run gates.
+
+    `--mode chat` continues in a linked Chat run (#20) instead of the
+    gate-only ballast-continue; `--mode human-gated` is the default.
+    """
     if not options or options[0].startswith("-"):
         return _refuse("continue needs a RUN_ID")
     flags: dict[str, str] = {}
@@ -851,13 +991,15 @@ def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, P
     if len(rest) % 2:
         return _refuse("continue accepts only --reason REASON --ref TEXT")
     for flag, value in zip(rest[::2], rest[1::2], strict=True):
-        if flag == "--mode":
+        if flag == "--mode" and value not in {"chat", "human-gated"}:
             return _refuse(
-                "the mode cannot be chosen here: a continuation is always human-gated "
-                "and autonomy is never raised"
+                "the mode cannot be chosen here: a continuation is human-gated or "
+                "chat, and autonomy is never raised"
             )
-        if flag not in {"--reason", "--ref"} or flag in flags:
-            return _refuse("continue accepts only --reason REASON --ref TEXT")
+        if flag not in {"--reason", "--ref", "--mode"} or flag in flags:
+            return _refuse(
+                "continue accepts only --reason REASON --ref TEXT [--mode chat]"
+            )
         flags[flag] = value
     if flags.get("--reason") not in REASONS or "--ref" not in flags:
         return _refuse(
@@ -870,6 +1012,13 @@ def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, P
     refusal = _continue_refusal(source, flags["--reason"])
     if refusal is not None:
         return _refuse(refusal)
+    if flags.get("--mode") == "chat":
+        return _continue_chat(source, flags)
+    if specify is None:
+        sys.stderr.write(
+            "specify CLI not found; see docs/policies/spec-kit-workflow.md\n"
+        )
+        return 2
     new_id = uuid.uuid4().hex[:8]
     pin = branch_sync.read_pin(ROOT, run_id)
     outcome = _sync(
@@ -935,6 +1084,31 @@ def _continue_command(options: list[str], specify: str) -> int:  # noqa: C901, P
     return status
 
 
+def _continue_chat(source: dict, flags: dict[str, str]) -> int:
+    """`continue --mode chat`: decide, lower to chat, then link a Chat run (AC-022)."""
+    run_id = source["run_id"]
+    try:
+        decision = autonomy.append_human_decision(
+            ROOT,
+            run_id,
+            REASONS[flags["--reason"]],
+            flags["--ref"],
+            resolves="block" if flags["--reason"] == "block-resolved" else None,
+        )
+        autonomy.change_mode(
+            source, "chat", reason=flags["--reason"], decision_id=decision["id"]
+        )
+        autonomy.set_status(source, "continued")
+        autonomy.write_run(ROOT, source)
+        _render_source_record(source)
+    except (autonomy.AutonomyError, OSError) as error:
+        return _refuse(str(error))
+    try:
+        return _chat(chat.continue_run, ROOT, source, decision)
+    finally:
+        _archive_operator(run_id)
+
+
 def _render_source_record(source: dict) -> None:
     """Re-render the committed record so it shows the lowering."""
     feature = ROOT / source["feature"]
@@ -980,6 +1154,17 @@ def _resume_refusal(run_id: str) -> str | None:
         record = autonomy.find_run(ROOT, run_id)
     except autonomy.AutonomyError as error:
         return f"run {run_id}: {error}"
+    if record is not None and record["workflow"] == autonomy.CHAT:
+        return (
+            f"Chat runs continue with `ballast run step {run_id} PHASE`; see "
+            f"`ballast run status {run_id}`"
+        )
+    linked = chat.continued_by(ROOT, run_id) if record is None else None
+    if linked is not None:
+        return (
+            f"run {run_id} continues as Chat run {linked}; use `ballast run step "
+            f"{linked} PHASE` (see `ballast run status {linked}`)"
+        )
     if record is None or record["workflow"] != AUTONOMOUS:
         return None
     if record["status"] == "continued":
@@ -1005,9 +1190,9 @@ def _point_feature(feature: str | None) -> int | None:
     return None
 
 
-def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve runner exit.
-    """Launch Spec Kit with the wrapper environment."""
-    if len(argv) < 1 or argv[0] not in {"start", "resume", "continue", "publish"}:
+def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Preserve runner exit.
+    """Launch Spec Kit with the wrapper environment, or drive a Chat run."""
+    if len(argv) < 1 or argv[0] not in COMMANDS:
         sys.stderr.write(__doc__ or "")
         return 2
     options = argv[1:]
@@ -1019,7 +1204,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
         flags, options = split
         mode = flags.get("--mode", "human-gated")
         if mode not in autonomy.MODES:
-            return _refuse("--mode must be human-gated or autonomous")
+            return _refuse("--mode must be human-gated, autonomous or chat")
         if mode != "autonomous" and len(flags) > ("--mode" in flags):
             return _refuse("--wall-time and --max-agent-steps need --mode autonomous")
         if mode != "autonomous" and _option_feature(options) is None:
@@ -1040,20 +1225,28 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve run
     if os.path.lexists(ROOT / TAMPER_MARKER):
         sys.stderr.write(TAMPER_MESSAGE)
         return 2
+    if argv[0] in CHAT_COMMANDS:
+        try:
+            return _chat_command(argv[0], options)
+        finally:
+            if options and RUN_ID.fullmatch(options[0]):
+                _archive_operator(options[0])
     if argv[0] == "publish":
         return _publish_command(options)
+    if argv[0] == "start" and flags.get("--mode") == "chat":
+        return _chat(chat.start, ROOT, options)
     if argv[0] == "resume":
         refusal = _resume_refusal(options[0])
         if refusal is not None:
             return _refuse(refusal)
+    if argv[0] == "continue":
+        return _continue_command(options, shutil.which("specify"))
     specify = shutil.which("specify")
     if specify is None:
         sys.stderr.write(
             "specify CLI not found; see docs/policies/spec-kit-workflow.md\n"
         )
         return 2
-    if argv[0] == "continue":
-        return _continue_command(options, specify)
     if flags.get("--mode") == "autonomous":
         return _start_autonomous(flags, options, specify)
     if argv[0] == "start":
