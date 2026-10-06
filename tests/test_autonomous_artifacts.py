@@ -830,6 +830,8 @@ class ImplementationReviewTests(RecorderCase):
         for relative in (
             ".github/workflows/ci.yml",
             "templates/github/workflows/ci.yml",
+            ".github/actions/setup/action.yml",
+            "templates/github/actions/setup/action.yml",
         ):
             with self.subTest(path=relative):
                 path = self.root / relative
@@ -839,6 +841,21 @@ class ImplementationReviewTests(RecorderCase):
                 path.write_text("steps:\n  - run: echo hi\n")
                 self.assertNotIn("dependency", self.hint()["required"])
                 path.unlink()
+
+    def test_quoted_and_flow_style_uses_require_dependency(self) -> None:
+        path = self.root / ".github/actions/setup/action.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for line in (
+            '  - "uses": actions/checkout@v4',
+            "  - {uses: actions/checkout@v4}",
+            "  - {name: x, uses: actions/checkout@v4}",
+            "  - { 'uses': actions/checkout@v4 }",
+        ):
+            with self.subTest(line=line):
+                path.write_text(f"steps:\n{line}\n")
+                self.assertIn("dependency", self.hint()["required"])
+        path.write_text("steps:\n  - run: echo reuses actions\n")
+        self.assertNotIn("dependency", self.hint()["required"])
 
     def test_draft_templates_cite_only_existing_evidence(self) -> None:
         """Pilot: a decide agent cited AGENTS.md in a project without one."""

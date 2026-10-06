@@ -2237,8 +2237,12 @@ def _changed_since_baseline(feature: Feature) -> list[str]:
     ).splitlines()
 
 
-WORKFLOW_YAML = re.compile(r"(?:\.github|templates/github)/workflows/.+\.ya?ml")
-ADDED_USES = re.compile(r"^\+\s*(?:-\s+)?uses:", re.MULTILINE)
+WORKFLOW_YAML = re.compile(
+    r"(?:\.github|templates/github)/(?:workflows/.+|actions/.+/action)\.ya?ml"
+)
+ADDED_USES = re.compile(
+    r"""^\+(?:\s*(?:-\s+)?|.*[{,]\s*)["']?uses["']?\s*:""", re.MULTILINE
+)
 
 
 def _adds_action_reference(feature: Feature, names: list[str]) -> bool:
