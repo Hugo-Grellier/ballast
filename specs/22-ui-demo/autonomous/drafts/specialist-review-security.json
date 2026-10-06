@@ -2,13 +2,13 @@
   "point": "specialist-review",
   "decision": "accept-finding",
   "summary": "Demo capture keeps agent authority unchanged: operator-only dispatch on the feature branch, protected command, secretless read-only job, verified definition and commit",
-  "basis": "Traced the request path in run.py and demo.py, the workflow template and ADR-0012 against docs/policies/security.md and the R2 boundaries in docs/policies/project/workflow.md. Only the trusted ballast run demo can dispatch, after the tamper and in-progress markers and the run lock; agents keep gh, .github and ballast.toml denied. The command comes only from the protected [demo] table and is validated. Dispatch uses the feature branch, after a blob-identity check of the workflow; the job checks GITHUB_SHA and HEAD, and Ballast links only a run whose head_sha is the requested commit. The template has workflow_dispatch only, contents: read, no secrets or environment, inputs only via env, SHA-pinned actions, persist-credentials false, no cache. gh output is parsed into fixed codes; the ledger event is runner-only and text-free; packet text is inert. Two residual points are low/info and open. docs/policies/project/security.md does not exist. Same-provider review; live GitHub cache-scope behavior is post-merge pilot evidence.",
+  "basis": "Traced the request path in run.py and demo.py, the workflow template and ADR-0013 against docs/policies/security.md and the R2 boundaries in docs/policies/project/workflow.md. Only the trusted ballast run demo can dispatch, after the tamper and in-progress markers and the run lock; agents keep gh, .github and ballast.toml denied. The command comes only from the protected [demo] table and is validated. Dispatch uses the feature branch, after a blob-identity check of the workflow; the job checks GITHUB_SHA and HEAD, and Ballast links only a run whose head_sha is the requested commit. The template has workflow_dispatch only, contents: read, no secrets or environment, inputs only via env, SHA-pinned actions, persist-credentials false, no cache. gh output is parsed into fixed codes; the ledger event is runner-only and text-free; packet text is inert. Two residual points are low/info and open. docs/policies/project/security.md does not exist. Same-provider review; live GitHub cache-scope behavior is post-merge pilot evidence.",
   "evidence": [
     "specs/22-ui-demo/reviews/security.md",
     "tools/spec_workflow/demo.py",
     "tools/spec_workflow/run.py",
     "templates/github/workflows/ballast-demo.yml",
-    "docs/adr/0012-demo-capture-dispatch.md",
+    "docs/adr/0013-demo-capture-dispatch.md",
     "tests/test_demo.py",
     "docs/policies/security.md",
     "docs/policies/project/workflow.md"

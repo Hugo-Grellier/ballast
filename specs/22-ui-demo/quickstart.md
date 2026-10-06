@@ -11,7 +11,7 @@ How to prove the feature works. The contracts are in [contracts/](contracts/) an
 
 | # | Scenario | Expected | ACs |
 | --- | --- | --- | --- |
-| 1 | Valid contract, `reused` Draft PR, `ballast run demo RUN login-journey --no-wait` | The argv sequence is exactly ADR-0012's. The two contents reads return the same blob `sha`. The dispatch stdin JSON has `ref` = the feature branch (never the default branch), `commit` = PR head and the declared command. One `demo_capture` event is written. The output starts `Demo capture: in progress (queued)`. No `pr create` call. | AC-001, AC-010, AC-019 |
+| 1 | Valid contract, `reused` Draft PR, `ballast run demo RUN login-journey --no-wait` | The argv sequence is exactly ADR-0013's. The two contents reads return the same blob `sha`. The dispatch stdin JSON has `ref` = the feature branch (never the default branch), `commit` = PR head and the declared command. One `demo_capture` event is written. The output starts `Demo capture: in progress (queued)`. No `pr create` call. | AC-001, AC-010, AC-019 |
 | 2 | Run list returns the matching `display_title`, `completed/success`, unexpired artifact | The packet line shows `captured at <head12>` · `[video](…/actions/runs/R/artifacts/A)` · environment · reproduce command | AC-002, AC-007 |
 | 3 | Event commit ≠ PR head, for `captured`, `failed` and `missing` | `stale (<outcome> at <commit12>; head is …)`, no `[video]` link | AC-003 |
 | 4 | Run `in_progress`, or no run yet within 24 h; then a second checkpoint with the run completed | `in progress (running|queued)` with job link, then the final outcome | AC-004 |

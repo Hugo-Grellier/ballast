@@ -2,8 +2,8 @@
 
 - Review: implementation (engineering), first review, before any fix cycle
 - Reviewer: claude-opus-5-5, fresh context, same provider as the author
-- Inputs: `spec.md` (FR-001..FR-020, AC-001..AC-019 at the PD-0008 digest), `intent.md`, `plan.md`, `data-model.md`, the four contracts, `tasks.md` (T001..T041 all checked), `decisions.md` (DEC-0001 resolved, DEC-0002 open), `docs/policies/engineering.md`, `docs/policies/workflow.md`, `docs/policies/project/workflow.md`, ADR-0003/0006 and the new ADR-0012.
-- Diff: the working tree against `11134f1` (the branch's last commit before the feature's own two docs commits). New: `tools/spec_workflow/demo.py`, `templates/github/workflows/ballast-demo.yml`, `tests/test_demo.py`, `docs/adr/0012-demo-capture-dispatch.md`. Changed: `draft_pr.py`, `packet.py`, `run.py`, `ledger.py`, `ledger-schema.md`, the policy template, `README.md`, `specs/TECHNICAL-SPEC.md` and four test files.
+- Inputs: `spec.md` (FR-001..FR-020, AC-001..AC-019 at the PD-0008 digest), `intent.md`, `plan.md`, `data-model.md`, the four contracts, `tasks.md` (T001..T041 all checked), `decisions.md` (DEC-0001 resolved, DEC-0002 open), `docs/policies/engineering.md`, `docs/policies/workflow.md`, `docs/policies/project/workflow.md`, ADR-0003/0006 and the new ADR-0013.
+- Diff: the working tree against `11134f1` (the branch's last commit before the feature's own two docs commits). New: `tools/spec_workflow/demo.py`, `templates/github/workflows/ballast-demo.yml`, `tests/test_demo.py`, `docs/adr/0013-demo-capture-dispatch.md`. Changed: `draft_pr.py`, `packet.py`, `run.py`, `ledger.py`, `ledger-schema.md`, the policy template, `README.md`, `specs/TECHNICAL-SPEC.md` and four test files.
 
 ## What I checked
 
@@ -17,7 +17,7 @@
 - FR-010..FR-012: `resolve` follows research R6 (ambiguous, truncated, not found within 24 h, mismatch, running, success→artifact, failed step→reason). `format_line` emits `[video]` only for a current `captured` capture. A stale capture links the job.
 - FR-013: both checkpoint calls use `create=False`, and the request goes on only for `reused`.
 - FR-014: `Sources.demo` is read only by `demo.lines` in `render`.
-- FR-015: ADR-0012 lists exactly the calls that `demo.py` makes.
+- FR-015: ADR-0013 lists exactly the calls that `demo.py` makes.
 - FR-016: nothing is downloaded.
 - FR-017: every call goes through `_Checkpoint.api`/`gh`, and failures map through `draft_pr._classify` to fixed causes.
 - FR-018: name, environment and command pass through `packet.inert`.
@@ -27,7 +27,7 @@
 
 **Import order.** The cycle `demo` ↔ `draft_pr` ↔ `packet` resolves because `draft_pr` only binds the module name, and `packet` uses `demo.*` at call time. `Sources.demo`'s annotation is lazy under `from __future__ import annotations`. `run.py` imports `demo` before any agent step.
 
-**Partial failure.** A refusal or a failed read before dispatch writes nothing. The event is appended only after a successful dispatch. A read failure during the wait leaves `queued`, and the packet refresh then reports the real state. In `packet._Step.collect`, a `demo.ReadError` fails the packet step `failed-retryable` and leaves the Draft PR outcome unchanged. The race between the identity check and the dispatch is bounded by the two postconditions, as ADR-0012 states.
+**Partial failure.** A refusal or a failed read before dispatch writes nothing. The event is appended only after a successful dispatch. A read failure during the wait leaves `queued`, and the packet refresh then reports the real state. In `packet._Step.collect`, a `demo.ReadError` fails the packet step `failed-retryable` and leaves the Draft PR outcome unchanged. The race between the identity check and the dispatch is bounded by the two postconditions, as ADR-0013 states.
 
 **Template.** It has one job, `contents: read`, no `secrets.` and no `environment:`. Inputs reach shells only through `env:`, the two actions are pinned by SHA, and checkout uses `persist-credentials: false`. The `if:` conditions of the three classification steps are mutually exclusive, and their implicit `success()` keeps the upload step to the success path. The `realpath -e` workspace check stops a symlink from pointing outside the workspace.
 
@@ -43,7 +43,7 @@ DEC-0002 (the rendering of the reproduce command) has no resolution yet. The imp
 
 ## Residual risk for the merge reviewer
 
-- ADR-0012 adds the launcher's first GitHub write other than the PR body edit, and it is agent-provisional.
+- ADR-0013 adds the launcher's first GitHub write other than the PR body edit, and it is agent-provisional.
 - DEC-0001 was resolved by the driving agent under the operator's standing authority.
 - The live pilot (SC-001, SC-004) is post-merge evidence.
 - This review has the same provider as the author.

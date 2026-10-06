@@ -1276,9 +1276,10 @@ The command installs its own browser or recorder; Ballast installs and
 downloads none.
 
 **Data.** The job has no secrets and a read-only token. The command must use
-only seeded, nonsensitive data and fake accounts: the video is an Actions
-artifact readable by anyone with repository read access, which on a public
-repository is everyone.
+only seeded, nonsensitive data and fake accounts: the video and the job log
+are readable by anyone with repository read access, which on a public
+repository is everyone. The video is an Actions artifact; the log holds the
+command and everything it prints.
 
 **Requesting.** `ballast run demo RUN_ID SCENARIO [--no-wait]`, from the
 operator's terminal, for a run with an open Ballast Draft PR in any mode. It

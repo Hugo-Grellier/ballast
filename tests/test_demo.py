@@ -1,7 +1,7 @@
 """Demo capture (#22): a real temporary Git repository, a scripted gh, no network.
 
 No test dispatches a real workflow: `gh` is #17's scripted `_command` fake,
-extended with the Actions calls of ADR-0012, and the clock and sleep of the
+extended with the Actions calls of ADR-0013, and the clock and sleep of the
 bounded wait are injected.
 """
 
@@ -122,7 +122,7 @@ def others(count: int, head: str, start: int = 0) -> list[dict[str, Any]]:
 
 
 class DemoGitHub(FakeGitHub):
-    """#17's scripted gh plus the Actions calls of ADR-0012."""
+    """#17's scripted gh plus the Actions calls of ADR-0013."""
 
     def __init__(self, gh: str, git_program: str) -> None:
         """Start with an active workflow whose copies match, and no run."""
@@ -290,7 +290,7 @@ class DemoCase(PacketCase):
 class RequestTests(DemoCase):
     """US1: a request dispatches on the feature branch, records it, refreshes."""
 
-    def test_request_follows_adr_0012_on_the_feature_branch(self) -> None:
+    def test_request_follows_adr_0013_on_the_feature_branch(self) -> None:
         """T007 (Q1) [AC-001, AC-010, AC-019]."""
         status, out = self.main("login-journey", "--no-wait")
         self.assertEqual(status, 0, out)
@@ -653,7 +653,18 @@ class TemplateLogicTests(unittest.TestCase):
             "GITHUB_SHA": ("b" * 40,),
             "TIMEOUT": ("0", "61", "015", "1m", ""),
             "RETENTION": ("0", "91", "x"),
-            "VIDEO": ("", "/etc/passwd", "../x.webm", "a/../../x.webm", "a/.."),
+            "VIDEO": (
+                "",
+                "/etc/passwd",
+                "../x.webm",
+                "a/../../x.webm",
+                "a/..",
+                "./x.webm",
+                "a//x.webm",
+                "out/*.webm",
+                "a b.webm",
+                "a.webm\nb.webm",
+            ),
             "DEMO_COMMAND": ("", "echo a\necho b"),
         }
         for key, values in hostile.items():

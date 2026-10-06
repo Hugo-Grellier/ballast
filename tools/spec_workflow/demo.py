@@ -9,7 +9,7 @@ module, so `run.py` loads it before any agent step.
 - The capture runs in the project's copy-once `ballast-demo.yml` workflow,
   dispatched on the feature branch's ref and never on the default branch, and
   only when the head commit's copy of the workflow is the default branch's
-  blob (docs/adr/0012). A result is linked only when its run's `head_sha` is
+  blob (docs/adr/0013). A result is linked only when its run's `head_sha` is
   the requested commit.
 - Every `gh` call goes through #17's checkpoint seam (resolved program, list
   argv, hardened environment, empty working directory, 30 s limit). `gh`

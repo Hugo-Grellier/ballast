@@ -9,7 +9,7 @@
 
 | Criterion | Evidence |
 | --- | --- |
-| AC-001, AC-019 (dispatch, call order, feature-branch ref) | `RequestTests.test_request_follows_adr_0012_on_the_feature_branch` runs through `run.main`. It asserts the five reads before the dispatch, the dispatch argv, `ref == feat-x` and not `main`, string inputs, the ledger event and its position between two `pull_request` events, and no `pr create`. This also closes analyze C2. |
+| AC-001, AC-019 (dispatch, call order, feature-branch ref) | `RequestTests.test_request_follows_adr_0013_on_the_feature_branch` runs through `run.main`. It asserts the five reads before the dispatch, the dispatch argv, `ref == feat-x` and not `main`, string inputs, the ledger event and its position between two `pull_request` events, and no `pr create`. This also closes analyze C2. |
 | AC-002 | `PacketLineTests.test_captured_line_links_the_video` |
 | AC-003 | `test_stale_captures_show_their_commit_and_never_the_video` (captured, failed and missing at an old commit) |
 | AC-004, FR-009 | `test_in_progress_queued_and_run_not_found`, `test_wait_stops_when_the_run_completes`, `test_wait_is_bounded_then_refreshes_once` and `test_no_wait_reads_no_run_list_before_the_refresh`, with an injected clock and sleep |

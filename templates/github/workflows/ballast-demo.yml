@@ -6,8 +6,8 @@
 # See "Demo capture" in docs/policies/spec-kit-workflow.md.
 #
 # The job has no credentials and a read-only token. The scenario's command
-# must use seeded, nonsensitive data and fake accounts: the video is readable
-# by anyone with read access to the repository.
+# must use seeded, nonsensitive data and fake accounts: the video and the job
+# log are readable by anyone with read access to the repository.
 name: Ballast demo
 run-name: Ballast demo ${{ inputs.request }}
 
@@ -69,6 +69,7 @@ jobs:
           scenario='^[A-Za-z0-9._-]{1,64}$'
           commit='^[0-9a-f]{40}([0-9a-f]{24})?$'
           small='^[1-9][0-9]?$'
+          video='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
           [[ $REQUEST =~ $request ]] || fail "request is not 16 hex digits"
           [[ $SCENARIO =~ $scenario ]] || fail "scenario name is invalid"
           [[ $COMMIT =~ $commit ]] || fail "commit is not a full commit ID"
@@ -76,9 +77,10 @@ jobs:
             || fail "timeout_minutes must be 1-60"
           [[ $RETENTION =~ $small ]] && (( RETENTION <= 90 )) \
             || fail "retention_days must be 1-90"
-          [[ -n $VIDEO && $VIDEO != /* ]] || fail "video must be a relative path"
+          # Same contract as Ballast's packet.safe_path: plain segments only.
+          [[ $VIDEO =~ $video ]] || fail "video must be a relative path of plain segments"
           case "/$VIDEO/" in
-            */../*) fail "video must not contain .." ;;
+            */../* | */./*) fail "video must not contain . or .." ;;
           esac
           [[ -n $DEMO_COMMAND && $DEMO_COMMAND != *$'\n'* ]] \
             || fail "command must be one non-empty line"

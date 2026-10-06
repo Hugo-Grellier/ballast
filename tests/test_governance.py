@@ -277,7 +277,7 @@ class DemoPolicyTests(unittest.TestCase):
             "`ballast run demo RUN_ID SCENARIO [--no-wait]`",
             "Check out the captured commit in a clean checkout and run that command",
             "only seeded, nonsensitive data and fake accounts",
-            "readable by anyone with repository read access",
+            "the video and the job log are readable by anyone with repository read",
             "A command that itself exits 124 or 137",
             "reported `timed-out`",
             "Every feature branch must carry the default branch's `ballast-demo.yml`",

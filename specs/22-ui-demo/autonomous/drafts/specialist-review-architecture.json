@@ -1,11 +1,11 @@
 {
   "point": "specialist-review",
   "decision": "accept-finding",
-  "summary": "ADR-0012 extends ADR-0003/0006 with exactly the calls demo.py makes through the #17 seam; ledger kind is additive and GitHub stays the source of truth",
-  "basis": "Compared ADR-0012's allowlist with every gh call in demo.py: the workflow, contents, dispatch, bounded run-list, jobs and artifacts reads, plus PR and repository reads already allowed by ADR-0003/0006. All go through draft_pr's _Checkpoint seam, with no second GitHub path. The packet gains demo.collect as one input, never read by criteria or counts (FR-014), and fails retryable on a read error as the check-run read does. ballast run demo holds the run lock, starts no agent and pushes nothing, consistent with ADR-0005/0010/0011. demo_capture is additive, runner-only and text-free, with schema_version 1 and the compatibility note in ledger-schema.md; the ledger stores only correlation IDs, so there is no second source of truth. The stdlib-only and preload invariants hold. The DEC-0001/R15 execution scope agrees across ADR, template and resolve. TECHNICAL-SPEC 9.1 cites ADR-0012 as proposed. Two residual points are low/info and open. Failed fast-gate checks in the run record belong to the fix loop. Same-provider review.",
+  "summary": "ADR-0013 extends ADR-0003/0006 with exactly the calls demo.py makes through the #17 seam; ledger kind is additive and GitHub stays the source of truth",
+  "basis": "Compared ADR-0013's allowlist with every gh call in demo.py: the workflow, contents, dispatch, bounded run-list, jobs and artifacts reads, plus PR and repository reads already allowed by ADR-0003/0006. All go through draft_pr's _Checkpoint seam, with no second GitHub path. The packet gains demo.collect as one input, never read by criteria or counts (FR-014), and fails retryable on a read error as the check-run read does. ballast run demo holds the run lock, starts no agent and pushes nothing, consistent with ADR-0005/0010/0011. demo_capture is additive, runner-only and text-free, with schema_version 1 and the compatibility note in ledger-schema.md; the ledger stores only correlation IDs, so there is no second source of truth. The stdlib-only and preload invariants hold. The DEC-0001/R15 execution scope agrees across ADR, template and resolve. TECHNICAL-SPEC 9.1 cites ADR-0013 as proposed. Two residual points are low/info and open. Failed fast-gate checks in the run record belong to the fix loop. Same-provider review.",
   "evidence": [
     "specs/22-ui-demo/reviews/architecture.md",
-    "docs/adr/0012-demo-capture-dispatch.md",
+    "docs/adr/0013-demo-capture-dispatch.md",
     "docs/adr/0003-launcher-github-authority.md",
     "docs/adr/0006-review-packet-reads.md",
     "tools/spec_workflow/demo.py",
@@ -14,7 +14,7 @@
     "tools/spec_workflow/ledger-schema.md",
     "specs/TECHNICAL-SPEC.md"
   ],
-  "artifact": "docs/adr/0012-demo-capture-dispatch.md",
+  "artifact": "docs/adr/0013-demo-capture-dispatch.md",
   "model": "claude-opus-5-5",
   "material": false,
   "supersedes": null,
@@ -29,9 +29,9 @@
         "severity": "info",
         "label": "architecture-issue",
         "disposition": "resolved",
-        "reason": "Plan-review F-007 is still unaddressed: ADR-0012's no-new-reach argument does not name PRs based on the feature branch, which restore its caches. The argument holds because they run code from the same branch lineage, but the ADR should say so. Fixed in 1b0cc91: ADR-0012 names PRs based on the feature branch in its no-new-reach argument.",
+        "reason": "Plan-review F-007 is still unaddressed: ADR-0013's no-new-reach argument does not name PRs based on the feature branch, which restore its caches. The argument holds because they run code from the same branch lineage, but the ADR should say so. Fixed in 1b0cc91: ADR-0013 names PRs based on the feature branch in its no-new-reach argument.",
         "evidence": [
-          "docs/adr/0012-demo-capture-dispatch.md",
+          "docs/adr/0013-demo-capture-dispatch.md",
           "specs/22-ui-demo/reviews/plan.md"
         ]
       },
@@ -40,7 +40,7 @@
         "severity": "low",
         "label": "architecture-issue",
         "disposition": "open",
-        "reason": "demo.py depends on five private draft_pr members (_Checkpoint, _classify, _json, _status, _now) under noqa SLF001, and draft_pr, demo and packet import each other in a cycle that works only through call-time use and postponed annotations. The seam ADR-0012 relies on is not a named interface, so a later draft_pr refactor could break demo silently; expose it publicly or document the contract.",
+        "reason": "demo.py depends on five private draft_pr members (_Checkpoint, _classify, _json, _status, _now) under noqa SLF001, and draft_pr, demo and packet import each other in a cycle that works only through call-time use and postponed annotations. The seam ADR-0013 relies on is not a named interface, so a later draft_pr refactor could break demo silently; expose it publicly or document the contract.",
         "evidence": [
           "tools/spec_workflow/demo.py",
           "tools/spec_workflow/draft_pr.py"

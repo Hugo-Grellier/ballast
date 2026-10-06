@@ -2,13 +2,13 @@
   "point": "specialist-review",
   "decision": "accept-finding",
   "summary": "Demo capture docs cover the contract, workflow install, request, every outcome and reason, data exposure and local reproduction, consistent across policy, ADR, README and spec",
-  "basis": "Read docs/policies/documentation.md (no project documentation policy exists). Compared the new Demo capture section of templates/policies/spec-kit-workflow.md with demo.py and run.py: contract limits, refusal reasons and remedies, exit codes, the output line format, the state table against demo.REASONS, resolve and lines, the stale, not-yet-requested, not-configured and configuration-invalid lines, and the 124/137 note. FR-019, AC-007 and AC-009 are covered: seeded nonsensitive data, video readable with repository read access, reproduce command named, changed command flagged. The README, TECHNICAL-SPEC 9.1, ADR-0012 (new, proposed, earlier ADRs untouched), ledger-schema.md, the run.py usage and the template header describe the same model. No screenshot applies. Two residual points are low/info and open. Same-provider review.",
+  "basis": "Read docs/policies/documentation.md (no project documentation policy exists). Compared the new Demo capture section of templates/policies/spec-kit-workflow.md with demo.py and run.py: contract limits, refusal reasons and remedies, exit codes, the output line format, the state table against demo.REASONS, resolve and lines, the stale, not-yet-requested, not-configured and configuration-invalid lines, and the 124/137 note. FR-019, AC-007 and AC-009 are covered: seeded nonsensitive data, video readable with repository read access, reproduce command named, changed command flagged. The README, TECHNICAL-SPEC 9.1, ADR-0013 (new, proposed, earlier ADRs untouched), ledger-schema.md, the run.py usage and the template header describe the same model. No screenshot applies. Two residual points are low/info and open. Same-provider review.",
   "evidence": [
     "specs/22-ui-demo/reviews/documentation.md",
     "templates/policies/spec-kit-workflow.md",
     "README.md",
     "specs/TECHNICAL-SPEC.md",
-    "docs/adr/0012-demo-capture-dispatch.md",
+    "docs/adr/0013-demo-capture-dispatch.md",
     "tools/spec_workflow/ledger-schema.md",
     "docs/policies/documentation.md"
   ],

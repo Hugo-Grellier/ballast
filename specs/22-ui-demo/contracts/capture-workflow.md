@@ -35,7 +35,7 @@ The template is the copy-once file `templates/github/workflows/ballast-demo.yml`
 6. **`Demo video missing`**: runs only when the exit is 0 and `$VIDEO` is not a regular file inside the workspace (checked with `realpath` against `$GITHUB_WORKSPACE`), and exits 1.
 7. **Upload**: `actions/upload-artifact` with `name: ballast-demo-${{ inputs.request }}`, `path: ${{ inputs.video }}`, `retention-days: ${{ inputs.retention_days }}`, `if-no-files-found: error`, `compression-level: 0`.
 
-## GitHub reads that interpret the run (ADR-0012)
+## GitHub reads that interpret the run (ADR-0013)
 
 | Call | Used for |
 | --- | --- |

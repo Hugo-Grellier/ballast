@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `specs/22-ui-demo/spec.md` (intent agent-provisional, PD-0008 after the FR-007/AC-010 rewording of DEC-0001, digest in [intent.md](intent.md))
 
-**Risk**: R2, rechecked in [research R14](research.md#r14-risk-recheck). The change adds a path by which `ballast` causes a project command to run (on the forge runner) and one new GitHub write (workflow dispatch), proposed as ADR-0012. **Mode**: Autonomous run `d6b5dff2`. Every decision here is agent-provisional, including the pre-change R2 approval; merging the PR is the only human approval.
+**Risk**: R2, rechecked in [research R14](research.md#r14-risk-recheck). The change adds a path by which `ballast` causes a project command to run (on the forge runner) and one new GitHub write (workflow dispatch), proposed as ADR-0013. **Mode**: Autonomous run `d6b5dff2`. Every decision here is agent-provisional, including the pre-change R2 approval; merging the PR is the only human approval.
 
 ## Summary
 
@@ -53,7 +53,7 @@ The video never changes a criterion's evidence state. Ballast never runs the pro
 - About 40 lines in `packet.py`, 15 in `draft_pr.py` (one exposed helper), 60 in `run.py` and 40 in `ledger.py`.
 - One template of about 90 lines.
 - One new test file.
-- Documentation and ADR-0012.
+- Documentation and ADR-0013.
 
 No NEEDS CLARIFICATION remains. All three D-05/D-06/D-07 assumptions and both clarifications (PD-0005, PD-0006) are realized as specified. [Research R7](research.md#r7-ledger-event-demo_capture) adds one presentation note, "declared command changed", to keep AC-007 truthful. It does not change behavior or authority. The plan review's F-001 changed how FR-007 is realized: the capture runs on the PR's head branch with a definition verified identical to the default branch's ([research R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001)). FR-007 and AC-010 were reworded to that guarantee, keeping their intent, as recorded in [decisions.md DEC-0001](decisions.md#dec-0001--proposal); the plan realizes the reworded text.
 
@@ -71,7 +71,7 @@ No NEEDS CLARIFICATION remains. All three D-05/D-06/D-07 assumptions and both cl
 | 6. Portable, dependency-free tools | Standard library only. pyyaml is used by tests only. |
 | 7. Generic by default | Generic scenario contract; any recording tool; no project names in the template. |
 | 8. Executable evidence | Every AC maps to a [quickstart](quickstart.md) scenario, including refusal, hostile text, token leakage and template-shape tests. |
-| 9. A provisional decision is never human approval (BL-INV-006) | The section states that a video is neither evidence nor approval. The text passes #19's `HUMAN_APPROVAL` guard. ADR-0012 is marked agent-provisional until merge. |
+| 9. A provisional decision is never human approval (BL-INV-006) | The section states that a video is neither evidence nor approval. The text passes #19's `HUMAN_APPROVAL` guard. ADR-0013 is marked agent-provisional until merge. |
 
 ## Architecture Boundaries
 
@@ -95,7 +95,7 @@ No NEEDS CLARIFICATION remains. All three D-05/D-06/D-07 assumptions and both cl
   - #19 [packet format](../19-acceptance-packet/contracts/packet-format.md) and [checkpoint integration](../19-acceptance-packet/contracts/checkpoint-integration.md);
   - [ledger schema](../../tools/spec_workflow/ledger-schema.md).
 - **Proposed architecture decisions** (agent-provisional here; the merge approves them):
-  1. **ADR-0012 Demo capture dispatch under the launcher's GitHub authority.** This extends ADR-0003/0006 with the reads and the one dispatch write in [research R12](research.md#r12-new-github-calls-adr-0012). It also sets these rules:
+  1. **ADR-0013 Demo capture dispatch under the launcher's GitHub authority.** This extends ADR-0003/0006 with the reads and the one dispatch write in [research R12](research.md#r12-new-github-calls-adr-0013). It also sets these rules:
      - untrusted PR-head code never runs in a workflow run whose ref is the default branch: the dispatch ref is always the PR's head branch;
      - Ballast dispatches only when the head commit's `ballast-demo.yml` blob equals the default branch's, and links a result only when the run's `head_sha` is the requested commit; the race between the check and the dispatch is bounded by these two checks and grants nothing a push to the branch does not (research R15);
      - the command comes only from trusted `ballast.toml`;
@@ -118,7 +118,7 @@ No NEEDS CLARIFICATION remains. All three D-05/D-06/D-07 assumptions and both cl
 | `templates/policies/spec-kit-workflow.md` | New subsection "Demo capture" after "Acceptance packet". It covers the `[demo]` table, copying the template to the default branch (and why a feature branch must carry the same file: the capture runs on the feature branch's ref so PR code cannot write default-branch caches), `ballast run demo`, each outcome and reason (a command that itself exits 124 or 137 is reported `timed-out`), the reproduce command, local reproduction without credentials, seeded nonsensitive data and the artifact's read access. The installed `docs/policies/` copy refreshes via `ballast setup`. |
 | `README.md` | The copy-once template list names the demo capture workflow. |
 | `specs/TECHNICAL-SPEC.md` | §91: on-demand demo capture is in 1.0, and automatic capture is later. |
-| `docs/adr/0012-demo-capture-dispatch.md` | New (ADR-0012). |
+| `docs/adr/0013-demo-capture-dispatch.md` | New (ADR-0013). |
 
 `tools/setup`, `tools/ballast`, `tools/cli.toml`, `launcher.py`, `agent.py`, `claude-settings.json`, `autonomy.py`, `chat.py` and `artifacts.py` are unchanged. Chat and human-gated checkpoints show the demo section through the same `draft_pr.checkpoint` path.
 
@@ -151,10 +151,10 @@ specs/22-ui-demo/
   - engineering review;
   - security review: a new execution path, a new GitHub write, script injection in the template, and project text rendered into the PR;
   - test review;
-  - documentation review: the policy subsection and ADR-0012;
+  - documentation review: the policy subsection and ADR-0013;
   - dependency evaluation: `actions/checkout` and `actions/upload-artifact` in the template.
 - **For the plan gate**:
-  - confirm R2 and accept ADR-0012 as an extension of ADR-0003/0006;
+  - confirm R2 and accept ADR-0013 as an extension of ADR-0003/0006;
   - accept that the command is passed as a dispatch input from the trusted local `ballast.toml` rather than read on the runner ([research R2](research.md#r2-where-the-contract-lives-and-what-the-runner-executes));
   - accept the capture's execution scope: feature-branch ref with a verified definition instead of default-branch dispatch ([research R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001)), and the FR-007/AC-010 rewording it required ([decisions.md DEC-0001](decisions.md#dec-0001--proposal));
   - accept that the live pilot (SC-001) is post-merge operator evidence ([research R13](research.md#r13-pilot-evidence-sc-001)).

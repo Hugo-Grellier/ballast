@@ -69,7 +69,7 @@ Single project: workflow tools in `tools/spec_workflow/`, the copy-once template
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [X] T007 [US1] Test the successful request (Q1) in `tests/test_demo.py`. The argv sequence is exactly ADR-0012's:
+- [X] T007 [US1] Test the successful request (Q1) in `tests/test_demo.py`. The argv sequence is exactly ADR-0013's:
   - checkpoint, PR read, repository read and workflow read;
   - two contents reads that return the same blob `sha`;
   - a `--method POST … /dispatches --input -` whose stdin JSON has `ref` = the feature branch (asserted never to be the default branch), `commit` = PR head, the declared `command`, and every input value a string.
@@ -94,7 +94,7 @@ Single project: workflow tools in `tools/spec_workflow/`, the copy-once template
 
 ### Implementation for User Story 1
 
-- [X] T015 [P] [US1] Implement `collect(step, head, events)` and `resolve` in `tools/spec_workflow/demo.py` per [research R6](research.md#r6-outcome-resolution-at-a-checkpoint) and [capture-workflow.md](contracts/capture-workflow.md#github-reads-that-interpret-the-run-adr-0012).
+- [X] T015 [P] [US1] Implement `collect(step, head, events)` and `resolve` in `tools/spec_workflow/demo.py` per [research R6](research.md#r6-outcome-resolution-at-a-checkpoint) and [capture-workflow.md](contracts/capture-workflow.md#github-reads-that-interpret-the-run-adr-0013).
   - Take the newest `demo_capture` event per scenario.
   - Read runs-list pages of 100 for `branch=<feature branch>`, `event=workflow_dispatch` and `created=>=<oldest newest-event date>`, until a short page, at most 5 pages, through the T006 seam.
   - Match `display_title` exactly. Several matches give `run-ambiguous`.
@@ -256,8 +256,8 @@ Single project: workflow tools in `tools/spec_workflow/`, the copy-once template
 
 **Purpose**: The architecture decision and the documentation outside the policy
 
-- [X] T039 [P] Write `docs/adr/0012-demo-capture-dispatch.md` (ADR-0012, agent-provisional until merge), extending ADR-0003 and ADR-0006. It records:
-  - the reads and the one dispatch write of [research R12](research.md#r12-new-github-calls-adr-0012);
+- [X] T039 [P] Write `docs/adr/0013-demo-capture-dispatch.md` (ADR-0013, agent-provisional until merge), extending ADR-0003 and ADR-0006. It records:
+  - the reads and the one dispatch write of [research R12](research.md#r12-new-github-calls-adr-0013);
   - the execution scope (the feature-branch ref and never the default branch, the blob identity check before dispatch, `head_sha` = requested commit before linking, and the bound on the race), per [R15](research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001) and DEC-0001;
   - that the command comes only from trusted `ballast.toml`;
   - the job's constraints: no secrets, `contents: read`, no cache and the fixed `timeout-minutes` backstop;
@@ -350,7 +350,7 @@ Task: "Create templates/github/workflows/ballast-demo.yml (T025)"
 Task: "Add the Demo capture subsection to templates/policies/spec-kit-workflow.md (T026)"
 Task: "Policy-text check in tests/test_governance.py (T024)"
 Task: "run demo authority test in tests/test_spec_workflow.py (T036)"
-Task: "Write docs/adr/0012-demo-capture-dispatch.md (T039)"
+Task: "Write docs/adr/0013-demo-capture-dispatch.md (T039)"
 ```
 
 ---
@@ -369,7 +369,7 @@ Task: "Write docs/adr/0012-demo-capture-dispatch.md (T039)"
 2. US2: the template, the reproduce command and the documentation. Without the template no project can capture, so US2 ships with US1 in the same PR.
 3. US3: failure causes and missing videos.
 4. US4: refusal paths and forge failures.
-5. Polish: ADR-0012, README and the technical spec.
+5. Polish: ADR-0013, README and the technical spec.
 
 All phases ship in one PR. The increments order the work and keep each story's tests green as it lands.
 

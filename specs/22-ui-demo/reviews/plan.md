@@ -14,7 +14,7 @@ The first round requested changes. Its high finding was that the capture job ran
 
 **The first round's findings.** Each one is addressed in the artifacts, not only in the resolution note:
 
-- Execution scope: research R15, the ADR-0012 rules in the plan, the capture-workflow contract (one job, no cache action, `GITHUB_SHA` check in `Validate demo request` before checkout), refusal 10 (`workflow-differs`) in R9 and the command contract, and the `commit-mismatch` resolution rule in R6. Quickstart scenarios 1, 7, 21 and 22 test it.
+- Execution scope: research R15, the ADR-0013 rules in the plan, the capture-workflow contract (one job, no cache action, `GITHUB_SHA` check in `Validate demo request` before checkout), refusal 10 (`workflow-differs`) in R9 and the command contract, and the `commit-mismatch` resolution rule in R6. Quickstart scenarios 1, 7, 21 and 22 test it.
 - Timeout: a literal `65` backstop, with `timeout --kill-after=30s` enforcing the contract value. Scenario 7 tests it.
 - Run-list window: the oldest newest-event date, a `branch=` filter, explicit pages up to 5, and `run-list-truncated`. Scenario 23 tests it.
 - Exit 124/137: documented in R5, the contract, the policy subsection and scenario 8.
@@ -36,9 +36,9 @@ The first round requested changes. Its high finding was that the capture job ran
 - The command comes only from protected `ballast.toml`, passed as a dispatch input.
 - The ledger event carries no free text.
 - GitHub is the authority for runs and media, and the packet stays a projection.
-- The new GitHub calls are listed for ADR-0012.
+- The new GitHub calls are listed for ADR-0013.
 
-The PR read (`pulls/<n>`) is already allowed by ADR-0006, and the reused `draft_pr._Checkpoint`, `checkpoint(create=...)` and `_classify` exist. ADR numbers run to 0011, so 0012 is free. No agent permission changes. `tools/setup`, `tools/ballast`, `launcher.py` and `claude-settings.json` stay unchanged, so the R2 boundaries touched remain "what ballast executes" and agent authority, as the record states.
+The PR read (`pulls/<n>`) is already allowed by ADR-0006, and the reused `draft_pr._Checkpoint`, `checkpoint(create=...)` and `_classify` exist. ADR numbers ran to 0011 at review time (#13 later took 0012, so this ADR is 0013). No agent permission changes. `tools/setup`, `tools/ballast`, `launcher.py` and `claude-settings.json` stay unchanged, so the R2 boundaries touched remain "what ballast executes" and agent authority, as the record states.
 
 **Failure behavior.** The refusal order writes nothing before dispatch. `failed-retryable` reuses #17's causes. R6's resolution order puts `commit-mismatch` before status, so a run that the validate step rejected still shows the mismatch rather than `request-invalid`. A truncated listing never yields a guessed outcome. A dispatched request exits 0 whatever the capture outcome.
 
@@ -46,9 +46,9 @@ The PR read (`pulls/<n>`) is already allowed by ADR-0006, and the reused `draft_
 
 Three small points remain, none blocking:
 
-- Quickstart scenario 1 expects "exactly ADR-0012's" argv sequence, but the request also makes #17 checkpoint calls (ADR-0003) and the PR read (ADR-0006). The plan's performance goal for the request also omits the PR read. The test author needs the full expected sequence, not only ADR-0012's list.
+- Quickstart scenario 1 expects "exactly ADR-0013's" argv sequence, but the request also makes #17 checkpoint calls (ADR-0003) and the PR read (ADR-0006). The plan's performance goal for the request also omits the PR read. The test author needs the full expected sequence, not only ADR-0013's list.
 - The run-list query puts `created=>=<date>` in the path given to `gh api`. The scripted fake cannot show whether the comparison operators reach GitHub intact. Percent-encoding them, or confirming the behavior once, avoids a silent empty listing that would surface only as `run-not-found` after 24 h.
-- ADR-0012's "why no new reach" should name PRs based on the feature branch, which also restore its caches. This adds no reach, since those PRs run code from the same branch lineage, but the ADR should state it so the boundary argument is complete.
+- ADR-0013's "why no new reach" should name PRs based on the feature branch, which also restore its caches. This adds no reach, since those PRs run code from the same branch lineage, but the ADR should state it so the boundary argument is complete.
 
 ## Verdict
 
@@ -57,7 +57,7 @@ Approved. The revision closes the first round's security-boundary finding with a
 <!-- ballast-findings: begin -->
 ## Findings (recorded from the review draft)
 
-- F-005 (low, spec-ambiguity, open): Quickstart scenario 1 expects the argv sequence to be exactly ADR-0012's. The request also makes #17 checkpoint calls (ADR-0003) and the PR read (ADR-0006), and the plan's performance goal for the request omits that PR read. Tasks should spell out the full expected call sequence.
+- F-005 (low, spec-ambiguity, open): Quickstart scenario 1 expects the argv sequence to be exactly ADR-0013's. The request also makes #17 checkpoint calls (ADR-0003) and the PR read (ADR-0006), and the plan's performance goal for the request omits that PR read. Tasks should spell out the full expected call sequence.
 - F-006 (info, implementation-bug, open): The run-list query puts created=&gt;=&lt;date&gt; in the gh api path. The offline fake cannot show whether the comparison operators reach GitHub intact. Percent-encode them, or confirm the behavior once, so a malformed filter cannot silently empty the listing and surface only as run-not-found after 24 h.
-- F-007 (info, architecture-issue, open): R15's no-new-reach argument should also name PRs based on the feature branch, which restore its caches. They run code from the same branch lineage, so this adds no reach, but ADR-0012 should say so to make the boundary argument complete.
+- F-007 (info, architecture-issue, open): R15's no-new-reach argument should also name PRs based on the feature branch, which restore its caches. They run code from the same branch lineage, so this adds no reach, but ADR-0013 should say so to make the boundary argument complete.
 <!-- ballast-findings: end -->

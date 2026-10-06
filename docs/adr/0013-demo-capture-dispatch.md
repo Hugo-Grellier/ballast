@@ -1,7 +1,7 @@
-# ADR-0012: Demo capture dispatch under the launcher's GitHub authority
+# ADR-0013: Demo capture dispatch under the launcher's GitHub authority
 
 - Status: proposed (2026-10-06, with the plan of [feature 22](../../specs/22-ui-demo/plan.md#architecture-boundaries); agent-provisional in Autonomous run `d6b5dff2`, accepted only when the operator merges the feature PR)
-- Feature: [22-ui-demo](../../specs/22-ui-demo/spec.md), FR-004, FR-006, FR-007, FR-015, AC-010; research [R2](../../specs/22-ui-demo/research.md#r2-where-the-contract-lives-and-what-the-runner-executes), [R12](../../specs/22-ui-demo/research.md#r12-new-github-calls-adr-0012), [R15](../../specs/22-ui-demo/research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001); [decisions.md DEC-0001](../../specs/22-ui-demo/decisions.md#dec-0001--proposal)
+- Feature: [22-ui-demo](../../specs/22-ui-demo/spec.md), FR-004, FR-006, FR-007, FR-015, AC-010; research [R2](../../specs/22-ui-demo/research.md#r2-where-the-contract-lives-and-what-the-runner-executes), [R12](../../specs/22-ui-demo/research.md#r12-new-github-calls-adr-0013), [R15](../../specs/22-ui-demo/research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001); [decisions.md DEC-0001](../../specs/22-ui-demo/decisions.md#dec-0001--proposal)
 - Extends: [ADR-0003](0003-launcher-github-authority.md) and [ADR-0006](0006-review-packet-reads.md), whose fixed command allowlist says a later feature extends it by a new ADR
 
 ## Context
@@ -27,7 +27,7 @@ The capture job runs code from the PR head, which agents write. Any code in a jo
   - Ballast dispatches only when the head commit's `ballast-demo.yml` has the same Git blob ID as the default branch's, and refuses `workflow-differs` otherwise, with nothing dispatched and nothing recorded;
   - the job rejects a run whose `GITHUB_SHA` is not the requested commit, and checks out that commit;
   - Ballast links a result only when the run's `head_sha` is the requested commit; any other run is `failed (commit-mismatch)` and its artifact is never linked.
-  The dispatch `ref` must be a branch name, so GitHub resolves its tip only when it creates the run. A push between the check and the dispatch is caught by the last two rules. Whoever can move the branch tip can already run any definition on that branch with a push, so the race grants nothing new; agents cannot push, and the run's lock excludes Ballast's own pushes during the request.
+  The dispatch `ref` must be a branch name, so GitHub resolves its tip only when it creates the run. A push between the check and the dispatch is caught by the last two rules. Whoever can move the branch tip can already run any definition on that branch with a push, so the race grants nothing new; agents cannot push. The run's invocation lock excludes only this run's pushes: another Ballast run that pins the same branch (a continuation) can push between the blob check and the dispatch. That push is a write-access push like any other and grants nothing new, and the moved tip fails closed: the job rejects a `GITHUB_SHA` that is not the requested commit, and Ballast never links a run whose `head_sha` differs.
 - **The job's constraints**, checked by a static test of the template: `workflow_dispatch` is the only trigger; `permissions: contents: read` at the workflow level and no job-level override; no `secrets.` reference and no `environment:`; inputs reach shells only through `env:`; `actions/checkout` and `actions/upload-artifact` are pinned by commit SHA, with `persist-credentials: false` and no cache action or `cache:` input; the command runs under `timeout`, and the job's `timeout-minutes` is a fixed backstop.
 - Correlation uses a random 16-hex request ID that only Ballast generates: the run's name is `Ballast demo <request>` and its artifact is `ballast-demo-<request>`. Several runs with one name are `failed (run-ambiguous)`, never a guess.
 - The `demo_capture` ledger event is written only after the dispatch call succeeds. It has no free text.
@@ -43,7 +43,7 @@ The capture job runs code from the PR head, which agents write. Any code in a jo
 - A capture's outcome is evidence for the reviewer, never a criterion's state and never an approval. A failed or missing capture shows as missing evidence with a fixed reason.
 - A feature branch must carry the default branch's `ballast-demo.yml`. A branch cut before the template was installed, or one that changed it, is refused until it is synced with the default branch.
 - Anyone with write access can dispatch the workflow with any command. They can already push workflows, so this grants nothing new; the job has no secrets and a read-only token.
-- The video is an Actions artifact, readable by anyone with read access to the repository. The project's scenario must use seeded, nonsensitive data and fake accounts.
+- The video, an Actions artifact, and the job log, which holds the command and its output, are readable by anyone with read access to the repository. The project's scenario must use seeded, nonsensitive data and fake accounts.
 - A further GitHub call needs another ADR.
 
 ## Rejected alternatives

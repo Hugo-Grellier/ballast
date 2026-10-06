@@ -122,9 +122,9 @@ Phase 0 decisions for [plan.md](plan.md). Each entry gives the decision, the rat
 - **Shortening**: at size level 3 and above the section shrinks to one count line.
 - **Rationale**: this follows the existing UI-state and check-run patterns. No new packet state is needed.
 
-## R12. New GitHub calls (ADR-0012)
+## R12. New GitHub calls (ADR-0013)
 
-- **Decision**: a new [ADR-0012](../../docs/adr/0012-demo-capture-dispatch.md) extends ADR-0003 and ADR-0006 with:
+- **Decision**: a new [ADR-0013](../../docs/adr/0013-demo-capture-dispatch.md) extends ADR-0003 and ADR-0006 with:
   - `gh api repos/<o>/<r>/actions/workflows/ballast-demo.yml` (read);
   - `gh api --method POST repos/<o>/<r>/actions/workflows/ballast-demo.yml/dispatches --input -` (the one new write, JSON on stdin);
   - `gh api "repos/<o>/<r>/contents/.github/workflows/ballast-demo.yml?ref=<ref>"`, once with the PR head commit and once with the default branch, for the blob `sha` only (R15);
@@ -158,10 +158,10 @@ Phase 0 decisions for [plan.md](plan.md). Each entry gives the decision, the rat
   - In the race of step 3, whoever moves the branch tip can already run any definition on that branch with a push (an `on: push` workflow). Pushing needs write access, and agents cannot push. During `ballast run demo`, the run's invocation lock excludes Ballast's own pushes and the launcher refuses while an agent step is in progress. The race also cannot lead to a linked video.
 - **Alternatives**:
   - **Keep the default-branch ref and split the job.** Run the command in a job with `permissions: {}` and no `actions/upload-artifact`, and hand only a size-bounded file to a separate upload job. Rejected: the runtime token and its cache scope belong to the run and its ref, not to a job's `permissions` or to the actions it uses. A job with `permissions: {}` that uses no action still receives the token. "No cache use" cannot be enforced against code that holds the token. The split would add a second job and a hand-off channel and still leave default-branch cache writes reachable.
-  - **Keep the default-branch ref and accept the residual risk in ADR-0012.** Rejected: it gives agent-written code new reach into privileged default-branch workflows, which BL-INV-003 forbids.
+  - **Keep the default-branch ref and accept the residual risk in ADR-0013.** Rejected: it gives agent-written code new reach into privileged default-branch workflows, which BL-INV-003 forbids.
   - **A `pull_request`-triggered capture** (merge-ref scope). Rejected: Ballast cannot dispatch a `pull_request` event. A label or comment trigger was rejected by D-02.
   - **A feature-branch caller of a reusable workflow pinned to the default branch.** Rejected: the caller file on the branch still needs the same identity check, so it adds a second file and no safety.
 - **Consequences**:
   - A feature branch must contain the same `ballast-demo.yml` as the default branch. A branch cut before the template was installed, or one that changed it, is refused with the remedy to sync the branch with the default branch.
   - FR-007 and AC-010 described the guarantee as "the definition comes from the default branch". The guarantee is now "the definition is identical to the default branch's, and no PR-head code runs under the default-branch ref". The spec was reworded to it: [decisions.md DEC-0001](decisions.md#dec-0001--proposal).
-  - ADR-0012 records these rules and the race's bound.
+  - ADR-0013 records these rules and the race's bound.
