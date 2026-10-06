@@ -13,6 +13,7 @@ import pty
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -354,14 +355,21 @@ def fakes() -> ExitStack:
 # Runs tools/setup with the fakes in a child process, killing it with SIGKILL
 # at a named point (research R12: no fault hook in production code).
 WRAPPER = """\
-import os, signal, sys
+import os, signal, sys, time
 sys.path.insert(0, {tests!r})
 import test_setup as t
 s = t.setup
 s._fetch_source = t.fake_fetch
 s.Setup.run = t.fake_run
 s.shutil.which = lambda name: "/usr/bin/" + name
+def offline(*_args, **_kwargs):
+    raise AssertionError("unexpected network request")
+s.urllib.request.urlretrieve = offline
+t.socket.socket.connect = offline
 point, count, calls = sys.argv[2], int(sys.argv[3]), []
+barrier = os.environ.get("BARRIER")
+while barrier and not os.path.exists(barrier):
+    time.sleep(0.005)
 def die(*_):
     os.kill(os.getpid(), signal.SIGKILL)
 if point == "staging":
@@ -381,7 +389,24 @@ elif point == "rename":
         if len(calls) == count:
             die()
     s._rename = renamed
-sys.exit(s.cli(["--project", sys.argv[1]]))
+elif point == "copytree":
+    copytree = s.shutil.copytree
+    def copied(*args, **kwargs):
+        result = copytree(*args, **kwargs)
+        calls.append(args[0])
+        if len(calls) == count:
+            die()
+        return result
+    s.shutil.copytree = copied
+elif point == "validate":
+    s.Setup.validate = die
+elif point == "sleep":
+    fill = s.Setup.fill_from_candidates
+    def slow(self, stage, state):
+        time.sleep(count)
+        return fill(self, stage, state)
+    s.Setup.fill_from_candidates = slow
+sys.exit(s.cli(["--project", sys.argv[1], *sys.argv[4:]]))
 """.format(tests=str(ROOT / "tests"))
 HOLD_LOCK = """\
 import fcntl, os, sys, time
@@ -471,10 +496,18 @@ class ProjectCase(unittest.TestCase):
         self.assertIn(SUCCESS, out)
 
     def child(
-        self, point: str = "none", count: int = 0, root: Path | None = None, **env: str
+        self,
+        point: str = "none",
+        count: int = 0,
+        root: Path | None = None,
+        args: tuple[str, ...] = (),
+        **env: str,
     ) -> subprocess.Popen[str]:
         process = subprocess.Popen(  # noqa: S603
-            [sys.executable, "-c", WRAPPER, str(root or self.root), point, str(count)],
+            [
+                *(sys.executable, "-c", WRAPPER, str(root or self.root)),
+                *(point, str(count), *args),
+            ],
             env={**os.environ, **env},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -484,8 +517,14 @@ class ProjectCase(unittest.TestCase):
         self.addCleanup(process.kill)
         return process
 
-    def kill(self, point: str, count: int = 0, root: Path | None = None) -> None:
-        process = self.child(point, count, root)
+    def kill(
+        self,
+        point: str,
+        count: int = 0,
+        root: Path | None = None,
+        args: tuple[str, ...] = (),
+    ) -> None:
+        process = self.child(point, count, root, args)
         process.communicate(timeout=60)
         self.assertEqual(process.returncode, -signal.SIGKILL)
 
@@ -1101,6 +1140,686 @@ class WorktreeCopyTests(ProjectCase):
         self.assertIn(
             "full installation: the primary checkout has no installation record", out
         )
+
+    def test_primary_record_is_read_under_its_lock(self) -> None:
+        # #15 T023: the lock comes first, so a setup holding the primary is
+        # named even when its record is momentarily absent.
+        (self.state() / "installation.json").unlink()
+        holder = subprocess.Popen(  # noqa: S603
+            [
+                *(sys.executable, "-c", HOLD_LOCK),
+                *(str(self.state() / "checkout.lock"), "exclusive"),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline(), "held\n")
+        code, out, _ = self.setup(self.worktree())
+        self.assertEqual(code, 0)
+        self.assertIn("full installation: the primary checkout is being set up", out)
+
+    def test_record_lists_executable_files(self) -> None:
+        # #15 AC-010: the record carries the execute bits a copy must keep.
+        record = self.record()
+        listed = record["executable"]
+        self.assertEqual(listed, sorted(listed))
+        self.assertIn(".ballast/spec_workflow/run.py", listed)
+        for name in listed:
+            self.assertFalse(record["files"][name].startswith("link:"), name)
+            self.assertNotIn("__pycache__", name)
+            self.assertFalse(
+                any(name.startswith(p + "/") for p in setup.LOCAL_STATE), name
+            )
+        self.assertNotIn(".specify/scripts/python/common.py", listed)
+
+    def test_changed_file_mode_is_not_copied(self) -> None:
+        # #15 AC-010: content digests do not cover modes; the record does.
+        for path, mode in (
+            ("docs/policies/workflow.md", 0o755),
+            (".ballast/spec_workflow/run.py", 0o644),
+        ):
+            with self.subTest(path=path):
+                target = self.root / path
+                original = target.stat().st_mode
+                target.chmod(mode)
+                worktree = self.worktree()
+                code, out, err = self.setup(worktree)
+                self.assertEqual(code, 0, err)
+                self.assertIn(
+                    "full installation: the primary installation's file modes "
+                    f"differ from its record at {path}",
+                    out,
+                )
+                self.assertEqual(self.check(worktree).stdout, "current\n")
+                target.chmod(original)
+
+    def test_record_without_modes_is_still_copied(self) -> None:
+        # A record an earlier version wrote has no `executable`; setup's own
+        # primary copy keeps accepting it on content (#14 behavior).
+        record = self.record()
+        del record["executable"]
+        (self.state() / "installation.json").write_text(json.dumps(record))
+        worktree = self.worktree()
+        with patch.dict(os.environ, {"FAKE_NETWORK": "deny"}):
+            code, out, err = self.setup(worktree)
+        self.assertEqual(code, 0, err)
+        self.assertIn("Copied the installation from the primary checkout", out)
+
+
+# --- Preparing a new worktree (#15) ------------------------------------------
+
+# Every file a preparation opens while AUDIT is a list (AC-012).
+AUDIT: list[str] | None = None
+
+
+def _audit(event: str, args: tuple) -> None:
+    if AUDIT is not None and event == "open" and args and args[0] is not None:
+        AUDIT.append(os.fsdecode(args[0]) if not isinstance(args[0], int) else "")
+
+
+sys.addaudithook(_audit)
+PREPARED = (
+    "Prepared the {ref} installation from {source} (verified, nothing downloaded).\n"
+    "Review this worktree's protected inputs, then run `ballast trust`.\n"
+)
+NO_SOURCE = (
+    "setup: refusing: no verified installation of {ref} with this ballast.toml on "
+    "this machine ({checked} checked). Next: run `ballast setup` once here (it may "
+    "download); later worktrees at this pin are then prepared from it\n"
+)
+PROJECT_OWNED = (
+    "ballast.toml",
+    ".specify/memory/constitution.md",
+    "docs/policies/project",
+)
+
+
+class WorktreeCase(ProjectCase):
+    """A committed project with a verified installation and linked worktrees."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.installed()
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "project")
+        self.count = 0
+        for target in (
+            patch.object(setup, "_fetch_source", self.network),
+            patch.object(setup.urllib.request, "urlretrieve", self.network),
+            patch.object(socket.socket, "connect", self.network),
+        ):
+            target.start()
+            self.addCleanup(target.stop)
+
+    def network(self, *_args: object, **_kwargs: object) -> None:
+        self.fail("a preparation made a network request")
+
+    def worktree(self, ref: str | None = None, config: str = "") -> Path:
+        self.count += 1
+        path = self.base / f"worktree-{self.count}"
+        git(self.root, "worktree", "add", "-q", "--detach", str(path))
+        if ref or config:
+            (path / "ballast.toml").write_text(PIN.format(ref or "vA") + config)
+        return path
+
+    def checkouts(self) -> list[Path]:
+        listing = git(self.root, "worktree", "list", "--porcelain", "-z")
+        return [
+            Path(f.removeprefix("worktree "))
+            for f in listing.split("\0")
+            if f.startswith("worktree ")
+        ]
+
+    def owned(self, root: Path) -> dict[str, str]:
+        """Return the worktree's project-owned files (AC-014)."""
+        return {
+            name: digest
+            for name, digest in tree(root, (".git",)).items()
+            if any(name == o or name.startswith(o + "/") for o in PROJECT_OWNED)
+        }
+
+    def prepare(
+        self, root: Path, opened: list[str] | None = None
+    ) -> tuple[int, str, str]:
+        """Prepare root in-process; every other checkout and root's own files stay.
+
+        With `opened`, every file the preparation opens is appended to it.
+        """
+        global AUDIT  # noqa: PLW0603
+        others = {p: self.snapshot(p) for p in self.checkouts() if p != root}
+        owned = self.owned(root)
+        out, err = io.StringIO(), io.StringIO()
+        AUDIT = opened
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                code = setup.cli(["--project", str(root), "--prepare"])
+        finally:
+            AUDIT = None
+        self.assertEqual(self.owned(root), owned)
+        for path, before in others.items():
+            self.assertEqual(self.snapshot(path), before, path)
+        return code, out.getvalue(), err.getvalue()
+
+    def prepared(self, root: Path, source: Path, ref: str = "vA") -> str:
+        code, out, err = self.prepare(root)
+        self.assertEqual(code, 0, err)
+        self.assertTrue(out.endswith(PREPARED.format(ref=ref, source=source)), out)
+        return out
+
+    def assert_uninstalled(self, root: Path) -> None:
+        self.assertEqual(setup.entries(root), [])
+        self.assertFalse((root / ".ballast").exists())
+        self.assertFalse((self.state(root) / "setup-attempt.json").exists())
+        self.assertFalse((self.state(root) / "installation.json").exists())
+
+
+class PrepareTests(WorktreeCase):
+    """The first command in a new worktree installs a verified local copy (#15)."""
+
+    def test_new_worktree_is_prepared_offline(self) -> None:
+        # AC-001, SC-005
+        worktree = self.worktree()
+        started = time.monotonic()
+        code, out, err = self.prepare(worktree)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(
+            (code, out, err), (0, PREPARED.format(ref="vA", source=self.root), "")
+        )
+        record, source = self.record(worktree), self.record()
+        self.assertEqual(record["files"], source["files"])
+        self.assertEqual(record["executable"], source["executable"])
+        self.assertEqual(
+            (record["ref"], record["fingerprint"]), ("vA", source["fingerprint"])
+        )
+        self.assertEqual(self.check(worktree).stdout, "current\n")
+        self.assertFalse((worktree / ".ballast/setup").exists())
+        self.assertFalse((worktree / ".specify/workflows/runs").exists())
+        self.assertFalse((self.state(worktree) / "trusted.json").exists())
+        self.assertTrue(
+            self.refusal(worktree).startswith("no trusted baseline for this checkout")
+        )
+        # A preparation never creates the project's constitution.
+        bare = self.worktree()
+        (bare / ".specify/memory/constitution.md").unlink()
+        self.prepared(bare, self.root)
+        self.assertFalse((bare / ".specify/memory/constitution.md").exists())
+
+    def test_sibling_and_kept_sources(self) -> None:
+        # AC-003: the primary is at another pin; a sibling, then a kept copy.
+        sibling = self.worktree("vB")
+        self.installed(sibling)
+        worktree = self.worktree("vB")
+        out = self.prepared(worktree, sibling, "vB")
+        self.assertIn(f"skipped {self.root}: it is for vA, not vB\n", out)
+        self.assertEqual(self.record(worktree)["files"], self.record(sibling)["files"])
+        self.pin("vB")
+        self.installed()
+        kept = self.root / ".ballast/setup/kept"
+        self.assertTrue(kept.is_dir())
+        worktree = self.worktree()
+        out = self.prepared(worktree, kept)
+        self.assertIn(f"skipped {self.root}: it is for vB, not vA\n", out)
+        self.assertEqual(self.check(worktree).stdout, "current\n")
+
+    def test_existing_installation_is_never_replaced(self) -> None:
+        # AC-006: stale, modified, other-pin or partial installations stand.
+        stale = self.worktree()
+        self.installed(stale)
+        self.pin("vB", stale)
+        modified = self.worktree()
+        self.installed(modified)
+        (modified / ".specify/scripts/python/common.py").write_text("edited\n")
+        partial = self.worktree()
+        (partial / ".specify/scripts").mkdir(parents=True)
+        (partial / ".specify/scripts/x.py").write_text("x\n")
+        for root, status in (
+            (stale, "stale: pinned vB, installed vA"),
+            (modified, "modified: .specify/scripts/python/common.py"),
+            (partial, "absent"),
+        ):
+            with self.subTest(status=status):
+                before = self.snapshot(root)
+                code, out, err = self.prepare(root)
+                self.assertEqual((code, out), (2, ""), err)
+                self.assertIn(
+                    "setup: refusing: this checkout already holds an installation "
+                    f"({status}",
+                    err,
+                )
+                self.assertTrue(err.endswith("Next: run `ballast setup`\n"), err)
+                self.assertEqual(self.snapshot(root), before)
+
+    def test_tracked_policy_is_not_an_installation(self) -> None:
+        # Plan review F-002: a project file under docs/policies/ is its own.
+        (self.root / "docs/policies/team.md").write_text("team rule\n")
+        git(self.root, "add", "-f", "docs/policies/team.md")
+        git(self.root, "commit", "-q", "-m", "team policy")
+        worktree = self.worktree()
+        self.prepared(worktree, self.root)
+        self.assertEqual(
+            (worktree / "docs/policies/team.md").read_text(), "team rule\n"
+        )
+        self.assertEqual(self.check(worktree).stdout, "current\n")
+
+    def test_other_pin_is_never_used(self) -> None:
+        # AC-008
+        worktree = self.worktree("vB")
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(out, f"skipped {self.root}: it is for vA, not vB\n")
+        self.assertEqual(err, NO_SOURCE.format(ref="vB", checked=1))
+        self.assert_uninstalled(worktree)
+
+    def test_other_configuration_is_never_used(self) -> None:
+        # AC-009: only [agents.permissions] differs.
+        config = '[agents.permissions]\nextra_allow = ["Bash(make test)"]\n'
+        worktree = self.worktree(config=config)
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            out, f"skipped {self.root}: it was built for another configuration\n"
+        )
+        self.assertEqual(err, NO_SOURCE.format(ref="vA", checked=1))
+        self.assert_uninstalled(worktree)
+        self.assertFalse(
+            (worktree / ".ballast/spec_workflow/claude-settings.json").exists()
+        )
+
+    def test_mismatched_content_is_rejected(self) -> None:
+        # AC-010, SC-003: added, missing, altered, mode-changed, or unrecorded modes.
+        record_file = self.state() / "installation.json"
+        record = record_file.read_text()
+
+        def without_modes(_: Path) -> None:
+            data = json.loads(record)
+            del data["executable"]
+            record_file.write_text(json.dumps(data))
+
+        cases = (
+            (
+                ".specify/scripts/extra.py",
+                lambda p: p.write_text("added\n"),
+                "its content differs from its record at .specify/scripts/extra.py",
+            ),
+            (
+                "docs/policies/workflow.md",
+                Path.unlink,
+                "its content differs from its record at docs/policies/workflow.md",
+            ),
+            (
+                ".specify/scripts/python/common.py",
+                lambda p: p.write_text("edited\n"),
+                (
+                    "its content differs from its record at "
+                    ".specify/scripts/python/common.py"
+                ),
+            ),
+            (
+                "docs/policies/workflow.md",
+                lambda p: p.chmod(0o755),
+                "its file modes differ from its record at docs/policies/workflow.md",
+            ),
+            (
+                ".ballast/spec_workflow/run.py",
+                lambda p: p.chmod(0o644),
+                (
+                    "its file modes differ from its record at "
+                    ".ballast/spec_workflow/run.py"
+                ),
+            ),
+            (
+                ".ballast/spec_workflow/run.py",
+                without_modes,
+                "its record predates file-mode checks",
+            ),
+        )
+        for path, damage, reason in cases:
+            with self.subTest(reason=reason):
+                target = self.root / path
+                original = target.read_bytes() if target.exists() else None
+                mode = target.stat().st_mode if target.exists() else None
+                damage(target)
+                try:
+                    worktree = self.worktree()
+                    code, out, err = self.prepare(worktree)
+                    self.assertEqual(code, 2, err)
+                    self.assertEqual(out, f"skipped {self.root}: {reason}\n")
+                    self.assertEqual(err, NO_SOURCE.format(ref="vA", checked=1))
+                    self.assert_uninstalled(worktree)
+                finally:
+                    if original is None:
+                        target.unlink()
+                    else:
+                        target.write_bytes(original)
+                        target.chmod(mode)
+                    record_file.write_text(record)
+
+    def test_source_reached_through_a_link_is_rejected(self) -> None:
+        # Security review: a parent link in a source could make the copy read
+        # files outside it into this worktree, even if the copy then fails.
+        moved = self.base / "elsewhere"
+        (self.root / ".specify").rename(moved)
+        (self.root / ".specify").symlink_to(moved)
+        kept = self.root / ".ballast/setup/kept"
+        kept.mkdir(parents=True)
+        (kept / ".specify").symlink_to(moved)
+        record = json.loads((self.state() / "installation.json").read_text())
+        (self.state() / "kept-installation.json").write_text(json.dumps(record))
+        worktree = self.worktree()
+        code, out, _ = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            out,
+            f"skipped {self.root}: it reaches its installation through a symbolic "
+            "link at .specify\n"
+            f"skipped {kept}: it reaches its installation through a symbolic link "
+            "at .ballast/setup/kept/.specify\n",
+        )
+        self.assert_uninstalled(worktree)
+
+    def test_unfinished_or_busy_source_is_rejected(self) -> None:
+        # AC-011, plan review F-004
+        journal = self.state() / "setup-attempt.json"
+        journal.write_text("{}\n")
+        worktree = self.worktree()
+        code, out, _ = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(out, f"skipped {self.root}: its setup did not finish\n")
+        self.assert_uninstalled(worktree)
+        journal.unlink()
+        holder = subprocess.Popen(  # noqa: S603
+            [
+                sys.executable,
+                "-c",
+                HOLD_LOCK,
+                str(self.state() / "checkout.lock"),
+                "exclusive",
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline(), "held\n")
+        code, out, _ = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(out, f"skipped {self.root}: it is being set up\n")
+        self.assert_uninstalled(worktree)
+        holder.kill()
+        holder.wait()
+        lock = self.state() / "checkout.lock"
+        lock.unlink()
+        code, out, _ = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(out, f"skipped {self.root}: it has no checkout lock\n")
+        self.assertFalse(lock.exists())
+        self.assert_uninstalled(worktree)
+
+    def test_no_baseline_is_inherited(self) -> None:
+        # AC-012, SC-003: byte-identical inputs, a trusted primary.
+        self.trust()
+        worktree = self.worktree()
+        opened: list[str] = []
+        code, out, err = self.prepare(worktree, opened)
+        self.assertEqual(
+            (code, out), (0, PREPARED.format(ref="vA", source=self.root)), err
+        )
+        self.assertIn(str(self.state() / "installation.json"), opened)
+        self.assertEqual([p for p in opened if p.endswith("trusted.json")], [])
+        self.assertFalse((self.state(worktree) / "trusted.json").exists())
+        self.assertTrue(
+            self.refusal(worktree).startswith("no trusted baseline for this checkout")
+        )
+        # A baseline left at a reused path predates this worktree.
+        reused = self.worktree()
+        self.state(reused).mkdir(parents=True)
+        (self.state(reused) / "trusted.json").write_text("{}\n")
+        out = self.prepared(reused, self.root)
+        self.assertTrue(
+            out.startswith(
+                "removed a trust baseline left by an earlier checkout at this path\n"
+            ),
+            out,
+        )
+        self.assertFalse((self.state(reused) / "trusted.json").exists())
+        self.assertTrue(self.refusal(reused).startswith("no trusted baseline"))
+
+    def test_missing_source_then_setup(self) -> None:
+        # AC-017, AC-019
+        worktree = self.worktree("vB")
+        code, _, err = self.prepare(worktree)
+        self.assertEqual((code, err), (2, NO_SOURCE.format(ref="vB", checked=1)))
+        self.assert_uninstalled(worktree)
+        self.installed(worktree)
+        later = self.worktree("vB")
+        self.prepared(later, worktree, "vB")
+        self.assertEqual(self.record(later)["files"], self.record(worktree)["files"])
+
+    def test_killed_preparation_is_recovered(self) -> None:
+        # AC-018, AC-019, SC-004: five kill points, then a retry.
+        reference = self.worktree()
+        self.prepared(reference, self.root)
+        expected = tree(reference, (".git",))
+        for point, count in (
+            ("copytree", 2),
+            ("validate", 0),
+            ("switching", 0),
+            ("rename", 3),
+            ("committed", 0),
+        ):
+            with self.subTest(point=point, count=count):
+                worktree = self.worktree()
+                self.kill(point, count, worktree, ("--prepare",))
+                self.assertTrue((self.state(worktree) / "setup-attempt.json").is_file())
+                code, out, err = self.prepare(worktree)
+                self.assertEqual(code, 0, err)
+                if point == "committed":
+                    self.assertEqual(
+                        out,
+                        "recovered an interrupted preparation: the new installation "
+                        "(vA) is complete\n",
+                    )
+                else:
+                    self.assertEqual(
+                        out,
+                        "recovered an interrupted preparation: no installation was "
+                        "in place before it; none is now\n"
+                        + PREPARED.format(ref="vA", source=self.root),
+                    )
+                self.assertEqual(tree(worktree, (".git",)), expected)
+                self.assertEqual(self.record(worktree)["files"], self.record()["files"])
+                self.assertEqual(self.check(worktree).stdout, "current\n")
+
+    def test_committed_preparation_at_a_changed_pin_is_rolled_back(self) -> None:
+        # AC-018 edge case: the pin changed before the next command.
+        sibling = self.worktree("vB")
+        self.installed(sibling)
+        worktree = self.worktree()
+        self.kill("committed", 0, worktree, ("--prepare",))
+        self.pin("vB", worktree)
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(code, 0, err)
+        self.assertTrue(
+            out.startswith(
+                "recovered an interrupted preparation: the installation it prepared "
+                "(vA) no longer matches this checkout's pin and ballast.toml and was "
+                "removed; none is in place now\n"
+            ),
+            out,
+        )
+        self.assertTrue(out.endswith(PREPARED.format(ref="vB", source=sibling)), out)
+        self.assertEqual(self.record(worktree)["files"], self.record(sibling)["files"])
+        self.assertEqual(self.check(worktree).stdout, "current\n")
+
+    def test_setup_recovers_a_preparation(self) -> None:
+        # AC-018: `ballast setup` finishes the same journal, then sets up.
+        worktree = self.worktree()
+        self.kill("switching", 0, worktree, ("--prepare",))
+        refused = self.launcher("run", "start", root=worktree)
+        self.assertEqual(refused.returncode, 2)
+        code, out, err = self.setup(worktree)
+        self.assertEqual(code, 0, err)
+        self.assertIn(
+            "recovered an interrupted preparation: no installation was in place "
+            "before it; none is now\n",
+            out,
+        )
+        self.assertIn(SUCCESS, out)
+        self.assertEqual(self.check(worktree).stdout, "current\n")
+
+    def test_unfinished_setup_is_not_recovered_by_preparation(self) -> None:
+        # A setup journal belongs to `ballast setup` (research R6).
+        worktree = self.worktree()
+        self.state(worktree).mkdir(parents=True)
+        journal = self.state(worktree) / "setup-attempt.json"
+        journal.write_text('{"schema": 1, "phase": "staging"}\n')
+        code, out, err = self.prepare(worktree)
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(
+            err,
+            "setup: refusing: setup did not finish in this checkout. Next: run "
+            "`ballast setup` to recover\n",
+        )
+        self.assertTrue(journal.exists())
+
+
+class PrepareConcurrencyTests(WorktreeCase):
+    """Worktrees prepared together stay complete and independent (US3)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sibling = self.worktree("vB")
+        self.installed(self.sibling)
+
+    def race(self, roots: list[Path]) -> list[tuple[int, str, str]]:
+        """Start one preparation per root at the same moment."""
+        barrier = self.base / f"barrier-{self.count}"
+        children = [
+            self.child(
+                root=r, args=("--prepare",), BARRIER=str(barrier), FAKE_NETWORK="deny"
+            )
+            for r in roots
+        ]
+        barrier.touch()
+        return [(c.wait(timeout=120), *c.communicate()) for c in children]
+
+    def test_ten_worktrees_two_pins(self) -> None:
+        # AC-015, SC-002: 20 repetitions of ten concurrent first commands.
+        sources = {"vA": self.root, "vB": self.sibling}
+        for repetition in range(20):
+            pins = ["vA", "vB"] * 5
+            roots = [self.worktree(ref) for ref in pins]
+            results = self.race(roots)
+            for root, ref, (code, out, err) in zip(roots, pins, results, strict=True):
+                with self.subTest(repetition=repetition, root=root.name):
+                    self.assertEqual(code, 0, err)
+                    self.assertTrue(
+                        out.endswith(PREPARED.format(ref=ref, source=sources[ref])), out
+                    )
+                    record, source = self.record(root), self.record(sources[ref])
+                    self.assertEqual(
+                        (record["ref"], record["fingerprint"], record["files"]),
+                        (ref, source["fingerprint"], source["files"]),
+                    )
+                    live = setup.installed_digests(root, record["entries"])
+                    self.assertEqual(live, record["files"])
+                    refusal = setup.launcher._refusal(root)  # noqa: SLF001
+                    self.assertTrue(
+                        refusal.startswith("no trusted baseline for this checkout"),
+                        refusal,
+                    )
+
+    def test_state_stays_per_worktree(self) -> None:
+        # AC-016: a run in one worktree changes nobody else's state.
+        roots = [self.worktree(ref) for ref in ["vA", "vB"] * 5]
+        for code, _, err in self.race(roots):
+            self.assertEqual(code, 0, err)
+        for root in roots:
+            self.assertFalse((root / ".specify/workflows/runs").exists(), root)
+            self.assertFalse((root / ".specify/workflow-state").exists(), root)
+            self.trust(root)
+        self.trust()
+
+        def everything(path: Path) -> dict[str, dict[str, str]]:
+            return {"checkout": tree(path, (".git",)), "state": tree(self.state(path))}
+
+        active, others = roots[0], [*roots[1:], self.root, self.sibling]
+        before = {p: everything(p) for p in others}
+        run = active / ".specify/workflows/runs/r9/state.json"
+        run.parent.mkdir(parents=True)
+        run.write_text('{"status": "paused"}\n')
+        self.assertIsNone(self.refusal(active))
+        discarded = self.launcher("discard-runs", root=active)
+        self.assertEqual(discarded.returncode, 0, discarded.stderr)
+        self.assertFalse(run.exists())
+        self.assertEqual({p: everything(p) for p in others}, before)
+
+    def test_one_preparation_per_worktree(self) -> None:
+        # AC-020, plan review F-001
+        worktree = self.worktree()
+        first = self.child("sleep", 3, worktree, ("--prepare",), FAKE_NETWORK="deny")
+        holder = self.state(worktree) / "setup-holder.json"
+        deadline = time.monotonic() + 30
+        while not (self.state(worktree) / "setup-attempt.json").exists():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.02)
+        self.assertEqual(json.loads(holder.read_text())["mode"], "prepare")
+        code, out, err = self.prepare(worktree)
+        self.assertEqual((code, out), (2, ""))
+        self.assertRegex(
+            err,
+            rf"^setup: refusing: another ballast preparation \(PID {first.pid}, "
+            r"started [^,]+, ref vA\) holds this checkout\. Next: wait for it to "
+            r"finish, then rerun the command\n$",
+        )
+        _, err = first.communicate(timeout=60)
+        self.assertEqual(first.returncode, 0, err)
+        self.assertEqual(self.record(worktree)["files"], self.record()["files"])
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(
+            (code, out, err),
+            (0, "nothing to prepare: this checkout is already installed for vA\n", ""),
+        )
+        # The first command already runs its launcher, holding the lock shared.
+        running = subprocess.Popen(  # noqa: S603
+            [
+                *(sys.executable, "-c", HOLD_LOCK),
+                *(str(self.state(worktree) / "checkout.lock"), "shared"),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(running.stdout.close)
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.assertEqual(running.stdout.readline(), "held\n")
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(
+            (code, out, err),
+            (0, "nothing to prepare: this checkout is already installed for vA\n", ""),
+        )
+        running.kill()
+        # Unsequenced: one prepares, the other refuses or finds nothing to do.
+        for _ in range(5):
+            root = self.worktree()
+            results = self.race([root, root])
+            prepared = [r for r in results if r[0] == 0 and "Prepared the" in r[1]]
+            self.assertEqual(len(prepared), 1, results)
+            for result in results:
+                if result not in prepared:
+                    self.assertTrue(
+                        (result[0] == 0 and result[1].startswith("nothing to prepare"))
+                        or (
+                            result[0] == setup.EXIT_REFUSED
+                            and "holds this checkout" in result[2]
+                        ),
+                        result,
+                    )
+            self.assertEqual(self.check(root).stdout, "current\n")
 
 
 class ChatInstallTests(unittest.TestCase):
