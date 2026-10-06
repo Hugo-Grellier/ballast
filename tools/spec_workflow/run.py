@@ -246,8 +246,11 @@ def _invocation_lock(run_id: str) -> object:
         os.close(fd)
 
 
-def _clock(run_id: str, *, start: bool) -> None:
-    """Open or close the run's active-time clock (#21 R8)."""
+def _clock(run_id: str, *, start: bool) -> bool:
+    """Open or close the run's active-time clock (#21 R8); False on failure.
+
+    A clock that cannot open fails closed: the caller starts no engine.
+    """
     try:
         record = autonomy.read_run(ROOT, run_id)
         if start:
@@ -257,6 +260,8 @@ def _clock(run_id: str, *, start: bool) -> None:
         autonomy.write_run(ROOT, record)
     except autonomy.AutonomyError as error:
         sys.stderr.write(f"ballast: autonomous run {run_id}: {error}\n")
+        return False
+    return True
 
 
 # Inputs of a block-time snapshot (feature-relative) and the step a change to
@@ -740,7 +745,19 @@ def _run_autonomous(  # noqa: PLR0913, PLR0917 - the start's checked values
         "-i",
         f"review_integration={review}",
     ]
-    _clock(run_id, start=True)
+    if not _clock(run_id, start=True):
+        try:
+            return _stop(
+                run_id,
+                autonomy.make_block(
+                    "postcondition",
+                    "the run's active-time clock could not start, so the wall-time "
+                    "limit could not be enforced; no agent step ran",
+                    run_id=run_id,
+                ),
+            )
+        finally:
+            _archive_operator(run_id)
     try:
         status = _launch(command, run_id, start=True)
     finally:
@@ -1658,6 +1675,11 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:
         return EXIT_INTERRUPTED if outcome.interrupted else code
     try:
         reentry, changed = _reentry(run_id, record, block)
+        autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))
+        steps = _engine_steps(run_id)
+        review = "record-implementation-review"
+        reset = review in steps and steps.index(reentry) <= steps.index(review)
+        block_step = _engine_state(run_id).get("current_step_id")
         decision = autonomy.append_human_decision(
             ROOT,
             run_id,
@@ -1665,14 +1687,10 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:
             ref
             or (
                 f"operator resumed after the {block['category']} block at "
-                f"{_engine_state(run_id).get('current_step_id') or reentry}"
+                f"{block_step or reentry}"
             ),
             resolves="block",
         )
-        autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))
-        steps = _engine_steps(run_id)
-        review = "record-implementation-review"
-        reset = review in steps and steps.index(reentry) <= steps.index(review)
         autonomy.resume_run(
             ROOT,
             record,
@@ -1680,7 +1698,7 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:
             {
                 "at": autonomy.now(),
                 "block_category": block["category"],
-                "block_step": _engine_state(run_id).get("current_step_id"),
+                "block_step": block_step,
                 "reentry_step": reentry,
                 "changed_inputs": changed,
             },

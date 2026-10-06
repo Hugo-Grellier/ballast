@@ -2937,13 +2937,21 @@ def _resolution_lines(run: dict, human: list[dict]) -> list[str]:
     lines = ["## Block resolutions", ""]
     for entry in resolutions:
         resume = resumes.get(entry["id"])
-        where = (
-            f"resolved the {resume.get('block_category')} block at "
-            f"{neutralize(resume.get('block_step') or 'unknown step')}; "
-            f"resumed in Autonomous at {resume['reentry_step']}"
-            if resume
-            else "resolved the block; the run continued human-gated"
+        lowered = any(
+            m.get("action") == "lower" and m.get("decision_id") == entry["id"]
+            for m in run["mode_history"]
         )
+        if resume:
+            where = (
+                f"resolved the {resume.get('block_category')} block at "
+                f"{neutralize(resume.get('block_step') or 'unknown step')}; "
+                f"resumed in Autonomous at {resume['reentry_step']}"
+            )
+        elif lowered:
+            where = "resolved the block; the run continued human-gated"
+        else:
+            # Recorded, then the resume stopped before the workflow restarted.
+            where = "resolved the block; the run did not resume"
         changed = ", ".join(_code(p) for p in (resume or {}).get("changed_inputs", []))
         lines.append(
             f"- {entry['id']} at {entry.get('at')} by {entry.get('by')}: {where}"

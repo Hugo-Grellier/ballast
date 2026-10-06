@@ -2891,7 +2891,7 @@ def check_step_drafts(  # noqa: C901 - the recorder's checks, in its order
     for name in sorted(created):
         point = _draft_point(name, list(points))
         if point is None:
-            message = f"unexpected draft {name} for {points[0]}"
+            message = f"unexpected draft {name!r} for {points[0]}"
             raise DraftError(message)
         drafts.append((name, point, _step_draft(feature, step, name), step))
     if points[0] not in autonomy.MULTI_ENTRY:
@@ -2917,7 +2917,7 @@ def _step_draft(feature: Feature, step: dict, name: str) -> object:
     run = _require_run(feature)
     digest = (step.get("drafts") or {}).get(name)
     if digest == "invalid":
-        message = f"draft {name} is not a regular file"
+        message = f"draft {name!r} is not a regular file"
         raise DraftError(message)
     try:
         data = autonomy.snapshot_draft(

@@ -2933,6 +2933,44 @@ class RecoveryRenderTests(unittest.TestCase):
         self.assertNotIn("@team", text)
         self.assertNotIn("HD-0002", text)
 
+    def test_resolution_without_a_resume_is_not_misreported(self) -> None:
+        """SEC-002: a resolution says only what happened to the run."""
+        human = [
+            {
+                "id": "HD-0001",
+                "kind": "block-resolution",
+                "ref": "x",
+                "at": "t",
+                "by": "operator",
+            },
+            {
+                "id": "HD-0002",
+                "kind": "block-resolution",
+                "ref": "y",
+                "at": "t",
+                "by": "operator",
+            },
+        ]
+        run = fixed_run()
+        run["mode_history"].append(
+            {
+                **run["mode_history"][0],
+                "mode": "human-gated",
+                "action": "lower",
+                "decision_id": "HD-0002",
+            }
+        )
+        text = autonomy.render_record(run, golden_decisions(), None, human=human)
+        self.assertIn(
+            "HD-0001 at t by operator: resolved the block; the run did not resume",
+            text,
+        )
+        self.assertIn(
+            "HD-0002 at t by operator: resolved the block; the run continued "
+            "human-gated",
+            text,
+        )
+
     def test_retries_are_shown(self) -> None:
         decisions = golden_decisions()
         decisions[3]["agent"]["attempts"] = 2

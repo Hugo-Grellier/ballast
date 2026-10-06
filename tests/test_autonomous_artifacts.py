@@ -1717,7 +1717,8 @@ class StepDraftTests(FixLoopCase):
             "unexpected name": (
                 {"tasks.json": self.draft("tasks")},
                 "/speckit-ballast-decide plan",
-                "unexpected draft",
+                # SEC-003: quoted, so the retry note drops the agent's name.
+                "unexpected draft 'tasks.json'",
             ),
             "narrative finding": (
                 self.reviews(),

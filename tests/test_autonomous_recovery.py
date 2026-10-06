@@ -690,6 +690,54 @@ class ResumeTests(StubCase):
         self.assertNotIn("deadline", seeded["limits"], out + err)
         self.assertGreaterEqual(seeded["active_seconds"], 240 * 60)
 
+    def test_changed_inputs_send_the_resume_back(self) -> None:
+        """T018 [AC-012, FR-009]: the earliest changed input's validator."""
+        (self.root / FEATURE).mkdir(parents=True, exist_ok=True)
+        spec = self.root / FEATURE / "spec.md"
+        spec.write_text("# Spec\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "spec")
+        run_id = self.blocked_run()
+        spec.write_text("# Spec\n\nFixed during the block.\n")
+        self.engine.update(status="failed", code=1, step="record-tasks")
+        _, out, err = self.main("resume", run_id)
+        self.assertIn("resumes in Autonomous at validate-spec", out + err)
+        self.assertIn(f"Changed during the block: {FEATURE}/spec.md", out)
+        self.assertEqual(self.resumed_at, "validate-spec")
+        # After implementation, code changed outside the feature rewinds to
+        # validate-implementation, before the reviews.
+        baseline = self.root / ".specify/workflow-state" / run_id
+        baseline.mkdir(parents=True, exist_ok=True)
+        (baseline / "implementation-baseline.json").write_text(
+            json.dumps({"feature": FEATURE, "tree": "0" * 40})
+        )
+        self.engine.update(status="failed", code=1, step="record-final")
+        self.main("resume", run_id)
+        (self.root / "src").mkdir(exist_ok=True)
+        (self.root / "src/late.py").write_text("x = 1\n")
+        self.main("resume", run_id)
+        resume = autonomy.read_run(self.root, run_id)["resumes"][-1]
+        self.assertEqual(resume["reentry_step"], "validate-implementation")
+        self.assertIn("outside", resume["changed_inputs"])
+        record = autonomy.read_run(self.root, run_id)
+        self.assertNotIn("frozen_tree", record)
+
+    def test_clock_that_cannot_start_runs_no_engine(self) -> None:
+        """SEC-001: the wall-time bound fails closed."""
+        self.enterContext(
+            offline.patch.object(
+                autonomy,
+                "open_invocation",
+                side_effect=autonomy.AutonomyError("clock unavailable"),
+            )
+        )
+        code, out, err = self.start()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.launched, [])
+        (run_id,) = self.run_ids()
+        block = autonomy.read_block(self.root, run_id)
+        self.assertIn("active-time clock", block["condition"])
+
     def test_resume_of_continued_run_refused(self) -> None:
         """AC-015: a lowered run resumes only as its continuation."""
         run_id = self.blocked_run()

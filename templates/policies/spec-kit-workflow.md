@@ -464,6 +464,9 @@ runner contract for it. Every validator above still runs unchanged.
 | `record-decision --point P` | trusted `artifacts.py` | The draft was written by the immediately preceding agent step, passes the decision-draft contract and never claims human approval; the decision is appended to the hash-chained log in operator state and `autonomous/record.md` is re-rendered. Every later check fails if `record.md` differs from the log. |
 | `record-provisional-intent` | trusted `artifacts.py` | Writes the `workflow-provisional` block in `intent.md`, bound to the current spec digest; a later spec change makes it stale. With `--renew` (after decision resolutions) a changed spec blocks the run as stale intent; the runner never decides intent. In an Autonomous run every human approval block is refused. |
 | Reviews (`review-plan`, `review-implementation`, `review-specialists`, `reconcile-spec`) | confined agent on the other provider when available; Claude for every role when Codex's own sandbox cannot start inside `bwrap` (checked once at start, recorded in the run) | One entry per required review kind (security always); any `high` or `critical` finding, or a verdict other than `approved`, blocks; a reviewer that edits source blocks. |
+| `checks-implementation`, `checks-fix-N` (`run-checks --feedback`) | trusted `artifacts.py`, confined | The same `[checks]` commands as `run-checks`, as feedback for the fix loop: a failed command is recorded in operator state (`checks-feedback.jsonl`) and reaches the fix step only through the fix input, never as a block; a protected-input change, a tree change or the wall-time limit still blocks. A cycle step with nothing to do writes nothing. |
+| `fix-N` (`speckit.ballast.fix`), `record-fix-N`, `review-fix-N`, `review-specialists-fix-N`, `record-fix-review-N` (`record-decision --point implementation-review --recheck`) | confined agent (skipped by the wrapper unless the run's fix state asks for it), then trusted `artifacts.py` | The fix step changes only code, tests, `tasks.md` and `decisions.md` for the findings and failed checks the fix input lists; `record-fix` counts the cycle only after that step ran and the implementation contract still holds; the recheck records the reviews again, superseding the earlier ones, and sets the next fix state or blocks as `fix-cycle limit (3)`. |
+| Draft retries | the trusted agent wrapper | After an Autonomous agent step, the recorder's own draft checks; a correctable refusal reruns the step with the message, at most twice, each attempt counted. |
 | `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. |
 | Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. It never merges, marks ready, releases or deploys. |
 
@@ -1023,8 +1026,9 @@ configure it. See ADR-0005 in the Ballast repository.
 ## Draft PR
 
 At the end of every `ballast run start`, `resume` or `continue` invocation,
-whether the workflow completed, paused at a gate or failed, and after an
-Autonomous run's own publication, the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
+whether the workflow completed, paused at a gate or failed, after an
+Autonomous run's own publication, and on `ballast run checkpoint RUN_ID` for
+an Autonomous run (which never creates a PR), the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
 feature branch as published on GitHub differs from the default branch outside
 `specs/<feature>/`, exactly one Draft PR shows it. Every later invocation reuses
 that PR, including one a human opened by hand from the same branch.
@@ -1150,10 +1154,11 @@ commit. `run-checks` runs whole suites, so an Autonomous run's packet shows its
 mapped criteria as `not run`. The packet is rebuilt only at a checkpoint, at
 the end of `ballast run start`, `resume` and `continue`, from that run's own
 ledger and records: record checks for a human-gated run under its run ID, then
-resume it. A finished Autonomous run cannot be resumed and `ballast run
-publish` runs no checkpoint, so its packet keeps the states it was published
-with; `ballast run continue` starts a new run whose packet reads only the new
-run's ledger.
+resume it. For an Autonomous run, record checks under its run ID, then
+`ballast run checkpoint RUN_ID` rebuilds the packet and the Draft PR section
+from that run's ledger and records, in any status and without an agent;
+`ballast run publish` runs no checkpoint, and `ballast run continue` starts a
+new run whose packet reads only the new run's ledger.
 
 Optional review sections come from the `[review]` table of `ballast.toml`,
 which agents cannot change (run `ballast trust` after editing it):
