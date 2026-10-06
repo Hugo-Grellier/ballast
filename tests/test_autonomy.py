@@ -1131,6 +1131,19 @@ class ConfinementTests(AutonomyCase):
                     readonly_extra=(outside,),
                 )
 
+    def test_installed_workflow_skills_are_read_only(self) -> None:
+        """#20 SEC-001: git-ignored installed skills cannot be rewritten."""
+        skills = self.root / ".agents/skills"
+        for name in ("ballast-security-review", "speckit-plan", "own-skill"):
+            (skills / name).mkdir(parents=True)
+        argv = self.argv()
+        triples = list(zip(argv, argv[1:], argv[2:], strict=False))
+        for name in ("ballast-security-review", "speckit-plan"):
+            path = str(skills / name)
+            self.assertIn(("--ro-bind", path, path), triples)
+        sources = [argv[i + 1] for i, a in enumerate(argv) if a == "--ro-bind"]
+        self.assertNotIn(str(skills / "own-skill"), sources)
+
 
 def chat_record(case: AutonomyCase, run_id: str = "chat42", **changes: object) -> dict:
     """Return a valid ballast-chat record for FEATURE."""

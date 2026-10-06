@@ -53,6 +53,7 @@ Conversation logs and agent logs stay on the operator's machine and are not part
 ## Wording rules
 
 - The section is rendered from `run.json`, `steps.jsonl`, `events.jsonl` and `human-decisions.jsonl`. The only agent-derived values are paths, IDs and the verdict enum, all passed through `autonomy.neutralize`.
+- Each `gate-approval` row ends with the approval's state: `(current)`, `(stale)` or `(superseded)` by a later decision for the same gate (review finding ENG-003).
 - The text "approved by the operator" is allowed only in the fixed header line and in rows rendered from `gate-approval` human decisions. The Autonomous `HUMAN_APPROVAL` guard stays in force for Autonomous bodies. For a Chat body, the guard is applied to every agent-derived value instead.
 - Carried Autonomous decisions are always labeled `agent-provisional`, even after a human approval supersedes them; the superseding HD is shown next to them (FR-022).
 - The body never contains or links to a conversation log, an agent log or `speckit-runs` content (FR-017).

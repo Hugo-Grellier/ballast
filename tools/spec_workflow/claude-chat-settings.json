@@ -30,6 +30,8 @@
       "Edit(./.github/**)",
       "Edit(./.claude/**)",
       "Edit(./.codex/**)",
+      "Edit(./.agents/skills/ballast-*/**)",
+      "Edit(./.agents/skills/speckit-*/**)",
       "Edit(./.specify/workflows/**)",
       "Edit(./.specify/workflow-state/**)",
       "Edit(./.ballast/**)",
@@ -39,5 +41,19 @@
     ],
     "disableBypassPermissionsMode": "disable",
     "disableAutoMode": "disable"
+  },
+  "disableAllHooks": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$CLAUDE_PROJECT_DIR/.ballast/spec_workflow/chat_hook.py\""
+          }
+        ]
+      }
+    ]
   }
 }

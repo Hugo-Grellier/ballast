@@ -25,6 +25,8 @@ An operator who wants to shape a feature in conversation today works in a plain 
 - An operator can work conversationally with the same preflight, confinement, postconditions, evidence and human approvals as a headless run; the PR states that the run used Chat mode.
 - Chat steps need bwrap with user namespaces and a systemd user session, as Autonomous steps already do.
 - Approvals for plan, tasks, implementation and final are bound to artifact versions, which is stricter than the human-gated engine gates.
+- It amends ADR-0004 in three places: a stopped Autonomous run may continue in Chat as well as human-gated; Chat steps, not only Autonomous ones, run under bwrap; and every confined step now binds the installed workflow skills read-only. It amends ADR-0005 in one: a Chat run linked to a `ballast-feature` run copies that run's pin instead of pinning at start.
+- Implementation reviews added three rules, recorded in the feature's [decisions](../../specs/20-chat-mode/decisions.md): a `PreToolUse` hook denies tool calls outside `dontAsk` (DEC-0001); `final` binds the whole tree and needs every earlier approval current (DEC-0002); and an out-of-scope change blocks later steps until undone (DEC-0003).
 - The runner has a second publication caller and a second ledger report path (Chat events instead of the engine log).
 
 ## Rejected alternatives

@@ -13,7 +13,7 @@ Accepted ADRs and the accepted architecture govern design. A ready feature spec 
 ## Commands
 
 - Install: nothing to install; the tools are stdlib-only. Tests need `pyyaml`, supplied by `uv run --with`.
-- Fast gate: `uvx ruff check && uvx ruff format --check` and `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py`. Full local gate: the same suite on a Linux machine with a systemd user session, the Codex CLI and the Spec Kit CLI, so the four tests CI skips also run.
+- Fast gate: `uvx ruff check && uvx ruff format --check` and `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py`. Full local gate: the same suite on a Linux machine with a systemd user session, the Codex CLI and the Spec Kit CLI, so the tests CI skips (real systemd, `bwrap`, Codex sandbox, Spec Kit CLI) also run.
 - Record exact verification commands and any unavailable gate in the PR. See the [testing policy](docs/policies/testing.md) for evidence requirements.
 
 ## Invariants

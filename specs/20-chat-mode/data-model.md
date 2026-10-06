@@ -92,7 +92,7 @@ Common fields, unchanged: `id`, `prev`, `at`, `by: "operator"`, `kind`, `ref`.
 | `tasks` | `tasks.md` | SHA-256 of normalized text, with every task checkbox read as unchecked: implementing marks tasks done without making the tasks approval stale, while a changed or added task does |
 | `implementation` | worktree | tree digest (`autonomy.tree_digest`, excluding `specs/<f>/reviews/`) |
 | `spec-reconciliation` | `reviews/convergence.md` | SHA-256 of normalized text |
-| `final` | worktree | tree digest (same exclusion) |
+| `final` | worktree | tree digest including `specs/<f>/reviews/` ([DEC-0002](decisions.md)), so a review changed after final approval makes it stale |
 
 ## Mode change (`run.json.mode_history`)
 

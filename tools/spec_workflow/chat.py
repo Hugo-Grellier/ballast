@@ -258,6 +258,12 @@ GATES: dict[str, dict[str, Any]] = {
             ("check", "convergence"),
             ("approval", "spec-reconciliation"),
             ("checks", None),
+            # DEC-0002: every earlier approval must still be current.
+            ("approval", "scope"),
+            ("approval", "intent"),
+            ("approval", "plan"),
+            ("approval", "tasks"),
+            ("approval", "implementation"),
         ],
         "covers": [
             "specify",
@@ -283,6 +289,8 @@ EVENT_KINDS = (
 )
 # Pseudo-checks that are approvals or records, never artifact checks.
 RECORD_CHECKS = ("baseline", "project-checks", "scope")
+# An entry check over earlier write-scope failures (DEC-0003).
+OPEN_VIOLATIONS = "open-write-scope"
 
 
 class Refused(Exception):  # noqa: N818 - a refusal, not an error
@@ -473,6 +481,8 @@ class Lock:
             raise Refused(EXIT_REFUSED, message) from error
         os.ftruncate(self.fd, 0)
         os.pwrite(self.fd, f"{self.holder} (pid {os.getpid()})".encode(), 0)
+        # Read again under the lock: another invocation may have changed it.
+        self.run.record = autonomy.read_run(self.run.root, self.run.id)
         return self
 
     def describe(self, holder: str) -> None:
@@ -601,7 +611,9 @@ def _gate_paths(run: Run, gate: str) -> Callable[[str], bool]:
         "tasks": {f"{feature}/tasks.md"},
         "spec-reconciliation": {f"{feature}/reviews/convergence.md"},
     }
-    if gate in {"implementation", "final"}:
+    if gate == "final":
+        return lambda _path: True
+    if gate == "implementation":
         return lambda path: not path.startswith(f"{feature}/reviews/")
     if gate == "scope":
         return lambda _path: False
@@ -654,7 +666,10 @@ def gate_digest(run: Run, gate: str) -> str | None:
     """Return the digest a gate's approval is bound to now (data-model binding)."""
     if gate == "scope":
         return "sha256:" + _sha(f"{run.issue}\n{run.feature_dir}".encode())
-    if gate in {"implementation", "final"}:
+    if gate == "final":
+        # DEC-0002: reviews/ included, so no review changes after final.
+        return "tree:" + autonomy.tree_digest(run.root, ())
+    if gate == "implementation":
         return "tree:" + run.tree()
     name = {
         "intent": "spec.md",
@@ -738,10 +753,12 @@ CHECKS: dict[str, Callable[[artifacts.Feature], object]] = {
 }
 
 
-def _check(run: Run, name: str) -> tuple[bool, str]:
+def _check(run: Run, name: str) -> tuple[bool, str]:  # noqa: PLR0911 - one branch per check kind
     """Run one check; (passed, detail). Nothing is recorded."""
     if name == "scope":
         return _scope_check(run)
+    if name == OPEN_VIOLATIONS:
+        return _violations_check(run)
     if name == "baseline":
         if run.record.get("baseline"):
             return True, "implementation baseline recorded at tasks approval"
@@ -758,6 +775,31 @@ def _check(run: Run, name: str) -> tuple[bool, str]:
     ) as error:
         return False, str(error)[:DETAIL_LIMIT]
     return True, "passed"
+
+
+def _violations_check(run: Run) -> tuple[bool, str]:
+    """Pass unless a step's out-of-scope change is still in the tree (DEC-0003).
+
+    A path a failed write-scope check named stays open while its content is
+    what that step left; restoring or changing it closes it.
+    """
+    current: dict[str, str] | None = None
+    still: list[str] = []
+    for event in run.events():
+        if event["kind"] != "check" or event.get("check") != "write-scope":
+            continue
+        if event.get("passed"):
+            continue
+        current = manifest(run.root) if current is None else current
+        after = read_manifest(run.dir, event.get("tree"))
+        still += [p for p in event.get("paths", []) if current.get(p) == after.get(p)]
+    if still:
+        paths = ", ".join(sorted(set(still))[:10])
+        return False, (
+            f"a step changed paths outside its write scope: {paths}; "
+            "restore or change them before the next step"
+        )
+    return True, "no open write-scope violation"
 
 
 def _scope_check(run: Run) -> tuple[bool, str]:
@@ -877,9 +919,10 @@ def _requirement(  # noqa: PLR0913 - complexity inherent to one guarded flow
 
 
 def _requirements(phase: str, kind: str | None) -> list[tuple[str, str | None]]:
+    # DEC-0003: an open write-scope violation blocks every step.
     if phase == "review":
-        return list(REVIEW_KINDS[str(kind)]["entry"])
-    return list(PHASES[phase]["entry"])
+        return [*REVIEW_KINDS[str(kind)]["entry"], ("check", OPEN_VIOLATIONS)]
+    return [*PHASES[phase]["entry"], ("check", OPEN_VIOLATIONS)]
 
 
 def entry(
@@ -910,7 +953,8 @@ def gate_precondition(
 ) -> tuple[bool, str | None, str | None, str | None]:
     """Return a gate's precondition now; (passed, failing check, E-id, detail)."""
     humans = run.humans()
-    for item in GATES[gate]["pre"]:
+    extra = [("check", OPEN_VIOLATIONS)] if gate in {"implementation", "final"} else []
+    for item in [*GATES[gate]["pre"], *extra]:
         passed, detail, event_id, name = _requirement(
             run, item, "gate", humans, record=record, memo=memo
         )
@@ -1132,6 +1176,19 @@ def synchronize(
     return outcome
 
 
+def _inherited_pin(run: Run) -> dict[str, str | None]:
+    """Return the source's pin for a continuation that has no pin of its own.
+
+    A continuation whose first synchronization was blocked saved no pin; its
+    next step synchronizes as the continuation did, from the source's pin.
+    """
+    source = run.record.get("continues")
+    if not source or branch_sync.read_pin(run.root, run.id):
+        return {}
+    pin = branch_sync.read_pin(run.root, source)
+    return {"branch": pin.get("branch"), "base": pin.get("base"), "source_run": source}
+
+
 # --- start --mode chat -----------------------------------------------------------
 
 
@@ -1317,13 +1374,15 @@ def start(root: Path, options: list[str]) -> int:
         f"Chat run {run.id}: {feature}, authoring {integration}, review by {review}"
         + ("" if review != integration else " (same provider: reduced independence)")
     )
+    # Recorded before synchronization: a blocked start still has a ledger
+    # run, so its later steps are recorded in a valid ledger.
+    _ledger(run, "run", _archive_definition(run), "runner:run")
     outcome = synchronize(run, starting=True)
     if outcome.outcome == "blocked":
         archive(run)
         return EXIT_INTERRUPTED if outcome.interrupted else EXIT_BLOCKED
     run.record["last_manifest"] = current_manifest(run)
     run.save()
-    _ledger(run, "run", _archive_definition(run), "runner:run")
     _out(summary(run))
     archive(run)
     checkpoint(run)
@@ -1405,7 +1464,12 @@ def late_close(run: Run) -> None:
 
 
 def _first_line(text: str) -> str:
-    return (text.strip().splitlines() or [""])[0][:300]
+    return draft_pr.printable((text.strip().splitlines() or [""])[0][:300])
+
+
+def _safe(text: object) -> str:
+    """Return agent-derived text for the operator's terminal: no control bytes."""
+    return draft_pr.printable(autonomy.neutralize(str(text)))
 
 
 def _postconditions(  # noqa: PLR0913, PLR0917 - one close, every input explicit
@@ -1690,7 +1754,7 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
         rerun = f"ballast run step {run.id} {phase}" + (
             f" --kind {kind}" if kind else ""
         )
-        outcome = synchronize(run, rerun=rerun)
+        outcome = synchronize(run, rerun=rerun, **_inherited_pin(run))
         if outcome.outcome == "blocked":
             raise _refuse(
                 run,
@@ -2097,9 +2161,7 @@ def _mode_history(record: dict) -> str:
     parts = []
     for change in record["mode_history"]:
         extra = f" ({change['decision_id']})" if change.get("decision_id") else ""
-        reason = (
-            f": {autonomy.neutralize(change['reason'])}" if change.get("reason") else ""
-        )
+        reason = f": {_safe(change['reason'])}" if change.get("reason") else ""
         parts.append(
             f"{change['action']} {change['mode']} at {change['at']} "
             f"by {change['by']}{extra}{reason}"
@@ -2205,9 +2267,7 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912, PLR0915 - seven fixed sect
                 else "; the artifact changed since)"
             )
         elif state == "rejected":
-            text = (
-                f"rejected ({decision['id']}: {autonomy.neutralize(decision['ref'])})"
-            )
+            text = f"rejected ({decision['id']}: {_safe(decision['ref'])})"
         else:
             text = "pending"
         lines.append(f"  - {gate}: {text}")
@@ -2236,7 +2296,7 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912, PLR0915 - seven fixed sect
         )
         open_lines.append(
             f"  - {decision['id']} ({decision['point']}, agent-provisional, {state}): "
-            f"{autonomy.neutralize(decision['summary'])}"
+            f"{_safe(decision['summary'])}"
         )
     lines += open_lines or ["  none"]
     lines += ["", "Changes made outside agent steps since the last step:"]
@@ -2295,9 +2355,7 @@ def _autonomous_status(root: Path, record: dict) -> str:
         f"Mode: {autonomy.effective_mode(record)}; history: {_mode_history(record)}",
     ]
     if block:
-        lines.append(
-            f"Block ({block['category']}): {autonomy.neutralize(block['condition'])}"
-        )
+        lines.append(f"Block ({block['category']}): {_safe(block['condition'])}")
     lines += [
         (
             "Provisional decisions: "
@@ -2517,7 +2575,8 @@ def resolve(root: Path, run_id: str, decision: str) -> int:
             )
         digest = artifacts.resolution_digest(body)
         _out(f"{decision} — Resolution:")
-        _out(body.strip())
+        # Agent-written: escape control bytes so the screen shows what is bound.
+        _out("\n".join(draft_pr.printable(line) for line in body.strip().splitlines()))
         _out(f"Digest: {digest}")
         if not _confirm(f"resolve {decision}"):
             _out("Not resolved; nothing was recorded.")
@@ -2769,13 +2828,8 @@ def continue_run(root: Path, source: dict, decision: dict) -> int:
         reason=decision["kind"],
         decision_id=decision["id"],
     )
-    pin = branch_sync.read_pin(root, source["run_id"])
-    outcome = synchronize(
-        run,
-        branch=pin.get("branch"),
-        base=pin.get("base"),
-        source_run=source["run_id"],
-    )
+    _ledger(run, "run", _archive_definition(run), "runner:run")
+    outcome = synchronize(run, **_inherited_pin(run))
     _out(
         f"Recorded {decision['id']} ({decision['kind']}); "
         f"run {source['run_id']} is lowered "
@@ -2788,7 +2842,6 @@ def continue_run(root: Path, source: dict, decision: dict) -> int:
         return EXIT_INTERRUPTED if outcome.interrupted else EXIT_BLOCKED
     run.record["last_manifest"] = current_manifest(run)
     run.save()
-    _ledger(run, "run", _archive_definition(run), "runner:run")
     _out(summary(run))
     archive(run)
     return EXIT_OK
@@ -2797,8 +2850,8 @@ def continue_run(root: Path, source: dict, decision: dict) -> int:
 # --- publish -------------------------------------------------------------------------
 
 
-CHAT_BEGIN = "<!-- ballast:chat:begin -->"
-CHAT_END = "<!-- ballast:chat:end -->"
+CHAT_BEGIN = autonomy.CHAT_BEGIN
+CHAT_END = autonomy.CHAT_END
 LOGS_LOCAL = (
     "Conversation logs and agent logs stay on the operator's machine and are not "
     "part of this PR."
@@ -2891,9 +2944,13 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
         "| Gate | Artifact | Digest | Decision | Approved at |",
         "| --- | --- | --- | --- | --- |",
     ]
+    states = {gate: approval_state(run, gate, humans) for gate in GATES}
     for entry in humans:
         if entry["kind"] == "gate-approval":
-            decision = f"{entry['id']} approved by the operator"
+            # ENG-003: say whether this approval is the gate's current one.
+            state, latest = states[entry["gate"]]
+            currency = state if latest and latest["id"] == entry["id"] else "superseded"
+            decision = f"{entry['id']} approved by the operator ({currency})"
         elif entry["kind"] == "gate-rejection":
             decision = f"{entry['id']} rejected: {autonomy.neutralize(entry['ref'])}"
         else:
@@ -3013,9 +3070,10 @@ def publish(root: Path, run_id: str) -> int:
                 f"the final approval is {state}; approve final first",
                 EXIT_REFUSED,
             )
-        passed, detail = _check(run, "project-checks")
+        passed, failing, event_id, detail = gate_precondition(run, "final")
         if not passed:
-            raise _refuse(run, "publish", detail, EXIT_REFUSED)
+            reason = f"final precondition failed: {failing} ({event_id}): {detail}"
+            raise _refuse(run, "publish", reason, EXIT_REFUSED)
         result = autonomy.publish(root, run.id)
         if not result["ok"]:
             _err(f"ballast: publish failed ({result['category']}): {result['message']}")

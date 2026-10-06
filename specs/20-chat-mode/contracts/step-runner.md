@@ -45,7 +45,9 @@ The prompt precedes the tool lists, which are variadic and would otherwise take 
 - every `allow` and `deny` rule of the shipped `claude-settings.json`;
 - `Edit(./**)` and `Write(./**)` in `allow`;
 - `permissions.disableBypassPermissionsMode: "disable"`;
-- `permissions.disableAutoMode: "disable"`.
+- `permissions.disableAutoMode: "disable"`;
+- deny rules for the installed `.agents/skills/ballast-*` and `speckit-*` skills;
+- `disableAllHooks: false` and a `PreToolUse` hook (`chat_hook.py`, installed in `.ballast/spec_workflow/`) that blocks every tool call unless the session's `permission_mode` is `dontAsk`. Leaving `dontAsk` with Shift+Tab therefore never leads to a permission prompt ([DEC-0001](../decisions.md)).
 
 `tools/setup` merges the project's `[agents.permissions]` rules into the installed `claude-settings.json` only. So before the protected-state snapshot, the step writes its own settings file in its log directory, which the agent sees read-only. That file holds the allow and deny rules of the installed `claude-settings.json`, project rules included, followed by those of `claude-chat-settings.json` (`agent.chat_settings`). A test keeps the deny list a superset of the installed headless settings, project rules included.
 
@@ -61,13 +63,13 @@ codex --sandbox workspace-write --ask-for-approval never \
 
 - Any token containing a `FORBIDDEN` marker is refused before launch.
 - The environment is `autonomy.confined_env`, plus `PYTHONPYCACHEPREFIX`, plus `guard/git` first on `PATH` with `BALLAST_GIT`.
-- The bwrap binds are those of an Autonomous step. In addition, `<root>/.claude` and `<root>/.codex` are bound read-only when they exist.
+- The bwrap binds are those of an Autonomous step, which bind the installed `.agents/skills/ballast-*` and `speckit-*` directories read-only (review finding SEC-001). In addition, `<root>/.claude` and `<root>/.codex` are bound read-only when they exist.
 
 ## Terminal
 
 - **Pty**: the runner opens a pty (`os.openpty`). Its child calls `setsid()`, makes the slave its controlling terminal (`TIOCSCTTY`), duplicates the slave onto fds 0–2, closes every other descriptor, and executes the argv above. The parent never passes the operator's terminal descriptor to the child.
 - **`--new-session`**: omitted only for this argv and only in this case. `confined_argv(..., interactive_pty=True)` is the only way to omit it, and `chat.run_step` is the only caller that passes `True`.
-- **Relay**: the parent puts the operator's terminal in raw mode, saves its attributes, and restores them on every exit path (`finally`, signal handlers). It relays stdin to the pty master and the pty master to stdout, and writes the pty output to `stdout.log`. On `SIGWINCH` it copies the window size to the pty (`TIOCSWINSZ`).
+- **Relay**: the parent puts the operator's terminal in raw mode, saves its attributes, and restores them on every exit path (`finally`, signal handlers). It relays stdin to the pty master and the pty master to stdout, and writes the pty output to `stdout.log`. On `SIGWINCH` it copies the window size to the pty (`TIOCSWINSZ`). When the session ends it writes a fixed reset sequence (alternate screen off, mouse, focus and bracketed-paste reports off, cursor shown, normal keypad, default colors) and restores the attributes with `TCSAFLUSH`, discarding input the shell has not read yet (review finding SEC-006).
 - **No terminal**: if stdin or stdout of `ballast run step` is not a TTY in `chat` mode, the step is refused with "Chat steps need a terminal; use `ballast run mode RUN human-gated` for headless steps".
 
 ## Log and `meta.json`

@@ -2,6 +2,8 @@
 
 The trusted runner evaluates each entry condition and precondition **when it is requested**, and records each evaluation as a `check` event ([data-model.md](../data-model.md)). Check names are the existing `artifacts.py` checks. A Chat run evaluates them with the run's feature and operator record. "Current" means the human decision's bound digest equals the artifact's digest now.
 
+Every phase entry, and the `implementation` and `final` preconditions, also run `open-write-scope`: it fails while a path that an earlier step changed outside its write scope still holds what that step left ([DEC-0003](../decisions.md)).
+
 Identifiers reuse `ballast-feature` step and gate IDs (`templates/spec-kit/workflows/feature/workflow.yml`), so the ledger reports both kinds of run against one definition.
 
 ## Phases
@@ -43,7 +45,7 @@ Verdict enum: `approved`, `changes-requested` (plan and implementation kinds), `
 | `tasks` | `review-tasks` | `tasks`, `intent` and `plan` approvals current | `tasks.md` |
 | `implementation` | `review-implementation` | `implementation`, `tasks` approval current | tree |
 | `spec-reconciliation` | `spec-reconciliation` | `convergence` (`- Verdict: CONVERGED`) | `reviews/convergence.md` |
-| `final` | `final-acceptance` | `convergence`, `spec-reconciliation` approval current, project checks passed or `unavailable` for the current tree | tree |
+| `final` | `final-acceptance` | `convergence`, `spec-reconciliation` approval current, project checks passed or `unavailable` for the current tree, every earlier gate approval current and no open write-scope violation ([DEC-0002](../decisions.md), [DEC-0003](../decisions.md)) | tree, `reviews/` included |
 
 `reject` has the same precondition. A rejection keeps the gate closed until a later approval at a current digest.
 
@@ -54,7 +56,7 @@ Verdict enum: `approved`, `changes-requested` (plan and implementation kinds), `
 1. every phase whose entry condition passes now;
 2. every gate whose precondition passes and that is not approved at a current digest;
 3. `checks` when `implementation` passes;
-4. `publish` when `final` is current;
+4. `publish` when `final` is current and its precondition still passes ([DEC-0002](../decisions.md));
 5. `mode`.
 
 A phase or gate missing from the list is refused when requested, and the refusal names the first failing check and its `E-NNNN`.

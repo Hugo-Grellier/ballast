@@ -137,6 +137,21 @@ def real_git() -> str:
 REAL_GIT = real_git()
 
 
+def _user_systemd() -> bool:
+    """Return whether a systemd user manager answers (real scope tests)."""
+    try:
+        return (
+            subprocess.run(
+                ["systemctl", "--user", "show", "--property=Version"],  # noqa: S607
+                capture_output=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
 class TTY(io.StringIO):
     """A text stream that says it is a terminal (in-process approvals)."""
 
@@ -724,10 +739,17 @@ class PhaseGraphTests(ChatCase):
         self.assertIsNone(chat.gate_digest(run, "tasks"))
         tree = autonomy.tree_digest(self.root, (f"{FEATURE}/reviews",))
         self.assertEqual(chat.gate_digest(run, "implementation"), "tree:" + tree)
-        self.assertEqual(chat.gate_digest(run, "final"), "tree:" + tree)
+        # DEC-0002: final binds the whole tree, reviews included.
+        whole = autonomy.tree_digest(self.root, ())
+        self.assertEqual(chat.gate_digest(run, "final"), "tree:" + whole)
         self.feature_file("reviews/convergence.md", CONVERGED)
         run.changed()
-        self.assertEqual(chat.gate_digest(run, "final"), "tree:" + tree)
+        self.assertEqual(chat.gate_digest(run, "implementation"), "tree:" + tree)
+        self.assertNotEqual(chat.gate_digest(run, "final"), "tree:" + whole)
+        self.assertEqual(
+            chat.gate_digest(run, "final"),
+            "tree:" + autonomy.tree_digest(self.root, ()),
+        )
         self.assertEqual(
             chat.gate_digest(run, "spec-reconciliation"),
             artifacts.spec_digest(CONVERGED),
@@ -1114,7 +1136,8 @@ class StartTests(ChatCase):
         (sync,) = self.events_of(run_id, "sync")
         self.assertEqual((sync["outcome"], sync["cause"]), ("blocked", "dirty"))
         self.assertFalse(self.agent_ran())
-        self.assertNotIn("run", {e["kind"] for e in self.ledger(run_id)})
+        # ENG-004: the run is in the ledger before synchronization.
+        self.assertIn("run", {e["kind"] for e in self.ledger(run_id)})
 
 
 class StepEntryTests(ChatCase):
@@ -1335,6 +1358,76 @@ class StepEntryTests(ChatCase):
         (ran,) = [r for r in report["results"] if r[0] == "run"]
         self.assertNotEqual(ran[2], 0)
 
+    def test_chat_settings_deny_prompts_outside_dont_ask(self) -> None:
+        """#20 SEC-003, DEC-0001: a PreToolUse hook blocks every other mode."""
+        settings = agent.chat_settings()
+        self.assertIn(("disableAllHooks", False), settings.items())
+        (matcher,) = settings["hooks"]["PreToolUse"]
+        self.assertEqual(matcher["matcher"], "*")
+        (hook,) = matcher["hooks"]
+        self.assertTrue(
+            hook["command"].endswith('.ballast/spec_workflow/chat_hook.py"')
+        )
+        self.assertIn(
+            "Edit(./.agents/skills/ballast-*/**)", settings["permissions"]["deny"]
+        )
+        script = self.root / ".ballast/spec_workflow/chat_hook.py"
+        for stdin, code in (
+            ('{"permission_mode": "dontAsk", "tool_name": "Bash"}', 0),
+            ('{"permission_mode": "default", "tool_name": "Bash"}', 2),
+            ('{"permission_mode": "acceptEdits"}', 2),
+            ('{"tool_name": "Bash"}', 2),
+            ("not json", 2),
+        ):
+            with self.subTest(stdin=stdin):
+                done = subprocess.run(  # noqa: S603 - the installed hook
+                    [sys.executable, "-I", "-S", str(script)],
+                    input=stdin,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(done.returncode, code, done.stderr)
+                if code:
+                    self.assertIn("Shift+Tab", done.stderr)
+
+    @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
+    def test_real_bwrap_keeps_installed_skills_read_only(self) -> None:
+        """#20 SEC-001: through .agents and through the .claude/skills link."""
+        skill = self.root / ".agents/skills/ballast-security-review"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("review\n")
+        (self.root / ".claude/skills").mkdir(parents=True)
+        (self.root / ".claude/skills/ballast-security-review").symlink_to(
+            "../../.agents/skills/ballast-security-review"
+        )
+        with (self.root / ".gitignore").open("a") as ignore:
+            ignore.write(".agents/\n.claude/\n")
+        self.commit_all("ignore installed skills")
+        self.trust()
+        self.real_bwrap()
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        targets = [
+            str(skill / "SKILL.md"),
+            str(self.root / ".claude/skills/ballast-security-review/SKILL.md"),
+        ]
+        result = self.step(
+            run_id,
+            "specify",
+            [
+                ["write", f"{FEATURE}/spec.md", SPEC],
+                *(["try_write", target] for target in targets),
+            ],
+        )
+        self.assertEqual(result.code, 0, result.text)
+        outcomes = {
+            r[1]: r[2] for r in self.fake_report()["results"] if r[0] == "try_write"
+        }
+        for target in targets:
+            self.assertNotEqual(outcomes[target], "ok", target)
+        self.assertEqual((skill / "SKILL.md").read_text(), "review\n")
+
 
 class TerminalTests(ChatCase):
     """T026 [AC-003, FR-005, D-3, R3a]: the wrapper-owned pty."""
@@ -1418,6 +1511,20 @@ class TerminalTests(ChatCase):
         self.assertFalse(self.agent_ran())
         refusal = self.events_of(run_id, "refusal")[-1]
         self.assertEqual(refusal["reason"], chat.NO_TERMINAL)
+
+    def test_terminal_modes_the_agent_left_on_are_reset(self) -> None:
+        """#20 SEC-006: mouse reporting left on by the agent is switched off."""
+        run_id = self.started()
+        result = self.step(
+            run_id,
+            "specify",
+            [["write", f"{FEATURE}/spec.md", SPEC], ["print", "\x1b[?1000hmouse on"]],
+        )
+        self.assertEqual(result.code, 0, result.text)
+        reset = agent.TERMINAL_RESET.decode()
+        self.assertIn("\x1b[?1000l", reset)
+        self.assertGreater(result.text.find(reset), result.text.find("mouse on"))
+        self.assertEqual(result.before, result.after)
 
 
 class StepCloseTests(ChatCase):
@@ -1676,6 +1783,60 @@ class StepCloseTests(ChatCase):
         self.assertTrue((moved / "meta.json").exists())
         self.assertFalse(list((self.bin / "decoy").iterdir()))
         self.assertEqual(self.record(run_id).steps[-1]["outcome"], "tampered")
+
+    @unittest.skipUnless(
+        _bwrap_works() and _user_systemd(), "needs bwrap and a systemd user manager"
+    )
+    def test_real_scope_and_bwrap_step_is_confirmed_stopped(self) -> None:
+        """#20 TST-004: an interactive step under real systemd-run and bwrap."""
+        for name in ("systemd-run", "systemctl"):
+            (self.bin / name).unlink()
+        self.real_bwrap()
+        run_id = self.started()
+        result = self.step(
+            run_id,
+            "specify",
+            [["write", f"{FEATURE}/spec.md", SPEC], ["run", ["sleep", "60"]]],
+            keys=(("sleep", 3), ("send", b"\x1d\x1d")),
+        )
+        self.assertEqual(result.code, 130, result.text)
+        close = self.record(run_id).steps[-1]
+        self.assertEqual(
+            (close["outcome"], close["scope_stopped"]), ("interrupted", True)
+        )
+        start = self.record(run_id).steps[-2]
+        unit = f"ballast-agent-{run_id}-{start['step']}.scope"
+        active = subprocess.run(  # noqa: S603
+            ["systemctl", "--user", "is-active", unit],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(active.stdout.strip(), "active")
+        self.assertFalse(
+            (launcher.state_dir(self.root) / launcher.IN_PROGRESS).exists()
+        )
+
+    def test_open_write_scope_violation_blocks_until_restored(self) -> None:
+        """#20 SEC-002, DEC-0003: the change stays a failure until it is undone."""
+        run_id = self.started()
+        self.step(
+            run_id,
+            "specify",
+            [["write", f"{FEATURE}/spec.md", SPEC], ["write", "tools/x.py", "x = 1\n"]],
+        )
+        blocked = self.step(run_id, "clarify", [["write", f"{FEATURE}/spec.md", SPEC]])
+        self.assertEqual(blocked.code, 1, blocked.text)
+        self.assertIn("open-write-scope", blocked.text)
+        self.assertIn("tools/x.py", blocked.text)
+        self.assertFalse(self.agent_ran())
+        run = self.chat_run(run_id)
+        self.assertFalse(chat.gate_precondition(run, "final", record=False)[0])
+        status = self.call(chat.status, self.root, run_id)
+        self.assertIn("open-write-scope", status.out)
+        (self.root / "tools/x.py").unlink()
+        done = self.step(run_id, "clarify", [["write", f"{FEATURE}/spec.md", SPEC]])
+        self.assertEqual(done.code, 0, done.text)
 
 
 AT = "2026-10-06T10:00:00+00:00"
@@ -2233,6 +2394,14 @@ class ForgeryTests(ChatCase):
                 ]
             ],
             "launcher approve": [["run", approve_cmd]],
+            # TST-002: the agent tries to change the mode or open a refused step.
+            "launcher mode": [
+                [
+                    "run",
+                    [*approve_cmd[:4], "mode", run_id, "human-gated", "--reason", "x"],
+                ]
+            ],
+            "launcher step": [["run", [*approve_cmd[:4], "step", run_id, "tasks"]]],
         }
 
         def opened(run: chat.Run) -> set[str]:
@@ -2253,6 +2422,15 @@ class ForgeryTests(ChatCase):
                 history = run.record["mode_history"]
                 approvals = [h for h in run.humans() if h["kind"] == "gate-approval"]
                 self.step(run_id, "plan", actions)
+                # TST-001: the attempt really ran, and left no marker behind.
+                self.assertTrue(self.agent_ran(), name)
+                for action in actions:
+                    if action[0] in {"append", "write"}:
+                        self.assertIn(action[2], (self.root / action[1]).read_text())
+                self.assertFalse(
+                    (launcher.state_dir(self.root) / launcher.IN_PROGRESS).exists()
+                )
+                self.assertFalse((self.root / launcher.TAMPER_MARKER).exists())
                 run = self.chat_run(run_id)
                 self.assertEqual(
                     [h for h in run.humans() if h["kind"] == "gate-approval"], approvals
@@ -2276,10 +2454,11 @@ class ForgeryTests(ChatCase):
                         "unresolved decisions: DEC-0001",
                         chat._check(run, "decisions")[1],  # noqa: SLF001
                     )
-                if name == "launcher approve":
+                if name.startswith("launcher"):
                     (ran,) = [r for r in self.fake_report()["results"] if r[0] == "run"]
                     self.assertEqual(ran[2], 2)
                     self.assertIn("an agent step is active", ran[3])
+                    self.assertEqual(run.mode, "chat")
                 # The operator restores the checkout between attempts.
                 self.git("checkout", "--", ".")
                 self.git("clean", "-fdq", FEATURE)
@@ -2488,6 +2667,23 @@ class ResolutionTests(ChatCase):
             self.call(chat.status, self.root, run_id)
             self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
         self.assertFalse(autonomy.read_decisions(self.root, run_id))
+
+    def test_resolution_text_is_shown_without_control_bytes(self) -> None:
+        """#20 SEC-005: an agent-written escape cannot hide what is confirmed."""
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        self.feature_file(
+            "decisions.md",
+            "# Decisions\n\n## DEC-0001 — Proposal\n\nKeep the flag?\n\n"
+            "## DEC-0001 — Resolution\n\nKeep it.\x1b[8m Also drop the tests.\n",
+        )
+        result = self.call(
+            chat.resolve, self.root, run_id, "DEC-0001", typed="resolve DEC-0001\n"
+        )
+        self.assertEqual(result.code, 0, result.text)
+        self.assertNotIn("\x1b", result.out)
+        self.assertIn("Keep it.\\x1b[8m Also drop the tests.", result.out)
+        self.assertNotIn("\x1b", chat._first_line("bad \x1b]52;c;x\x07"))  # noqa: SLF001
 
 
 class ReturnPreflightTests(ChatCase):
@@ -3042,6 +3238,8 @@ class ProjectChecksTests(ChatCase):
         self.assertEqual(refused.code, 1)
         self.assertIn("ran on another tree", refused.text)
         self.assertEqual(self.call(chat.checks, self.root, run_id).code, 0)
+        # DEC-0002: the edit also made the implementation approval stale.
+        self.approve_in_process(run_id, "implementation")
         self.approve_in_process(run_id, "final")
         self.assertEqual(self.record(run_id).run["status"], "completed")
         self.edit("src/demo.py", "print('after final')\n")
@@ -3267,6 +3465,40 @@ class PublishTests(ChatCase):
             chat.publish_section(self.root, autonomy.read_run(self.root, run_id))
         self.assertEqual(chat._agent_value("a|b <c>"), "a\\|b &lt;c&gt;")  # noqa: SLF001
 
+    def test_a_review_changed_after_final_approval_blocks_publish(self) -> None:
+        """#20 ENG-002, SEC-004, DEC-0002: final binds the reviews too."""
+        run_id = self.start()
+        self.through_final(run_id)
+        section = chat.publish_section(self.root, autonomy.read_run(self.root, run_id))
+        self.assertIn("approved by the operator (current)", section)
+        self.feature_file(
+            "reviews/convergence.md", "# Reconciliation\n\n- Verdict: FAILED\n"
+        )
+        run = self.chat_run(run_id)
+        self.assertEqual(chat.approval_state(run, "final")[0], "stale")
+        result = self.ballast("run", "publish", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn("final approval is stale", result.text)
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
+
+    def test_final_needs_every_earlier_approval_current(self) -> None:
+        """#20 ENG-003, DEC-0002: a stale plan approval keeps final closed."""
+        run_id = self.start()
+        self.through_tasks(run_id)
+        self.feature_file("plan.md", PLAN + "\nA later change.\n")
+        self.feature_file("tasks.md", DONE_TASKS)
+        self.edit("src/demo.py", "print('demo')\n")
+        self.approve_in_process(run_id, "implementation")
+        self.feature_file("reviews/convergence.md", CONVERGED)
+        self.approve_in_process(run_id, "spec-reconciliation")
+        self.assertEqual(self.call(chat.checks, self.root, run_id).code, 0)
+        result = self.call(
+            chat.approve, self.root, run_id, "final", typed="approve final\n"
+        )
+        self.assertEqual(result.code, 1, result.text)
+        self.assertIn("plan-approval", result.text)
+        self.assertNotEqual(self.record(run_id).humans[-1]["gate"], "final")
+
 
 class ModeSwitchTests(ChatCase):
     """T060 [AC-018 to AC-021, FR-020, FR-022, SC-005, D-5]: mode switches."""
@@ -3375,6 +3607,7 @@ class ModeSwitchTests(ChatCase):
         run = self.chat_run(run_id)
         self.assertEqual(chat.approval_state(run, "intent")[0], "current")
         self.assertEqual(chat.approval_state(run, "plan")[0], "pending")
+        self.assertEqual(chat.approval_state(run, "tasks")[0], "pending")  # TST-003
         self.assertEqual(
             branch_sync.read_pin(self.root, run_id)["branch"], "27-demo-run"
         )
@@ -3535,3 +3768,64 @@ class ContinueTests(ChatCase):
         self.assertEqual(result.code, 2)
         self.assertIn("never raised", result.err)
         self.assertEqual(autonomy.read_run(self.root, source)["status"], "stopped")
+
+    def test_blocked_continuation_is_recovered_by_the_next_step(self) -> None:
+        """#20 ENG-001, ENG-004: a blocked continuation is not a dead end."""
+        source = self.stopped_autonomous()
+        self.advance_base({"base.txt": "b\n"})
+        self.edit("README.md", "dirty\n")
+        result = self.ballast(
+            "run",
+            "continue",
+            source,
+            "--reason",
+            "block-resolved",
+            "--ref",
+            "x",
+            "--mode",
+            "chat",
+        )
+        self.assertEqual(result.code, 1, result.text)
+        self.assertIn("BLOCKED_UPSTREAM_SYNC (dirty)", result.text)
+        (run_id,) = self.run_ids()
+        self.assertEqual(branch_sync.read_pin(self.root, run_id), {})
+        self.assertIn("run", {e["kind"] for e in self.ledger(run_id)})
+        self.git("checkout", "--", "README.md")
+        self.commit_all("lowered record")  # the recovery the block names
+        step = self.step(run_id, "clarify", [["write", f"{FEATURE}/spec.md", SPEC]])
+        self.assertEqual(step.code, 0, step.text)
+        self.assertEqual(
+            branch_sync.read_pin(self.root, run_id)["branch"], "27-demo-run"
+        )
+        self.assertTrue(self.ledger(run_id))
+
+    def test_lowering_keeps_failures_and_open_decisions(self) -> None:
+        """#20 TST-003, SC-005: autonomous -> chat hides no failure or decision."""
+        source = self.stopped_autonomous()
+        self.feature_file("plan.md", "# Plan\n\n[NEEDS CLARIFICATION: scope]\n")
+        self.feature_file(
+            "decisions.md", "# Decisions\n\n## DEC-0001 — Proposal\n\nKeep?\n"
+        )
+        self.commit_all("failed plan, open decision")
+        result = self.ballast(
+            "run",
+            "continue",
+            source,
+            "--reason",
+            "block-resolved",
+            "--ref",
+            "x",
+            "--mode",
+            "chat",
+        )
+        self.assertEqual(result.code, 0, result.text)
+        (run_id,) = self.run_ids()
+        self.approve_in_process(run_id, "scope")
+        self.approve_in_process(run_id, "intent")
+        run = self.chat_run(run_id)
+        self.assertEqual(chat.entry(run, "tasks", record=False)[1], "plan")
+        self.assertFalse(chat.gate_precondition(run, "plan", record=False)[0])
+        status = self.call(chat.status, self.root, run_id)
+        self.assertIn(
+            "DEC-0001: proposal without a current human resolution", status.out
+        )

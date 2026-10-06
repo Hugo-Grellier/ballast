@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
 
 # Never read or write checkout bytecode, including for the import below.
@@ -1505,6 +1506,23 @@ def agent_homes(home: Path, env: dict[str, str]) -> list[Path]:
     return [claude, codex, home / ".cache"]
 
 
+def _installed_skill_binds(root: Path) -> list[str]:
+    """Bind the installed workflow skills read-only (#20 SEC-001).
+
+    `tools/setup` installs them git-ignored under `.agents/skills/` (and links
+    `.claude/skills/` to them), so no tree check sees an edit: a step could
+    otherwise rewrite the instructions a later review step follows.
+    """
+    skills = root / ".agents" / "skills"
+    if not skills.is_dir() or skills.is_symlink():
+        return []
+    args: list[str] = []
+    for path in sorted(skills.iterdir()):
+        if path.name.startswith(("ballast-", "speckit-")) and not path.is_symlink():
+            args += ["--ro-bind", str(path), str(path)]
+    return args
+
+
 def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
     args = ["--bind", str(root), str(root)]
     for name in PROTECTED:
@@ -1676,6 +1694,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         args += ["--bind", str(copy), str(settings)]
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature)
+    args += _installed_skill_binds(root)
     args += extra
     for path in hidden:
         args += ["--remount-ro", str(path)]
@@ -2573,7 +2592,57 @@ def _protected_path(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in PROTECTED)
 
 
-def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
+def _publication_target(
+    root: Path, run: dict, adoptable: Callable[[object, str, str], object]
+) -> tuple:
+    """Check the branch, its pin and origin, and find the one PR to reuse.
+
+    Shared by the Autonomous and Chat publishers. Returns (repo, default
+    branch, branch, push URL, adopted PR or None, its current state or None);
+    a refusal raises a `postcondition` AutonomyError.
+    """
+    repo, default_branch = repository(root, "forge")
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if branch in {"", "HEAD", default_branch}:
+        raise AutonomyError(BRANCH_REFUSAL, "postcondition")
+    if run["workflow"] == CHAT:
+        pinned = _trusted()._branch_pin(root, run["run_id"])  # noqa: SLF001
+        if pinned is not None and pinned != branch:
+            message = f"HEAD is {branch}, not the pinned {pinned}"
+            raise AutonomyError(message, "postcondition")
+    if not _origin_is(root, repo):
+        raise AutonomyError(ORIGIN_REFUSAL, "postcondition")
+    push_url = _push_url(root, repo)
+    prs = _gh(
+        root,
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,url,body,isCrossRepository,headRepository,headRepositoryOwner",
+        category="forge",
+    )
+    adopted = adoptable(prs, run["feature"], repo)
+    if prs and adopted is None:
+        message = f"{BRANCH_REFUSAL}; reuse is #17"
+        raise AutonomyError(message, "postcondition")
+    current = None
+    if adopted is not None:
+        # The list entry carries no base or draft state: read the PR back.
+        current = _read_pr(root, repo, adopted[0])
+        problem = _pr_problem(current, repo, default_branch, branch)
+        if problem:
+            message = f"{BRANCH_REFUSAL}; PR #{adopted[0]} {problem}; reuse is #17"
+            raise AutonomyError(message, "postcondition")
+    return repo, default_branch, branch, push_url, adopted, current
+
+
+def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
     """Commit, push and open one Draft PR as the operator.
 
     Returns {"ok": bool, "category": str|None, "message": str, "url": str|None}.
@@ -2598,39 +2667,9 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
         reasons = risk_reasons(run["risk"]["level"], run["risk"]["boundaries"], policy)
         if reasons:
             return refuse("ineligible", reasons[0])
-        repo, default_branch = repository(root, "forge")
-        branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        if branch in {"", "HEAD", default_branch}:
-            return refuse("postcondition", BRANCH_REFUSAL)
-        if not _origin_is(root, repo):
-            return refuse("postcondition", ORIGIN_REFUSAL)
-        push_url = _push_url(root, repo)
-        prs = _gh(
-            root,
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--head",
-            branch,
-            "--state",
-            "open",
-            "--json",
-            "number,url,body,isCrossRepository,headRepository,headRepositoryOwner",
-            category="forge",
+        repo, default_branch, branch, push_url, adopted, current = _publication_target(
+            root, run, _adoptable
         )
-        adopted = _adoptable(prs, run["feature"], repo)
-        if prs and adopted is None:
-            return refuse("postcondition", f"{BRANCH_REFUSAL}; reuse is #17")
-        if adopted is not None:
-            # The list entry carries no base or draft state: read the PR back.
-            current = _read_pr(root, repo, adopted[0])
-            problem = _pr_problem(current, repo, default_branch, branch)
-            if problem:
-                return refuse(
-                    "postcondition",
-                    f"{BRANCH_REFUSAL}; PR #{adopted[0]} {problem}; reuse is #17",
-                )
         checked = run.get("checked_tree")
         if not checked or checked_digest(root, run["feature"]) != checked:
             return refuse(
@@ -2718,7 +2757,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
     return {"ok": True, "category": None, "message": "published", "url": url}
 
 
-def _publish_chat(root: Path, run: dict) -> dict:  # noqa: C901, PLR0911, PLR0912 - one guarded publication
+def _publish_chat(root: Path, run: dict) -> dict:
     """Publish a Chat run (#20 D-6): the Autonomous commit, push and PR path.
 
     `chat.publish` has already checked that the final human approval and the
@@ -2726,6 +2765,11 @@ def _publish_chat(root: Path, run: dict) -> dict:  # noqa: C901, PLR0911, PLR091
     from operator records only (`chat.publish_section`); its fixed wording
     names the operator's approvals, and every agent-derived value is guarded
     there instead of by the Autonomous `HUMAN_APPROVAL` body guard.
+
+    There is no allowed-path list or start-time Git configuration snapshot as
+    in Autonomous: the operator edits the checkout between steps, so the
+    publishable tree is the one the current final approval is bound to, and
+    `program_findings` still refuses any configured hook, filter or driver.
     """
     import chat  # noqa: PLC0415 - chat imports this module
 
@@ -2733,41 +2777,9 @@ def _publish_chat(root: Path, run: dict) -> dict:  # noqa: C901, PLR0911, PLR091
         return {"ok": False, "category": category, "message": message, "url": None}
 
     try:
-        repo, default_branch = repository(root, "forge")
-        branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        if branch in {"", "HEAD", default_branch}:
-            return refuse("postcondition", BRANCH_REFUSAL)
-        pinned = _trusted()._branch_pin(root, run["run_id"])  # noqa: SLF001
-        if pinned is not None and pinned != branch:
-            return refuse("postcondition", f"HEAD is {branch}, not the pinned {pinned}")
-        if not _origin_is(root, repo):
-            return refuse("postcondition", ORIGIN_REFUSAL)
-        push_url = _push_url(root, repo)
-        prs = _gh(
-            root,
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--head",
-            branch,
-            "--state",
-            "open",
-            "--json",
-            "number,url,body,isCrossRepository,headRepository,headRepositoryOwner",
-            category="forge",
+        repo, default_branch, branch, push_url, adopted, current = _publication_target(
+            root, run, _adoptable_chat
         )
-        adopted = _adoptable_chat(prs, run["feature"], repo)
-        if prs and adopted is None:
-            return refuse("postcondition", f"{BRANCH_REFUSAL}; reuse is #17")
-        if adopted is not None:
-            current = _read_pr(root, repo, adopted[0])
-            problem = _pr_problem(current, repo, default_branch, branch)
-            if problem:
-                return refuse(
-                    "postcondition",
-                    f"{BRANCH_REFUSAL}; PR #{adopted[0]} {problem}; reuse is #17",
-                )
         findings = program_findings(root) + [
             f"attribute driver {d} is configured" for d in attribute_drivers(root)
         ]

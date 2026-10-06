@@ -615,7 +615,11 @@ dontAsk` (or `codex --ask-for-approval never`) with the headless permission
 rules, inside the same bubblewrap confinement and systemd scope as an Autonomous
 step, plus read-only `.claude/` and `.codex/` in the checkout: anything the rules
 do not allow is denied without a prompt, and nothing granted inside the session
-gets past bubblewrap. `bwrap` with user namespaces is therefore a Chat
+gets past bubblewrap. If a Claude session leaves `dontAsk` (Shift+Tab), a hook
+denies every tool call until it is back, so no step ever asks for a permission.
+Codex has no such hook: an operator's own `/approvals` in a Codex step can widen
+that session up to the bubblewrap bound, so leave it at `never`.
+The installed workflow skills are read-only for every confined step. `bwrap` with user namespaces is therefore a Chat
 prerequisite; an integration that cannot run confined (for example Codex when its
 own sandbox cannot start inside `bwrap`) is refused for Chat and the other one is
 named. The agent's terminal is a pty the wrapper owns; press `Ctrl-]` twice to
@@ -627,7 +631,10 @@ confirms them stopped, and the next invocation closes the step as interrupted.
 **Human approvals only through `ballast run approve`.** Nothing an agent writes,
 prints or says opens a gate, records a passing check, resolves a decision or
 changes the mode: approvals exist only as operator commands from a terminal,
-refused while a step is active. Chat asks for every human approval the
+refused while a step is active. `final` is bound to the whole tree, reviews
+included, and needs every earlier approval current; `publish` checks it again.
+A change a step made outside its write scope blocks every later step until the
+operator restores or changes it. Chat asks for every human approval the
 human-gated mode asks for and never records an agent-provisional decision. A
 continued Autonomous run's provisional decisions stay labeled agent-provisional,
 in its record and in the Draft PR, even after a Chat approval supersedes them.

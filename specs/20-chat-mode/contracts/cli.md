@@ -15,9 +15,9 @@ ballast run start --mode chat -i feature_directory=specs/N-slug \
 - It refuses unless exactly one valid `feature_directory` is given (the existing human-gated rule), the Chat integration can run confined (bwrap self-test, and for Codex the nested-sandbox probe), and no other Chat run in this checkout has an active step.
 - In order, it:
   1. creates the run record (`mode: chat`, `workflow: ballast-chat`);
-  2. runs branch synchronization with `starting=True` (pins the branch and feature);
-  3. archives the `ballast-feature` definition and the phase graph;
-  4. appends the ledger `run` event with `mode: chat`;
+  2. archives the `ballast-feature` definition and the phase graph;
+  3. appends the ledger `run` event with `mode: chat`, before synchronization, so a blocked start still has a valid ledger for its later steps (review finding ENG-004);
+  4. runs branch synchronization with `starting=True` (pins the branch and feature);
   5. prints the handoff summary;
   6. runs the Draft PR checkpoint.
 - **No agent runs.** A blocked synchronization leaves the record with no steps and prints the existing `BLOCKED_UPSTREAM_SYNC` line.
@@ -101,7 +101,7 @@ ballast run continue RUN_ID --reason block-resolved|changes-requested --ref TEXT
   2. lowers the source `autonomous → chat` and sets it to `continued`;
   3. re-renders the source's `autonomous/record.md`;
   4. creates the linked Chat run with the source's pin;
-  5. runs branch synchronization for the new run;
+  5. runs branch synchronization for the new run. When it is blocked, the Chat run keeps no pin of its own, and each later `step` synchronizes from the source's pin, as the continuation did, until one succeeds (review finding ENG-001);
   6. prints the handoff summary, which lists the provisional decisions still to be superseded.
 - No agent runs.
 - `--mode autonomous` is refused, with the existing "never raised" wording.

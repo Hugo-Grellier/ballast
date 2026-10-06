@@ -249,6 +249,7 @@ specs/20-chat-mode/
 
 - **F-1**: A narrower recovery than `discard-runs` for one dead Chat step (D-7), if the pilot shows a need.
 - **F-2**: Autonomous resume (#21) and the richer review packet (#19) will consume Chat records as they do Autonomous ones.
+- **F-4**: Detect agent writes to git-ignored paths that later agents read (for example `AGENTS.local.md`), which no tree manifest lists ([DEC-0003](decisions.md); security review SEC-002, SEC-008).
 - **F-3**: A provider-native transcript (Claude `--session-id` JSONL) as an optional second local log, bound out of bwrap's overlay.
 
 ## Complexity Tracking

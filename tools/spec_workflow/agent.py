@@ -110,6 +110,12 @@ INTERRUPT_GRACE_SECONDS = 5.0
 ESCAPE_BYTE = 0x1D
 ESCAPE_SECONDS = 1.0
 HANGUP_GRACE_SECONDS = 2.0
+# Leave the alternate screen; mouse, focus and bracketed-paste reports off;
+# cursor shown; normal keypad; default colors (#20 SEC-006).
+TERMINAL_RESET = (
+    b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l"
+    b"\x1b[?2004l\x1b[?25h\x1b>\x1b[0m"
+)
 
 
 def permission_args(integration: str, args: list[str]) -> list[str]:
@@ -713,8 +719,12 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
                 break
     finally:
         if saved is not None:
+            # Undo modes the agent may have left on, and drop pending input
+            # (late answers to its terminal queries) before the shell reads.
+            with suppress(OSError):
+                _write_all(stdout_fd, TERMINAL_RESET)
             with suppress(termios.error):
-                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, saved)
+                termios.tcsetattr(stdin_fd, termios.TCSAFLUSH, saved)
         for number in handlers:
             signal.signal(number, signal.SIG_IGN)
         signal.signal(signal.SIGWINCH, signal.SIG_DFL)
