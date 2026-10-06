@@ -238,6 +238,7 @@ class AutonomousInstallTests(unittest.TestCase):
         with (
             patch.object(setup, "_fetch_source", side_effect=lambda n, _: sources[n]),
             patch.object(setup.shutil, "which", return_value="/usr/bin/x"),
+            patch.object(tool, "edit_tasks_skills"),
             patch.object(tool, "complete_claude_extension_skills") as skills,
         ):
             skills.side_effect = lambda: self.calls.append(("claude-skills",))
@@ -273,14 +274,119 @@ class AutonomousInstallTests(unittest.TestCase):
             self.assertTrue(probes[path], path)
 
 
+class TasksSkillTests(unittest.TestCase):
+    """#58: every installed integration's `speckit-tasks` skill gets Ballast's edits."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.render(
+            '{"installed_integrations": ["codex", "claude"]}',
+            CODEX_TASKS,
+            CLAUDE_TASKS,
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def render(self, integrations: str, codex: str, claude: str) -> None:
+        for path, text in (
+            (".specify/integration.json", integrations),
+            (".agents/skills/speckit-tasks/SKILL.md", codex),
+            (".claude/skills/speckit-tasks/SKILL.md", claude),
+        ):
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / path).write_text(text)
+
+    def skill(self, integration: str) -> str:
+        return (self.root / integration / "skills/speckit-tasks/SKILL.md").read_text()
+
+    def edit(self) -> None:
+        setup.Setup(self.root).edit_tasks_skills()
+
+    def test_edits_both_renderings(self) -> None:
+        self.edit()
+        self.assertEqual(self.skill(".agents"), EDITED_TASKS)
+        claude = self.skill(".claude")
+        # Claude keeps its own frontmatter, naming the preset as the source ...
+        front = CLAUDE_TASKS[: CLAUDE_TASKS.index("\n---\n") + 5].replace(
+            '  source: "templates/commands/tasks.md"',
+            "  source: preset:explicit-task-dependencies",
+        )
+        self.assertEqual(claude[: len(front)], front)
+        # ... and gets the edited preset body, with Claude's command names.
+        body = EDITED_TASKS[EDITED_TASKS.index("\n---\n") + 5 :]
+        self.assertEqual(claude[len(front) :], body.replace("$speckit-", "/speckit-"))
+        for text in (self.skill(".agents"), claude):
+            self.assertIn("## Task requirements", text)
+            self.assertIn("**Acceptance evidence is required**", text)
+            self.assertIn("Execution Wave DAG", text)
+            self.assertNotIn("Tests are OPTIONAL", text)
+
+    def test_rerun_is_idempotent(self) -> None:
+        self.edit()
+        first = (self.skill(".agents"), self.skill(".claude"))
+        self.edit()
+        self.assertEqual((self.skill(".agents"), self.skill(".claude")), first)
+
+    def test_unknown_rendering_is_refused_without_writing(self) -> None:
+        integrations = '{"installed_integrations": ["codex", "claude"]}'
+        unknown = "---\nname: speckit-tasks\n---\n\nTasks.\n"
+        cases = (
+            (
+                (integrations, unknown, CLAUDE_TASKS),
+                (
+                    ".agents/skills/speckit-tasks/SKILL.md is not a Spec Kit 1.0.11 "
+                    "rendering Ballast knows: it lacks '# Speckit Tasks Skill\\n'"
+                ),
+            ),
+            (
+                (integrations, CODEX_TASKS, "Tasks.\n"),
+                (
+                    ".claude/skills/speckit-tasks/SKILL.md is not a Spec Kit 1.0.11 "
+                    "rendering Ballast knows: it lacks '---\\n'"
+                ),
+            ),
+            (
+                ('{"installed_integrations": ["codex", "gemini"]}', CODEX_TASKS, ""),
+                "integration gemini has no skills/speckit-tasks/SKILL.md rendering",
+            ),
+        )
+        for rendered, message in cases:
+            with self.subTest(message=message):
+                self.render(*rendered)
+                with self.assertRaises(setup.StageFailedError) as raised:
+                    self.edit()
+                self.assertEqual(
+                    str(raised.exception),
+                    f"edit speckit-tasks skills failed: {message}. The previous "
+                    f"installation was kept. Next: {setup.UNKNOWN_RENDERING}",
+                )
+                self.assertEqual(self.skill(".agents"), rendered[1])
+                self.assertEqual(self.skill(".claude"), rendered[2])
+
+
 # --- Recoverable setup (#14) -------------------------------------------------
 
 PIN = '[standard]\nref = "{}"\n'
+# Spec Kit 1.0.11's renderings of the `speckit-tasks` skill, before Ballast's
+# edits, and the Codex skill after them (#58).
+RENDERINGS = ROOT / "tests/fixtures/spec-kit"
+CODEX_TASKS = (RENDERINGS / "codex-tasks.md").read_text()
+CLAUDE_TASKS = (RENDERINGS / "claude-tasks.md").read_text()
+EDITED_TASKS = (RENDERINGS / "codex-tasks-edited.md").read_text()
+
+
+def _literal(text: str) -> str:
+    """Escape text for the fake's str.format."""
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 # What the fake Spec Kit writes into the project root it builds (the stage).
 FAKE_SPEC_KIT = {
     ".specify/scripts/python/common.py": "common {ref}\n",
     ".specify/templates/plan-template.md": "plan\n",
-    ".specify/integration.json": "{{}}\n",
+    ".specify/integration.json": '{{"installed_integrations": ["codex", "claude"]}}\n',
     ".specify/init-options.json": "{{}}\n",
     ".specify/.gitignore": "*.tmp\n",
     ".specify/extensions.yml": "installed: []\n",
@@ -291,8 +397,8 @@ FAKE_SPEC_KIT = {
     ".specify/memory/constitution.md": "template constitution\n",
     ".specify/memory/.constitution-template.json": "{{}}\n",
     ".specify/.workflow-install.lock": "",
-    ".agents/skills/speckit-tasks/SKILL.md": "tasks {ref}\n",
-    ".claude/skills/speckit-tasks/SKILL.md": "tasks {ref}\n",
+    ".agents/skills/speckit-tasks/SKILL.md": _literal(CODEX_TASKS),
+    ".claude/skills/speckit-tasks/SKILL.md": _literal(CLAUDE_TASKS),
 }
 # Version B drops a skill A installed and adds one (plan review F-001).
 FAKE_ONLY = {
@@ -338,6 +444,10 @@ def fake_run(self: setup.Setup, *args: str, cwd: Path | None = None) -> None:
             (self.root / ".specify/init-options.json").write_text(str(self.root))
         if FAKE.get("extra"):
             (self.root / FAKE["extra"]).write_text("extra\n")
+        if FAKE.get("claude"):
+            (self.root / ".claude/skills/speckit-tasks/SKILL.md").write_text(
+                FAKE["claude"]
+            )
     elif spec[:2] == ("workflow", "add") and FAKE.get("skip") != Path(spec[-1]).name:
         target = self.root / ".specify/workflows" / f"ballast-{Path(spec[-1]).name}"
         target.mkdir(parents=True, exist_ok=True)
@@ -610,7 +720,6 @@ class RecoverableSetupTests(ProjectCase):
             ("extension add", "spec-kit extension add"),
             ("workflow add", "spec-kit workflow add"),
             ("preset add", "spec-kit preset add"),
-            ("skills.patch", "patch skills.patch"),
             ("preset.patch", "patch preset.patch"),
         ):
             with self.subTest(stage=stage), patch.dict(FAKE, fail=fail):
@@ -620,6 +729,23 @@ class RecoverableSetupTests(ProjectCase):
                 self.assertIn("The previous installation was kept. Next: ", err)
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse((self.root / ".ballast/setup").exists())
+
+    def test_unknown_rendering_keeps_the_previous_installation(self) -> None:
+        # #58: a skill Ballast cannot edit fails the build, never the checkout.
+        self.pin("vB")
+        before = self.snapshot()
+        with patch.dict(FAKE, claude="---\nname: speckit-tasks\n---\n"):
+            code, _, err = self.setup()
+        self.assertEqual(code, 1, err)
+        self.assertIn(
+            "setup: edit speckit-tasks skills failed: "
+            ".claude/skills/speckit-tasks/SKILL.md is not a Spec Kit 1.0.11 "
+            "rendering Ballast knows: it lacks '  source: '. "
+            "The previous installation was kept. Next: ",
+            err,
+        )
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.root / ".ballast/setup").exists())
 
     def test_switch_and_stage_failures_keep_the_previous_installation(self) -> None:
         # SC-001: a failing rename mid-switch, and a stage that cannot be prepared.

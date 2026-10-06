@@ -154,6 +154,42 @@ INSTALLED = (
     ".specify/memory/.constitution-template.json",
 )
 KEPT_CHILDREN = ("runs", ".cache")
+# Ballast's edits to Spec Kit's `speckit-tasks` skill (#58): (anchor, edited)
+# pairs, each applied once. Spec Kit renders the explicit-task-dependencies
+# preset only for the default integration (Codex), so the other integrations
+# get the edited Codex body under their own frontmatter.
+TASKS_SKILL = "skills/speckit-tasks/SKILL.md"
+SKILL_ROOTS = {"codex": ".agents", "claude": ".claude"}
+TASK_REQUIREMENTS = (
+    "\n## Task requirements\n\nRead "
+    "`.specify/presets/explicit-task-dependencies/commands/speckit.tasks.md` "
+    "and `docs/policies/testing.md` before generating tasks. Preserve the "
+    "explicit dependency suffix and Execution Wave DAG. Map every behavior "
+    "acceptance criterion to a test or explicit verification task using its "
+    "stable `AC-NNN` ID; do not treat the upstream \u201ctests optional\u201d "
+    "example as a waiver of the project's acceptance evidence requirements.\n"
+)
+TESTS_OPTIONAL = (
+    "**Tests are OPTIONAL**: Only generate test tasks if explicitly requested "
+    "in the feature specification or if user requests TDD approach.\n"
+)
+ACCEPTANCE_EVIDENCE = (
+    "**Acceptance evidence is required**: Generate a test or explicit "
+    "verification task for every behavior acceptance criterion. Cite its "
+    "stable `AC-NNN` ID in the task. Do not omit tests merely because the "
+    "spec did not ask for them. If no automated test seam is appropriate, "
+    "record the manual evidence and reason.\n"
+)
+TASKS_EDITS = (
+    ("# Speckit Tasks Skill\n", "# Speckit Tasks Skill\n" + TASK_REQUIREMENTS),
+    ("EXECUTE_COMMAND: {command}\n    \n", "EXECUTE_COMMAND: {command}\n\n"),
+    (TESTS_OPTIONAL, ACCEPTANCE_EVIDENCE),
+)
+EDIT_TASKS = "edit speckit-tasks skills"
+PRESET_SOURCE = "  source: preset:explicit-task-dependencies"
+UNKNOWN_RENDERING = (
+    "keep the previous pin and report the Spec Kit rendering to the standard"
+)
 # Installed skill directories, by prefix, and installed policies.
 SKILLS = tuple(
     f"{integration}/skills/{prefix}-*"
@@ -1163,12 +1199,38 @@ class Setup:
             "--dev",
         )
         self.specify("preset", "add", "--dev", str(sources["preset"]))
-        self.patch("skills.patch")
+        self.edit_tasks_skills()
         self.complete_claude_extension_skills()
         self.patch(
             "preset.patch",
             cwd=self.root / ".specify/presets/explicit-task-dependencies",
         )
+
+    def edit_tasks_skills(self) -> None:
+        """Apply Ballast's edits to each installed integration's tasks skill.
+
+        Every rendering is checked before any file is written; one Ballast does
+        not know fails the build. A rerun leaves edited skills unchanged.
+        """
+        settings = json.loads((self.root / ".specify/integration.json").read_text())
+        codex = Path(SKILL_ROOTS["codex"], TASKS_SKILL)
+        edited = _edit_tasks(codex, (self.root / codex).read_text())
+        outputs = {codex: edited}
+        for name in settings.get("installed_integrations", []):
+            if name not in SKILL_ROOTS:
+                cause = f"integration {name} has no {TASKS_SKILL} rendering"
+                fail(EDIT_TASKS, cause, UNKNOWN_RENDERING)
+            path = Path(SKILL_ROOTS[name], TASKS_SKILL)
+            if path not in outputs:
+                rendered = (self.root / path).read_text()
+                front, _ = _split_front(path, rendered)
+                source = re.subn(r"(?m)^  source: .*$", PRESET_SOURCE, front)
+                if source[1] != 1:
+                    _unknown(path, "  source: ")
+                body = _split_front(codex, edited)[1]
+                outputs[path] = source[0] + body.replace("$speckit-", "/speckit-")
+        for path, text in outputs.items():
+            (self.root / path).write_text(text)
 
     def complete_claude_extension_skills(self) -> None:
         """Add the extension skills Spec Kit installs only for Codex."""
@@ -1259,6 +1321,30 @@ def tracked(root: Path, names: list[str]) -> set[str]:
     )
     files = [f for f in result.stdout.split("\0") if f]
     return {n for n in names if any(f == n or f.startswith(n + "/") for f in files)}
+
+
+def _unknown(path: Path, anchor: str) -> NoReturn:
+    """Fail on a skill rendering that lacks an anchor Ballast edits at."""
+    cause = f"{path} is not a Spec Kit {VERSION} rendering Ballast knows: "
+    fail(EDIT_TASKS, f"{cause}it lacks {anchor!r}", UNKNOWN_RENDERING)
+
+
+def _edit_tasks(path: Path, text: str) -> str:
+    """Return the Codex tasks skill with every edit applied exactly once."""
+    for anchor, edited in TASKS_EDITS:
+        if edited not in text:
+            if anchor not in text:
+                _unknown(path, anchor)
+            text = text.replace(anchor, edited)
+    return text
+
+
+def _split_front(path: Path, text: str) -> tuple[str, str]:
+    """Split a skill into its frontmatter (with both fences) and its body."""
+    end = text.find("\n---\n", 4)
+    if not text.startswith("---\n") or end < 0:
+        _unknown(path, "---\n")
+    return text[: end + 5], text[end + 5 :]
 
 
 def _unexpected(stage: Path, names: list[str]) -> str | None:
