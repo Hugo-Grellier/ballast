@@ -5,7 +5,7 @@
 - Base: `bc4ea3e..e2e4ffc` (`git diff origin/main...HEAD`): `tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/spec_workflow/run.py`, `tools/cli.toml`, tests, README, ADR-0007/0008.
 - Artifacts: [spec.md](../spec.md), [plan.md](../plan.md), [contracts/](../contracts/), [data-model.md](../data-model.md), [decisions.md](../decisions.md) (DEC-0001, DEC-0002), [implementation-security.md](implementation-security.md), ADR-0007, ADR-0008, `docs/policies/security.md`, `docs/policies/project/workflow.md`, `CLAUDE.md` invariants.
 - Evidence run: `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests.test_ballast tests.test_preview tests.test_doctor` (71 OK), `tests.test_setup` (32 OK), `tests.test_spec_workflow` (143 OK); one scratch probe of `render_preview` outside the repository.
-- Verdict: changes requested
+- Verdict: approved
 
 ## Threat model used
 
@@ -44,3 +44,17 @@ SEC-003 (an older setup run while a journal is pending), SEC-004 (link swap betw
 ## Required before merge
 
 SEC2-001, SEC2-002 and SEC2-003 (small, local changes with regression tests). SEC2-004 may be fixed now or tracked as a follow-up with the operator's agreement; SEC2-005 to SEC2-009 are accepted or informational and listed for the merge review.
+
+## Resolution
+
+Each fix landed test-first: the new or extended test failed on the reviewed code and passes with the fix.
+
+- SEC2-001 (fixed): `render_preview` escapes every output line with `printable`, as doctor's `render` does, so steps (including `[checks] commands`), paths, `not_ignored`, project-owned names and blockers can neither drive the terminal nor forge a line; the ignore block is rendered as its own lines. `preview` escapes its refusal and `preview of <ref> failed:` messages. `test_checkout_text_cannot_drive_the_terminal` now seeds `[checks] commands`, a planted path with control characters and a newline, and a failure message.
+- SEC2-002 (fixed): `copy_kept` catches `OSError`, prints `full installation: the kept installation is unreadable: <error>` and falls back to the build. `copy_verified` removes whatever it copied when the copy raises, so neither caller leaves partial content in the stage.
+- SEC2-003 (fixed): `test_damaged_kept_copy_is_not_reused` covers an altered, an added, a link-swapped and an unreadable (FIFO plus planted file) kept copy: no reuse, the installation equals a fresh build, and no planted content or link is installed. The first three cases passed on the reviewed code (missing test); a mutation that skips the verification fails all four.
+- SEC2-004 (fixed): `live_entries` excludes every entry that is, or holds, a file `git ls-files` tracks, so a tracked file is never removed, moved into the kept copy or recorded; `validate` fails `validate stage paths` when a staged entry is tracked, so one is never replaced. The preview counts tracked `removed` paths as project-owned. Tested with a force-added `docs/policies/custom.md` and a force-added shipped policy, and in the preview with a force-added policy the target drops.
+- SEC2-005 (accepted): the installation record is a content check for the no-op, the copies and the messages, not an authority; `ballast.toml` in `BASES` is what refuses a changed pin, and every forged-record consequence fails closed.
+- SEC2-006 (accepted): the cache is outside agent authority, and a damaged `tools/setup --check` only makes the preview fall back to the verified disposable build.
+- SEC2-007 (fixed): `tools/setup --check` reports `unverified: <reason>` with exit 1 when `state_dir` is unavailable (`test_check_without_operator_state_is_unverified`).
+- SEC2-008 (accepted): `ls-files` adds no git configuration surface beyond the `check-ignore` and `rev-parse` calls that already ran on `main`, and `.git` stays read-only to agents.
+- SEC2-009 (fixed): `launcher.pinned_ref` returns the ref only when it matches `REF` (the same pattern as `tools/ballast`, kept equal by `test_temp_roots_match_the_launcher`), and `tools/setup` reads its ref through it, so an invalid developer-mode pin is treated as absent and never printed (`test_invalid_pin_is_never_printed`).
