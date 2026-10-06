@@ -2032,6 +2032,15 @@ def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
 
 
 TMPFS_HIDDEN = (Path("/tmp"), Path("/run"))  # noqa: S108 - emptied in the sandbox
+# Writable state a step owns (#79), in the sandbox's own /run tmpfs: it
+# vanishes with the step, and it is outside every temp root, so the project's
+# tests may keep operator-style state there. The operator's real state, with
+# its trust baselines, stays read-only. uvx writes its tool directory; caches
+# already get a throwaway overlay of ~/.cache.
+STEP_DIRECTORIES = {
+    "XDG_STATE_HOME": "/run/ballast-step/state",
+    "UV_TOOL_DIR": "/run/ballast-step/uv-tools",
+}
 # Name resolution the agent CLIs need; systemd-resolved links resolv.conf into /run.
 RESOLVER_FILES = (
     Path("/etc/resolv.conf"),
@@ -2144,6 +2153,8 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         "--tmpfs",
         "/run",
     ]
+    for name, path in STEP_DIRECTORIES.items():
+        args += ["--dir", path, "--setenv", name, path]
     if Path("/var/run").is_dir() and not Path("/var/run").is_symlink():
         args += ["--tmpfs", "/var/run"]
     runtime = env.get("XDG_RUNTIME_DIR")
