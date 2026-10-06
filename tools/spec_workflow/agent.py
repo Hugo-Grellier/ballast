@@ -52,6 +52,7 @@ from typing import BinaryIO
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
 
+import artifacts  # noqa: E402
 import autonomy  # noqa: E402
 from launcher import (  # noqa: E402
     IN_PROGRESS,
@@ -329,10 +330,11 @@ def _mark_tampered(root: Path, reasons: list[str]) -> None:
 class Refusal(Exception):  # noqa: N818 - a refusal, not an error
     """An Autonomous agent step refused before the agent started."""
 
-    def __init__(self, code: int, message: str) -> None:
-        """Keep the wrapper exit code with the reason."""
+    def __init__(self, code: int, message: str, limit: str | None = None) -> None:
+        """Keep the wrapper exit code and, for a limit, its kind with the reason."""
         super().__init__(message)
         self.code = code
+        self.limit = limit
 
 
 def _workflow_id(root: Path, key: str) -> str | None:
@@ -343,12 +345,11 @@ def _workflow_id(root: Path, key: str) -> str | None:
         return None
 
 
-def _autonomous_run(root: Path, key: str) -> dict | None:
-    """Return the active Autonomous run record for this step, or None if human-gated.
+def _autonomous_record(root: Path, key: str) -> dict | None:
+    """Return the active Autonomous run record, or None if the run is human-gated.
 
-    Refuses (before any agent starts) an Autonomous run without a record, one
-    that is not active, an exhausted limit, and a failed confinement
-    self-test; otherwise counts the step.
+    Refuses (before any agent starts) an Autonomous run without a record and
+    one that is not active.
     """
     try:
         record = autonomy.find_run(root, key)
@@ -366,14 +367,27 @@ def _autonomous_run(root: Path, key: str) -> dict | None:
         return None
     if record["status"] != "active":
         message = (
-            f"run {key} is {record['status']}, not active; "
-            + autonomy.RESUME_REFUSAL.format(run_id=key)
+            f"run {key} is {record['status']}, not active; only the operator's "
+            f"ballast run resume {key} makes a stopped Autonomous run active again"
         )
         raise Refusal(EXIT_USAGE, message)
+    return record
+
+
+def _autonomous_run(root: Path, key: str) -> dict | None:
+    """Return the active Autonomous run record for this step, or None if human-gated.
+
+    Refuses (before any agent starts) an Autonomous run without a record, one
+    that is not active, an exhausted limit, and a failed confinement
+    self-test; otherwise counts the step. Every attempt counts (#21 R4).
+    """
+    record = _autonomous_record(root, key)
+    if record is None:
+        return None
     if autonomy.remaining_seconds(record) <= 0:
-        raise Refusal(EXIT_LIMIT, "wall-time limit exhausted")
+        raise Refusal(EXIT_LIMIT, "wall-time limit exhausted", "wall-time")
     if record["agent_steps"] >= record["limits"]["max_agent_steps"]:
-        raise Refusal(EXIT_LIMIT, "agent step limit exhausted")
+        raise Refusal(EXIT_LIMIT, "agent step limit exhausted", "agent-steps")
     try:
         autonomy.confinement_self_test(root)
     except autonomy.AutonomyError as error:
@@ -381,6 +395,35 @@ def _autonomous_run(root: Path, key: str) -> dict | None:
     record["agent_steps"] += 1
     autonomy.write_run(root, record)
     return record
+
+
+def _command(prompt: str) -> tuple[str, str | None]:
+    """(command, first argument) of a prompt: `/speckit-x a` -> (speckit-x, a)."""
+    words = prompt.split()
+    name = words[0].lstrip("/$").replace(".", "-") if words else ""
+    return name, words[1] if len(words) > 1 else None
+
+
+# Fix-cycle agent steps and the fix state each one needs (#21 R1).
+FIX_CYCLE_GATES = {
+    ("speckit-ballast-fix", None): "fix-pending",
+    ("speckit-ballast-review", "implementation-recheck"): "review-pending",
+    ("speckit-ballast-review", "specialists-recheck"): "review-pending",
+}
+
+
+def _skip(record: dict, prompt: str) -> str | None:
+    """Why a fix-cycle step has nothing to do, or None when it runs.
+
+    Read from the operator record before any limit check: a skipped step
+    starts no agent, counts no step and records nothing.
+    """
+    name, argument = _command(prompt)
+    needed = FIX_CYCLE_GATES.get((name, None if name.endswith("-fix") else argument))
+    state = autonomy.fix_state(record)["state"]
+    if needed is None or state == needed:
+        return None
+    return f"{name} {argument or ''}".strip() + f" skipped: the fix state is {state}"
 
 
 def _set_aside(root: Path, record: dict, step: str) -> list[str]:
@@ -762,17 +805,104 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
     }
 
 
-def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent step
+QUOTED = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
+MESSAGE_LIMIT = 500
+RETRY_NOTE = (
+    "\n\nBallast retry {n} of {total}: the trusted recorder refused the draft you "
+    "wrote:\n{message}\nWrite a corrected draft. Keep within the stated limits. "
+    "Paraphrase and cite any human approval you rely on; never quote approval "
+    "wording."
+)
+
+
+def _retry_message(error: Exception) -> str:
+    """Make a validator message fit for a prompt and the record (#21 R4, T043).
+
+    Quoted draft values are dropped, approval wording and workflow markers
+    replaced, and the text made printable and cut to MESSAGE_LIMIT
+    characters: field names, IDs and limits remain, never draft content.
+    """
+    text = QUOTED.sub(
+        lambda match: match.group(0) if match.group(0) == "'..'" else "<value>",
+        str(error),
+    )
+    text = autonomy.HUMAN_APPROVAL.sub("<approval wording>", text)
+    text = autonomy.WORKFLOW_MARKER.sub("<marker>", text)
+    text = "".join(c if c.isprintable() else "?" for c in text)
+    return text[:MESSAGE_LIMIT]
+
+
+def _check_drafts(root: Path, record: dict, prompt: str, entry: dict) -> str | None:
+    """Run the recorders' draft contract; the refusal to retry on, or None.
+
+    Only a DraftError is retried. Any other refusal is left to the recorder,
+    which decides as it always did.
+    """
+    try:
+        feature = artifacts.Feature(root, record["feature"], record["run_id"])
+        feature.run_id = record["run_id"]
+        feature.run = record
+        artifacts.check_step_drafts(
+            feature, prompt, entry, blocked=entry["exit_code"] == EXIT_BLOCKED
+        )
+    except artifacts.DraftError as error:
+        return _retry_message(error)
+    except (
+        artifacts.ContractError,
+        autonomy.AutonomyError,
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+    ):
+        return None
+    return None
+
+
+def _move_refused(root: Path, record: dict, step: str, attempt: int) -> None:
+    """Keep a refused attempt's drafts in operator state, out of the agent's reach."""
+    directory = autonomy.drafts_dir(root, record["feature"])
+    if directory.is_symlink() or not directory.is_dir():
+        return
+    target = (
+        autonomy.run_dir(root, record["run_id"])
+        / "set-aside"
+        / step
+        / f"retry-{attempt}"
+    )
+    for path in sorted(directory.iterdir()):
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.move(str(path), str(target / path.name))
+
+
+def _refuse_step(root: Path, run_id: str, refusal: Refusal) -> int:
+    """Report a refusal before any agent started, with a step entry when possible."""
+    sys.stderr.write(f"spec workflow agent wrapper: refusing: {refusal}\n")
+    with suppress(autonomy.AutonomyError, OSError):
+        if autonomy.find_run(root, run_id):
+            entry = {
+                "step": None,
+                "ran": False,
+                "exit_code": refusal.code,
+                "reason": str(refusal),
+                "at": autonomy.now(),
+            }
+            if refusal.limit:
+                entry["limit"] = refusal.limit
+            autonomy.append_step(root, run_id, entry)
+    return refusal.code
+
+
+def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
     """Run the real agent CLI with bounded permissions and persistent logs."""
     integration = Path(sys.argv[0]).name
     if integration not in {"claude", "codex"}:
         sys.stderr.write("invoke through .ballast/spec_workflow/bin/{claude,codex}\n")
         return EXIT_USAGE
+    args = sys.argv[1:]
     try:
-        argv = [
-            _real_executable(integration),
-            *permission_args(integration, sys.argv[1:]),
-        ]
+        real = _real_executable(integration)
+        permission_args(integration, args)
         systemd_run, scope_options = _containment(Path.cwd())
     except (ValueError, OSError) as error:
         sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
@@ -780,25 +910,89 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
 
     root = Path.cwd()
     run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "")
+    prompt = args[1]
     try:
-        record = _autonomous_run(root, run_id) if RUN_ID.fullmatch(run_id) else None
+        found = _autonomous_record(root, run_id) if RUN_ID.fullmatch(run_id) else None
     except Refusal as refusal:
-        sys.stderr.write(f"spec workflow agent wrapper: refusing: {refusal}\n")
-        with suppress(autonomy.AutonomyError, OSError):
-            if autonomy.find_run(root, run_id):
-                autonomy.append_step(
-                    root,
-                    run_id,
-                    {
-                        "step": None,
-                        "ran": False,
-                        "exit_code": refusal.code,
-                        "reason": str(refusal),
-                        "at": autonomy.now(),
-                    },
+        return _refuse_step(root, run_id, refusal)
+    if found is not None:
+        # Before any limit check or step count (#21 T011).
+        skipped = _skip(found, prompt)
+        if skipped is not None:
+            sys.stdout.write(f"spec workflow agent wrapper: {skipped}\n")
+            return 0
+    refusals: list[str] = []
+    attempt = 1
+    while True:
+        try:
+            record = _autonomous_run(root, run_id) if found is not None else None
+        except Refusal as refusal:
+            if refusals and refusal.code == EXIT_LIMIT:
+                label = autonomy.LIMIT_LABELS[refusal.limit or "agent-steps"]
+                refusal = Refusal(
+                    EXIT_LIMIT,
+                    f"{label} exhausted after a refused draft: {refusals[-1]}",
+                    refusal.limit,
                 )
-        return refusal.code
-    log_dir, key = _log_dir(root, integration, sys.argv[2])
+            return _refuse_step(root, run_id, refusal)
+        argv = [real, *permission_args(integration, [args[0], prompt, *args[2:]])]
+        exit_code, entry = _attempt(
+            root,
+            integration=integration,
+            argv=argv,
+            scope=(systemd_run, scope_options),
+            record=record,
+            prompt=prompt,
+        )
+        if record is None:
+            return exit_code
+        refused = (
+            _check_drafts(root, record, prompt, entry)
+            if exit_code in {0, EXIT_BLOCKED}
+            else None
+        )
+        entry |= {"attempt": attempt, "refusals": list(refusals)}
+        if refused is None:
+            autonomy.append_step(root, record["run_id"], entry)
+            return exit_code
+        refusals.append(refused)
+        entry["refused"] = refused
+        sys.stderr.write(
+            f"spec workflow agent wrapper: the recorder would refuse this draft: "
+            f"{refused}\n"
+        )
+        if attempt > autonomy.DRAFT_RETRIES:
+            reason = autonomy.limit_condition(
+                "retries",
+                f"draft refused after {autonomy.DRAFT_RETRIES} retries: {refused}",
+            )
+            entry |= {"exit_code": EXIT_LIMIT, "reason": reason, "limit": "retries"}
+            autonomy.append_step(root, record["run_id"], entry)
+            sys.stderr.write(f"spec workflow agent wrapper: {reason}\n")
+            return EXIT_LIMIT
+        autonomy.append_step(root, record["run_id"], entry)
+        _move_refused(root, record, entry["step"], attempt)
+        prompt = args[1] + RETRY_NOTE.format(
+            n=attempt, total=autonomy.DRAFT_RETRIES, message=refused
+        )
+        attempt += 1
+
+
+def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear agent run
+    root: Path,
+    *,
+    integration: str,
+    argv: list[str],
+    scope: tuple[str, list[str]],
+    record: dict | None,
+    prompt: str,
+) -> tuple[int, dict]:
+    """Run the agent once; return its exit code and, for Autonomous, its step entry.
+
+    The entry is not appended here: the caller first checks the drafts.
+    """
+    systemd_run, scope_options = scope
+    log_dir, key = _log_dir(root, integration, prompt)
     env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
     # Every `git` the agent runs goes through guard/git first (#34).
     git, _ = autonomy.trusted_program("git", root)
@@ -812,9 +1006,9 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
         step_record = {
             "step": log_dir.name,
             "ran": True,
-            "command": sys.argv[2].split(maxsplit=1)[0],
+            "command": prompt.split(maxsplit=1)[0],
             "integration": integration,
-            "role": _role(sys.argv[2]),
+            "role": _role(prompt),
             "set_aside": _set_aside(root, record, log_dir.name),
             "tree_before": autonomy.tree_digest(root, _review_exclusions(feature)),
         }
@@ -835,7 +1029,7 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
         "run_id": key,
         "feature_directory": _feature_directory(root, key),
         "integration": integration,
-        "command": sys.argv[2].split(maxsplit=1)[0],
+        "command": prompt.split(maxsplit=1)[0],
         "argv": [Path(argv[0]).name, *argv[1:]],
         "started_at": datetime.now(UTC).isoformat(),
     }
@@ -887,7 +1081,7 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
     ]
     for thread in threads:
         thread.start()
-    # An Autonomous step may only run until the run's deadline.
+    # An Autonomous step may only run while the run has wall time left.
     timeout = (
         max(autonomy.remaining_seconds(record), 0.0) if record is not None else None
     )
@@ -942,6 +1136,7 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
             f"{TAMPER_MARKER} before any other workflow command.\n"
         )
         _mark_tampered(root, tampered)
+        # A tampering step is never retried: EXIT_TAMPERED is not checked.
         exit_code = EXIT_TAMPERED
     else:
         in_progress.unlink(missing_ok=True)
@@ -952,27 +1147,26 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded, linear agent s
         "protected_changes": tampered,
         "stopped_descendants": survivors,
     }
+    entry: dict = {}
     if record is not None:
         drafts = _created_drafts(root, record, log_dir.name)
         meta["drafts"] = drafts
         reason = "wall-time limit exhausted during the step" if limit_hit else None
-        autonomy.append_step(
-            root,
-            record["run_id"],
-            {
-                **step_record,
-                "drafts": drafts,
-                "exit_code": exit_code,
-                "blocking_status": blocked,
-                "reason": reason,
-                "at": autonomy.now(),
-            },
-        )
+        entry = {
+            **step_record,
+            "drafts": drafts,
+            "exit_code": exit_code,
+            "blocking_status": blocked,
+            "reason": reason,
+            "at": autonomy.now(),
+        }
+        if limit_hit:
+            entry["limit"] = "wall-time"
     if private is not None:
         shutil.rmtree(private, ignore_errors=True)
     with meta_file:
         meta_file.write((json.dumps(meta, indent=2) + "\n").encode())
-    return exit_code
+    return exit_code, entry
 
 
 if __name__ == "__main__":

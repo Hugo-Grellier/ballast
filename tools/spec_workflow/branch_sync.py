@@ -135,7 +135,13 @@ RECOVERY = {
     "in-progress": "finish or abort the {operation} yourself, then {rerun}",
     "index-lock": "if no git process is running, remove {path}, then {rerun}",
     "wrong-branch": "git switch {pinned}, then {rerun}",
-    "unpinned": "start a new run: your ballast run start command",
+    # #21 R11: a documented operator step; nothing writes the pin for it.
+    "unpinned": (
+        'after checking the feature in the run\'s record, add "feature": '
+        '"specs/<N>-<slug>" (and "branch" when missing) to the run\'s pin in the '
+        "launcher state directory (see Runs started before branch pinning), then "
+        "{rerun}"
+    ),
     "no-repository": "declare [github] repository and run ballast trust",
     "missing-base": "restore {base} on {repo}; Ballast never substitutes another base",
     "fetch-failed": (

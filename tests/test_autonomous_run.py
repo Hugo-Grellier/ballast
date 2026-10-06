@@ -162,8 +162,9 @@ class AgentWrapperAutonomousTests(WrapperCase):
                 autonomy.write_run(self.root, record)
                 result = self.wrapper()
                 self.assertEqual(result.returncode, 2)
-                # A-9: lifting the resume refusal belongs to #21.
-                self.assertIn("#21", result.stderr)
+                # #21: only the trusted resume makes a stopped run active again.
+                self.assertIn(f"{status}, not active", result.stderr)
+                self.assertIn("ballast run resume run42", result.stderr)
                 self.assertIsNone(self.ran())
 
     def test_confined_step_counts_and_hides_secrets(self) -> None:
@@ -195,8 +196,10 @@ class AgentWrapperAutonomousTests(WrapperCase):
 
     def test_reviewer_role(self) -> None:
         self.make_run()
+        # An argument with no draft contract: the fake writes no valid draft,
+        # and the draft retries (#21) are covered in test_autonomous_recovery.
         self.assertEqual(
-            self.wrapper(prompt="/speckit-ballast-review plan").returncode, 0
+            self.wrapper(prompt="/speckit-ballast-review audit").returncode, 0
         )
         self.assertEqual(self.steps()[0]["role"], "reviewer")
 
@@ -246,7 +249,7 @@ class AgentWrapperAutonomousTests(WrapperCase):
         drafts.mkdir(parents=True)
         (drafts / "plan-review.json").write_text('{"planted": true}')
         result = self.wrapper(
-            prompt="/speckit-ballast-review plan",
+            prompt="/speckit-ballast-review audit",
             FAKE_DRAFTS=str(drafts),
             FAKE_DRAFT_NAMES="plan-review.json",
         )
@@ -376,6 +379,15 @@ class RunCase(WrapperCase):
         )
         record["checked_tree"] = autonomy.checked_digest(self.root, FEATURE)
         autonomy.write_run(self.root, record)
+        # What implementation-baseline leaves: implementation happened.
+        baseline = (
+            self.root
+            / ".specify/workflow-state"
+            / run_id
+            / "implementation-baseline.json"
+        )
+        baseline.parent.mkdir(parents=True, exist_ok=True)
+        baseline.write_text(json.dumps({"feature": FEATURE, "tree": "0" * 40}))
 
 
 class RunStartTests(RunCase):
@@ -765,16 +777,14 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["category"], "decision")
         self.assertIn("No safe, reversible default: Both change", block["condition"])
         self.assertEqual([o["option"] for o in block["options"]], ["Keep", "Drop"])
-        self.assertEqual(
-            block["command"],
-            f"ballast run continue {run_id} --reason block-resolved --ref TEXT",
-        )
+        # #21: the operator answers the decision, then resumes in Autonomous.
+        self.assertEqual(block["command"], f"ballast run resume {run_id}")
         self.assertEqual(autonomy.read_decisions(self.root, run_id), [])
         self.assertFalse(
             (autonomy.drafts_dir(self.root, FEATURE) / "block.json").exists()
         )
         self.assertIn("option: Keep -> More storage", self.out)
-        self.assertIn("Next: ballast run continue", self.out)
+        self.assertIn(f"Next: ballast run resume {run_id}", self.out)
 
     def test_invalid_or_missing_draft_still_blocks_as_decision(self) -> None:
         for name, drafts in (
@@ -892,21 +902,25 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["category"], "permission")
         self.assertEqual(block["command"], f"ballast run publish {run_id}")
 
-    def test_resume_is_refused_for_autonomous_runs(self) -> None:
-        """AC-014: names #21 (A-9 of #18) and the human-gated continuation."""
+    def test_autonomous_resume_refuses_mode_limits_and_inputs(self) -> None:
+        """#21 AC-016, AC-029 (was #18 AC-014): resume never changes the mode."""
         self.engine.update(status="failed", code=1, step="validate-plan")
         run_id = self.started()
-        code, _, err = self.main("resume", run_id)
-        self.assertEqual(code, 2)
-        self.assertIn(
-            "autonomous resume is not supported until Autonomous resume through "
-            "branch synchronization (#21)",
-            err,
-        )
-        self.assertIn(f"ballast run continue {run_id} --reason block-resolved", err)
+        before = autonomy.read_run(self.root, run_id)
+        for extra in (
+            ("--mode", "autonomous"),
+            ("--mode", "human-gated"),
+            ("--wall-time", "999"),
+            ("--max-agent-steps", "200"),
+            ("-i", "integration=codex"),
+        ):
+            with self.subTest(extra=extra):
+                code, _, err = self.main("resume", run_id, *extra)
+                self.assertEqual(code, 2)
+                self.assertIn("keeps the mode, risk, limits and integrations", err)
+        self.assertEqual(autonomy.read_run(self.root, run_id), before)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
         self.assertEqual(len(self.launched), 1)
-        code, _, err = self.main("resume", run_id, "--mode", "autonomous")
-        self.assertEqual(code, 2)
 
     def test_resume_of_human_gated_run_is_unchanged(self) -> None:
         # What `ballast run start` leaves: the engine inputs and the pin (SEC-002).
@@ -993,7 +1007,7 @@ class UpstreamSyncRunTests(RunCase):
         self.assertIn(". Recovery: rebase by hand", block["condition"])
         self.assertEqual(autonomy.read_decisions(self.root, run_id), [])
         self.assertIn("BLOCKED_UPSTREAM_SYNC (conflict)", err)
-        self.assertIn("Autonomous run blocked (upstream-sync)", out)
+        self.assertIn("Autonomous run blocked (unsafe uncertainty: upstream-sync)", out)
         self.assertEqual([e["cause"] for e in self.sync_events(run_id)], ["conflict"])
         code, _, err = self.main(
             "continue", run_id, "--reason", "block-resolved", "--ref", "x"
@@ -1017,7 +1031,10 @@ class UpstreamSyncRunTests(RunCase):
         self.assertEqual(command, autonomy.RESTART_COMMAND)
         self.assertTrue(autonomy.BLOCK_COMMAND.fullmatch(command))
         self.assertIn("upstream-sync", autonomy.BLOCK_CATEGORIES)
-        self.assertIn("#21", autonomy.RESUME_REFUSAL)
+        # #21: every other resumable block names resume.
+        resume = autonomy.recovery_command("r1", "decision")
+        self.assertEqual(resume, "ballast run resume r1")
+        self.assertTrue(autonomy.BLOCK_COMMAND.fullmatch(resume))
 
     def test_continue_checks_then_pins_the_continuation(self) -> None:
         """Q4, second variant [AC-005, R12]."""
@@ -1090,7 +1107,7 @@ class UpstreamSyncRunTests(RunCase):
         )
         self.assertEqual(code, 1)
         self.assertIn(f"run {run_id} has no branch or feature pin", err)
-        self.assertIn("Recovery: start a new run", err)
+        self.assertIn("Recovery: after checking the feature in the run's record", err)
         self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
 
 

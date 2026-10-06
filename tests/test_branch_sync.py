@@ -1007,8 +1007,13 @@ class BlockedCauseTests(SyncCase):
             outcome.detail,
             "run old1 has no branch or feature pin (started before branch pinning)",
         )
+        # #21 R11: the documented manual operator step, never a re-pin.
         self.assertEqual(
-            outcome.recovery, "start a new run: your ballast run start command"
+            outcome.recovery,
+            'after checking the feature in the run\'s record, add "feature": '
+            '"specs/<N>-<slug>" (and "branch" when missing) to the run\'s pin in the '
+            "launcher state directory (see Runs started before branch pinning), "
+            "then ballast run resume old1",
         )
         self.assertEqual(self.s.read_pin("old1"), {})
         # A #17 pin has the branch but not the feature whose Issue number
