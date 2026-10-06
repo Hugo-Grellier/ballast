@@ -9,20 +9,20 @@ Implements FR-002 to FR-009 and AC-001 to AC-016. Decisions are in [research.md]
 | Function | Contract |
 | --- | --- |
 | `read_setting(root, run_id) -> Setting \| None` | `None` when absent or off; raises `SettingError` when invalid (the wrapper prints it and treats it as off) |
-| `write_setting(root, run_id, model \| None, endpoint \| None) -> Setting` | validates, writes 0600 through `autonomy` helpers; `None` model = off |
-| `validate_model(text)`, `validate_endpoint(text)` | raise `SettingError` with the fixed messages in [operator-cli.md](operator-cli.md) |
+| `write_setting(root, run_id, model \| None) -> Setting` | validates, writes 0600 through `autonomy` helpers; `None` model = off. There is no endpoint argument: the endpoint is the constant `OLLAMA_ENDPOINT` (`http://127.0.0.1:11434`, DEC-0003) |
+| `validate_model(text)` | raises `SettingError` with the fixed messages in [operator-cli.md](operator-cli.md) |
 | `classify(integration, exit_code, blocked, contained, tail, *, cli_found) -> str` | the normalized cause; pure |
 | `RECOVERABLE` | `frozenset({"quota-exhausted", "provider-unavailable", "cli-unavailable"})` |
-| `probe(setting, *, root, autonomous, codex, prompt) -> str \| None` | runs checks 5 to 11 of research R5 in order within one 10 s budget; returns the refusal reason or `None`; sends only the model name |
-| `fallback_argv(codex, prompt, setting) -> list[str]` | research R6; never forwards primary extra arguments |
+| `probe(setting, *, root, autonomous, codex, prompt) -> str \| None` | runs checks 5 to 11 and 11a of research R5 in order within one 10 s budget; requests only `OLLAMA_ENDPOINT`; returns the refusal reason or `None`; sends only the model name |
+| `fallback_argv(codex, prompt, model) -> list[str]` | research R6: `permission_args("codex", ["exec", prompt])` plus `--oss`, `--local-provider ollama`, `-m MODEL`, `--json`; no `-c model_providers.ollama.*` or other base-URL key, which Codex refuses; never forwards primary extra arguments |
 | `fallback_env(env, codex_home) -> dict` | `confined_env(env, None)` minus `OLLAMA_HOST`, `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, with `CODEX_HOME` set to the wrapper's private, empty directory (research R6) |
-| `permission_mismatch(argv, env, codex_home) -> bool` | true when argv or env is wider than the canonical headless Codex profile, or `CODEX_HOME` is anything but `codex_home` |
+| `permission_mismatch(argv, env, codex_home, *, codex, prompt, model) -> bool` | exact allowlist: true unless `argv == fallback_argv(codex, prompt, model)` token for token and `env` holds only `confined_env` names plus `CODEX_HOME == codex_home` and none of `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OLLAMA_HOST`. No token list to keep current (plan-review F-002) |
 | `state_evidence(root, feature) -> dict \| None` | research R3 pieces (tree, reviews, drafts, ignored, refs); `None` when any piece cannot be established |
 | `codex_prompt(prompt) -> str` | `/speckit-x rest` → `$speckit-x rest`; a `$` prompt is unchanged |
 | `parse_events(lines) -> Events` | agent message text, summed usage, `complete`; raises `EventError` when unparsable |
 | `record(root, run_id, feature, events)` | appends `route` and `usage` events through `ledger.append` with the fixed event IDs |
 
-HTTP: `urllib.request.build_opener(ProxyHandler({}))`, 5 s timeout, `GET /api/version`, `GET /api/tags`, `POST /api/show`. Response bodies are capped at 1 MiB and parsed as JSON. Any error is the reason the check names.
+HTTP: only `OLLAMA_ENDPOINT` (`http://127.0.0.1:11434`, the endpoint Codex's `--oss` uses with no override), `urllib.request.build_opener(ProxyHandler({}))`, 5 s timeout, `GET /api/version`, `GET /api/tags`, `POST /api/show`. Response bodies are capped at 1 MiB and parsed as JSON. Any error is the reason the check names.
 
 ## `agent.main` flow change
 
@@ -47,7 +47,7 @@ else:
 ```
 
 - The fallback is considered only on the step's first attempt. A draft-retry attempt never falls back, and a fallback is never followed by a draft retry, so a step that falls back makes exactly two attempts (SC-005, FR-006, DEC-0001).
-- The fallback's `CODEX_HOME` is a fresh 0700 directory inside the attempt's private directory, removed after the attempt. Under bubblewrap it is the Codex home the confinement exposes. No user Codex configuration is read (plan-review F-001).
+- The fallback's `CODEX_HOME` is a fresh 0700 directory inside the attempt's private directory, removed after the attempt. Under bubblewrap it is the Codex home the confinement exposes. No user Codex configuration file is read (plan-review F-001), and a non-empty `~/.agents/skills` refuses the fallback (F-003).
 - With the setting off, no new digest, probe, file or ledger event exists: the step behaves byte-for-byte as before (AC-003). Tests compare argv, `steps.jsonl` and ledger with and without the feature present.
 - `_attempt` gains one keyword, `fallback: Setting | None`. When set, it uses `fallback_argv`/`fallback_env`, `integration="codex"`, `--json` parsing for `BLOCKING` and the terminal, the timeout of research R9, and writes `route`, `provider` and `model` into `meta.json` and the entry. Confinement, scope, subreaper, protected-state check, tamper marker and draft snapshotting are the same code path as a primary attempt.
 - A fallback that exits 0 with a refused draft ends the step with `EXIT_LIMIT`, `limit: "retries"` and the reason `draft refused after the local fallback: <message>`, using the existing limit-condition wording. It is not retried.
@@ -58,10 +58,10 @@ else:
 | Reason | Checks |
 | --- | --- |
 | `changed-state` | tree, reviews, drafts, ignored paths or refs differ after the primary, or any of them cannot be checked |
-| `privacy-exclusion` | endpoint not a loopback literal; model entry remote or cloud |
+| `privacy-exclusion` | an endpoint override variable (`CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OLLAMA_HOST`) in the built environment; model entry remote or cloud |
 | `unknown-free-status` | model not listed, or listed without size and digest |
-| `incompatible-capability` | server not answering; codex missing or without `--oss`/`--local-provider`; the project's Codex skill for the step's Spec Kit command missing; Codex sandbox not starting under the step's confinement; the checks exceeding their 10 s budget |
-| `permission-mismatch` | argv or env wider than the canonical headless Codex profile; a Codex configuration layer outside the private `CODEX_HOME` exists or could not be established |
+| `incompatible-capability` | server not answering, or older than Ollama 0.13.4 or of unknown version; served context below 16384 or unknown (`num_ctx`, DEC-0004); codex missing or without `--oss`/`--local-provider`; the project's Codex skill for the step's Spec Kit command missing; Codex sandbox not starting under the step's confinement; the checks exceeding their 10 s budget |
+| `permission-mismatch` | argv or env not exactly the one the wrapper builds (any added, removed or changed token); a Codex configuration layer outside the private `CODEX_HOME` exists or could not be established; the user skills directory `~/.agents/skills` is non-empty, a symlink or unreadable (plan-review F-003) |
 
 ## Review provenance
 

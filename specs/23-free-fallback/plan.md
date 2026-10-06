@@ -13,15 +13,16 @@ When a headless step's primary agent fails because its quota is exhausted, its p
 Before any prompt is sent, these checks run in order:
 
 - the primary left the tree, reviews, drafts, git-ignored paths and refs unchanged, and all of them could be checked;
-- the endpoint is a loopback literal;
-- the server answers;
+- the probes use only Ollama's fixed default endpoint `127.0.0.1:11434`, the one Codex uses, and no endpoint override survives in the environment;
+- the server answers and is Ollama 0.13.4 or newer;
 - the model is installed and is neither remote nor cloud;
 - Codex supports `--oss`;
+- the model's served context is at least 16384 tokens;
 - Codex's sandbox starts under the step's own confinement;
-- no Codex configuration layer outside the fallback's private, empty `CODEX_HOME` exists;
-- the built argv and environment are no wider than the canonical headless Codex step's.
+- no Codex configuration layer outside the fallback's private, empty `CODEX_HOME` exists, and the user's `~/.agents/skills` is empty or absent;
+- the built argv and environment equal, token for token, the one the wrapper builds from the canonical headless Codex step's profile.
 
-Any failed or unknown check refuses with one of five reasons: `changed-state`, `privacy-exclusion`, `unknown-free-status`, `incompatible-capability` or `permission-mismatch`. The network and subprocess checks share a 10 s budget.
+Any failed or unknown check refuses with one of five reasons: `changed-state`, `privacy-exclusion`, `unknown-free-status`, `incompatible-capability` or `permission-mismatch`. The network and subprocess checks, including the served-context check, share a 10 s budget.
 
 The fallback reuses the primary attempt's code path: scope, subreaper, bubblewrap for Autonomous steps, protected-state and tamper checks, draft snapshotting. It counts as an agent step and is never retried. The wrapper records the failed primary, the decision and the fallback attempt with its usage (`codex exec --json`) as additive `route` and `usage` ledger events and `steps.jsonl` fields. A review completed by the fallback is never counted as cross-provider: in Autonomous runs through the step entry, in human-gated runs through the ledger report. A pilot on the operator host runs first and goes into `evaluation.md`. On this host Codex's sandbox is already known not to nest inside Ballast's bubblewrap (DEC-0004), so Autonomous steps are expected to refuse the fallback as an incompatible capability, while human-gated steps can use it. Decisions are in [research.md](research.md) (R1 to R10).
 
@@ -87,7 +88,7 @@ Post-design re-check: the contracts add no writable path for agents, no new netw
   - [model routing policy](../../docs/policies/model-routing.md);
   - [project workflow R2 boundaries](../../docs/policies/project/workflow.md).
 - **Proposed architecture decisions** (agent-provisional; written with the implementation as `docs/adr/0012-local-zero-cost-fallback.md`, accepted only when the PR merges):
-  1. **ADR-0012 Local zero-cost fallback through Codex local-provider mode.** The wrapper may make one fallback attempt per step on `codex exec --oss --local-provider ollama` against an operator-named, locally installed, non-cloud model on a loopback endpoint. Conditions: the operator opted in per run; the step's first primary attempt failed on quota, availability or a missing CLI; the attempt changed nothing; and runtime checks prove free status, privacy, capability and an equal permission profile, refusing otherwise. The changed-state evidence covers tracked, untracked and git-ignored worktree paths and the refs, and refuses when it cannot be established (DEC-0001). The fallback reads no user Codex configuration. The ADR records the remaining residual risk (a model pull race), the cost of the state walk and the host result that Autonomous steps refuse while Codex's sandbox does not nest (R1 to R9).
+  1. **ADR-0012 Local zero-cost fallback through Codex local-provider mode.** The wrapper may make one fallback attempt per step on `codex exec --oss --local-provider ollama` against an operator-named, locally installed, non-cloud model at Ollama's default loopback endpoint `127.0.0.1:11434` (DEC-0003; the operator cannot choose another endpoint). Conditions: the operator opted in per run; the step's first primary attempt failed on quota, availability or a missing CLI; the attempt changed nothing; and runtime checks prove free status, privacy, capability and an equal permission profile, refusing otherwise. The changed-state evidence covers tracked, untracked and git-ignored worktree paths and the refs, and refuses when it cannot be established (DEC-0001). The fallback reads no user Codex configuration and refuses while the user's skills directory is non-empty. The ADR records the remaining residual risk (a model pull race), the cost of the state walk and the host result that Autonomous steps refuse while Codex's sandbox does not nest (R1 to R9).
 
 ## Repository Impact
 
@@ -95,7 +96,7 @@ Post-design re-check: the contracts add no writable path for agents, no new netw
 | --- | --- |
 | `tools/spec_workflow/fallback.py` | New, per [wrapper-fallback.md](contracts/wrapper-fallback.md#module-boundary). |
 | `tools/spec_workflow/agent.py` | Capture `cli-unavailable` instead of returning early when a setting is on; state evidence before and after the primary; classify the primary; decision, probes and one fallback attempt in `main` on the first attempt only; private `CODEX_HOME`; `local_fallback` in `meta.json`; `_attempt(fallback=...)` with Codex `--oss` argv/env, `--json` parsing, timeout and entry fields; module docstring. |
-| `tools/spec_workflow/run.py` | `--local-fallback` and `--local-fallback-endpoint` in `_split_mode` and resume option parsing for human-gated and Autonomous; Chat refusal; setting write and printed line; `status` line; usage text. |
+| `tools/spec_workflow/run.py` | `--local-fallback` in `_split_mode` and resume option parsing for human-gated and Autonomous; Chat refusal; setting write and printed line; `status` line; usage text. |
 | `tools/spec_workflow/ledger.py` | `route` enum value, three optional fields, cross-field validation, report counts, no cross-provider review in a run whose review step fell back. |
 | `tools/spec_workflow/ledger-schema.md` | One paragraph on the additions. |
 | `tools/spec_workflow/artifacts.py` | Fallback-step provenance: `cross_provider` false, runner-known provider and model. |

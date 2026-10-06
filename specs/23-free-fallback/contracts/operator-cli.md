@@ -5,24 +5,22 @@ Implements FR-001, AC-003, AC-019, AC-020 and AC-021. Storage is described in [d
 ## Start
 
 ```text
-ballast run start [--mode human-gated|autonomous] --local-fallback MODEL
-                  [--local-fallback-endpoint http://127.0.0.1:PORT] -i ...
+ballast run start [--mode human-gated|autonomous] --local-fallback MODEL -i ...
 ```
 
-- `_split_mode` takes `--local-fallback` and `--local-fallback-endpoint` out of the start options (same rules as `--mode`: `--name value` or `--name=value`, not twice, a value after `-i` is an input value).
+- `_split_mode` takes `--local-fallback` out of the start options (same rules as `--mode`: `--name value` or `--name=value`, not twice, a value after `-i` is an input value).
 - Refused before any engine or agent starts, exit 2, nothing written:
   - with `--mode chat`: `--local-fallback is not available in Chat runs; the operator chooses in Chat`;
-  - `--local-fallback-endpoint` without `--local-fallback`;
   - an invalid model: `--local-fallback needs a local model name such as qwen3:4b`;
   - a cloud tag: `--local-fallback refuses cloud model MODEL: content would leave this machine`;
-  - a non-loopback or non-literal endpoint: `--local-fallback-endpoint must be http://127.0.0.1:PORT or http://[::1]:PORT`.
-- On success, before the engine starts, `fallback.json` is written to the new run's operator directory, and one line is printed: `Local fallback: on (ollama MODEL at ENDPOINT); turn it off with ballast run resume RUN --local-fallback off`.
+  - `--local-fallback-endpoint` (any form) is not an option (DEC-0003). T026 adds no parser for it and T024 tests that start and resume refuse it with exit 2 and write nothing. The fallback always uses Ollama's default endpoint `http://127.0.0.1:11434` (DEC-0003).
+- On success, before the engine starts, `fallback.json` is written to the new run's operator directory, and one line is printed: `Local fallback: on (ollama MODEL at 127.0.0.1:11434); turn it off with ballast run resume RUN --local-fallback off`.
 - The flag only stores the setting. It probes nothing; the checks run when a fallback would be selected.
 
 ## Resume
 
 ```text
-ballast run resume RUN --local-fallback MODEL|off [--local-fallback-endpoint URL]
+ballast run resume RUN --local-fallback MODEL|off
 ```
 
 - Accepted for human-gated and Autonomous resumes next to their existing options; refused for a Chat run with the Chat message above.

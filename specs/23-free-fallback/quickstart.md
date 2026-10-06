@@ -23,9 +23,9 @@ Offline tests use a loopback stub Ollama server (`http.server` on an ephemeral `
 | AC-003 | `…test_setting_off_matches_today` (argv, `steps.jsonl` and ledger equal with and without the feature) |
 | AC-004 | `…test_fallback_argv_is_primary_codex_profile`, `…test_fallback_runs_under_same_confinement` (Autonomous: same `confined_argv`; env has no provider key and no OSS overrides), `…test_user_codex_config_not_read` |
 | AC-005, SC-002 | `ProbeTests.test_model_missing_refuses_unknown_free_status` |
-| AC-006, SC-002 | `…test_cloud_model_refuses_privacy`, `…test_remote_host_refuses_privacy`, `SettingTests.test_non_loopback_endpoint_refused`, `WrapperFallbackTests.test_user_codex_config_not_read` (no user MCP server or notify program) |
-| AC-007, SC-002 | `…test_server_down_refuses_capability`, `…test_codex_without_oss_refuses_capability`, `…test_codex_skill_missing_refuses_capability`, `…test_sandbox_not_nesting_refuses_capability`, `…test_probe_deadline_refuses` |
-| AC-008, SC-002 | `PermissionTests.test_wider_argv_refused` (each widening token), `…test_extra_env_refused`, `…test_other_codex_config_layer_refuses` |
+| AC-006, SC-002 | `…test_cloud_model_refuses_privacy`, `…test_remote_host_refuses_privacy`, `SettingTests.test_setting_has_no_endpoint`, `PermissionTests.test_endpoint_override_env_refused`, `WrapperFallbackTests.test_user_codex_config_not_read` (no user MCP server or notify program) |
+| AC-007, SC-002 | `…test_server_down_refuses_capability`, `…test_codex_without_oss_refuses_capability`, `…test_codex_skill_missing_refuses_capability`, `…test_sandbox_not_nesting_refuses_capability`, `…test_probe_deadline_refuses`, `ProbeContextTests` (`…test_old_ollama_refuses_capability`, served context below 16384 or unknown) |
+| AC-008, SC-002 | `PermissionTests.test_wider_argv_refused` (exact-argv allowlist, each widening flag of the pilot, any added, removed or reordered token), `…test_extra_env_refused`, `…test_endpoint_override_env_refused`, `…test_other_codex_config_layer_refuses`, `…test_user_skills_dir_refuses` |
 | AC-009, SC-002 | `StateTests` (ignored and ref digests, caps, unreadable entries); `WrapperFallbackTests.test_changed_tree_refuses`, `…test_created_draft_refuses`, `…test_changed_reviews_refuses`, `…test_ignored_path_change_refuses`, `…test_primary_commit_refuses`, `…test_unverifiable_state_refuses` |
 | AC-010 | `ClassifyTests` (each non-recoverable cause, tail-only matching, unknown text) and `…test_non_recoverable_never_falls_back` |
 | AC-011 | `LedgerFallbackTests.test_selected_records_both_routes_and_usage` |

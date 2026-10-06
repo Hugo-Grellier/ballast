@@ -12,11 +12,12 @@ Entities from [spec.md](spec.md) (Key Entities) as they are stored. Decisions ar
 | `enabled` | bool | `false` after `--local-fallback off` |
 | `provider` | label | `ollama` (the only value) |
 | `model` | string | ledger `MODEL` pattern, not starting with `-`, no `cloud` tag (`:cloud`, `-cloud`) |
-| `endpoint` | string | `http://<loopback IP literal>:<port>`, no path, user info, query or host name; default `http://127.0.0.1:11434` |
 | `set_at` | string | UTC ISO time |
 | `set_by` | string | `operator` |
 
-Absent file, unreadable file, symlink, or invalid field: the fallback is off and the wrapper prints one line naming the problem. A corrupt setting never enables anything. `--local-fallback off` rewrites the file with `enabled: false` (kept, so the record shows the change).
+There is no endpoint field (DEC-0003): the fallback always uses Ollama's default endpoint `http://127.0.0.1:11434`, the constant `OLLAMA_ENDPOINT` in `fallback.py`, because Codex's `--oss` provider cannot be pointed elsewhere without an environment override the wrapper strips. A file that carries an `endpoint` or any other unknown field is invalid.
+
+Absent file, unreadable file, symlink, unknown or invalid field: the fallback is off and the wrapper prints one line naming the problem. A corrupt setting never enables anything. `--local-fallback off` rewrites the file with `enabled: false` (kept, so the record shows the change).
 
 ## Attempt
 
@@ -91,15 +92,18 @@ primary attempt finished
   ├─ not the step's first attempt (a draft retry) ────────► as today (cause recorded)
   └─ recoverable, first attempt
        ├─ state changed or uncheckable ► refused: changed-state
-       ├─ endpoint not loopback ─────► refused: privacy-exclusion
+       ├─ endpoint override in env ──► refused: privacy-exclusion
        ├─ server not answering ──────► refused: incompatible-capability
+       ├─ Ollama older than 0.13.4 ──► refused: incompatible-capability
        ├─ model not installed ───────► refused: unknown-free-status
        ├─ model remote / cloud ──────► refused: privacy-exclusion
        ├─ codex lacks --oss ─────────► refused: incompatible-capability
        ├─ codex sandbox won't start ─► refused: incompatible-capability
+       ├─ served context < 16384 ────► refused: incompatible-capability  (or unknown)
        ├─ checks over 10 s ──────────► refused: incompatible-capability
        ├─ other Codex config layer ──► refused: permission-mismatch
-       ├─ argv/env wider than primary► refused: permission-mismatch
+       ├─ ~/.agents/skills not empty ► refused: permission-mismatch
+       ├─ argv/env not the exact one ► refused: permission-mismatch
        ├─ step limit exhausted ──────► existing limit refusal (run stops)
        └─ selected ──► fallback attempt (once)
                           ├─ success, drafts accepted ─► step succeeds

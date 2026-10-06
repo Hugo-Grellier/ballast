@@ -9,7 +9,7 @@ description: "Task list for Qualify one zero-cost provider fallback"
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md), [decisions.md](decisions.md)
 
-**Risk**: R2, Autonomous run. Merging the PR is the single human approval (BL-INV-006). DEC-0001 in [decisions.md](decisions.md) keeps the spec as written. A step falls back only after its first primary attempt (SC-005, FR-006). Changed-state evidence covers git-ignored worktree paths and refs, and refuses when it cannot be checked (AC-009, FR-003). The open plan-review finding PD-0010 F-001 is closed by an `incompatible-capability` refusal when the project lacks Codex's Spec Kit skill for the step's command (research R5 check 9; T001, T013, T015, T029).
+**Risk**: R2, Autonomous run. Merging the PR is the single human approval (BL-INV-006). DEC-0001 in [decisions.md](decisions.md) keeps the spec as written. A step falls back only after its first primary attempt (SC-005, FR-006). Changed-state evidence covers git-ignored worktree paths and refs, and refuses when it cannot be checked (AC-009, FR-003). DEC-0003 option 1 fixes the endpoint at Ollama's default `127.0.0.1:11434`: there is no endpoint option, setting field or base-URL `--config` key, and the probes check exactly the endpoint Codex uses. DEC-0004 requires a served context of at least 16384 tokens. The permission comparison is an exact-argv allowlist, and a non-empty `~/.agents/skills` refuses (plan-review F-001 to F-004 of the third review). The earlier plan-review finding PD-0010 F-001 is closed by an `incompatible-capability` refusal when the project lacks Codex's Spec Kit skill for the step's command (research R5 check 9; T001, T013, T015, T029).
 
 **Acceptance evidence**: Every behavior acceptance criterion (AC-001 to AC-021) has a test or an explicit verification task below that cites its ID. Test names follow the [quickstart map](quickstart.md#offline-gate). Offline tests use a loopback stub Ollama (`http.server` on an ephemeral `127.0.0.1` port) that records every request. They also use fake `claude` and `codex` executables that record argv, prompt and environment. "Nothing sent" means the stub saw no request outside `/api/version`, `/api/tags` and `/api/show`, and the fake Codex never received the prompt.
 
@@ -45,7 +45,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - quota-exhausted and provider-unavailable messages from `claude` and `codex`, with account, quota and credential details redacted. Each one comes from a captured run, the CLI's source or documentation, or an earlier run's logs (research R2), and its source is recorded. When a cause has no signature for an integration, list it.
 
   Record a discovery in `specs/23-free-fallback/decisions.md` and stop when any of these holds: the host cannot run the probes; the candidate is rejected outright (`--oss` missing, or the model cannot answer); no quota signature can be found for any integration; or the configuration layers cannot be established. Never switch backend silently.
-  Done 2026-10-06: items 1 to 9 and the 16k rerun in [evaluation.md](evaluation.md#pilot) (item 10: `qwen3:4b-16k` answered `ok` under `codex exec --oss --json`, exit 0, `turn.completed` input_tokens 11905). DEC-0002 to DEC-0004 are resolved.
+  The `--config` key of the second bullet does not exist (DEC-0003 option 1): the endpoint is fixed. Done 2026-10-06: items 1 to 9 and the 16k rerun in [evaluation.md](evaluation.md#pilot) (item 10: `qwen3:4b-16k` answered `ok` under `codex exec --oss --json`, exit 0, `turn.completed` input_tokens 11905). DEC-0002 to DEC-0004 are resolved.
 - [ ] T002 Create `tests/test_fallback.py` with the shared harness (depends on T001):
   - `StubOllama`, a loopback `http.server` on an ephemeral `127.0.0.1` port that serves configurable `/api/version`, `/api/tags` and `/api/show` responses, with an optional delay, and records every request;
   - helpers that write fake `claude` and `codex` executables into a temporary `PATH` directory. They record argv, environment, `CODEX_HOME` contents and prompt to a file, and print configurable output (including `--json` event streams) and exit codes;
@@ -76,14 +76,15 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 - [X] T005 [P] Add one paragraph to `tools/spec_workflow/ledger-schema.md` (depends on T004). It describes the new `route` value and fields, the cross-field rules and the report's fallback review rule of [contracts/ledger.md](contracts/ledger.md#report). It also states that the schema version is unchanged and that an older pinned Ballast rejects a stream holding them.
 - [ ] T006 Add `SettingTests` to `tests/test_fallback.py` [AC-006, AC-020] (depends on T002):
   - `validate_model` accepts `qwen3:4b`. It rejects an empty name, a leading `-`, a name outside the ledger `MODEL` pattern and cloud tags (`:cloud`, `-cloud`), with the fixed messages of [contracts/operator-cli.md](contracts/operator-cli.md#start).
-  - `validate_endpoint` accepts `http://127.0.0.1:PORT`, other `127.0.0.0/8` literals and `http://[::1]:PORT`. It rejects `localhost`, any host name, a non-loopback IP, `https`, a path, user info, a query and a missing port (`test_non_loopback_endpoint_refused`).
+  - `test_setting_has_no_endpoint`: `write_setting` has no endpoint argument and `fallback.json` has no `endpoint` field; `read_setting` raises `SettingError` for a file that carries `endpoint` or any other unknown field; `OLLAMA_ENDPOINT` is `http://127.0.0.1:11434`.
   - `write_setting` writes `fallback.json` with mode 0600 in `autonomy.run_dir`, with the fields of [data-model.md](data-model.md#fallback-setting). `write_setting(model=None)` writes `enabled: false`.
   - `read_setting` returns `None` when the file is absent or disabled. It raises `SettingError` for a symlink, an unreadable file, bad JSON or any invalid field (`test_invalid_setting_is_off`).
 - [ ] T007 Create `tools/spec_workflow/fallback.py` (standard library only, no top-level side effects), passing T006 (depends on T006). It holds:
   - the module docstring, `RECOVERABLE`, the cause and refusal-reason constants, the `Setting` dataclass, `SettingError` and `EventError`;
-  - `validate_model` and `validate_endpoint` (via `ipaddress`, IP literal only);
-  - `write_setting`: 0600 through the `autonomy` state helpers, `set_at` in UTC, `set_by: operator`, provider `ollama`, default endpoint `http://127.0.0.1:11434`;
-  - `read_setting`: opened with `O_NOFOLLOW`; any invalid content raises `SettingError`.
+  - `validate_model`;
+  - the constants `OLLAMA_ENDPOINT = "http://127.0.0.1:11434"`, `MIN_OLLAMA_VERSION` (0.13.4) and `MIN_SERVED_CONTEXT` (16384);
+  - `write_setting(root, run_id, model)`: no endpoint argument; 0600 through the `autonomy` state helpers, `set_at` in UTC, `set_by: operator`, provider `ollama`;
+  - `read_setting`: opened with `O_NOFOLLOW`; any invalid or unknown content raises `SettingError`.
 - [ ] T008 Add `StateTests` to `tests/test_fallback.py` [AC-009] (depends on T006).
 
   `autonomy.ignored_digest` changes when any of these happens under a git-ignored path: a file is created, written (same size, mtime reset with `os.utime`), chmodded, renamed or deleted, a directory is added, or a symlink target changes. It also changes when `.specify/feature.json` changes. It ignores changes under `.ballast/`, `.venv/` and `.specify/` other than the `SPECIFY_WRITABLE` paths, and the wrapper's own log files. It never follows a symlink out of the worktree. It returns `None` for over 200,000 entries (patched cap), a walk over the time budget (patched clock), an entry that `lstat` cannot read, or a failing Git.
@@ -113,10 +114,10 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 - [ ] T010 [US1] Add US1 tests to `tests/test_fallback.py` [AC-001, AC-002, AC-003, AC-004, AC-006] (depends on T004, T009):
   - `ClassifyTests` recoverable cases: each captured quota and availability fixture, per integration, gives `quota-exhausted` or `provider-unavailable`; `cli_found=False` gives `cli-unavailable`.
   - `codex_prompt`: `/speckit-x rest` becomes `$speckit-x rest`; a `$` prompt is unchanged.
-  - `fallback_argv` is exactly `permission_args("codex", ["exec", prompt])` plus `--oss`, `--local-provider ollama`, `-m MODEL`, `--json` and the pinned base-URL `--config`. No primary extra arguments are forwarded.
+  - `fallback_argv(codex, prompt, model)` is exactly `permission_args("codex", ["exec", prompt])` plus `--oss`, `--local-provider ollama`, `-m MODEL` and `--json`. No `-c model_providers.ollama.*` or other base-URL key appears (Codex refuses it, DEC-0003), and no primary extra arguments are forwarded.
   - `fallback_env` keeps no provider key and no `OLLAMA_HOST`, `CODEX_OSS_BASE_URL` or `CODEX_OSS_PORT`. Its `CODEX_HOME` is the given private directory.
   - `parse_events` returns the agent message text, the summed usage and `complete`.
-  - `permission_mismatch` returns false for the canonical profile with the private `CODEX_HOME`.
+  - `permission_mismatch` returns false for exactly the argv `fallback_argv` builds and the env `fallback_env` builds, with the private `CODEX_HOME`.
   - `ProbeTests.test_eligible_model_passes`: the stub answers correctly, `probe` returns `None`, and only the model name is sent.
   - `WrapperFallbackTests`:
     - `test_quota_failure_completes_on_fallback`, `test_provider_unavailable_completes_on_fallback` and `test_cli_missing_completes_on_fallback`;
@@ -125,21 +126,21 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
     - `test_fallback_runs_under_same_confinement`: Autonomous; the same `confined_argv` call as the primary;
     - `test_user_codex_config_not_read`: the user's `~/.codex/config.toml` defines `mcp_servers`, a `notify` program and a default `profile`. The fake Codex sees a `CODEX_HOME` that is not the user's, is empty at start and is removed after the attempt. No MCP server or notify program from the user configuration is started.
 - [ ] T011 [US1] Implement `classify(integration, exit_code, blocked, contained, tail, *, cli_found)` in `tools/spec_workflow/fallback.py` per [data-model.md](data-model.md#normalized-cause) (depends on T001, T010). It checks reserved wrapper exit codes and the blocking status first, then the per-integration signature tables pinned from T001, matched only against the last 64 KiB of stdout and stderr. Anything unmatched is `unrecognized`.
-- [ ] T037 [US1] Add `ProbeContextTests` to `tests/test_fallback.py` (depends on T010; tests first, so T013 depends on this task): against a stub Ollama, `/api/show` with `num_ctx 16384` or more passes; `num_ctx 4096`, a missing `num_ctx` and an unparsable one each refuse as `incompatible-capability` with the detail `served context below 16384` or `served context unknown` [FR-006, DEC-0004]. The stub shape comes from [evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06) item 10.
+- [ ] T037 [US1] Add `ProbeContextTests` to `tests/test_fallback.py` (depends on T010; tests first, so T013 depends on this task): against a stub Ollama, `/api/show` with `num_ctx 16384` or more passes; `num_ctx 4096`, a missing `num_ctx` and an unparsable one each refuse as `incompatible-capability` with the detail `served context below 16384` or `served context unknown` [FR-006, DEC-0004]. `test_old_ollama_refuses_capability`: `/api/version` `0.6.8` refuses with `ollama older than 0.13.4`, `0.13.4` and `0.35.1` pass, and an unparsable version refuses with `ollama version unknown` [DEC-0003]. The stub shape comes from [evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06) item 10.
 - [ ] T012 [US1] Implement the invocation helpers in `tools/spec_workflow/fallback.py` (depends on T011):
   - `codex_prompt`;
-  - `fallback_argv`: research R6, with the `--config` key recorded in T001;
-  - `fallback_env(env, codex_home)`: `autonomy.confined_env(env, None)` minus the three OSS variables, with `CODEX_HOME=codex_home`;
-  - `permission_mismatch(argv, env, codex_home)`, against the canonical headless Codex profile: `workspace-write`, `network_access=false`, `writable_roots=[]`, no `FORBIDDEN` token; no extra `--sandbox`, `--add-dir`, `--dangerously-*` or `--profile`; no `-c`/`--config` key outside the allowlist; no environment variable beyond `confined_env` except `CODEX_HOME` equal to `codex_home`;
+  - `fallback_argv(codex, prompt, model)`: research R6, the fixed token list with no base-URL key;
+  - `fallback_env(env, codex_home)`: `autonomy.confined_env(env, None)` minus `OLLAMA_HOST`, `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, with `CODEX_HOME=codex_home`;
+  - `permission_mismatch(argv, env, codex_home, *, codex, prompt, model)`, an exact-argv allowlist and not a denylist (research R6, plan-review F-002): true unless `argv == fallback_argv(codex, prompt, model)` token for token, and `env` holds only the names `confined_env` keeps plus `CODEX_HOME == codex_home` and none of the three endpoint variables. The comparison is on the inner Codex argv, before `confined_argv` or the systemd scope wraps it. No token list is maintained;
   - `parse_events`: raises `EventError` on an unparsable stream; `complete` only when every turn reported usage.
-- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt)` in `tools/spec_workflow/fallback.py` (depends on T012, T037). It runs research R5 checks 5 to 11 in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
-  1. the endpoint is a loopback literal;
-  2. `GET /api/version`;
+- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt)` in `tools/spec_workflow/fallback.py` (depends on T012, T037). It runs research R5 checks 5 to 11 and 11a in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
+  1. the probes use only `OLLAMA_ENDPOINT`, and the built environment holds none of `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT` and `OLLAMA_HOST` (else `privacy-exclusion`), so the probes check exactly the endpoint Codex will use;
+  2. `GET /api/version` answers and is at least `MIN_OLLAMA_VERSION` 0.13.4 (`ollama older than 0.13.4`, or `ollama version unknown`);
   3. `GET /api/tags` lists the exact name with a nonzero size and digest;
   4. there is no `remote_host`/`remote_model` in the tag entry or in `POST /api/show`, and no cloud tag;
   5. a trusted `codex` via `autonomy.trusted_program`, whose `codex exec --help` lists `--oss` and `--local-provider`; and, when `codex_prompt(prompt)` starts with `$<command>`, the project's Codex skill for that command at the path T001 recorded (a regular file inside `root`, checked with `lstat`, never followed through a symlink); a missing skill refuses as `incompatible-capability` with the detail `codex skill <command> is not installed`;
   6. Codex's sandbox starts: `autonomy.codex_sandbox_nests` for Autonomous, and for human-gated the same `codex sandbox` probe without bubblewrap, added as a helper in `tools/spec_workflow/autonomy.py` if none exists;
-  7. no Codex configuration layer outside the private home exists among those T001 found, and the layer list is known;
+  7. no Codex configuration layer outside the private home exists among those T001 found, and the layer list is known; and `~/.agents/skills` in the operator's home is absent or an empty directory (`lstat`, never followed through a symlink; a non-empty directory, a symlink or an unreadable one refuses as `permission-mismatch` with the detail `user skills directory is not empty`, plan-review F-003);
   8. the model's served context is at least `MIN_SERVED_CONTEXT` (16384; the pilot's trivial prompt needed 11905 input tokens), read from `POST /api/show` `parameters` (`num_ctx NNNN`); a missing `num_ctx`, which means the server default, counts as unknown and refuses (T037, DEC-0004).
 
   It returns the fixed refusal reason with a fixed detail phrase, or `None`.
@@ -186,8 +187,10 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
     - `test_probe_deadline_refuses`: a slow stub exhausts the 10 s budget (patched clock) and the result is `incompatible-capability`;
     - a proxy environment (`http_proxy`) that does not redirect a probe.
   - `PermissionTests`:
-    - `test_wider_argv_refused`: one case per widening token (`--dangerously-bypass-approvals-and-sandbox`, `--sandbox danger-full-access`, `--add-dir`, `network_access=true`, a non-empty `writable_roots`, `--profile`, an unlisted `--config` key);
+    - `test_wider_argv_refused`: the comparison is an exact-argv allowlist, so each case alters the argv `fallback_argv` builds and must refuse. One case per widening flag: `--approve-for-me`, `--enable X`/`--disable X`, `--worktree`, `--ignore-user-config`, `-p`/`--profile`, `--ignore-rules`, `--strict-config`, `--add-dir`, `--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`, `--dangerously-bypass-hook-trust`, any `-c`/`--config` key (including `network_access=true`, a non-empty `writable_roots` and `model_providers.ollama.base_url`), a repeated `--oss`, `-m` or `--local-provider`, and a flag nobody listed (`--some-future-flag`). Also one case each for a removed token, a reordered token and a changed model. The unchanged argv passes;
     - `test_extra_env_refused`, including a `CODEX_HOME` other than the private one;
+    - `test_endpoint_override_env_refused`: `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT` or `OLLAMA_HOST` in the built environment refuses as `privacy-exclusion`, and `fallback_env` strips all three from a parent environment that has them;
+    - `test_user_skills_dir_refuses` [plan-review F-003]: a non-empty `~/.agents/skills`, a symlink there and an unreadable one each refuse as `permission-mismatch` before the prompt is sent, in both modes. An absent and an empty directory pass. The project's own `.agents/skills` does not count;
     - `test_other_codex_config_layer_refuses`: a system or project Codex config layer that sets `mcp_servers`, `notify` or `profile`, or an unknown layer list, refuses with `permission-mismatch`.
   - `ClassifyTests` non-recoverable cases: `EXIT_BLOCKED`/`BLOCKED_*`, `EXIT_TAMPERED`/not contained, `EXIT_LIMIT`/timeout, `EXIT_INTERRUPTED`, a refused draft, exit 0, unknown text, and a signature present only before the last 64 KiB.
   - `WrapperFallbackTests`:
@@ -277,8 +280,9 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 - [ ] T024 [US4] Add `RunCliTests` to `tests/test_fallback.py` [AC-019, AC-020, AC-021] (depends on T007, T018):
   - `test_start_and_resume_flags`:
-    - `--local-fallback MODEL`, the `--name=value` form, `--local-fallback-endpoint`, and resume with a model and with `off`;
-    - the printed lines `Local fallback: on (ollama MODEL at ENDPOINT); turn it off with ballast run resume RUN --local-fallback off` and `Local fallback: off`;
+    - `--local-fallback MODEL`, the `--name=value` form, and resume with a model and with `off`;
+    - `--local-fallback-endpoint` in either form is refused on start and resume with exit 2 and nothing written (DEC-0003);
+    - the printed lines `Local fallback: on (ollama MODEL at 127.0.0.1:11434); turn it off with ballast run resume RUN --local-fallback off` and `Local fallback: off`;
     - an absent flag keeps the stored setting, a value after `-i` is an input value, and a repeated flag is refused.
   - Each refusal of [contracts/operator-cli.md](contracts/operator-cli.md#start) exits 2 before any engine or agent starts, and writes nothing.
   - `test_chat_refuses_flag`, for start and resume.
@@ -292,7 +296,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Implementation for User Story 4
 
-- [ ] T026 [US4] Add `--local-fallback` and `--local-fallback-endpoint` to `tools/spec_workflow/run.py` (depends on T024):
+- [ ] T026 [US4] Add `--local-fallback` (and no endpoint option, DEC-0003) to `tools/spec_workflow/run.py` (depends on T024):
   - parse them in `_split_mode` and in the human-gated and Autonomous resume option parsing, with the `--mode` rules;
   - refuse Chat and the invalid cases with the fixed messages, and exit 2 before anything starts;
   - call `fallback.write_setting` before the engine starts, and print the on/off line;
@@ -314,12 +318,12 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
   Note that the workflow runs quickstart pilot steps 3 to 5 and appends them there.
 - [ ] T029 [P] [US4] Add a "Local fallback" subsection to `templates/policies/spec-kit-workflow.md` [AC-019] (depends on T016, T026). It covers:
-  - how to enable it with `--local-fallback MODEL` and the endpoint option, and that the project needs Spec Kit's Codex integration installed (a missing Codex skill refuses as `incompatible-capability`);
-  - what each refusal reason means, including `changed-state` for an uncheckable worktree and `permission-mismatch` for a Codex configuration layer;
+  - how to enable it with `--local-fallback MODEL`, that it always uses Ollama's default endpoint `127.0.0.1:11434` and a local model served with a context of at least 16384 tokens (for example a `num_ctx 16384` variant), that Ollama must be 0.13.4 or newer, and that the project needs Spec Kit's Codex integration installed (a missing Codex skill refuses as `incompatible-capability`);
+  - what each refusal reason means, including `changed-state` for an uncheckable worktree and `permission-mismatch` for a Codex configuration layer or a non-empty `~/.agents/skills` (empty it, or leave the fallback off);
   - that it applies only to a step's first attempt;
   - how to turn it off: `resume RUN --local-fallback off`, or start without the flag;
   - where the setting shows: `ballast run status`, `record.md`, and the step's `meta.json`;
-  - that it is never available in Chat runs, never routes to a paid or remote backend, never reads the user's Codex configuration and never loosens a sandbox;
+  - that it is never available in Chat runs, never routes to a paid or remote backend, never reads the user's Codex configuration, never runs while the user's skills directory is non-empty and never loosens a sandbox;
   - where to read the evidence: `./scripts/agent-metrics --run RUN`.
 - [X] T030 [P] [US4] Add one paragraph to `templates/policies/model-routing.md` [AC-016, AC-019]: the local fallback is a zero-cost availability route, not a routing profile, and a review it completes never counts as cross-provider review.
 - [ ] T031 [P] [US4] Add one line about `--local-fallback` under the `ballast run` options in `README.md`, linking the spec-kit-workflow subsection (depends on T026).
@@ -333,6 +337,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 - [ ] T032 [P] Write `docs/adr/0012-local-zero-cost-fallback.md` with status proposed; it is accepted only when the PR merges (depends on T028). It records:
   - the decision of plan.md ADR-0012 and its conditions;
   - the first-attempt-only rule and the changed-state evidence (DEC-0001);
+  - the fixed default endpoint, the Ollama and served-context minimums (DEC-0003, DEC-0004) and the exact-argv comparison;
   - the runtime checks, the private `CODEX_HOME` and the permission comparison;
   - the cost of the state walk;
   - the remaining residual risk, the model-pull race;
@@ -482,7 +487,7 @@ Wave 18:
 
 ## Notes
 
-- Never loosen either sandbox, add a writable root, a bypass flag or tool network, or read the user's Codex configuration, to make the fallback run (FR-005). A check that cannot be established refuses.
+- Never loosen either sandbox, add a writable root, a bypass flag or tool network, read the user's Codex configuration, or add an endpoint option or a `-c model_providers.ollama.*` key, to make the fallback run (FR-005, DEC-0003). A check that cannot be established refuses.
 - A pilot result that contradicts research R1 to R10 is a discovery for `decisions.md`, not a silent design change.
 - No account, quota, credential, prompt or agent output text goes into a ledger event, step entry, `meta.json` field, stderr refusal line or fixture.
 - Commit after each task or logical group with a Conventional Commit message.
