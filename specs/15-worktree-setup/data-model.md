@@ -46,7 +46,7 @@ Not persisted; built per preparation.
 | `record` | `installation.json` (live, through `launcher.read_record`) or `kept-installation.json` (kept), read after the shared lock is held |
 | `rejected` | `None`, or the reason it was not used |
 
-Order: own kept → primary live → primary kept → each other linked worktree's live, then kept, in `git worktree list` order. The first candidate with `rejected = None` after copying is the source.
+Order: own kept → primary live → primary kept → each other linked worktree's live, then kept, in `git worktree list` order. A checkout with no `installation.json` holds no live candidate and one with no `.ballast/setup/kept` directory no kept candidate; neither is reported or counted. The first candidate with `rejected = None` after copying is the source.
 
 Rejection reasons (stable text, used in the outcome and tests):
 
@@ -60,6 +60,7 @@ Rejection reasons (stable text, used in the outcome and tests):
 | `it is for <ref>, not <pin>` | `record.ref` differs from the pin |
 | `it was built for another configuration` | `record.fingerprint` differs (`ballast.toml` bytes, standard content or Spec Kit version) |
 | `its record predates file-mode checks` | no `executable` list |
+| `it reaches its installation through a symbolic link at <path>` | a directory between the checkout and a recorded entry (for a kept copy, including `.ballast/setup/kept`) is a link |
 | `its content differs from its record at <path>` | stage copy digests differ |
 | `its file modes differ from its record at <path>` | stage copy executable set differs |
 | `it is unreadable: <error>` | any `OSError` while reading or copying |

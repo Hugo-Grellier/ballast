@@ -1,0 +1,37 @@
+# Review: implementation (security)
+
+- Role: security reviewer (R2: the paths `tools/setup` installs and where it copies them from, what the CLI executes before the launcher, the launcher's trust model)
+- Agent/model: claude/claude-opus-5-5. Two passes: an independent fresh-context pass (same model, no authoring context, read-only, with two scratch reproductions) and the driving agent's own pass. Reduced independence: no cross-provider reviewer ran.
+- Base: `1ce1f9a..HEAD` (`tools/setup`, `tools/ballast`, `tools/spec_workflow/launcher.py`, `tools/cli.toml`, tests, README, ADR-0009)
+- Artifacts: [spec.md](../spec.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [decisions.md](../decisions.md), `docs/policies/security.md`, `docs/policies/project/workflow.md`, constitution BL-INV-001 to BL-INV-006, ADR-0007, ADR-0009
+- Verdict: approved (after the fixes below)
+
+## What was examined
+
+- **Reuse only verified matching-pin content.** A candidate is read only through operator state keyed by its resolved path; its record is read after its existing `checkout.lock` is held shared (`_share`, opened `O_RDONLY | O_NOFOLLOW`, never created); `mismatch` requires the pin, the fingerprint (standard content, Spec Kit version, `ballast.toml` bytes) and an `executable` list; `copy_verified` hashes the stage copy against `record.files` and compares its execute bits with `record.executable`; `check_unchanged` requires the record `validate` builds from the stage to equal the verified one; the switch is verified live against it. A record lists `entries`; anything outside them (run state, `.specify/workflow-state`, local caches, bytecode) is never copied.
+- **No cross-worktree run state or trust sharing.** No code path in prepare mode opens any `trusted.json` (audit-hook test); the only `trusted.json` touched is this worktree's own, removed unread (DEC-0002). Journal, holder, lock and record are written only in this worktree's state; another checkout's state is opened read-only. Ten-worktree tests compare every other tree and state byte for byte.
+- **Symlinks and TOCTOU.** Own parents: `check_links(PARENTS)` before staging and for every planned path before the switch (ADR-0007). Source parents: `_linked_parent` rejects a candidate reached through a linked directory, and the copy opens every source directory with `O_NOFOLLOW`. Stage: see SEC-001. Removal: `_remove_entry` and `launcher._remove_tree` never follow a link.
+- **Permissions.** State directory `0o700`, records `0o600` via `_write_json`; copied files keep only `mode & 0o755`.
+- **Concurrency.** All locks are non-blocking `flock`s, so no lock-ordering deadlock between worktrees preparing from each other; one exclusive holder per worktree; a source's shared lock blocks only a setup there.
+- **What runs before the trust preflight.** The CLI runs only the pinned version's `tools/setup` from the cache after `damage()` verified it (`-IS`), or from `BALLAST_STANDARD_DIR`, which the operator chose. Setup runs only `git` (see SEC-002); no `uvx`, `patch` or network on the prepare path.
+
+## Findings
+
+| ID | Class | Severity | Location | Evidence | Required action |
+|---|---|---|---|---|---|
+| SEC-001 | architecture issue | high | `tools/setup` `copy_verified` (`mkdir(exist_ok)`, `copy2`, `copytree`, `_remove` on failure) | Reproduced in scratch by the independent pass: a link planted as `stage/.specify` while the stage is filled redirects the copy's writes outside the stage, and the failure cleanup `rmtree`s the target directory through the link. The stage lies in the checkout, which an agent can write; ADR-0007's build had the same exposure, but preparation now reaches it from `ballast run`. | Copy and remove without following links; regression test. |
+| SEC-002 | architecture issue | high | `tools/setup` `tracked()` and every git call, reached from `ballast run` → prepare | Reproduced in scratch: repository configuration with `core.fsmonitor` (shared by all worktrees, or reached through a redirected `.git` pointer, which is a protected input checked only later by the launcher) runs a program as the operator on `git ls-files`, before the trust preflight. | Run git with `core.fsmonitor` disabled; regression test. |
+| SEC-003 | implementation bug | medium | `tools/setup` `attempt` | The verified copy and `validate`'s record were never compared, so an agent writing into the stage between them could add a skill or policy (outside `launcher.BASES`) that would then be recorded as operator-verified and propagate to later worktrees. | Require `validate`'s record to equal the verified one; regression test. |
+| SEC-004 | implementation bug | low | `copy_verified` | Modes other than execute bits (set-id, group/world write) and empty directories were copied unchecked. | Drop set-id and group/world write on copy; empty directories accepted (no content; tools run under `-I`, so no script directory on `sys.path`). |
+| SEC-005 | spec ambiguity | low | `fill_from_candidates`; `ballast setup` | (a) An agent that deletes every installed entry in a trusted worktree makes the next `ballast run` re-prepare and remove the operator's own baseline: fails closed, but the old message claimed an earlier checkout left it. (b) `ballast setup` at a reused path keeps an earlier checkout's baseline; it passes only if every protected input is byte-identical to what the operator reviewed. | (a) Reword the message. (b) Accept; unchanged by this feature (ADR-0007 behavior). |
+| SEC-006 | architecture issue | info | `copy_verified`, `switch` | After the copy, a surviving process in the new worktree could still swap a stage directory for a link to identical content before a rename; content stays verified by `check_unchanged` and the live verification. Same residual as feature 14's SEC-004; agent scopes are killed at step end and the launcher holds the checkout while a run is active. | Accept; residual risk. |
+| SEC-007 | spec ambiguity | info | `candidates()` | `git worktree list` follows the checkout's `.git` pointer, so a forged list could name checkouts of another repository; such a source still has to match an operator-written record for that exact path, pin and fingerprint, so no unrecorded content is accepted. A failing `git worktree list` yields `(0 checked)` without its cause. | Accept; note for a follow-up. |
+
+## Resolution
+
+- SEC-001: fixed in `de68125`: `_copy_entry`/`_copy_node` open every directory on both sides with `O_NOFOLLOW` and create files with `O_EXCL`; failed copies are removed with `_remove_entry`. Regression test `PrepareTests.test_stage_link_is_never_followed` failed before the fix (outside directory emptied) and passes after. The copy is shared with `ballast setup`'s primary and kept copies.
+- SEC-002: fixed in `de68125` (`GIT` with `-c core.fsmonitor=false` for every git call in `tools/setup`); regression test `PrepareTests.test_git_configuration_never_runs_a_program` failed before the fix.
+- SEC-003: fixed in `de68125` (`check_unchanged`); regression test `PrepareTests.test_stage_changed_after_verification_is_refused` failed before the fix.
+- SEC-004: fixed for modes in `de68125` (`mode & 0o755`); empty directories accepted with the reason above.
+- SEC-005: (a) reworded in `de68125` (`removed a trust baseline recorded before this installation`); (b) accepted; both listed for the merge review. Stale baseline removal is recorded as DEC-0002.
+- SEC-006, SEC-007: accepted; listed for the merge review as residual risks of this R2 change.
