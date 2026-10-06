@@ -29,6 +29,8 @@ None.
 | ID | Point | Decision | Summary | Decided by | Artifact | Evidence | Superseded by |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | PD-0001 | scope | accept (agent-provisional, after 1 retry) | Issue #55 is one specifiable outcome: ballast setup records the trust baseline for protected inputs it just wrote, so a clean checkout can start a run without a separate ballast trust; agent-provisional. | claude/claude-opus-5-5 (author) | [.specify/feature.json](../../../.specify/feature.json) `b2888ca192d6` | <https://github.com/Hugo-Grellier/ballast/issues/55>, [.specify/feature.json](../../../.specify/feature.json), [docs/policies/spec-kit-workflow.md](../../../docs/policies/spec-kit-workflow.md), [docs/policies/workflow.md](../../../docs/policies/workflow.md), [docs/policies/project/workflow.md](../../../docs/policies/project/workflow.md), [docs/plans/2026-10-02-product-roadmap.md](../../../docs/plans/2026-10-02-product-roadmap.md), [specs/TECHNICAL-SPEC.md](../../../specs/TECHNICAL-SPEC.md), [AGENTS.md](../../../AGENTS.md) |  |
+| PD-0002 | clarification | assume (agent-provisional) | D-04: setup records no baseline when any run state exists, an operator-state run is unfinished, or the in-progress or BALLAST_TAMPERED marker exists | claude/claude-opus-5-5 (author) | [specs/55-setup-trust/discovery.md](../../../specs/55-setup-trust/discovery.md) `7433bf050ec5` | [specs/55-setup-trust/discovery.md](../../../specs/55-setup-trust/discovery.md), [tools/spec_workflow/launcher.py](../../../tools/spec_workflow/launcher.py) |  |
+| PD-0003 | clarification | assume (agent-provisional) | D-05: the baseline's source is a provenance file in operator state beside trusted.json, bound to its digest and reported in the launcher's status --json | claude/claude-opus-5-5 (author) | [specs/55-setup-trust/discovery.md](../../../specs/55-setup-trust/discovery.md) `7433bf050ec5` | [specs/55-setup-trust/discovery.md](../../../specs/55-setup-trust/discovery.md), [tools/spec_workflow/launcher.py](../../../tools/spec_workflow/launcher.py), [tools/ballast](../../../tools/ballast), [docs/adr/0002-cli-standard-manifest.md](../../../docs/adr/0002-cli-standard-manifest.md) |  |
 
 ### PD-0001 basis
 
@@ -38,6 +40,14 @@ Refused drafts before this one (agent-provisional retries):
 
 - scope draft must not carry an assumption
 
+### PD-0002 basis
+
+> It only adds refusals inside the eligibility boundary the operator set in D-02 and D-03 and never widens trust; a refused checkout falls back to today's operator `ballast trust`. Run state lives under .specify/workflows/runs and .specify/workflow-state, which the launcher's comparison skips (tools/spec_workflow/launcher.py), so its presence shows agents ran there. Reversible by dropping the extra check.
+
+### PD-0003 basis
+
+> The launcher's comparison stays unchanged as the Issue and IAC-4 require (tools/spec_workflow/launcher.py), doctor keeps reading only status --json (tools/ballast, ADR-0002), and an absent or mismatched provenance file reads as operator trust, so the file can never make a checkout trusted. Reversible: the file is operator state that can be dropped without touching any baseline.
+
 ## Reviews
 
 No review recorded yet.
@@ -45,6 +55,14 @@ No review recorded yet.
 ## Open findings
 
 None.
+
+## Fix loop
+
+- Cycles used: 0 of 3
+
+## Block resolutions
+
+- HD-0001 at 2026-10-06T17:45:45+00:00 by operator: resolved the upstream-sync block at discover; resumed in Autonomous at discover; changed during the block: `specs/55-setup-trust/discovery.md`; reference: operator resumed after the upstream-sync block at discover
 
 ## Checks
 
