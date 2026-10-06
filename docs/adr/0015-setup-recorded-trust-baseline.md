@@ -1,4 +1,4 @@
-# ADR-0014: Setup records the trust baseline when it installed exactly what a human reviewed
+# ADR-0015: Setup records the trust baseline when it installed exactly what a human reviewed
 
 - Status: proposed (with the implementation of [feature 55](../../specs/55-setup-trust/spec.md), 2026-10-06); accepted when its PR merges
 - Feature: [55-setup-trust](../../specs/55-setup-trust/spec.md), FR-001 to FR-020, AC-001 to AC-027; decisions R1 to R19 in its [research](../../specs/55-setup-trust/research.md)

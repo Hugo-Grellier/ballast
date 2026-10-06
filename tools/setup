@@ -26,7 +26,7 @@ another checkout's trust baseline.
 
 Once an installation is in place, setup and a preparation record this checkout's
 trust baseline themselves when it holds exactly what they installed from
-configuration a human reviewed and no agent has run there (ADR-0014,
+configuration a human reviewed and no agent has run there (ADR-0015,
 `spec_workflow/setup_trust.py` decides); otherwise they record nothing and
 `ballast trust` stays the operator's step. `--check` never does.
 
@@ -317,7 +317,7 @@ SETUP_REMINDER = [
 # How long a preparation retries a lock another preparation holds for a moment.
 LOCK_RETRY_SECONDS = 2.0
 # ... and how long it waits for one that is deciding the trust baseline, which
-# may ask the pinned repository's default branch over the network (ADR-0014).
+# may ask the pinned repository's default branch over the network (ADR-0015).
 SETTLE_WAIT_SECONDS = 240.0
 
 
@@ -721,7 +721,7 @@ class Setup:
         return None
 
     def settling(self, state: Path) -> bool:
-        """Whether the live holder is deciding the trust baseline (ADR-0014)."""
+        """Whether the live holder is deciding the trust baseline (ADR-0015)."""
         holder = _read_json(state / HOLDER)
         pid = holder.get("pid") if isinstance(holder, dict) else None
         if not isinstance(pid, int) or holder.get("phase") != "settling":

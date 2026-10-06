@@ -34,7 +34,7 @@
 | AC-022 | `SetupBaselineLauncherTests.test_a_changed_input_is_refused_exactly_as_after_trust` (exact refusal text for `status`, `run`, `ledger`, `intake`, exit 2) |
 | AC-023 | See TEST-008: existing tests gained lines, and six existing lines were edited (documented in DEC-0003 except the `tests/test_ballast.py` one). No launcher trust or refusal test was edited. |
 | AC-024 | `SetupBaselineLauncherTests.test_the_refusal_never_depends_on_the_provenance` (five provenance shapes; same refusal), `test_a_forged_setup_provenance_never_trusts_a_checkout`; `RecordBaselineTests.test_source_and_operator_baseline_for_every_provenance` |
-| AC-025 to AC-027 | Documentation; `tests/test_governance.py` was not changed and has no ADR-0014 or BL-INV-002 specific assertion, so these rest on documentation review (as the spec states) |
+| AC-025 to AC-027 | Documentation; `tests/test_governance.py` was not changed and has no ADR-0015 or BL-INV-002 specific assertion, so these rest on documentation review (as the spec states) |
 | FR-012, FR-020 and write order | `RecordBaselineTests` (bytes equal today's serialization, provenance written first, crash between writes, 0600 and no link followed, ten concurrent `add_reviewed` processes); `SharedRulesTests` (shared environment, stdlib-only imports, `--check` and doctor never import `setup_trust`); `RecordStepTests` (recheck and rollback) |
 
 ## Review

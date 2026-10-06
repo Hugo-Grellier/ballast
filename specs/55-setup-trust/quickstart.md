@@ -39,7 +39,7 @@ Test module names are the plan's; `tasks.md` fixes the exact test names.
 | AC-022 | after a setup-recorded baseline, edit `.specify/scripts/...` → launcher refuses with today's message | `tests/test_spec_workflow.py` |
 | AC-023 | existing launcher trust and refusal tests unedited and passing | `git diff main -- tests/test_spec_workflow.py` shows additions only in new classes; full suite green |
 | AC-024 | provenance missing, unreadable, unbound, `setup` but unbound → `status --json` says `trust`; refusal unaffected either way | `tests/test_spec_workflow.py` |
-| AC-025 | ADR-0014 exists; ADR-0007 and ADR-0011 mark the superseded clauses; roadmap wording updated | review of the PR diff; `tests/test_governance.py` link checks |
+| AC-025 | ADR-0015 exists; ADR-0007 and ADR-0011 mark the superseded clauses; roadmap wording updated | review of the PR diff; `tests/test_governance.py` link checks |
 | AC-026 | constitution BL-INV-002 amended, version 1.2.0, amendment history entry | review; `tests/test_governance.py` |
 | AC-027 | README and `templates/policies/spec-kit-workflow.md` describe conditions, network and Git authority, when `ballast trust` is still needed, doctor's source | `ballast-documentation-review` |
 

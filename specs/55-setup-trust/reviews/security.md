@@ -3,7 +3,7 @@
 - Reviewer: security reviewer, independent context
 - Change: `git diff 641fa7f..HEAD` (ee50e93, 5201073, 3d0a087, c659760), branch `feat/55-setup-trust`, risk R2 (launcher trust model)
 - Scope examined: `tools/spec_workflow/setup_trust.py` (all), `tools/spec_workflow/launcher.py` (`record_baseline`, `_provenance`, `baseline_source`, `operator_baseline`, `reviewed_repositories`, `add_reviewed`, `_trust`, `_review_repository`, `_status`), `tools/setup` (`main`, `prepare`, `settle`, `closing`, preparation's stale-baseline removal, recovery), `tools/spec_workflow/branch_sync.py` and `draft_pr.py` (shared Git environment), `tools/ballast` (doctor), `tools/init`; tests `tests/test_setup_trust.py` and the new classes in `tests/test_spec_workflow.py` (read for coverage, not run in full).
-- Policies and artifacts read: `AGENTS.md`, `.specify/memory/constitution.md` (BL-INV-002, BL-INV-003, the rest), `docs/policies/security.md` (no `docs/policies/project/security.md` exists), ADR-0005, ADR-0014, the feature's `spec.md`, `research.md`, `data-model.md`, `contracts/*.md`, `decisions.md`, `README.md` setup section.
+- Policies and artifacts read: `AGENTS.md`, `.specify/memory/constitution.md` (BL-INV-002, BL-INV-003, the rest), `docs/policies/security.md` (no `docs/policies/project/security.md` exists), ADR-0005, ADR-0015, the feature's `spec.md`, `research.md`, `data-model.md`, `contracts/*.md`, `decisions.md`, `README.md` setup section.
 
 ## What was checked
 
@@ -104,7 +104,7 @@ findings:
   - id: SEC-004
     severity: info
     invariant: BL-INV-002
-    location: docs/adr/0014-setup-recorded-trust-baseline.md (Decision 9, Consequences); launcher.py add_reviewed
+    location: docs/adr/0015-setup-recorded-trust-baseline.md (Decision 9, Consequences); launcher.py add_reviewed
     description: >
       Unresolved assumption, accepted by the operator (D-01 to D-03) but not
       stated. "Reviewed" for the default-branch alternative means "equal to what
@@ -117,7 +117,7 @@ findings:
       sound given a protected default branch, but the ADR and README do not say
       the safety depends on it.
     required_action: >
-      State in ADR-0014 and the README section that the guarantee holds only if
+      State in ADR-0015 and the README section that the guarantee holds only if
       the default branch is protected and its changes reviewed, and that
       `reviewed-repositories.json` entries should be removed when a repository
       changes hands. No code change required.
@@ -151,7 +151,7 @@ Resolved by the implementer after the review; each fix has a regression test in 
 - SEC-001 (medium): fixed. `setup_trust._check_parents` refuses a link in any directory above a protected input, on every path that reaches `settle` (the "nothing changed" and recovered paths included). Tests: `LocalIneligibleTests.test_a_linked_protected_directory_is_not_recorded`, `test_setup_says_so_for_a_linked_directory`.
 - SEC-002 (low): fixed. `_check_pointer` requires the bytes it reads to hash to the snapshot's `.git` digest. Test: `WorktreePointerTests.test_a_pointer_swapped_after_the_snapshot`.
 - SEC-003 (low): fixed without relying on the Git version. Every local Git command now carries `-c protocol.allow=never`, so a promisor remote named by the checkout's agent-writable configuration can never be contacted, with or without `GIT_NO_LAZY_FETCH` (Git 2.44 and later). The two network commands do not carry it. Test: `ObservationTests.test_only_the_documented_commands_run`.
-- SEC-004 (info): documented. ADR-0014 "Residual risks", README and `decisions.md` DEC-0008 say what "reviewed" means, how to drop a repository from the record, and that binding a repository to one project is a spec change for the human.
-- SEC-005 (info): fixed and documented. A standard under an agent temp directory is refused like one inside the checkout (`LocalIneligibleTests.test_a_standard_in_a_temp_directory`); ADR-0014 says the `HEAD` check and the `origin` scheme are early refusals, not the boundary.
+- SEC-004 (info): documented. ADR-0015 "Residual risks", README and `decisions.md` DEC-0008 say what "reviewed" means, how to drop a repository from the record, and that binding a repository to one project is a spec change for the human.
+- SEC-005 (info): fixed and documented. A standard under an agent temp directory is refused like one inside the checkout (`LocalIneligibleTests.test_a_standard_in_a_temp_directory`); ADR-0015 says the `HEAD` check and the `origin` scheme are early refusals, not the boundary.
 
 Verdict after resolution: approved, with DEC-0008 and the two agent inferences left to the merge reviewer.

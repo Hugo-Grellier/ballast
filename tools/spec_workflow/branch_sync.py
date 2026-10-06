@@ -95,7 +95,7 @@ THROWAWAY_COMMANDS = frozenset(
     }
 )
 # One copy of the Git environment rules, shared with setup's observation of the
-# pinned repository's default branch (ADR-0014; plan-review F-002).
+# pinned repository's default branch (ADR-0015; plan-review F-002).
 DROPPED_ENV = setup_trust.DROPPED_ENV
 DIRTY_PATHS = 10
 CONFLICT_PATHS = 20

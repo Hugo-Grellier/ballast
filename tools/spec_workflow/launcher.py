@@ -28,7 +28,7 @@ them. They also refuse while the pin differs from the installed version.
 directory, and the repository `ballast.toml` pins as one you reviewed. `ballast
 setup` and a worktree's first-command preparation record the same baseline when
 the checkout holds exactly what they installed from reviewed configuration
-(ADR-0014); the source is kept beside it and never affects the comparison.
+(ADR-0015); the source is kept beside it and never affects the comparison.
 `run`, `ledger` and `intake` refuse unless those inputs still match, no tamper
 marker exists, and no agent step was left unfinished. This file uses only the
 standard library and imports nothing from the checkout; agent.py imports its
@@ -56,7 +56,7 @@ from pathlib import Path
 TAMPER_MARKER = "BALLAST_TAMPERED"
 IN_PROGRESS = "in-progress"
 TRUSTED = "trusted.json"
-# Who recorded the baseline, bound to its exact bytes; display only (ADR-0014).
+# Who recorded the baseline, bound to its exact bytes; display only (ADR-0015).
 TRUSTED_SOURCE = "trusted-source.json"
 # Machine-wide: the repositories `ballast trust` reviewed, identities only.
 REVIEWED = "reviewed-repositories.json"
@@ -304,7 +304,7 @@ def record_baseline(
 
     The only writer of `trusted.json`. It decides nothing about eligibility:
     `ballast trust` (the operator) and `setup_trust` (setup and preparation,
-    under ADR-0014's conditions) call it. The provenance is bound to the exact
+    under ADR-0015's conditions) call it. The provenance is bound to the exact
     baseline bytes, so a crash between the two writes leaves a record bound to a
     baseline that was never written, which reads as the old baseline's `trust`.
     Raises OSError; the caller reports it.
@@ -659,7 +659,7 @@ def _review_repository(root: Path, inputs: dict[str, str]) -> None:
     """Remember the repository the trusted `ballast.toml` pins as reviewed.
 
     It decides which default branch setup may later count as reviewed
-    (ADR-0014). Failing to write it leaves the baseline recorded: warn only.
+    (ADR-0015). Failing to write it leaves the baseline recorded: warn only.
     """
     try:
         text = read_config(root)

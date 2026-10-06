@@ -2,7 +2,7 @@
 
 - Reviewer: independent security reviewer, a different model from the author and from the first security review, no shared context with either.
 - Change: `git diff origin/main...HEAD` on `feat/55-setup-trust` at `cbde7e2`, risk R2 (the launcher's trust model; who may record a baseline).
-- Read: `CLAUDE.md`, `.agents/skills/ballast-security-review/SKILL.md`, `docs/policies/security.md` (no project override exists), the constitution (BL-INV-002 to BL-INV-004, BL-INV-006), `constitution-amendment.md`, ADR-0014 (and ADR-0005, ADR-0011 for the parts it supersedes), `discovery.md` D-01 to D-07 with the D-02 refinement, `spec.md`, `plan.md`, `contracts/setup-trust.md`, `contracts/launcher-and-doctor.md`, `decisions.md` DEC-0001 to DEC-0008, `reviews/security.md` (and its resolution), `README.md` "Setup records the baseline".
+- Read: `CLAUDE.md`, `.agents/skills/ballast-security-review/SKILL.md`, `docs/policies/security.md` (no project override exists), the constitution (BL-INV-002 to BL-INV-004, BL-INV-006), `constitution-amendment.md`, ADR-0015 (and ADR-0005, ADR-0011 for the parts it supersedes), `discovery.md` D-01 to D-07 with the D-02 refinement, `spec.md`, `plan.md`, `contracts/setup-trust.md`, `contracts/launcher-and-doctor.md`, `decisions.md` DEC-0001 to DEC-0008, `reviews/security.md` (and its resolution), `README.md` "Setup records the baseline".
 - Code: `tools/spec_workflow/setup_trust.py` (all), `launcher.py` (`state_base`, `digests`, `input_bases`, `trusted_inputs`, `write_atomic`, `record_baseline`, `_provenance`, `baseline_source`, `operator_baseline`, `split_repository`, `reviewed_repositories`, `add_reviewed`, `_trust`, `_review_repository`, `_status`, and `_trust_refusal`, which the diff does not touch), `tools/setup` (`main`, `prepare`, `settle`, `settling`, `hold`, `fill_from_candidates`, `candidates`, `copy_candidate`), `tools/init`, `tools/ballast` doctor `_trust`/`_recorder`, `branch_sync.py` and `draft_pr.py` (now delegating to the shared Git rules), `autonomy.py` (`GIT_HARDENING`, `confined_argv`, `_binds_for_worktree`, `_git_binds`, `STEP_DIRECTORIES`) to establish what a confined step can write.
 - Run: `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests.test_setup_trust tests.test_setup tests.test_spec_workflow`: `Ran 363 tests in 686.852s`, `OK`.
 - Experiments: a scratch `unittest` subclass of `tests.test_setup_trust.TrustCase` in the session scratchpad (`review55/exp.py`), state under the tests' own `XDG_STATE_HOME`, nothing written to the repository, no `ballast trust` run in the worktree. Results E1 to E5 are cited below.
@@ -33,7 +33,7 @@ findings:
   - id: SEC2-001
     severity: medium
     invariant: BL-INV-002
-    location: tools/spec_workflow/setup_trust.py:_default_branch (reviewed check), launcher.py:add_reviewed; decisions.md DEC-0008; ADR-0014 "Residual risks"
+    location: tools/spec_workflow/setup_trust.py:_default_branch (reviewed check), launcher.py:add_reviewed; decisions.md DEC-0008; ADR-0015 "Residual risks"
     description: >
       Demonstrated (E1). The reviewed record is machine-wide and holds names
       only, so a committed `ballast.toml` that repoints `[github] repository`
@@ -94,7 +94,7 @@ findings:
       network; it prints the URL after `insteadOf` rewriting) and treat a
       result different from `<url>` as unobservable. It closes the only
       rewrite Git performs silently and costs nothing; `branch_sync` can
-      share it. State in ADR-0014's residual risks that the observation trusts
+      share it. State in ADR-0015's residual risks that the observation trusts
       the operator's shell environment and Git configuration.
 
   - id: SEC2-003
@@ -105,7 +105,7 @@ findings:
       Demonstrated (E5). `ballast trust` adds the pinned repository to the
       machine-wide record and prints nothing about it on success (stdout is
       only `trusted N workflow inputs for ROOT`), and no command lists the
-      record; the README names the file. The mitigation ADR-0014 and DEC-0008
+      record; the README names the file. The mitigation ADR-0015 and DEC-0008
       rely on ("remove the entry when a repository changes hands") needs the
       operator to know an entry was created, in particular when they trust a
       worktree whose `ballast.toml` an agent repointed, which is exactly the
@@ -137,7 +137,7 @@ findings:
   - id: SEC2-005
     severity: info
     invariant: BL-INV-002
-    location: docs/adr/0014-setup-recorded-trust-baseline.md "Residual risks"
+    location: docs/adr/0015-setup-recorded-trust-baseline.md "Residual risks"
     description: >
       Demonstrated (E2), documented. "Reviewed" is whatever the reviewed
       repository's default branch holds at observation time: after the default
@@ -149,16 +149,16 @@ findings:
   - id: SEC2-006
     severity: info
     invariant: BL-INV-002
-    location: tools/spec_workflow/setup_trust.py:_check_pointer; ADR-0014 decision 7
+    location: tools/spec_workflow/setup_trust.py:_check_pointer; ADR-0015 decision 7
     description: >
       Unresolved assumption, stated for the record. The pointer check is
       structural and is sufficient only because a confined step can create no
       surviving directory outside the checkout, `/tmp` and `/run`
       (`confined_argv`: read-only `/`, tmpfs and overlays), and cannot write
-      the pointer (`_git_binds`). ADR-0014 does not say the check leans on the
+      the pointer (`_git_binds`). ADR-0015 does not say the check leans on the
       sandbox.
     required_action: >
-      One sentence in ADR-0014 decision 7 or its residual risks: the pointer
+      One sentence in ADR-0015 decision 7 or its residual risks: the pointer
       check relies on the step sandbox leaving no agent-writable path outside
       the checkout and the temp roots; weakening the sandbox weakens it.
 ```
@@ -185,8 +185,8 @@ The feature keeps the stated boundary: within the confined-step model, no path w
 
 Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), test-first; listed for merge review (not an operator approval).
 
-- SEC2-001: resolved (DEC-0008, option (b)). `ballast trust` records per repository the digests of the trusted `ballast.toml` and constitution; setup and preparation accept the default-branch observation only when the checkout's files equal a pair reviewed for the repository it pins, before any network request. `tests.test_setup_trust.ReviewedConfigurationTests` (repointed reviewed repository, exact reviewed configuration, name without digests, accumulation, malformed digests, no network first). ADR-0014's residual risks are rewritten.
-- SEC2-002: resolved. `git ls-remote --get-url <url>` runs in the throwaway's hardened environment first; a result other than `<url>` is "unobservable" (not eligible). `RewrittenUrlTests` uses an `insteadOf` in a `GIT_CONFIG_GLOBAL` fixture (it recorded from the mirror before the fix). ADR-0014 now states that the observation trusts the operator's Git environment. `branch_sync` is unchanged.
+- SEC2-001: resolved (DEC-0008, option (b)). `ballast trust` records per repository the digests of the trusted `ballast.toml` and constitution; setup and preparation accept the default-branch observation only when the checkout's files equal a pair reviewed for the repository it pins, before any network request. `tests.test_setup_trust.ReviewedConfigurationTests` (repointed reviewed repository, exact reviewed configuration, name without digests, accumulation, malformed digests, no network first). ADR-0015's residual risks are rewritten.
+- SEC2-002: resolved. `git ls-remote --get-url <url>` runs in the throwaway's hardened environment first; a result other than `<url>` is "unobservable" (not eligible). `RewrittenUrlTests` uses an `insteadOf` in a `GIT_CONFIG_GLOBAL` fixture (it recorded from the mirror before the fix). ADR-0015 now states that the observation trusts the operator's Git environment. `branch_sync` is unchanged.
 - SEC2-003: resolved. `ballast trust` prints one `recorded OWNER/NAME as reviewed on this machine: ...` line when it changes the record; `launcher.py reviewed --json` and `ballast doctor`'s trust check list the reviewed repositories (`TrustProvenanceTests`, `TrustSourceTests`).
 - SEC2-004, SEC2-005: no action, as the review states (SEC2-005's moved-default-branch case is now also refused, because the new bytes were not reviewed).
-- SEC2-006: resolved. ADR-0014 states that the pointer check relies on the step sandbox.
+- SEC2-006: resolved. ADR-0015 states that the pointer check relies on the step sandbox.

@@ -33,7 +33,7 @@ A forged `HEAD`, local ref, `origin` or `insteadOf` cannot create eligibility, b
 
 **Governing documents.**
 
-- ADR-0014 is the next free number.
+- ADR-0015 is the next free number.
 - ADR-0007's clause "never records trust" exists as quoted.
 - ADR-0011's "Preparation never reads any `trusted.json`" exists as quoted, but ADR-0011 also says preparation is local-only, never downloads and reaches the trust preflight with no network. R17 does not supersede those statements.
 - The constitution amendment goes through governance with a recorded reason (R17). Complexity Tracking justifies the amendment, the machine-wide record and the new network read.
@@ -51,12 +51,12 @@ R4 already states that a `.venv` in the checkout, which setup never writes, make
 
 ## Verdict
 
-The design meets the spec, and every refusal fails closed. Nothing I examined lets an unreviewed input be recorded or widens an agent's authority beyond the operator's D-02 answer. The items in the review draft can be resolved while ADR-0014, the module and the tasks are written. They are carried to the security and architecture specialist reviews and to merge review.
+The design meets the spec, and every refusal fails closed. Nothing I examined lets an unreviewed input be recorded or widens an agent's authority beyond the operator's D-02 answer. The items in the review draft can be resolved while ADR-0015, the module and the tasks are written. They are carried to the security and architecture specialist reviews and to merge review.
 
 <!-- ballast-findings: begin -->
 ## Findings (recorded from the review draft)
 
-- F-001 (medium, architecture-issue, accepted-provisionally): ADR-0011 says --prepare is local-only, never downloads, and reaches the trust preflight with no network, but R17 supersedes only its trusted.json clause while the plan adds a live network observation to preparation. ADR-0014 as planned would leave ADR-0011 contradicting the new behavior. Resolvable by extending R17's superseded-clause list when ADR-0014 is written (the download wording stays true; the no-network outcome does not); carried to tasks and the architecture review.
+- F-001 (medium, architecture-issue, accepted-provisionally): ADR-0011 says --prepare is local-only, never downloads, and reaches the trust preflight with no network, but R17 supersedes only its trusted.json clause while the plan adds a live network observation to preparation. ADR-0015 as planned would leave ADR-0011 contradicting the new behavior. Resolvable by extending R17's superseded-clause list when ADR-0015 is written (the download wording stays true; the no-network outcome does not); carried to tasks and the architecture review.
 - F-002 (medium, architecture-issue, accepted-provisionally): R9 and the setup-trust contract restate branch synchronization's throwaway Git environment (DROPPED_ENV, PATH restriction, prompt and askpass variables, display variables) instead of sharing it; only the URL rule moves to a shared function. Two copies of security-relevant rules can drift, against FR-004's 'same trusted path'. Resolvable by sharing the environment builder when setup_trust.py is written; carried to tasks and the security review.
 - F-003 (low, spec-ambiguity, open): Contract step 1 keeps a matching baseline before the local conditions run, so with a BALLAST_TAMPERED marker and a matching baseline setup reports the baseline unchanged instead of naming the remedy AC-019 asks for. Nothing is recorded and the launcher still refuses; message gap only.
 - F-004 (low, spec-violation, open): The post-write recheck and OSError paths remove the baseline record_baseline just wrote; if that write replaced an older operator-recorded baseline, the older one is lost, departing from FR-008 in a rare race. Fails closed: ballast trust is needed again. Keeping the previous bytes for restore would close it.

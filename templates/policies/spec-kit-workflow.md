@@ -349,7 +349,7 @@ Bytecode is excluded from the baseline because no workflow tool reads it.
 **Setup-recorded baseline.** Only the operator's `ballast trust` records a
 baseline after a review, with one exception that the operator's own
 `ballast setup` (and a new worktree's first-command preparation, which installs
-from a verified local copy) may also record it (ADR-0014). They record it only
+from a verified local copy) may also record it (ADR-0015). They record it only
 when every protected input is exactly what setup installed (no `.venv`, no
 committed `.specify` file other than the constitution, no edited installed
 file, a linked worktree's `.git` pointer naming a worktree of its own

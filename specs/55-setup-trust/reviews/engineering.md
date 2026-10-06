@@ -2,9 +2,9 @@
 
 - Review: engineering
 - Reviewer: engineering reviewer, independent context
-- Scope: `git diff 641fa7f..HEAD` on `feat/55-setup-trust` (commits ee50e93, 5201073, 3d0a087, c659760): `tools/spec_workflow/setup_trust.py` (new), `launcher.py`, `branch_sync.py`, `draft_pr.py`, `tools/setup`, `tools/ballast`, `tools/init`, the tests, ADR-0014, the ADR-0007 and ADR-0011 edits, README, the policy template, the roadmap and technical-spec edits. Judged against `spec.md` (FR-001 to FR-020, AC-001 to AC-027), `plan.md`, `research.md`, `data-model.md`, `contracts/`, `tasks.md`, `decisions.md` (DEC-0001 to DEC-0007) and `reviews/plan.md` (F-001 to F-006).
-- Policies read: `AGENTS.md`, `docs/policies/engineering.md`, `.agents/skills/ballast-engineering-review/SKILL.md`. `docs/policies/project/engineering.md` does not exist. ADR-0014, ADR-0007, ADR-0011, ADR-0002 and ADR-0005 were read for decision conflicts.
-- Working tree note: the tree held uncommitted edits by other reviewers or the implementer (README, ADR-0014, tasks.md, TECHNICAL-SPEC, the policy template, `reviews/documentation.md`). This review reads the committed HEAD code and treats those files as read-only context.
+- Scope: `git diff 641fa7f..HEAD` on `feat/55-setup-trust` (commits ee50e93, 5201073, 3d0a087, c659760): `tools/spec_workflow/setup_trust.py` (new), `launcher.py`, `branch_sync.py`, `draft_pr.py`, `tools/setup`, `tools/ballast`, `tools/init`, the tests, ADR-0015, the ADR-0007 and ADR-0011 edits, README, the policy template, the roadmap and technical-spec edits. Judged against `spec.md` (FR-001 to FR-020, AC-001 to AC-027), `plan.md`, `research.md`, `data-model.md`, `contracts/`, `tasks.md`, `decisions.md` (DEC-0001 to DEC-0007) and `reviews/plan.md` (F-001 to F-006).
+- Policies read: `AGENTS.md`, `docs/policies/engineering.md`, `.agents/skills/ballast-engineering-review/SKILL.md`. `docs/policies/project/engineering.md` does not exist. ADR-0015, ADR-0007, ADR-0011, ADR-0002 and ADR-0005 were read for decision conflicts.
+- Working tree note: the tree held uncommitted edits by other reviewers or the implementer (README, ADR-0015, tasks.md, TECHNICAL-SPEC, the policy template, `reviews/documentation.md`). This review reads the committed HEAD code and treats those files as read-only context.
 - Commands run: `tests.test_setup_trust` (77 tests, OK), `tests.test_setup.NoOpTests/PrepareTests/RecoverableSetupTests`, `tests.test_ballast.PrepareTriggerTests`, `tests.test_doctor` (85 tests, OK), and `python3 -I -S` import of each `spec_workflow` module in isolation (no circular-import failure from `draft_pr` and `branch_sync` now importing `setup_trust`). The full suite and the live network path were not run.
 
 ## What was checked
@@ -13,10 +13,10 @@
 - FR-001 to FR-011 and AC-001 to AC-021 trace to `setup_trust._evaluate` and `_reference`, `tools/setup` (`main`, `prepare`, `settle`, `closing`, the recovered-preparation path and the no-op path) and `tests/test_setup_trust.py`.
 - FR-012 to FR-015 and AC-022 to AC-024 trace to `launcher.record_baseline`, `baseline_source`, `operator_baseline`, `_status`, `_trust` and `tools/ballast._trust`.
 - FR-016 and FR-020 hold (standard-library only; the module imports cleanly under `-I -S`).
-- AC-025 and AC-027 are met by ADR-0014, the ADR-0007 and ADR-0011 annotations, the roadmap, the technical spec, the README and the policy template.
+- AC-025 and AC-027 are met by ADR-0015, the ADR-0007 and ADR-0011 annotations, the roadmap, the technical spec, the README and the policy template.
 - AC-026 and FR-018 are not met in the tree (ENG-003).
 
-**Eligibility order against ADR-0014.**
+**Eligibility order against ADR-0015.**
 - The code order is: standard outside the checkout, tamper and in-progress markers, matching baseline kept, run state, configuration read once, installation record, pointer, committed, reviewed (operator baseline, then reviewed-repository and default branch).
 - This equals the ADR's nine conditions and `setup_trust`'s docstring, and DEC-0001 explains the marker-before-keep order.
 - Nothing reaches the network before the last step. `ls-remote` and `fetch` run in a throwaway bare repository under operator state with an environment that carries no checkout Git configuration.
@@ -55,7 +55,7 @@
 **Error handling.**
 - `settle` converts `_Ineligible`, `OSError`, `ValueError` and `SubprocessError` into a skipped verdict. All local and network failure modes seen in the code (offline, timeout, denied, unreadable file, failed write, changed input) reach one of these. The remaining gap is ENG-002.
 
-**ADR-0014 completeness.**
+**ADR-0015 completeness.**
 - Conditions, observation commands, timeouts (30 s and 120 s), reviewed record, provenance, rejected alternatives and the two D-02 narrowings are all stated and match the code.
 - Gaps are limited to ENG-004 and ENG-009.
 
@@ -91,20 +91,20 @@ verdict: changes_required
 - location: `.specify/memory/constitution.md` (unchanged); `specs/55-setup-trust/constitution-amendment.md`; `tasks.md` T038
 - invariant_or_requirement: FR-018, AC-026 (BL-INV-002 amended with the reason recorded); constitution governance for an R2 change.
 - evidence:
-  - Fact: BL-INV-002 in the tree still says the launcher refuses until the operator trusts the inputs, while ADR-0014 and the code let setup record them. T038 records that the file is a protected input and the amendment text is parked in the feature folder.
+  - Fact: BL-INV-002 in the tree still says the launcher refuses until the operator trusts the inputs, while ADR-0015 and the code let setup record them. T038 records that the file is a protected input and the amendment text is parked in the feature folder.
   - Fact: the amendment text, the version bump (1.2.0) and the history entry exist and match the ADR's conditions.
   - Uncertainty: whether the operator applies it as part of this PR is outside the code; the spec says the merge is the approval.
 - required_action: Keep AC-026 and FR-018 explicitly open in `tasks.md` and the spec status, and make the PR description name the operator step (apply the amendment, bump the version) as a required follow-up so the accepted invariant and the code are not left contradicting each other. No code change.
 
 ### ENG-004
 - severity: low
-- location: `docs/adr/0014-setup-recorded-trust-baseline.md` Decision (conditions 3 and 9, "Supersedes in part"); `setup_trust._evaluate`, `_reference` (`mode == "setup"`), `_record`; `decisions.md` DEC-0004
+- location: `docs/adr/0015-setup-recorded-trust-baseline.md` Decision (conditions 3 and 9, "Supersedes in part"); `setup_trust._evaluate`, `_reference` (`mode == "setup"`), `_record`; `decisions.md` DEC-0004
 - invariant_or_requirement: FR-009 ("preparation records under the same conditions as setup"); ADR consistency with code.
 - evidence:
-  - Fact: ADR-0014 lists the matching-baseline step (3) and the operator-baseline alternative (9a) without saying they apply to setup only. The code skips both in preparation (DEC-0004).
-  - Fact: ADR-0014 says it supersedes ADR-0011's "never reads any trusted.json" for the checkout's own baseline, while the decision logic in preparation never reads it. `_record` still opens `trusted.json` and `trusted-source.json` through `_read_regular` to snapshot them for restore. On the eligible path both are already removed by `fill_from_candidates`, so the read finds nothing.
+  - Fact: ADR-0015 lists the matching-baseline step (3) and the operator-baseline alternative (9a) without saying they apply to setup only. The code skips both in preparation (DEC-0004).
+  - Fact: ADR-0015 says it supersedes ADR-0011's "never reads any trusted.json" for the checkout's own baseline, while the decision logic in preparation never reads it. `_record` still opens `trusted.json` and `trusted-source.json` through `_read_regular` to snapshot them for restore. On the eligible path both are already removed by `fill_from_candidates`, so the read finds nothing.
   - Consequence: an offline preparation can never record, even when the worktree's configuration equals the primary checkout's operator baseline. This is a narrower rule than FR-009's wording, listed only as a "clarification" in DEC-0004.
-- required_action: State in ADR-0014 that conditions 3 and 9a apply to setup only, name the offline-preparation consequence, and describe `_record`'s read as a restore snapshot. Reclassify DEC-0004 as a departure from FR-009 for merge review, not a clarification.
+- required_action: State in ADR-0015 that conditions 3 and 9a apply to setup only, name the offline-preparation consequence, and describe `_record`'s read as a restore snapshot. Reclassify DEC-0004 as a departure from FR-009 for merge review, not a clarification.
 
 ### ENG-005
 - severity: low
@@ -148,14 +148,14 @@ verdict: changes_required
 
 ### ENG-009
 - severity: medium
-- location: `launcher.reviewed_repositories`, `add_reviewed`, `_review_repository`; `setup_trust._reference` (the `NOT_REVIEWED` check); ADR-0014 "Reviewed repositories"; spec Assumptions
+- location: `launcher.reviewed_repositories`, `add_reviewed`, `_review_repository`; `setup_trust._reference` (the `NOT_REVIEWED` check); ADR-0015 "Reviewed repositories"; spec Assumptions
 - invariant_or_requirement: FR-005, AC-016 (changing `[github] repository` must not by itself make a checkout eligible); the feature's safety boundary (an unreviewed `ballast.toml` is never recorded).
 - evidence:
   - Fact: the record is machine-wide and holds repository identities only, with no binding to a project or checkout. Any committed `ballast.toml` that equals the default branch of any reviewed repository is eligible in any checkout.
   - Scenario (read from the code, not run): checkout B of project B is repointed by an agent to `[github] repository = "Y"` where Y is a repository the operator trusted for another project, with `ballast.toml` and constitution set to Y's current default-branch files (for example, Y's wider `[agents.permissions]`). After the operator runs `ballast setup` in B, `_reference` finds Y reviewed and the files equal, so a baseline is recorded for a configuration no human reviewed for B.
-  - Fact: AC-016 and the spec's Assumptions only cover a repository the operator never reviewed. The spec does accept "in any checkout" for the reviewed record, so this follows the written design; ADR-0014 does not state the cross-project consequence.
+  - Fact: AC-016 and the spec's Assumptions only cover a repository the operator never reviewed. The spec does accept "in any checkout" for the reviewed record, so this follows the written design; ADR-0015 does not state the cross-project consequence.
   - Uncertainty: how practical this is depends on Y's file differing from B's reviewed one and on an agent knowing a reviewed repository name. Whether a project binding is wanted is a product decision for merge review.
-- required_action: State the cross-project consequence in ADR-0014's consequences and in the list of agent inferences for merge review, or tighten the rule (for example, also require the checkout's own previous operator baseline, when one exists, to name the same repository). The security review should rule on it.
+- required_action: State the cross-project consequence in ADR-0015's consequences and in the list of agent inferences for merge review, or tighten the rule (for example, also require the checkout's own previous operator baseline, when one exists, to name the same repository). The security review should rule on it.
 
 ## Resolution
 
@@ -164,11 +164,11 @@ Resolved by the implementer after the review.
 - ENG-001 (medium): fixed. The holder file now records `phase: settling` while `settle` runs; a second preparation waits up to `SETTLE_WAIT_SECONDS` (240 s) for a live settling holder and still refuses a plain holder after `LOCK_RETRY_SECONDS`, so two first commands do not both refuse while the network is asked. Tests: `PrepareTrustTests.test_a_second_preparation_waits_for_a_baseline_decision` (fails without the wait), `test_a_second_preparation_still_refuses_a_plain_holder`, `test_a_stale_settling_holder_does_not_wait`, `test_two_preparations_at_once_record_once`.
 - ENG-002 (low): fixed. `settle` converts any exception into a skipped verdict, and `tools/setup` falls back to `Unrecorded` when the module cannot be loaded or crashes, so a committed installation never becomes a failed setup. Tests: `test_an_unexpected_failure_never_escapes`, `test_a_crash_in_the_decision_never_fails_the_installation`.
 - ENG-003 (medium): operator step, not an agent edit. `.specify/memory/constitution.md` is a protected input; the amendment is `specs/55-setup-trust/constitution-amendment.md` (version 1.2.0), applied by the operator at merge as for #27. Until then BL-INV-002 reads as before and the code is more permissive than it; the PR says so.
-- ENG-004 (low): documented. ADR-0014 states the own-baseline alternative is setup-only; `decisions.md` DEC-0004 records the departure from FR-009's wording (research R7 and ADR-0011 already required it).
+- ENG-004 (low): documented. ADR-0015 states the own-baseline alternative is setup-only; `decisions.md` DEC-0004 records the departure from FR-009's wording (research R7 and ADR-0011 already required it).
 - ENG-005 (low): partly fixed. A killed setup's scratch directories are removed by the next observation (`test_stale_scratch_directories_are_removed`). A temporary file left by a SIGKILL inside the state directory is left as it is (operator-only, small, replaced by the next write); the `record_baseline` docstring is unchanged because its crash behavior is what the tests pin.
 - ENG-006 (low): accepted. The version probe now runs once per `settle`; the Git runner and `Result` shape of `branch_sync` and `setup_trust` stay separate because merging them changes a 1,900-line module outside this feature. The security-relevant environment rules are shared.
 - ENG-007 (info): no action; DEC-0003 records the output order.
 - ENG-008 (low): fixed. The previous baseline is read in full for the restore.
-- ENG-009 (medium): not an implementation defect; the spec accepts a machine-wide record. Documented in ADR-0014 "Residual risks" and README, and proposed for human resolution as DEC-0008.
+- ENG-009 (medium): not an implementation defect; the spec accepts a machine-wide record. Documented in ADR-0015 "Residual risks" and README, and proposed for human resolution as DEC-0008.
 
 Verdict after resolution: approved, with the operator steps (constitution) and DEC-0008 for the merge reviewer.

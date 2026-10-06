@@ -1,7 +1,7 @@
 """Decide whether setup or a worktree's preparation may record the trust baseline.
 
 `ballast setup`, and the first `ballast run`, `ledger` or `intake` in a new
-worktree, run this once their installation is complete (ADR-0014). They record
+worktree, run this once their installation is complete (ADR-0015). They record
 the baseline themselves only when the checkout holds exactly what they just
 installed from configuration a human already reviewed and no agent has run
 there; every other case records nothing and keeps needing `ballast trust`.
