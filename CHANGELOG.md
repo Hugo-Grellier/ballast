@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/Hugo-Grellier/ballast/compare/v0.6.0...v0.7.0) (2026-10-06)
+
+
+### Features
+
+* **setup:** make installs and pin updates recoverable ([#64](https://github.com/Hugo-Grellier/ballast/issues/64)) ([1ce1f9a](https://github.com/Hugo-Grellier/ballast/commit/1ce1f9a529bb39c7a50dd7dea4382a34356f690c))
+* **setup:** prepare a new worktree on first Ballast use ([#69](https://github.com/Hugo-Grellier/ballast/issues/69)) ([0258627](https://github.com/Hugo-Grellier/ballast/commit/0258627fcb934822dc3eb63f11fbc64ad2ac1481))
+* **workflow:** provide trusted interactive Chat mode ([#67](https://github.com/Hugo-Grellier/ballast/issues/67)) ([24820ce](https://github.com/Hugo-Grellier/ballast/commit/24820ce7cb3141d695c52394cc2fc9d6987f02b1))
+* **workflow:** reach a reviewed PR with provisional Autonomous decisions ([#71](https://github.com/Hugo-Grellier/ballast/issues/71)) ([60a220a](https://github.com/Hugo-Grellier/ballast/commit/60a220a00a8766fae8b230d311ab18fee88cc799))
+
+
+### Bug Fixes
+
+* **cli:** escape control characters in the doctor text report ([#62](https://github.com/Hugo-Grellier/ballast/issues/62)) ([bc4ea3e](https://github.com/Hugo-Grellier/ballast/commit/bc4ea3e4d395014ae3e8cccbb5e6a8d1e7e2d142))
+* **setup:** escape control characters in setup output ([#70](https://github.com/Hugo-Grellier/ballast/issues/70)) ([0a668c3](https://github.com/Hugo-Grellier/ballast/commit/0a668c39cd5f9960c80bfd6ae70cdb6bc5708baa))
+* **setup:** never let checkout git config run a program before trust ([#68](https://github.com/Hugo-Grellier/ballast/issues/68)) ([0d5ff50](https://github.com/Hugo-Grellier/ballast/commit/0d5ff50f5f2312ee8fd51b10c091570904647da6))
+
 ## [0.6.0](https://github.com/Hugo-Grellier/ballast/compare/v0.5.0...v0.6.0) (2026-10-05)
 
 
