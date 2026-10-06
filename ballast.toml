@@ -20,3 +20,12 @@ commands = [
   "uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py",
 ]
 timeout_minutes = 30
+
+# Privileged actions the operator authorizes before merge in Autonomous runs
+# (operator decision 2026-10-06: the driving agent runs `ballast trust` on
+# checkouts it set up and uses the disposable scratch repository for live checks).
+[autonomous]
+authorized_privileged_actions = [
+  "operator runs ballast trust in the networked end-to-end check",
+  "scratch github repository for the networked end-to-end check",
+]
