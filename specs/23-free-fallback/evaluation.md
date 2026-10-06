@@ -1,12 +1,42 @@
 # Evaluation: Qualify one zero-cost provider fallback
 
-Evidence for [research.md](research.md) R10 and AC-018. Task T028 completes this file after the wrapper exists.
+Evidence for [research.md](research.md) R10 and AC-018. Task T028 completed this file after the wrapper existed; the workflow appends the quickstart pilot (steps 3 to 5) under [Workflow pilot](#workflow-pilot).
+
+## Summary
+
+- **Candidate**: the Codex CLI in local-provider mode, `codex exec --oss --local-provider ollama -m MODEL --json`, against the host's Ollama at its fixed default endpoint `127.0.0.1:11434` (DEC-0003), with a local model served with a context of at least 16384 tokens (DEC-0004).
+- **Decision**: qualified, agent-provisional (Autonomous run `f200c320`; merging the PR is the only human approval). The model answered through the candidate on this host (item 10). Human-gated steps can use the fallback. Autonomous steps refuse it with `incompatible-capability`, because Codex's sandbox does not start inside Ballast's bubblewrap here (item 7, DEC-0004 of the run record).
+- **Host versions**: `codex-cli 0.155.1`, Ollama 0.35.1 (0.6.8 before the operator's upgrade), Claude Code 2.1.290, bubblewrap 0.11.1, Spec Kit 1.0.11 (item 1 and item 9).
+
+### Alternatives and why they were rejected
+
+From research R1:
+
+| Alternative | Rejected because |
+| --- | --- |
+| Claude Code pointed at Ollama's Anthropic-compatible endpoint (`ANTHROPIC_BASE_URL`) | Redirects a paid-provider CLI by environment, needs an auth variable `confined_env` removes on purpose, and its tool permission model would need a second qualification. |
+| A hosted free tier (OpenRouter free models, Gemini CLI free tier, other hosted endpoints) | Remote and account-bound; free status and privacy terms cannot be established at run time; Issue #23 excludes account sign-up (D-03). |
+| LM Studio through `--local-provider lmstudio` | Same path, additive later, but not installed on the operator host, so it could not be piloted. |
+| Another agent CLI (aider, opencode) or a direct Ollama API harness | A new permission model to qualify, or the direct-API harness the spec lists as a non-goal. |
+
+### What the pilot established for the wrapper
+
+- **Sandbox nesting, both modes** (item 7, operator terminal): `codex_sandbox_nests` is `False` under Ballast's bubblewrap on this host (`kernel.apparmor_restrict_unprivileged_userns = 1`), and `codex sandbox … -- true` exits 0 without it. The wrapper runs the same probe before each fallback: `codex_sandbox_nests` for an Autonomous step, `codex_sandbox_starts` for a human-gated one.
+- **Configuration layers and the empty `CODEX_HOME`** (items 4, 5, 9 and 10): Codex reads `/etc/codex/` (absent here), `$CODEX_HOME/config.toml` and profiles, a project `.codex/config.toml` only when the user configuration trusts the project, and `-c` overrides; skills also load from `~/.agents/skills`. Runs with an empty `CODEX_HOME` needed no login and reached the default endpoint. The wrapper therefore gives the fallback a fresh private `CODEX_HOME`, and refuses with `permission-mismatch` when `/etc/codex` holds anything, a project `.codex/config.toml` exists, or `~/.agents/skills` is not empty.
+- **Codex Spec Kit skill path** (item 6): `.agents/skills/<command>/SKILL.md`. A project needs Spec Kit's Codex integration installed for a fallback to run; without the skill for the step's command the fallback refuses as `incompatible-capability` (`codex skill <command> is not installed`).
+- **A raw `codex exec --json` run** (item 10, operator terminal, CPU only): `qwen3:4b-16k` answered `ok` after 322 s, exit 0; usage `input_tokens` 11905, `cached_input_tokens` 0, `output_tokens` 110. A run with an open stdin waited for input, so the wrapper closes stdin for the fallback attempt.
+- **Signatures adopted** (item 8, research R2): `fallback.SIGNATURES` holds, per integration, the redacted quota and availability messages of item 8, matched only against the last 64 KiB of each output stream. Claude: `You've hit your (monthly spend) limit`, `usage limit reached`, `Credit balance is too low`, `Request rejected (429)` for quota; `API Error: 5xx`, `Connection error.`, `Request timed out`, `Unable to connect to API`, `overloaded_error` for availability. Codex: `You’ve hit your usage limit` (either apostrophe), `Quota exceeded. Check your plan`, `usage_limit_reached` for quota; `unexpected status 5xx`, `stream disconnected before completion`, `exceeded retry limit, last status`, `Connection failed:` for availability. No cause is left without a signature for either integration; any other failure is `unrecognized` and never falls back. The Claude subscription quota message could not be captured without a real account; its signature comes from the CLI's own strings.
+- **Expected Autonomous refusal**: on this host every Autonomous fallback refuses with `incompatible-capability: codex sandbox does not start`, as DEC-0004 of the run record predicts. No sandbox is loosened to make it run (FR-005).
+
+## Workflow pilot
+
+Quickstart steps 3 to 5 run through `ballast run` by the workflow after implementation; their results are appended here.
 
 ## Pilot
 
 - **Run**: task T001, 2026-10-06, by the driving agent (claude/claude-opus-5-5) acting from the operator side: a host shell outside Ballast's confinement, not a confined agent step and not through `ballast run` (DEC-0002 option 1).
 - **Context**: every probe ran from that host shell. Each ran in a scratch directory outside the feature worktree, written `$SCRATCH` below. The Codex runs used `CODEX_HOME=$SCRATCH/<probe>/home`, an empty directory. No Ollama sign-in and no cloud tag pull happened. Account, quota and credential details are redacted, and dates and times in captured messages are replaced with `<date>` and `<time>`.
-- **Outcome**: **stop condition holds.** The `--oss` run can't reach the model on this host because Codex 0.155.1 refuses Ollama 0.6.8. A second problem contradicts research R6: no `--config` key can pin the base URL of Codex's built-in Ollama provider. Both are recorded as DEC-0003 in [decisions.md](decisions.md). T001 stays open. **Update, 2026-10-06 (item 9)**: after the Ollama 0.35.1 upgrade the version gate passes, but a trivial `--oss` run still fails because the host serves `qwen3:4b` with a 4096-token context, below Codex's roughly 7.7k-token prompt. T001 stays open (DEC-0004).
+- **Outcome**: resolved by item 10 (the history below is kept as recorded). First run: **stop condition holds.** The `--oss` run can't reach the model on this host because Codex 0.155.1 refuses Ollama 0.6.8. A second problem contradicts research R6: no `--config` key can pin the base URL of Codex's built-in Ollama provider. Both are recorded as DEC-0003 in [decisions.md](decisions.md). T001 stays open. **Update, 2026-10-06 (item 9)**: after the Ollama 0.35.1 upgrade the version gate passes, but a trivial `--oss` run still fails because the host serves `qwen3:4b` with a 4096-token context, below Codex's roughly 7.7k-token prompt. T001 stays open (DEC-0004).
 
 ### 1. Versions and help
 

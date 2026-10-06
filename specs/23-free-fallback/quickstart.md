@@ -21,7 +21,7 @@ Offline tests use a loopback stub Ollama server (`http.server` on an ephemeral `
 | AC-001, SC-001 | `test_fallback.WrapperFallbackTests.test_quota_failure_completes_on_fallback` |
 | AC-002, SC-001 | `…test_provider_unavailable_completes_on_fallback`, `…test_cli_missing_completes_on_fallback` |
 | AC-003 | `…test_setting_off_matches_today` (argv, `steps.jsonl` and ledger equal with and without the feature) |
-| AC-004 | `…test_fallback_argv_is_primary_codex_profile`, `…test_fallback_runs_under_same_confinement` (Autonomous: same `confined_argv`; env has no provider key and no OSS overrides), `…test_user_codex_config_not_read` |
+| AC-004 | `…test_fallback_argv_is_primary_codex_profile`, `…test_fallback_argv_literal_tokens` (literal token list, catches a widening inside `permission_args`), `…test_fallback_runs_under_same_confinement` (Autonomous: same `confined_argv`; env has no provider key and no OSS overrides), `…test_user_codex_config_not_read` |
 | AC-005, SC-002 | `ProbeTests.test_model_missing_refuses_unknown_free_status` |
 | AC-006, SC-002 | `…test_cloud_model_refuses_privacy`, `…test_remote_host_refuses_privacy`, `SettingTests.test_setting_has_no_endpoint`, `PermissionTests.test_endpoint_override_env_refused`, `WrapperFallbackTests.test_user_codex_config_not_read` (no user MCP server or notify program) |
 | AC-007, SC-002 | `…test_server_down_refuses_capability`, `…test_codex_without_oss_refuses_capability`, `…test_codex_skill_missing_refuses_capability`, `…test_sandbox_not_nesting_refuses_capability`, `…test_probe_deadline_refuses`, `ProbeContextTests` (`…test_old_ollama_refuses_capability`, served context below 16384 or unknown) |

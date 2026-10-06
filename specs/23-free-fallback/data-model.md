@@ -99,10 +99,10 @@ primary attempt finished
        ├─ model remote / cloud ──────► refused: privacy-exclusion
        ├─ codex lacks --oss ─────────► refused: incompatible-capability
        ├─ codex sandbox won't start ─► refused: incompatible-capability
-       ├─ served context < 16384 ────► refused: incompatible-capability  (or unknown)
-       ├─ checks over 10 s ──────────► refused: incompatible-capability
        ├─ other Codex config layer ──► refused: permission-mismatch
        ├─ ~/.agents/skills not empty ► refused: permission-mismatch
+       ├─ served context < 16384 ────► refused: incompatible-capability  (or unknown)
+       ├─ checks over 10 s ──────────► refused: incompatible-capability
        ├─ argv/env not the exact one ► refused: permission-mismatch
        ├─ step limit exhausted ──────► existing limit refusal (run stops)
        └─ selected ──► fallback attempt (once)

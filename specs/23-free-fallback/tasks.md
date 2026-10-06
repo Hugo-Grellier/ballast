@@ -9,7 +9,7 @@ description: "Task list for Qualify one zero-cost provider fallback"
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md), [decisions.md](decisions.md)
 
-**Risk**: R2, Autonomous run. Merging the PR is the single human approval (BL-INV-006). DEC-0001 in [decisions.md](decisions.md) keeps the spec as written. A step falls back only after its first primary attempt (SC-005, FR-006). Changed-state evidence covers git-ignored worktree paths and refs, and refuses when it cannot be checked (AC-009, FR-003). DEC-0003 option 1 fixes the endpoint at Ollama's default `127.0.0.1:11434`: there is no endpoint option, setting field or base-URL `--config` key, and the probes check exactly the endpoint Codex uses. DEC-0004 requires a served context of at least 16384 tokens. The permission comparison is an exact-argv allowlist, and a non-empty `~/.agents/skills` refuses (plan-review F-001 to F-004 of the third review). The earlier plan-review finding PD-0010 F-001 is closed by an `incompatible-capability` refusal when the project lacks Codex's Spec Kit skill for the step's command (research R5 check 9; T001, T013, T015, T029).
+**Risk**: R2, Autonomous run. Merging the PR is the single human approval (BL-INV-006). DEC-0001 in [decisions.md](decisions.md) keeps the spec as written. A step falls back only after its first primary attempt (SC-005, FR-006). Changed-state evidence covers git-ignored worktree paths and refs, and refuses when it cannot be checked (AC-009, FR-003). DEC-0003 option 1 fixes the endpoint at Ollama's default `127.0.0.1:11434`: there is no endpoint option, setting field or base-URL `--config` key, and the probes check exactly the endpoint Codex uses. DEC-0004 requires a served context of at least 16384 tokens. The permission comparison is an exact-argv allowlist, and a non-empty `~/.agents/skills` refuses (plan-review F-001 to F-004 of the third review). The earlier plan-review finding PD-0010 F-001 is closed by an `incompatible-capability` refusal when the project lacks Codex's Spec Kit skill for the step's command (research R5 check 9; T001, T013, T015, T029). The fourth plan review's open findings (PD-0013, forwarded by PD-0014) are carried here: `probe` receives the built environment and owns the endpoint-override `privacy-exclusion` (F-001; T013, T014, T015); a test pins the literal fallback token list (F-002; T010); the served-context check traces to FR-004 and runs after the configuration-layer and skills checks (F-003; T013, T037).
 
 **Acceptance evidence**: Every behavior acceptance criterion (AC-001 to AC-021) has a test or an explicit verification task below that cites its ID. Test names follow the [quickstart map](quickstart.md#offline-gate). Offline tests use a loopback stub Ollama (`http.server` on an ephemeral `127.0.0.1` port) that records every request. They also use fake `claude` and `codex` executables that record argv, prompt and environment. "Nothing sent" means the stub saw no request outside `/api/version`, `/api/tags` and `/api/show`, and the fake Codex never received the prompt.
 
@@ -46,7 +46,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
   Record a discovery in `specs/23-free-fallback/decisions.md` and stop when any of these holds: the host cannot run the probes; the candidate is rejected outright (`--oss` missing, or the model cannot answer); no quota signature can be found for any integration; or the configuration layers cannot be established. Never switch backend silently.
   The `--config` key of the second bullet does not exist (DEC-0003 option 1): the endpoint is fixed. Done 2026-10-06: items 1 to 9 and the 16k rerun in [evaluation.md](evaluation.md#pilot) (item 10: `qwen3:4b-16k` answered `ok` under `codex exec --oss --json`, exit 0, `turn.completed` input_tokens 11905). DEC-0002 to DEC-0004 are resolved.
-- [ ] T002 Create `tests/test_fallback.py` with the shared harness (depends on T001):
+- [X] T002 Create `tests/test_fallback.py` with the shared harness (depends on T001):
   - `StubOllama`, a loopback `http.server` on an ephemeral `127.0.0.1` port that serves configurable `/api/version`, `/api/tags` and `/api/show` responses, with an optional delay, and records every request;
   - helpers that write fake `claude` and `codex` executables into a temporary `PATH` directory. They record argv, environment, `CODEX_HOME` contents and prompt to a file, and print configurable output (including `--json` event streams) and exit codes;
   - module-level fixtures holding the redacted quota and availability messages and the `--json` event sample from T001;
@@ -74,25 +74,25 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - `report` counts fallbacks and lists refusal reasons;
   - `schema_version` is unchanged.
 - [X] T005 [P] Add one paragraph to `tools/spec_workflow/ledger-schema.md` (depends on T004). It describes the new `route` value and fields, the cross-field rules and the report's fallback review rule of [contracts/ledger.md](contracts/ledger.md#report). It also states that the schema version is unchanged and that an older pinned Ballast rejects a stream holding them.
-- [ ] T006 Add `SettingTests` to `tests/test_fallback.py` [AC-006, AC-020] (depends on T002):
+- [X] T006 Add `SettingTests` to `tests/test_fallback.py` [AC-006, AC-020] (depends on T002):
   - `validate_model` accepts `qwen3:4b`. It rejects an empty name, a leading `-`, a name outside the ledger `MODEL` pattern and cloud tags (`:cloud`, `-cloud`), with the fixed messages of [contracts/operator-cli.md](contracts/operator-cli.md#start).
   - `test_setting_has_no_endpoint`: `write_setting` has no endpoint argument and `fallback.json` has no `endpoint` field; `read_setting` raises `SettingError` for a file that carries `endpoint` or any other unknown field; `OLLAMA_ENDPOINT` is `http://127.0.0.1:11434`.
   - `write_setting` writes `fallback.json` with mode 0600 in `autonomy.run_dir`, with the fields of [data-model.md](data-model.md#fallback-setting). `write_setting(model=None)` writes `enabled: false`.
   - `read_setting` returns `None` when the file is absent or disabled. It raises `SettingError` for a symlink, an unreadable file, bad JSON or any invalid field (`test_invalid_setting_is_off`).
-- [ ] T007 Create `tools/spec_workflow/fallback.py` (standard library only, no top-level side effects), passing T006 (depends on T006). It holds:
+- [X] T007 Create `tools/spec_workflow/fallback.py` (standard library only, no top-level side effects), passing T006 (depends on T006). It holds:
   - the module docstring, `RECOVERABLE`, the cause and refusal-reason constants, the `Setting` dataclass, `SettingError` and `EventError`;
   - `validate_model`;
   - the constants `OLLAMA_ENDPOINT = "http://127.0.0.1:11434"`, `MIN_OLLAMA_VERSION` (0.13.4) and `MIN_SERVED_CONTEXT` (16384);
   - `write_setting(root, run_id, model)`: no endpoint argument; 0600 through the `autonomy` state helpers, `set_at` in UTC, `set_by: operator`, provider `ollama`;
   - `read_setting`: opened with `O_NOFOLLOW`; any invalid or unknown content raises `SettingError`.
-- [ ] T008 Add `StateTests` to `tests/test_fallback.py` [AC-009] (depends on T006).
+- [X] T008 Add `StateTests` to `tests/test_fallback.py` [AC-009] (depends on T006).
 
   `autonomy.ignored_digest` changes when any of these happens under a git-ignored path: a file is created, written (same size, mtime reset with `os.utime`), chmodded, renamed or deleted, a directory is added, or a symlink target changes. It also changes when `.specify/feature.json` changes. It ignores changes under `.ballast/`, `.venv/` and `.specify/` other than the `SPECIFY_WRITABLE` paths, and the wrapper's own log files. It never follows a symlink out of the worktree. It returns `None` for over 200,000 entries (patched cap), a walk over the time budget (patched clock), an entry that `lstat` cannot read, or a failing Git.
 
   `autonomy.refs_digest` changes after a commit, a new branch, a new tag and a detached `HEAD`. It returns `None` on a Git failure.
 
   `fallback.state_evidence` returns `None` when any piece is `None`.
-- [ ] T009 Implement `ignored_digest(root)` and `refs_digest(root)` in `tools/spec_workflow/autonomy.py`, per research R3 and [data-model.md](data-model.md#worktree-state-evidence) (depends on T007, T008):
+- [X] T009 Implement `ignored_digest(root)` and `refs_digest(root)` in `tools/spec_workflow/autonomy.py`, per research R3 and [data-model.md](data-model.md#worktree-state-evidence) (depends on T007, T008):
   - `ignored_digest` uses `git ls-files -z --others --ignored --exclude-standard --directory`, then walks collapsed directories with `os.walk(followlinks=False)` and `lstat`. It excludes `PROTECTED` except `SPECIFY_WRITABLE`, and stops at 200,000 entries or 10 s.
   - `refs_digest` covers `HEAD` and `git for-each-ref`.
   - Git runs with hooks and fsmonitor disabled, as `tree_digest` does.
@@ -111,7 +111,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Acceptance tests for User Story 1
 
-- [ ] T010 [US1] Add US1 tests to `tests/test_fallback.py` [AC-001, AC-002, AC-003, AC-004, AC-006] (depends on T004, T009):
+- [X] T010 [US1] Add US1 tests to `tests/test_fallback.py` [AC-001, AC-002, AC-003, AC-004, AC-006] (depends on T004, T009):
   - `ClassifyTests` recoverable cases: each captured quota and availability fixture, per integration, gives `quota-exhausted` or `provider-unavailable`; `cli_found=False` gives `cli-unavailable`.
   - `codex_prompt`: `/speckit-x rest` becomes `$speckit-x rest`; a `$` prompt is unchanged.
   - `fallback_argv(codex, prompt, model)` is exactly `permission_args("codex", ["exec", prompt])` plus `--oss`, `--local-provider ollama`, `-m MODEL` and `--json`. No `-c model_providers.ollama.*` or other base-URL key appears (Codex refuses it, DEC-0003), and no primary extra arguments are forwarded.
@@ -123,18 +123,19 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
     - `test_quota_failure_completes_on_fallback`, `test_provider_unavailable_completes_on_fallback` and `test_cli_missing_completes_on_fallback`;
     - `test_setting_off_matches_today`: with the feature present and the setting off, argv, `steps.jsonl`, `meta.json` and the ledger are the same as without it, with no probe request, no state walk and no new file;
     - `test_fallback_argv_is_primary_codex_profile`;
+    - `test_fallback_argv_literal_tokens` [AC-004, AC-008] (plan-review PD-0013 F-002): `fallback_argv("codex", "$speckit-plan", "qwen3:4b-16k")` equals a literal list written out in the test, not built from `permission_args`: the `workspace-write` sandbox, `network_access=false`, `writable_roots=[]`, and `--oss`, `--local-provider ollama`, `-m qwen3:4b-16k`, `--json`. A change that widens `permission_args` or `fallback_argv` fails this test, which the run-time `permission_mismatch` comparison cannot catch;
     - `test_fallback_runs_under_same_confinement`: Autonomous; the same `confined_argv` call as the primary;
     - `test_user_codex_config_not_read`: the user's `~/.codex/config.toml` defines `mcp_servers`, a `notify` program and a default `profile`. The fake Codex sees a `CODEX_HOME` that is not the user's, is empty at start and is removed after the attempt. No MCP server or notify program from the user configuration is started.
-- [ ] T011 [US1] Implement `classify(integration, exit_code, blocked, contained, tail, *, cli_found)` in `tools/spec_workflow/fallback.py` per [data-model.md](data-model.md#normalized-cause) (depends on T001, T010). It checks reserved wrapper exit codes and the blocking status first, then the per-integration signature tables pinned from T001, matched only against the last 64 KiB of stdout and stderr. Anything unmatched is `unrecognized`.
-- [ ] T037 [US1] Add `ProbeContextTests` to `tests/test_fallback.py` (depends on T010; tests first, so T013 depends on this task): against a stub Ollama, `/api/show` with `num_ctx 16384` or more passes; `num_ctx 4096`, a missing `num_ctx` and an unparsable one each refuse as `incompatible-capability` with the detail `served context below 16384` or `served context unknown` [FR-006, DEC-0004]. `test_old_ollama_refuses_capability`: `/api/version` `0.6.8` refuses with `ollama older than 0.13.4`, `0.13.4` and `0.35.1` pass, and an unparsable version refuses with `ollama version unknown` [DEC-0003]. The stub shape comes from [evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06) item 10.
-- [ ] T012 [US1] Implement the invocation helpers in `tools/spec_workflow/fallback.py` (depends on T011):
+- [X] T011 [US1] Implement `classify(integration, exit_code, blocked, contained, tail, *, cli_found)` in `tools/spec_workflow/fallback.py` per [data-model.md](data-model.md#normalized-cause) (depends on T001, T010). It checks reserved wrapper exit codes and the blocking status first, then the per-integration signature tables pinned from T001, matched only against the last 64 KiB of stdout and stderr. Anything unmatched is `unrecognized`.
+- [X] T037 [US1] Add `ProbeContextTests` to `tests/test_fallback.py` (depends on T010; tests first, so T013 depends on this task): against a stub Ollama, `/api/show` with `num_ctx 16384` or more passes; `num_ctx 4096`, a missing `num_ctx` and an unparsable one each refuse as `incompatible-capability` with the detail `served context below 16384` or `served context unknown` [AC-007, FR-004, DEC-0004; plan-review PD-0013 F-003]. A stub that also fails the configuration-layer or skills check returns `permission-mismatch`, because the served-context check runs after them (research R5 check 11a). `test_old_ollama_refuses_capability`: `/api/version` `0.6.8` refuses with `ollama older than 0.13.4`, `0.13.4` and `0.35.1` pass, and an unparsable version refuses with `ollama version unknown` [DEC-0003]. The stub shape comes from [evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06) item 10.
+- [X] T012 [US1] Implement the invocation helpers in `tools/spec_workflow/fallback.py` (depends on T011):
   - `codex_prompt`;
   - `fallback_argv(codex, prompt, model)`: research R6, the fixed token list with no base-URL key;
   - `fallback_env(env, codex_home)`: `autonomy.confined_env(env, None)` minus `OLLAMA_HOST`, `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, with `CODEX_HOME=codex_home`;
   - `permission_mismatch(argv, env, codex_home, *, codex, prompt, model)`, an exact-argv allowlist and not a denylist (research R6, plan-review F-002): true unless `argv == fallback_argv(codex, prompt, model)` token for token, and `env` holds only the names `confined_env` keeps plus `CODEX_HOME == codex_home` and none of the three endpoint variables. The comparison is on the inner Codex argv, before `confined_argv` or the systemd scope wraps it. No token list is maintained;
   - `parse_events`: raises `EventError` on an unparsable stream; `complete` only when every turn reported usage.
-- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt)` in `tools/spec_workflow/fallback.py` (depends on T012, T037). It runs research R5 checks 5 to 11 and 11a in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
-  1. the probes use only `OLLAMA_ENDPOINT`, and the built environment holds none of `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT` and `OLLAMA_HOST` (else `privacy-exclusion`), so the probes check exactly the endpoint Codex will use;
+- [X] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt, env)` in `tools/spec_workflow/fallback.py` (depends on T012, T037). `env` is the environment `fallback_env` built for the attempt. It runs research R5 checks 5 to 11 and 11a in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
+  1. the probes use only `OLLAMA_ENDPOINT`, and `env` holds none of `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT` and `OLLAMA_HOST` (else `privacy-exclusion`), so the probes check exactly the endpoint Codex will use. `probe` owns this refusal; `permission_mismatch` keeps its own environment check as a second line, but runs later and so never decides this reason (plan-review PD-0013 F-001);
   2. `GET /api/version` answers and is at least `MIN_OLLAMA_VERSION` 0.13.4 (`ollama older than 0.13.4`, or `ollama version unknown`);
   3. `GET /api/tags` lists the exact name with a nonzero size and digest;
   4. there is no `remote_host`/`remote_model` in the tag entry or in `POST /api/show`, and no cloud tag;
@@ -144,14 +145,14 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   8. the model's served context is at least `MIN_SERVED_CONTEXT` (16384; the pilot's trivial prompt needed 11905 input tokens), read from `POST /api/show` `parameters` (`num_ctx NNNN`); a missing `num_ctx`, which means the server default, counts as unknown and refuses (T037, DEC-0004).
 
   It returns the fixed refusal reason with a fixed detail phrase, or `None`.
-- [ ] T014 [US1] Wire the selected path into `tools/spec_workflow/agent.py` (depends on T013):
+- [X] T014 [US1] Wire the selected path into `tools/spec_workflow/agent.py` (depends on T013):
   - Read the setting. A `SettingError` prints one line and counts as off.
   - When the setting is on:
     - capture a `_real_executable` failure as `cli-unavailable` instead of returning early;
     - take `fallback.state_evidence` before the primary `_attempt`;
     - after the attempt, call `fallback.classify`.
   - Consider the fallback only when all of these hold: the run is not Chat; the cause is recoverable; this is the step's first attempt (`attempt == 1` and no refused draft before it).
-  - Then compare the state evidence, run `probe` (passing the step's prompt) and `permission_mismatch`, and call `_autonomous_run` to count the step; an exhausted limit takes the existing limit path. Then run exactly one `_attempt(..., fallback=setting)`.
+  - Then compare the state evidence, build the fallback argv and environment, run `probe` (passing the step's prompt and the built environment) and then `permission_mismatch`, and call `_autonomous_run` to count the step; an exhausted limit takes the existing limit path. Then run exactly one `_attempt(..., fallback=setting)`.
   - Add the `fallback` keyword to `_attempt`:
     - fallback argv and environment, `integration="codex"`;
     - a fresh 0700 `CODEX_HOME` inside the attempt's private directory (one is created for a human-gated step), exposed as the Codex home under bubblewrap through the existing agent-home overlay, and removed afterwards;
@@ -175,7 +176,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Acceptance tests for User Story 2
 
-- [ ] T015 [US2] Add US2 tests to `tests/test_fallback.py` [AC-005, AC-006, AC-007, AC-008, AC-009, AC-010, AC-013] (depends on T014):
+- [X] T015 [US2] Add US2 tests to `tests/test_fallback.py` [AC-005, AC-006, AC-007, AC-008, AC-009, AC-010, AC-013] (depends on T014):
   - `ProbeTests`:
     - `test_model_missing_refuses_unknown_free_status`, including a tag without size or digest;
     - `test_cloud_model_refuses_privacy`;
@@ -189,7 +190,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - `PermissionTests`:
     - `test_wider_argv_refused`: the comparison is an exact-argv allowlist, so each case alters the argv `fallback_argv` builds and must refuse. One case per widening flag: `--approve-for-me`, `--enable X`/`--disable X`, `--worktree`, `--ignore-user-config`, `-p`/`--profile`, `--ignore-rules`, `--strict-config`, `--add-dir`, `--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`, `--dangerously-bypass-hook-trust`, any `-c`/`--config` key (including `network_access=true`, a non-empty `writable_roots` and `model_providers.ollama.base_url`), a repeated `--oss`, `-m` or `--local-provider`, and a flag nobody listed (`--some-future-flag`). Also one case each for a removed token, a reordered token and a changed model. The unchanged argv passes;
     - `test_extra_env_refused`, including a `CODEX_HOME` other than the private one;
-    - `test_endpoint_override_env_refused`: `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT` or `OLLAMA_HOST` in the built environment refuses as `privacy-exclusion`, and `fallback_env` strips all three from a parent environment that has them;
+    - `test_endpoint_override_env_refused`: `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT` or `OLLAMA_HOST` in the environment passed to `probe` refuses as `privacy-exclusion` before any HTTP request; `permission_mismatch` alone returns true for the same environment; and `fallback_env` strips all three from a parent environment that has them;
     - `test_user_skills_dir_refuses` [plan-review F-003]: a non-empty `~/.agents/skills`, a symlink there and an unreadable one each refuse as `permission-mismatch` before the prompt is sent, in both modes. An absent and an empty directory pass. The project's own `.agents/skills` does not count;
     - `test_other_codex_config_layer_refuses`: a system or project Codex config layer that sets `mcp_servers`, `notify` or `profile`, or an unknown layer list, refuses with `permission-mismatch`.
   - `ClassifyTests` non-recoverable cases: `EXIT_BLOCKED`/`BLOCKED_*`, `EXIT_TAMPERED`/not contained, `EXIT_LIMIT`/timeout, `EXIT_INTERRUPTED`, a refused draft, exit 0, unknown text, and a signature present only before the last 64 KiB.
@@ -208,14 +209,14 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] Implement the refusal path in `tools/spec_workflow/agent.py` (depends on T015):
+- [X] T016 [US2] Implement the refusal path in `tools/spec_workflow/agent.py` (depends on T015):
   - Compare the before and after `fallback.state_evidence` of research R3. When either is `None`, or the two differ, refuse with `changed-state` before any probe (details `worktree state changed` or `worktree state could not be checked`).
   - On any refusal:
     - print `local fallback refused: <reason>: <detail>` to stderr;
     - record `fallback: {"decision": "refused", "reason": ...}` on the primary entry;
     - append the entry and return the primary's exit code.
   - Never consider the fallback for a non-recoverable cause, a Chat run or a draft-retry attempt. A recoverable cause on a retry attempt only sets `failure_cause` on the entry.
-- [ ] T017 [P] [US2] Bring `probe` and `permission_mismatch` in `tools/spec_workflow/fallback.py` to the T015 cases (depends on T015). Each check returns its reason from the fixed table of [contracts/wrapper-fallback.md](contracts/wrapper-fallback.md#refusal-reasons-fixed), with a fixed detail phrase such as `model qwen3:4b is not installed` or `eligibility checks timed out`. Any exception or unknown answer from a check refuses rather than passes.
+- [X] T017 [P] [US2] Bring `probe` and `permission_mismatch` in `tools/spec_workflow/fallback.py` to the T015 cases (depends on T015). Each check returns its reason from the fixed table of [contracts/wrapper-fallback.md](contracts/wrapper-fallback.md#refusal-reasons-fixed), with a fixed detail phrase such as `model qwen3:4b is not installed` or `eligibility checks timed out`. Any exception or unknown answer from a check refuses rather than passes.
 
 **Checkpoint**: The US1 and US2 tests pass, and no refusal sends content.
 
@@ -229,7 +230,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Acceptance tests for User Story 3
 
-- [ ] T018 [US3] Add US3 tests to `tests/test_fallback.py` [AC-011, AC-012, AC-013, AC-014, AC-015, AC-016, AC-017] (depends on T004, T016, T017):
+- [X] T018 [US3] Add US3 tests to `tests/test_fallback.py` [AC-011, AC-012, AC-013, AC-014, AC-015, AC-016, AC-017] (depends on T004, T016, T017):
   - `LedgerFallbackTests`:
     - `test_selected_records_both_routes_and_usage`: a primary `route` with `failure_cause` and `fallback: selected`, attempt n; a fallback `route` with `provider: ollama`, the model, `route_source: fallback`, attempt n+1 and the same `cause_id`; a `usage` event with `counter_source: codex-exec-json` and the SHA-256 of `usage.json` as `counter_digest`; event IDs `fallback:<step>:<attempt>:route|usage`;
     - `test_refusal_recorded_with_reason`: one case per reason, including `changed-state` for an uncheckable state;
@@ -249,14 +250,14 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Implementation for User Story 3
 
-- [ ] T019 [US3] Implement `record(root, run_id, feature, events)` in `tools/spec_workflow/fallback.py` (depends on T018):
+- [X] T019 [US3] Implement `record(root, run_id, feature, events)` in `tools/spec_workflow/fallback.py` (depends on T018):
   - append the primary and fallback `route` events and the fallback `usage` event through `ledger.append`, with source `runner`, `stage` the command label, `cause_id` the primary step ID and the fixed event IDs;
   - write `usage.json` in the fallback step's log directory;
   - record no usage when the stream was unparsable.
-- [ ] T020 [US3] Call `fallback.record` from `tools/spec_workflow/agent.py` for every case of [contracts/ledger.md](contracts/ledger.md#events-per-case): refused, selected, succeeded, failed, and a recoverable cause on a retry attempt (depends on T019). Add the optional `steps.jsonl` fields: `failure_cause`, `fallback`, `route`, `provider`, `model`, and `local_fallback: true` on every entry while the setting is on; `ran: false` for a `cli-unavailable` primary. Write nothing new when the setting is off or the cause is not recoverable.
-- [ ] T021 [P] [US3] In `tools/spec_workflow/artifacts.py`, for a step entry with `route: "fallback"`, set the review entry's `cross_provider` to false. Set the draft's `agent.provider` and `agent.model` to the entry's `provider` and `model` (depends on T018).
-- [ ] T022 [P] [US3] Make the step-entry readers in `tools/spec_workflow/autonomy.py` accept the new optional `steps.jsonl` fields, without changing the validation of existing entries (depends on T018).
-- [ ] T023 [P] [US3] Implement the review provenance rule in `ledger.report` (`tools/spec_workflow/ledger.py`), per [contracts/ledger.md](contracts/ledger.md#report) (depends on T018). The rule applies when the run holds a runner `route` with `route_source: fallback`, `outcome: success` and a `ballast-review` stage:
+- [X] T020 [US3] Call `fallback.record` from `tools/spec_workflow/agent.py` for every case of [contracts/ledger.md](contracts/ledger.md#events-per-case): refused, selected, succeeded, failed, and a recoverable cause on a retry attempt (depends on T019). Add the optional `steps.jsonl` fields: `failure_cause`, `fallback`, `route`, `provider`, `model`, and `local_fallback: true` on every entry while the setting is on; `ran: false` for a `cli-unavailable` primary. Write nothing new when the setting is off or the cause is not recoverable.
+- [X] T021 [P] [US3] In `tools/spec_workflow/artifacts.py`, for a step entry with `route: "fallback"`, set the review entry's `cross_provider` to false. Set the draft's `agent.provider` and `agent.model` to the entry's `provider` and `model` (depends on T018).
+- [X] T022 [P] [US3] Make the step-entry readers in `tools/spec_workflow/autonomy.py` accept the new optional `steps.jsonl` fields, without changing the validation of existing entries (depends on T018).
+- [X] T023 [P] [US3] Implement the review provenance rule in `ledger.report` (`tools/spec_workflow/ledger.py`), per [contracts/ledger.md](contracts/ledger.md#report) (depends on T018). The rule applies when the run holds a runner `route` with `route_source: fallback`, `outcome: success` and a `ballast-review` stage:
   - `cross_provider_reviews` is 0;
   - every `review_provider_availability` and `outcome.reviews` item has `cross_provider: false`;
   - `routing.fallback_reviews` counts those routes.
@@ -278,7 +279,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ### Acceptance tests for User Story 4
 
-- [ ] T024 [US4] Add `RunCliTests` to `tests/test_fallback.py` [AC-019, AC-020, AC-021] (depends on T007, T018):
+- [X] T024 [US4] Add `RunCliTests` to `tests/test_fallback.py` [AC-019, AC-020, AC-021] (depends on T007, T018):
   - `test_start_and_resume_flags`:
     - `--local-fallback MODEL`, the `--name=value` form, and resume with a model and with `off`;
     - `--local-fallback-endpoint` in either form is refused on start and resume with exit 2 and nothing written (DEC-0003);
@@ -290,20 +291,20 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - `test_status_shows_setting`: `ballast run status RUN` prints `Local fallback: on (ollama MODEL)` and, after `off`, `Local fallback: off`, for a human-gated and an Autonomous run. Its output is unchanged when no `fallback.json` exists.
   - `test_human_gated_meta_records_setting`: each human-gated step's `meta.json` has `local_fallback: true` while the setting is on, and no such field when it is absent.
   - `WrapperFallbackTests.test_chat_step_never_falls_back`: the `run_interactive` path is untouched by a quota failure.
-- [ ] T025 [P] [US4] Add to `tests/test_autonomous_run.py` [AC-003, AC-020] (depends on T022):
+- [X] T025 [P] [US4] Add to `tests/test_autonomous_run.py` [AC-003, AC-020] (depends on T022):
   - the `record.md` "Mode and risk" section shows `- Local fallback: off` and `- Local fallback: on (ollama MODEL)`;
   - an Autonomous run without the setting renders `record.md` and `steps.jsonl` exactly as before.
 
 ### Implementation for User Story 4
 
-- [ ] T026 [US4] Add `--local-fallback` (and no endpoint option, DEC-0003) to `tools/spec_workflow/run.py` (depends on T024):
+- [X] T026 [US4] Add `--local-fallback` (and no endpoint option, DEC-0003) to `tools/spec_workflow/run.py` (depends on T024):
   - parse them in `_split_mode` and in the human-gated and Autonomous resume option parsing, with the `--mode` rules;
   - refuse Chat and the invalid cases with the fixed messages, and exit 2 before anything starts;
   - call `fallback.write_setting` before the engine starts, and print the on/off line;
   - add the `Local fallback:` line to `ballast run status` when `fallback.json` exists (an invalid file counts as off);
   - update the usage text.
-- [ ] T027 [US4] Add the `- Local fallback: off|on (ollama MODEL)` line to the "Mode and risk" section of the `record.md` renderer in `tools/spec_workflow/autonomy.py`, read from `fallback.read_setting` (an invalid setting counts as off) (depends on T022, T025).
-- [ ] T028 [US4] Complete `specs/23-free-fallback/evaluation.md` [AC-018] (depends on T001, T014, T016). It covers:
+- [X] T027 [US4] Add the `- Local fallback: off|on (ollama MODEL)` line to the "Mode and risk" section of the `record.md` renderer in `tools/spec_workflow/autonomy.py`, read from `fallback.read_setting` (an invalid setting counts as off) (depends on T022, T025).
+- [X] T028 [US4] Complete `specs/23-free-fallback/evaluation.md` [AC-018] (depends on T001, T014, T016). It covers:
   - the candidate: Codex CLI local-provider mode against loopback Ollama;
   - the alternatives and their rejection reasons, from research R1;
   - the host versions;
@@ -317,7 +318,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - the decision.
 
   Note that the workflow runs quickstart pilot steps 3 to 5 and appends them there.
-- [ ] T029 [P] [US4] Add a "Local fallback" subsection to `templates/policies/spec-kit-workflow.md` [AC-019] (depends on T016, T026). It covers:
+- [X] T029 [P] [US4] Add a "Local fallback" subsection to `templates/policies/spec-kit-workflow.md` [AC-019] (depends on T016, T026). It covers:
   - how to enable it with `--local-fallback MODEL`, that it always uses Ollama's default endpoint `127.0.0.1:11434` and a local model served with a context of at least 16384 tokens (for example a `num_ctx 16384` variant), that Ollama must be 0.13.4 or newer, and that the project needs Spec Kit's Codex integration installed (a missing Codex skill refuses as `incompatible-capability`);
   - what each refusal reason means, including `changed-state` for an uncheckable worktree and `permission-mismatch` for a Codex configuration layer or a non-empty `~/.agents/skills` (empty it, or leave the fallback off);
   - that it applies only to a step's first attempt;
@@ -326,7 +327,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - that it is never available in Chat runs, never routes to a paid or remote backend, never reads the user's Codex configuration, never runs while the user's skills directory is non-empty and never loosens a sandbox;
   - where to read the evidence: `./scripts/agent-metrics --run RUN`.
 - [X] T030 [P] [US4] Add one paragraph to `templates/policies/model-routing.md` [AC-016, AC-019]: the local fallback is a zero-cost availability route, not a routing profile, and a review it completes never counts as cross-provider review.
-- [ ] T031 [P] [US4] Add one line about `--local-fallback` under the `ballast run` options in `README.md`, linking the spec-kit-workflow subsection (depends on T026).
+- [X] T031 [P] [US4] Add one line about `--local-fallback` under the `ballast run` options in `README.md`, linking the spec-kit-workflow subsection (depends on T026).
 
 **Checkpoint**: All four stories pass independently.
 
@@ -334,7 +335,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T032 [P] Write `docs/adr/0012-local-zero-cost-fallback.md` with status proposed; it is accepted only when the PR merges (depends on T028). It records:
+- [X] T032 [P] Write `docs/adr/0012-local-zero-cost-fallback.md` with status proposed; it is accepted only when the PR merges (depends on T028). Done as [`docs/adr/0014-local-zero-cost-fallback.md`](../../docs/adr/0014-local-zero-cost-fallback.md): ADR-0012 and ADR-0013 were already taken (`init-before-pin`, `demo-capture-dispatch`), so the plan's "ADR-0012" is this ADR. It records:
   - the decision of plan.md ADR-0012 and its conditions;
   - the first-attempt-only rule and the changed-state evidence (DEC-0001);
   - the fixed default endpoint, the Ollama and served-context minimums (DEC-0003, DEC-0004) and the exact-argv comparison;
@@ -342,13 +343,13 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - the cost of the state walk;
   - the remaining residual risk, the model-pull race;
   - the host result from T028.
-- [ ] T033 [P] Update `specs/TECHNICAL-SPEC.md` sections 6.4, 6.5 and 9.1 with the qualified fallback, its checks and its refusal behavior (depends on T020, T026).
-- [ ] T034 Add `ModuleTests.test_stdlib_only_no_model_list` to `tests/test_fallback.py` [FR-009, FR-011] (depends on T017, T024). `tools/spec_workflow/fallback.py` imports only standard-library modules and `autonomy`/`ledger`, and imports cleanly under `python3 -I -S`. No model name, apart from test fixtures, appears in `fallback.py`, `agent.py` or `run.py`.
-- [ ] T035 Write `specs/23-free-fallback/acceptance-evidence.json` in the format of earlier features' evidence files (depends on T005, T020, T021, T023, T025, T027, T028, T029, T030, T031, T032, T033, T034). It maps:
-  - AC-001 to AC-021 and SC-001 to SC-005 to the tests of T003, T006, T008, T010, T015, T018, T024, T025 and T034;
+- [X] T033 [P] Update `specs/TECHNICAL-SPEC.md` sections 6.4, 6.5 and 9.1 with the qualified fallback, its checks and its refusal behavior (depends on T020, T026).
+- [X] T034 Add `ModuleTests.test_stdlib_only_no_model_list` to `tests/test_fallback.py` [FR-009, FR-011] (depends on T017, T024). `tools/spec_workflow/fallback.py` imports only standard-library modules and `autonomy`/`ledger`, and imports cleanly under `python3 -I -S`. No model name, apart from test fixtures, appears in `fallback.py`, `agent.py` or `run.py`. Implementation notes: `fallback_argv` also imports the wrapper `agent` lazily, for `permission_args`, the one source of the canonical Codex profile; and the fixed message of [operator-cli.md](contracts/operator-cli.md#start) names `qwen3:4b` as an example (`MODEL_HINT`), which the test leaves out. Neither is a model list.
+- [X] T035 Write `specs/23-free-fallback/acceptance-evidence.json` in the format of earlier features' evidence files (depends on T005, T020, T021, T023, T025, T027, T028, T029, T030, T031, T032, T033, T034). The format (`ledger.archive_manifest`) accepts exactly the spec's AC IDs, each mapped to unittest cases; the SC and FR mappings therefore stay in the [quickstart map](quickstart.md#offline-gate), and AC-018/AC-019's documents are covered by `tests.test_governance.LocalFallbackDocumentTests`. It maps:
+  - AC-001 to AC-021 and SC-001 to SC-005 to the tests of T003, T006, T008, T010, T037, T015, T018, T024, T025 and T034;
   - the same criteria to the evaluation record and documentation of T028 to T031;
   - FR-009 and FR-011 to T034.
-- [ ] T036 Run `uvx ruff check && uvx ruff format --check` and `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py`. Fix lint and format findings in the changed files, and confirm that the `tests/test_governance.py` link checks pass for the new documents (depends on T035).
+- [X] T036 Run `uvx ruff check && uvx ruff format --check` and `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py`. Fix lint and format findings in the changed files, and confirm that the `tests/test_governance.py` link checks pass for the new documents (depends on T035). Result in the implement step (2026-10-06), which itself ran as a confined agent step: `ruff check` and `ruff format --check` pass; `tests.test_fallback` (77), `tests.test_governance`, `tests.test_release_workflow`, `tests.test_autonomy`, `tests.test_autonomous_artifacts`, `tests.test_autonomous_recovery` and `tests.test_branch_sync` pass, and so do the 85 tests `acceptance-evidence.json` names. Not green in that environment: `test_agent_run_ledger` (17, all the ledger's operator-attestation guard, which refuses inside an agent step), `test_draft_pr`, `test_packet`, `test_demo` and one `test_ballast` case (the inspected failures are "git not found outside working trees" or a missing check record), and one `test_spec_workflow` venv case. A comparison against the base commit could not run there (no second worktree), so these need the full local gate. `test_chat_mode.EndToEndTests.test_conversational_feature` failed once under load and passed alone. The workflow's full local gate runs the suite outside an agent step.
 
 ---
 
