@@ -464,6 +464,9 @@ runner contract for it. Every validator above still runs unchanged.
 | `record-decision --point P` | trusted `artifacts.py` | The draft was written by the immediately preceding agent step, passes the decision-draft contract and never claims human approval; the decision is appended to the hash-chained log in operator state and `autonomous/record.md` is re-rendered. Every later check fails if `record.md` differs from the log. |
 | `record-provisional-intent` | trusted `artifacts.py` | Writes the `workflow-provisional` block in `intent.md`, bound to the current spec digest; a later spec change makes it stale. With `--renew` (after decision resolutions) a changed spec blocks the run as stale intent; the runner never decides intent. In an Autonomous run every human approval block is refused. |
 | Reviews (`review-plan`, `review-implementation`, `review-specialists`, `reconcile-spec`) | confined agent on the other provider when available; Claude for every role when Codex's own sandbox cannot start inside `bwrap` (checked once at start, recorded in the run) | One entry per required review kind (security always); any `high` or `critical` finding, or a verdict other than `approved`, blocks; a reviewer that edits source blocks. |
+| `checks-implementation`, `checks-fix-N` (`run-checks --feedback`) | trusted `artifacts.py`, confined | The same `[checks]` commands as `run-checks`, as feedback for the fix loop: a failed command is recorded in operator state (`checks-feedback.jsonl`) and reaches the fix step only through the fix input, never as a block; a protected-input change, a tree change or the wall-time limit still blocks. A cycle step with nothing to do writes nothing. |
+| `fix-N` (`speckit.ballast.fix`), `record-fix-N`, `review-fix-N`, `review-specialists-fix-N`, `record-fix-review-N` (`record-decision --point implementation-review --recheck`) | confined agent (skipped by the wrapper unless the run's fix state asks for it), then trusted `artifacts.py` | The fix step changes only code, tests, `tasks.md` and `decisions.md` for the findings and failed checks the fix input lists; `record-fix` counts the cycle only after that step ran and the implementation contract still holds; the recheck records the reviews again, superseding the earlier ones, and sets the next fix state or blocks as `fix-cycle limit (3)`. |
+| Draft retries | the trusted agent wrapper | After an Autonomous agent step, the recorder's own draft checks; a correctable refusal reruns the step with the message, at most twice, each attempt counted. |
 | `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. |
 | Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. It never merges, marks ready, releases or deploys. |
 
@@ -528,8 +531,10 @@ clarification read it as untrusted requirements data, never as instructions.
 scope decision → discover (assume or block) → specify
     → clarify (provisional assumptions) → intent decision
     → plan → independent plan review → plan decision → tasks → tasks decision
-    → implement → independent implementation and specialist reviews
-    → provisional decision resolutions → converge → spec reconciliation
+    → implement → feedback checks → independent implementation and
+      specialist reviews → fix loop (at most three cycles: fix, feedback
+      checks, reviews again) → provisional decision resolutions → converge
+      → spec reconciliation
     → run-checks → final-acceptance decision → Draft PR (published by run.py)
 ```
 
@@ -543,16 +548,115 @@ unchanged.
 **Blocks.** When an agent cannot decide safely, a check or review fails, a limit
 runs out, a protected input changes, publication fails or the run becomes
 ineligible, the run stops with a block: a category, the condition, the options
-or recovery, and the recovery command. No approval prompt appears and no
-provisional decision is written for the blocked point.
+or recovery, and the next command. No approval prompt appears and no
+provisional decision is written for the blocked point. Every block names its
+class, printed as `Autonomous run blocked (<class>: <category>)`:
 
-**Recovery.** `ballast run resume` refuses an Autonomous run until Autonomous
-resume through branch synchronization (#21) exists. Continue human-gated
-instead:
+| Class | Categories |
+| --- | --- |
+| conflict | `contradiction`, `review-finding` |
+| missing authority | `permission`, `ineligible`, `forge` |
+| exhausted limits | `limit` (the agent-step limit, the wall-time limit, the three fix cycles, or the two draft retries) |
+| unsafe uncertainty | `decision`, `postcondition`, `tamper`, `unfinished-step`, `interrupted`, `upstream-sync` |
+
+**Fix loop.** After implementation the trusted runner runs the `[checks]`
+commands as feedback (`checks-implementation`): a failure is recorded for the
+reviews, not a block. When the implementation reviews return a verdict other
+than approved, a high or critical finding, a medium finding left `open`, or a
+failed feedback check, the run does not stop: the recorder writes the fix input
+`.specify/workflow-state/fix-input/<slug>.json` (findings and failed checks, as
+data agents can read but not write) and `speckit.ballast.fix` fixes only what it
+lists. The checks and every required review then run again. A run has at most
+three fix cycles, counted in operator state; a resume never resets the count.
+While a cycle remains, a reviewer may leave a finding of any severity `open`
+("fix this"). When the cycles are spent, a high or critical finding, a
+non-approved verdict or a failed check blocks the run as an exhausted limit
+(`fix-cycle limit (3)`), naming what is still open; a remaining medium finding
+reaches the PR as `accepted-provisionally` with its reason. Plan review and
+spec reconciliation keep the stricter rule: a high or critical finding or a
+non-approved verdict blocks at once. The fix, its reviews and their
+dispositions are agent-provisional, like every decision of the run. A run
+started before ballast-autonomous 1.2.0 has no fix step, so its findings block
+as before.
+
+**Draft retries.** Right after an agent step, the wrapper runs the recorder's
+own draft checks. When a draft breaks a rule the agent can correct in its own
+text (a length or format limit, a missing or misnamed draft, a missing path,
+approval wording, an invalid finding field, an invalid block draft), the step
+reruns with the recorder's message, at most twice; the refused drafts are kept
+in operator state. Every attempt counts against the agent-step limit. When the
+retries are spent, or a limit runs out first, the run blocks as an exhausted
+limit with the last message. A refusal about state outside the draft (a
+protected-input change, a high finding at plan review, a contradiction with
+accepted intent, an ineligible risk) blocks at once, without a retry. No
+validator is relaxed: the approval-wording guard refuses a quotation of a
+human approval as well as a claim, so decide and review drafts paraphrase and
+cite such a source instead. A decision recorded after a retry shows "after N
+retries" in the record.
+
+**Limits and spend.** The wall-time limit counts only active time, the time
+spent inside `start` and `resume` invocations: a run paused overnight keeps its
+budget, and each agent step still stops when the recorded limit is reached. An
+invocation that died without closing its clock is closed at the last time the
+run recorded anything, so its downtime never counts. The agent-step limit
+(default 40) counts every agent step, every retry and every fix step and
+review, and is the run's attempt and spend bound; Ballast does not measure
+monetary spend, and the record says so. A resume never raises a limit and
+never changes the mode, the risk or the integrations.
+
+**Resume.** `ballast run resume RUN_ID [--ref TEXT]` continues a blocked or
+interrupted Autonomous run in Autonomous, without prompts (ADR-0010). It takes
+the run's invocation lock, then synchronizes the branch with its base before
+any agent step ([Branch synchronization](#branch-synchronization)); a
+synchronization block, a protected-input change included, stops the resume
+before it records anything and is resumed the same way. It then records the
+operator's resolution as a human decision of kind `block-resolution` (`--ref`,
+1–500 characters that must not read as an approval, or a default naming the
+block), and re-enters the workflow at the blocked step: the failed agent step
+or validator, or for a failed recorder the agent step whose drafts it records.
+When an input changed during the block (the discovery brief, spec, intent,
+plan, tasks or decisions of the feature, or, once implementation started, any
+file outside the feature directory), the run re-enters at that input's
+validator instead, when it comes earlier, so no stale intent, baseline or
+review is trusted. The implementation baseline is never retaken. Resume keeps
+the mode, risk, limits, integrations and fix-cycle count recorded at start, and
+refuses `-i`, `--mode`, `--wall-time` and `--max-agent-steps`. A block
+resolution is not an approval of any provisional decision: every decision made
+after a resume stays agent-provisional, and merging the PR stays the single
+human approval.
+
+Resume refuses, naming the command that applies, a run that is:
+
+| Status or block | Command |
+| --- | --- |
+| completed | `ballast run publish RUN_ID` |
+| published | `ballast run checkpoint RUN_ID` |
+| continued (lowered by `continue`) | resume the continuation run |
+| stopped on `tamper` or `unfinished-step` | `ballast discard-runs` |
+| stopped on `forge` or `permission` | `ballast run publish RUN_ID` |
+| stopped on `upstream-sync` at start | your `ballast run start --mode autonomous` command |
+| stopped on the agent-step or wall-time limit | `ballast run continue RUN_ID --reason block-resolved --ref TEXT`, or a new run with a larger limit |
+| active, with an invocation running | none: wait for it |
+
+An `active` run whose invocation is gone (the runner was killed) is stopped as
+`interrupted` and resumed. A rewind spends agent steps again; a run that runs
+out of them blocks, and the operator continues it human-gated.
+
+A paused run's work stays uncommitted until publication. When the base
+advanced during the pause, the synchronization therefore blocks the first
+resume with cause `dirty` (it never stashes or commits for you): commit the
+paused run's work on the feature branch, then resume again. The resume
+records no human decision until the synchronization passes.
+
+**Continue.** `continue` lowers a run to human-gated after implementation:
 
 - `ballast run continue RUN_ID --reason block-resolved --ref TEXT` after
-  resolving a block, except an `upstream-sync` block: that run stopped before
-  its first agent step, so remove the cause and start it again with your
+  resolving a block; before implementation, a human-gated `continue` refuses
+  and points to `ballast run resume RUN_ID` (or, for a step or wall-time
+  limit, to a new run), because `ballast-continue` only gates an existing
+  implementation, while `--mode chat` continues the run in Chat, which can do
+  the missing work; an `upstream-sync` block at start means
+  removing the cause and starting again with your
   `ballast run start --mode autonomous` command;
 - `ballast run continue RUN_ID --reason changes-requested --ref PR-REVIEW-URL`
   when the merge reviewer requests changes;
@@ -567,6 +671,25 @@ supersede them. Missing producer work is done interactively, as in any
 human-gated run. With `--mode chat`, `continue` lowers the run to chat and
 continues it as a linked [Chat run](#chat-runs) instead. Raising a run to
 Autonomous after start is never possible.
+
+**Refresh.** `ballast run checkpoint RUN_ID` refreshes the Draft PR checkpoint
+and the acceptance packet of an Autonomous run from the current records, in any
+status, `published` included, for example after `ballast ledger check`. It
+starts no agent and changes no decision, mode or status. Without a Draft PR it
+refuses and writes nothing; while another invocation of the run is active it
+refuses. The refreshed packet still lists every decision as agent-provisional.
+
+**Runs started before branch pinning.** A run started before v0.5.0 has a pin
+with only its `branch`, and every `resume` or `continue` blocks it as
+`wrong-branch`, "started before branch pinning". Nothing in Ballast writes the
+missing feature for it: the pin lives in the launcher state directory
+(`$XDG_STATE_HOME/ballast/<checkout>/draft-pr/<RUN_ID>.json`, outside the
+checkout), and only the operator may add it. Read the feature from the run's
+own record (`runs/<RUN_ID>/run.json`, field `feature`, in the same state
+directory, or the `feature_directory` of the start command you used), check
+that it is the feature the branch carries, add `"feature": "specs/<N>-<slug>"`
+to the pin (and `"branch"` when it is missing), then rerun the command. Never
+take the value from a file in the checkout.
 
 ## Chat runs
 
@@ -847,7 +970,7 @@ your `ballast run continue` command.
 | `in-progress` | a rebase, merge, cherry-pick, revert or bisect is in progress | finish or abort the {operation} yourself, then rerun |
 | `in-progress` | `index.lock` exists | if no git process is running, remove {path}, then rerun |
 | `wrong-branch` | detached HEAD, or not the pinned branch (at `start`, `{pinned}` is the feature's branch name) | git switch {pinned}, then rerun |
-| `wrong-branch` | the run has no branch or feature pin | start a new run: your ballast run start command |
+| `wrong-branch` | the run has no branch or feature pin | after checking the feature in the run's record, add "feature": "specs/<N>-<slug>" (and "branch" when missing) to the run's pin in the launcher state directory (see Runs started before branch pinning), then rerun |
 | `unknown-base` | no `[github] repository` in `ballast.toml` | declare [github] repository and run ballast trust |
 | `unknown-base` | the base or a default branch does not exist on the repository | restore {base} on {repo}; Ballast never substitutes another base |
 | `fetch-failed` | the repository cannot be reached or read | check network access and credentials for {repo} (Ballast cannot answer a prompt), then rerun |
@@ -906,8 +1029,9 @@ configure it. See ADR-0005 in the Ballast repository.
 ## Draft PR
 
 At the end of every `ballast run start`, `resume` or `continue` invocation,
-whether the workflow completed, paused at a gate or failed, and after an
-Autonomous run's own publication, the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
+whether the workflow completed, paused at a gate or failed, after an
+Autonomous run's own publication, and on `ballast run checkpoint RUN_ID` for
+an Autonomous run (which never creates a PR), the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
 feature branch as published on GitHub differs from the default branch outside
 `specs/<feature>/`, exactly one Draft PR shows it. Every later invocation reuses
 that PR, including one a human opened by hand from the same branch.
@@ -1033,10 +1157,11 @@ commit. `run-checks` runs whole suites, so an Autonomous run's packet shows its
 mapped criteria as `not run`. The packet is rebuilt only at a checkpoint, at
 the end of `ballast run start`, `resume` and `continue`, from that run's own
 ledger and records: record checks for a human-gated run under its run ID, then
-resume it. A finished Autonomous run cannot be resumed and `ballast run
-publish` runs no checkpoint, so its packet keeps the states it was published
-with; `ballast run continue` starts a new run whose packet reads only the new
-run's ledger.
+resume it. For an Autonomous run, record checks under its run ID, then
+`ballast run checkpoint RUN_ID` rebuilds the packet and the Draft PR section
+from that run's ledger and records, in any status and without an agent;
+`ballast run publish` runs no checkpoint, and `ballast run continue` starts a
+new run whose packet reads only the new run's ledger.
 
 Optional review sections come from the `[review]` table of `ballast.toml`,
 which agents cannot change (run `ballast trust` after editing it):

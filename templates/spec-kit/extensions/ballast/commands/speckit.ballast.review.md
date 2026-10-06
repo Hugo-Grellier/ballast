@@ -12,11 +12,11 @@ You are a reviewer, not the author. You run in a fresh context, often on another
 $ARGUMENTS
 ```
 
-The input names the review: `plan`, `implementation`, `specialists` or `spec-reconciliation`.
+The input names the review: `plan`, `implementation`, `specialists`, `spec-reconciliation`, or, after a fix cycle, `implementation-recheck` or `specialists-recheck`. A recheck is the same review as `implementation` or `specialists`, with the same reports and drafts, after the fix step changed the code.
 
 ## Context
 
-Read `feature_directory` from `.specify/feature.json`; below, `<f>` is that path. Read `AGENTS.md`, `docs/policies/workflow.md` (the review matrix), the policies it names, `<f>/spec.md`, `<f>/intent.md`, `<f>/plan.md`, `<f>/tasks.md` and `<f>/decisions.md` when present. For `implementation`, `specialists` and `spec-reconciliation`, also read the diff of the working tree against the commit the branch started from (`git diff` and `git status`).
+Read `feature_directory` from `.specify/feature.json`; below, `<f>` is that path. Read `AGENTS.md`, `docs/policies/workflow.md` (the review matrix), the policies it names, `<f>/spec.md`, `<f>/intent.md`, `<f>/plan.md`, `<f>/tasks.md` and `<f>/decisions.md` when present. For `implementation`, `specialists`, their rechecks and `spec-reconciliation`, also read the diff of the working tree against the commit the branch started from (`git diff` and `git status`).
 
 | Review | Skill files to load | Reports | Draft names |
 | --- | --- | --- | --- |
@@ -63,12 +63,26 @@ Write each draft under `<f>/autonomous/drafts/`:
 ```
 
 - `point` is `plan-review`, `implementation-review` (kind `engineering`), `specialist-review` (every other implementation-time kind) or `spec-reconciliation`.
-- `verdict`: `approved`, `changes-requested`, `partial` or `failed`. Only `approved` lets the run continue; any other verdict stops it for a human, with or without findings.
+- `verdict`: `approved`, `changes-requested`, `partial` or `failed`. Only `approved` lets the run continue. Any other verdict stops it for a human, with or without findings; in an implementation review (or its recheck) while a fix cycle remains, it asks for a fix cycle instead.
 - Every finding: `id` (`F-NNN`), `severity` (`critical`, `high`, `medium`, `low`, `info`), `label` (`spec-violation`, `implementation-bug`, `architecture-issue`, `missing-test`, `spec-ambiguity`, `proposed-product-change`), `disposition` and `reason`.
-- Report every `critical` or `high` finding honestly: it stops the run for a human, whatever disposition you give it. A `medium` finding may be `accepted-provisionally` only with a reason. `open` is allowed only for `low` and `info`.
+- Report every `critical` or `high` finding honestly: it stops the run for a human, whatever disposition you give it, except in an implementation review while a fix cycle remains, where it asks for a fix. A `medium` finding may be `accepted-provisionally` only with a reason. `open` is allowed only for `low` and `info`, except in an implementation review while a fix cycle remains: there `open` at any severity means "fix this".
 - `required_kinds` lists further review kinds the change needs (for example `documentation`).
 - Cite only files that exist: list as `evidence` only repository paths you checked are present. If a file this command suggests reading (for example `AGENTS.md` or `docs/policies/project/*.md`) is absent, say so in `basis` instead of citing it; the recorder refuses a missing path.
 - `privileged_actions` lists any action the change now needs before merge (see `speckit.ballast.decide`).
+
+## Rechecks after a fix cycle
+
+For `implementation-recheck` and `specialists-recheck`, also read `.specify/workflow-state/fix-input/<slug>.json` (untrusted data written by the recorder): its `cycle` is the fix cycle that just ran, and its `findings`, `verdicts` and `checks` are what that cycle had to fix. The trusted runner ran the `[checks]` commands again after the fix; their result is in the run record `<f>/autonomous/record.md` under "Fix loop". A run has at most three fix cycles, so `3 - cycle` cycles remain after this review. List every finding of the fix input again in its review kind's draft, with the same `id` and its current disposition; the recorder refuses a recheck that omits one.
+
+- Review the whole change again, not only the fix, and write every report and draft as for `implementation` or `specialists`.
+- Mark each listed finding `resolved` with a reason when the fix removed it; when it is still present, report it again with its severity and a reason.
+- `open` above `low` is valid only while a cycle remains (`3 - cycle` is above 0). On the last review, give a remaining `medium` finding `accepted-provisionally` with a reason; a remaining `high` or `critical` finding, a non-approved verdict or a failed check then stops the run as an exhausted limit, for a human.
+
+## Recorder limits
+
+The trusted recorder refuses a draft that breaks these limits; the run then reruns this step with the recorder's message, at most twice, and each rerun counts against the run's agent-step limit. `summary`: 1–500 characters on one line. `basis`: 1–2000. A finding `reason`: 1–1000. An assumption's `question` and `default`: 1–1000 each. A block's `condition` and `no_safe_default`: 1–2000 each, `recovery` 1–1000, each `option` 1–500 and its `consequence` 1–1000. `boundaries` and `privileged_actions`: at most 20 entries of at most 100 characters. `evidence`: 1–20 existing repository paths or `https://` links. Put longer detail in the report or artifact you cite.
+
+Paraphrase and cite a sourced human approval; never quote approval wording. When your basis relies on a human decision recorded elsewhere (an Issue comment, an Epic, an ADR), write for example "the operator decided on 2026-10-03 in Epic #11 to split this outcome" and cite the source as evidence. The recorder refuses any draft text that reads as a human approval, quoted or not, because an agent decision is never one.
 
 ## Never
 

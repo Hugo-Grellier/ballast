@@ -46,6 +46,10 @@ $ARGUMENTS
 
 Write `<f>/autonomous/drafts/block.json` with `category` (`decision` or `contradiction`), `condition`, `no_safe_default` (required for `decision`), at least two `options` with their `consequence`, `recovery` and `evidence`, as described in `speckit.ballast.decide`. Then print exactly `RECONCILE_STATUS: BLOCKED_DECISION` and stop. Any clarification draft you already wrote is discarded with the run's block.
 
+## Recorder limits
+
+The trusted recorder refuses a draft that breaks these limits; the run then reruns this step with the recorder's message, at most twice, and each rerun counts against the run's agent-step limit. `summary`: 1–500 characters on one line. `basis`: 1–2000. A finding `reason`: 1–1000. An assumption's `question` and `default`: 1–1000 each. A block's `condition` and `no_safe_default`: 1–2000 each, `recovery` 1–1000, each `option` 1–500 and its `consequence` 1–1000. `boundaries` and `privileged_actions`: at most 20 entries of at most 100 characters. `evidence`: 1–20 existing repository paths or `https://` links. Put longer detail in the report or artifact you cite.
+
 ## Never
 
 - Ask the operator, wait for input, or leave a question for a human prompt.

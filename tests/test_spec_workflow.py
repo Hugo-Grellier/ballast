@@ -1433,8 +1433,10 @@ class RunFormatTests(unittest.TestCase):
     # every shipped workflow's step IDs. Record a new entry only together with
     # a new [runs] format (and a decision on [runs] resumes).
     BASIS: ClassVar[dict[str, str]] = {
+        # ballast-autonomous 1.2.0 (#21) added fix steps; a run started under
+        # 1.1.0 still resumes from its own workflow copy (#21 R19).
         "ballast-run/1": (
-            "67ad04f92da7349fdb4ef1b0237349da9fcb9ecf1680df537efc1bd65c571421"
+            "1aced2c4b3f9cef84956b39304132dcc0f096b909542420370e693ca922dabdc"
         ),
     }
 
@@ -2206,9 +2208,27 @@ AUTONOMOUS_STEPS = (
     ("implementation-baseline", "implementation-baseline", None),
     ("implement", "speckit.implement", None),
     ("validate-implementation", "implementation", None),
+    ("checks-implementation", "run-checks", "--feedback"),
     ("review-implementation", "speckit.ballast.review", "implementation"),
     ("review-specialists", "speckit.ballast.review", "specialists"),
     ("record-implementation-review", "record-decision", "implementation-review"),
+    # #21: three fix cycles, each skipped while the fix state is idle.
+    *(
+        step
+        for n in (1, 2, 3)
+        for step in (
+            (f"fix-{n}", "speckit.ballast.fix", None),
+            (f"record-fix-{n}", "record-fix", None),
+            (f"checks-fix-{n}", "run-checks", "--feedback"),
+            (f"review-fix-{n}", "speckit.ballast.review", "implementation-recheck"),
+            (
+                f"review-specialists-fix-{n}",
+                "speckit.ballast.review",
+                "specialists-recheck",
+            ),
+            (f"record-fix-review-{n}", "record-decision", "implementation-review"),
+        )
+    ),
     ("resolve-decisions", "speckit.ballast.resolve", None),
     ("record-resolutions", "record-decision", "decision-resolution"),
     ("renew-intent", "record-provisional-intent", "--renew"),
@@ -2221,7 +2241,16 @@ AUTONOMOUS_STEPS = (
     ("decide-final", "speckit.ballast.decide", "final-acceptance"),
     ("record-final", "record-decision", "final-acceptance"),
 )
-REVIEW_STEPS = ("review-plan", "review-implementation", "review-specialists")
+REVIEW_STEPS = (
+    "review-plan",
+    "review-implementation",
+    "review-specialists",
+    *(
+        f"{kind}-{n}"
+        for n in (1, 2, 3)
+        for kind in ("review-fix", "review-specialists-fix")
+    ),
+)
 SHELL_PREFIX = "python3 -I -S .ballast/spec_workflow/artifacts.py "
 
 
@@ -2303,6 +2332,16 @@ class AutonomousWorkflowDefinitionTests(unittest.TestCase):
             ("decide-tasks", "record-tasks"),
             ("implement", "validate-implementation"),
             ("review-specialists", "record-implementation-review"),
+            ("validate-implementation", "checks-implementation"),
+            *(
+                pair
+                for n in (1, 2, 3)
+                for pair in (
+                    (f"fix-{n}", f"record-fix-{n}"),
+                    (f"record-fix-{n}", f"checks-fix-{n}"),
+                    (f"review-specialists-fix-{n}", f"record-fix-review-{n}"),
+                )
+            ),
             ("resolve-decisions", "record-resolutions"),
             ("reconcile-spec", "record-reconciliation"),
             ("decide-final", "record-final"),
@@ -2313,6 +2352,44 @@ class AutonomousWorkflowDefinitionTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(WORKFLOW.read_bytes()).hexdigest(), FEATURE_WORKFLOW_DIGEST
         )
+
+    def test_version_and_step_order(self) -> None:
+        """#21 T014: 1.2.0, and the step order resume re-enters by."""
+        self.assertEqual(self.doc["workflow"]["version"], "1.2.0")
+        self.assertEqual(
+            tuple(step["id"] for step in self.steps), autonomy.AUTONOMOUS_STEPS
+        )
+        shell = {s["id"] for s in self.steps if s.get("type") == "shell"}
+        self.assertEqual(shell, set(autonomy.AUTONOMOUS_SHELL_STEPS))
+
+    def test_every_human_gated_check_is_kept(self) -> None:
+        """#21 T014 [AC-005, FR-006]: choosing Autonomous skips no check."""
+        feature_checks = {
+            _shell_check(step["run"])
+            for step in _steps()
+            if step.get("type") == "shell"
+        }
+        autonomous = {
+            _shell_check(step["run"])
+            for step in self.steps
+            if step.get("type") == "shell"
+        }
+        # The human gates' recorders become provisional recorders; every
+        # validator and postcondition of ballast-feature is still present.
+        for check, _extra in feature_checks:
+            if check in {"record-intent", "preflight"}:
+                continue
+            with self.subTest(check=check):
+                self.assertIn(check, {c for c, _ in autonomous})
+        commands = {s["command"] for s in self.steps if "command" in s}
+        registered = set(
+            re.findall(
+                r'name: "([^"]+)"', (COMMANDS.parent / "extension.yml").read_text()
+            )
+        )
+        for command in commands:
+            if command.startswith("speckit.ballast."):
+                self.assertIn(command, registered)
 
 
 class DiscoveryWorkflowTests(unittest.TestCase):
@@ -2327,7 +2404,8 @@ class DiscoveryWorkflowTests(unittest.TestCase):
 
     def test_versions(self) -> None:
         self.assertEqual(self.feature["workflow"]["version"], "1.2.0")
-        self.assertEqual(self.autonomous["workflow"]["version"], "1.1.0")
+        # 1.2.0 adds #21's fix loop after #16's discovery.
+        self.assertEqual(self.autonomous["workflow"]["version"], "1.2.0")
 
     def test_feature_discovers_after_the_scope_gate(self) -> None:
         ids = [step["id"] for step in self.feature["steps"]]
@@ -2519,7 +2597,12 @@ def _autonomous_plan() -> dict[str, dict[str, str]]:
         "speckit-ballast-decide-scope": decide("scope", "README.md"),
         "speckit-ballast-discover-autonomous": {f"{feature}/discovery.md": AUTO_BRIEF},
         "speckit-specify": {spec: TRACED_SPEC},
-        "speckit-ballast-decide-intent": decide("intent", spec),
+        # #21 FR-004: provisional intent cites the brief and the traced spec.
+        "speckit-ballast-decide-intent": {
+            f"{drafts}/intent.json": _draft(
+                "intent", spec, evidence=[f"{feature}/discovery.md", spec]
+            )
+        },
         "speckit-plan": {plan: PLAN},
         "speckit-ballast-review-plan": _review("plan-review", "plan"),
         "speckit-ballast-decide-plan": decide("plan", plan),
@@ -2712,7 +2795,11 @@ class AutonomousEngineCase(AutonomyCase):
         self.assertEqual(record["status"], "stopped")
         block = autonomy.read_block(self.root, run_id)
         self.assertIn(f"Next: {block['command']}", out)
-        self.assertIn(f"Autonomous run blocked ({block['category']})", out)
+        self.assertIn(
+            f"Autonomous run blocked ({autonomy.block_class(block)}: "
+            f"{block['category']})",
+            out,
+        )
         # DEC-0007: the #17 checkpoint line is printed, but no PR is published.
         self.assertNotRegex(out, r"Draft PR: (https://|created|reused)")
         if block["category"] not in autonomy.PUBLISH_RETRY:
@@ -3024,7 +3111,13 @@ class AutonomousBlockEngineTests(AutonomousEngineCase):
             "speckit-ballast-decide-intent",
             {
                 f"{AUTO_FEATURE}/autonomous/drafts/intent.json": _draft(
-                    "intent", f"{AUTO_FEATURE}/spec.md", privileged_actions=["deploy"]
+                    "intent",
+                    f"{AUTO_FEATURE}/spec.md",
+                    privileged_actions=["deploy"],
+                    evidence=[
+                        f"{AUTO_FEATURE}/discovery.md",
+                        f"{AUTO_FEATURE}/spec.md",
+                    ],
                 )
             },
         )
@@ -3186,7 +3279,7 @@ class AutonomousConfinementEngineTests(AutonomousEngineCase):
                 record = autonomy.read_run(self.root, run_id)
                 self.assertEqual(autonomy.effective_mode(record), "autonomous")
                 self.assertTrue(record["eligibility"]["eligible"])
-                self.assertEqual(record["limits"]["max_agent_steps"], 30)
+                self.assertEqual(record["limits"]["max_agent_steps"], 40)
                 self.assertEqual(record["integration"], integration)
                 self.assertEqual(self.run_ids(), [run_id])
                 self.assertEqual(record["status"], "published")
@@ -3949,3 +4042,179 @@ class ChatArtifactTests(AutonomyCase):
         self.assertEqual(
             (unavailable["unavailable"], unavailable["results"]), (True, [])
         )
+
+
+REPOSITION_WORKFLOW = """schema_version: "1.0"
+workflow:
+  id: reposition-demo
+  name: Reposition demo
+  version: 1.0.0
+steps:
+  - id: one
+    type: shell
+    run: echo one >> steps.log
+  - id: two
+    type: shell
+    run: echo two >> steps.log
+  - id: three
+    type: shell
+    run: echo three >> steps.log && test -f ok
+"""
+
+
+def _engine_run_dir(root: Path, run_id: str, steps: list[str], **state: object) -> Path:
+    """Write an engine run directory: its workflow copy (as dumped) and state."""
+    directory = root / ".specify/workflows/runs" / run_id
+    directory.mkdir(parents=True)
+    (directory / "workflow.yml").write_text(
+        yaml.safe_dump(
+            {"workflow": {"id": "demo"}, "steps": [{"id": s} for s in steps]},
+            sort_keys=False,
+        )
+    )
+    (directory / "state.json").write_text(json.dumps(state))
+    (directory / "log.jsonl").write_text('{"event": "x"}\n')
+    return directory
+
+
+class EngineRepositionOfflineTests(unittest.TestCase):
+    """#21 T001, R7: run.py repositions a failed engine run at an earlier step."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.enterContext(patch.object(run_module, "ROOT", self.root))
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_rewrites_index_results_and_status(self) -> None:
+        directory = _engine_run_dir(
+            self.root,
+            "r1",
+            ["one", "two", "three"],
+            status="failed",
+            current_step_index=2,
+            current_step_id="three",
+            step_results={"one": {"status": "completed"}, "two": {}, "three": {}},
+            workflow_id="demo",
+        )
+        log = (directory / "log.jsonl").read_bytes()
+        run_module._reposition_engine("r1", "two")  # noqa: SLF001
+        state = json.loads((directory / "state.json").read_text())
+        self.assertEqual(
+            (state["current_step_index"], state["current_step_id"], state["status"]),
+            (1, "two", "failed"),
+        )
+        self.assertEqual(state["step_results"], {"one": {"status": "completed"}})
+        self.assertEqual(state["workflow_id"], "demo")
+        self.assertEqual((directory / "log.jsonl").read_bytes(), log)
+
+    def test_failed_step_itself_is_left_alone(self) -> None:
+        directory = _engine_run_dir(
+            self.root,
+            "r1",
+            ["one", "two"],
+            status="failed",
+            current_step_index=1,
+            current_step_id="two",
+            step_results={"two": {"status": "failed"}},
+        )
+        before = (directory / "state.json").read_bytes()
+        run_module._reposition_engine("r1", "two")  # noqa: SLF001
+        self.assertEqual((directory / "state.json").read_bytes(), before)
+
+    def test_an_unfinished_run_becomes_resumable(self) -> None:
+        directory = _engine_run_dir(
+            self.root,
+            "r1",
+            ["one", "two"],
+            status="running",
+            current_step_index=1,
+            current_step_id="two",
+            step_results={"one": {}},
+        )
+        run_module._reposition_engine("r1", "two")  # noqa: SLF001
+        state = json.loads((directory / "state.json").read_text())
+        self.assertEqual((state["status"], state["current_step_index"]), ("failed", 1))
+
+    def test_unknown_step_or_linked_state_refuses(self) -> None:
+        _engine_run_dir(self.root, "r1", ["one"], status="failed", step_results={})
+        with self.assertRaisesRegex(RuntimeError, "not a step"):
+            run_module._reposition_engine("r1", "nope")  # noqa: SLF001
+        other = _engine_run_dir(self.root, "r2", ["one"], status="failed")
+        (self.root / ".specify/workflows/runs/r3").symlink_to(other)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            run_module._reposition_engine("r3", "one")  # noqa: SLF001
+
+
+@unittest.skipUnless(shutil.which("specify"), "Spec Kit CLI (1.0.11 or later) missing")
+class EngineRepositionTests(unittest.TestCase):
+    """#21 T001, R7: the real engine resumes at a repositioned step."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        (self.root / ".specify").mkdir()
+        (self.root / "workflow.yml").write_text(REPOSITION_WORKFLOW)
+        self.env = {**os.environ, "SPECKIT_WORKFLOW_RUN_ID": "repo1"}
+        self.enterContext(patch.object(run_module, "ROOT", self.root))
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def specify(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603
+            ["specify", "workflow", *args],  # noqa: S607 - resolved by the skip
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+
+    def test_resume_runs_the_repositioned_step_next(self) -> None:
+        self.specify("run", str(self.root / "workflow.yml"))
+        log = self.root / "steps.log"
+        self.assertEqual(log.read_text().split(), ["one", "two", "three"])
+        state = run_module._engine_state("repo1")  # noqa: SLF001
+        self.assertEqual(
+            (state["status"], state["current_step_id"]), ("failed", "three")
+        )
+        run_module._reposition_engine("repo1", "one")  # noqa: SLF001
+        (self.root / "ok").write_text("")
+        result = self.specify("resume", "repo1")
+        self.assertEqual(
+            log.read_text().split(),
+            ["one", "two", "three", "one", "two", "three"],
+            result.stdout + result.stderr,
+        )
+        self.assertEqual(run_module._engine_state("repo1")["status"], "completed")  # noqa: SLF001
+
+
+class EngineStepListTests(unittest.TestCase):
+    """#21 R7: the step list is read whatever the dump's key order."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.enterContext(patch.object(run_module, "ROOT", self.root))
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_any_key_order_and_indentation(self) -> None:
+        data = yaml.safe_load(AUTONOMOUS_WORKFLOW.read_text())
+        directory = self.root / ".specify/workflows/runs/r1"
+        directory.mkdir(parents=True)
+        expected = [step["id"] for step in data["steps"]]
+        for text in (
+            yaml.safe_dump(data, sort_keys=False),
+            yaml.safe_dump(data, sort_keys=True),
+            AUTONOMOUS_WORKFLOW.read_text(),
+        ):
+            (directory / "workflow.yml").write_text(text)
+            self.assertEqual(run_module._engine_steps("r1"), expected)  # noqa: SLF001
+        (directory / "workflow.yml").write_text("steps:\n- type: shell\n")
+        self.assertEqual(run_module._engine_steps("r1"), [])  # noqa: SLF001

@@ -9,7 +9,7 @@ the artifacts it depends on, so a resumed run cannot trust stale step state.
 Run from the repository root:
 
     artifacts.py <check> (--run RUN_ID | --feature specs/<number>-<slug>)
-        [--point POINT] [--renew]
+        [--point POINT] [--renew] [--recheck] [--feedback]
 
 In an Autonomous run (operator run record with workflow ballast-autonomous),
 every check first requires the run to be active and the committed
@@ -17,6 +17,13 @@ every check first requires the run to be active and the committed
 `record-*` checks validate agent drafts and append provisional decisions;
 `check_intent` and `check_decisions` accept only agent-provisional records
 there, and never count them as human approval in a human-gated run.
+
+The fix loop (#21): `run-checks --feedback` records the `[checks]` results
+without blocking on a failure; the implementation-review recorder sets the
+run's fix state instead of blocking while a fix cycle remains; `record-fix`
+counts a cycle after the fix step; `record-decision --recheck` records the
+review after it. `check_step_drafts` lets the agent wrapper run the recorders'
+draft contract right after a step, so a DraftError retries the step.
 
 `record-intent` registers each human approval block it writes in the
 operator's state directory (launcher.state_dir), which no agent can write. A
@@ -121,6 +128,14 @@ SPEC_LINE = re.compile(r"^- \*\*Spec\*\*: (\S+)$", re.MULTILINE)
 
 class ContractError(Exception):
     """An artifact does not satisfy its workflow postcondition."""
+
+
+class DraftError(ContractError):
+    """A refusal the agent can correct by rewriting its own draft (#21 R4).
+
+    The agent wrapper reruns an Autonomous agent step on it, within
+    DRAFT_RETRIES; every other ContractError stays terminal.
+    """
 
 
 class Feature:
@@ -472,9 +487,25 @@ def _state_file(feature: Feature, name: str) -> Path:
 
 
 def record_baseline(feature: Feature) -> None:
-    """Snapshot the working tree immediately before implementation."""
+    """Snapshot the working tree immediately before implementation.
+
+    An Autonomous run keeps the baseline it already took (#21 R6): after a
+    resume the reviews still cover every change since the first one.
+    """
     check_tasks(feature)
     path = _state_file(feature, "implementation-baseline.json")
+    if feature.run is not None and path.is_file() and not path.is_symlink():
+        try:
+            kept = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            kept = None
+        if (
+            isinstance(kept, dict)
+            and kept.get("feature") == feature.relative
+            and isinstance(kept.get("tree"), str)
+            and TREE_ID.fullmatch(kept["tree"])
+        ):
+            return
     payload = {"feature": feature.relative, "tree": worktree_tree(feature.root)}
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
@@ -1671,12 +1702,7 @@ def _block(feature: Feature, category: str, condition: str, **fields: object) ->
 
 
 def _rendered(feature: Feature) -> str:
-    run = _require_run(feature)
-    return autonomy.render_record(
-        run,
-        autonomy.read_decisions(feature.root, run["run_id"]),
-        autonomy.read_checks(feature.root, run["run_id"]),
-    )
+    return autonomy.render_run_record(feature.root, _require_run(feature))
 
 
 def _record_file(feature: Feature) -> Path:
@@ -1798,33 +1824,33 @@ def _repo_path(feature: Feature, value: object, name: str) -> str:
         or "\\" in value
     ):
         message = f"{name} must be a repository-relative path"
-        raise ContractError(message)
+        raise DraftError(message)
     parts = Path(value).parts
     if ".." in parts or "." in parts or value != Path(value).as_posix():
         message = f"{name} {value!r} must not contain '..'"
-        raise ContractError(message)
+        raise DraftError(message)
     current = feature.root
     for part in parts:
         current = current / part
         if current.is_symlink():
             message = f"{name} {value!r} goes through a symlink"
-            raise ContractError(message)
+            raise DraftError(message)
     if not current.exists():
         message = f"{name} {value!r} does not exist"
-        raise ContractError(message)
+        raise DraftError(message)
     return value
 
 
 def _evidence(feature: Feature, value: object) -> list[str]:
     if not isinstance(value, list) or not 1 <= len(value) <= 20:  # noqa: PLR2004
         message = "evidence must list 1-20 paths or https:// links"
-        raise ContractError(message)
+        raise DraftError(message)
     out = []
     for item in value:
         if isinstance(item, str) and item.startswith("https://"):
             if len(item) > 500 or re.search(r"\s", item):  # noqa: PLR2004
                 message = f"evidence link {item[:60]!r} is invalid"
-                raise ContractError(message)
+                raise DraftError(message)
             out.append(item)
         else:
             out.append(_repo_path(feature, item, "evidence"))
@@ -1834,23 +1860,23 @@ def _evidence(feature: Feature, value: object) -> list[str]:
 def _text_field(value: object, name: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         message = f"{name} must be 1-{limit} characters"
-        raise ContractError(message)
+        raise DraftError(message)
     if autonomy.HUMAN_APPROVAL.search(value):
         message = f"{name} claims a human approval; agent decisions are provisional"
-        raise ContractError(message)
+        raise DraftError(message)
     if autonomy.WORKFLOW_MARKER.search(value):
         message = f"{name} contains a workflow marker"
-        raise ContractError(message)
-    return value
+        raise DraftError(message)
+    return autonomy.printable(value)
 
 
 def _string_list(value: object, name: str, limit: int = 20) -> list[str]:
     if not isinstance(value, list) or len(value) > limit:
         message = f"{name} must be a list of at most {limit} strings"
-        raise ContractError(message)
+        raise DraftError(message)
     if not all(isinstance(v, str) and 0 < len(v.strip()) <= 100 for v in value):  # noqa: PLR2004
         message = f"{name} must contain short strings"
-        raise ContractError(message)
+        raise DraftError(message)
     return sorted({" ".join(v.lower().split()) for v in value})
 
 
@@ -1870,30 +1896,30 @@ def _validate_review(  # noqa: C901, PLR0912 - one field per rule
     run = _require_run(feature)
     if not isinstance(review, dict):
         message = f"{point} draft needs a review entry"
-        raise ContractError(message)
+        raise DraftError(message)
     kind = review.get("kind")
     if kind not in POINT_KINDS[point]:
         message = f"{point} review kind must be one of {', '.join(POINT_KINDS[point])}"
-        raise ContractError(message)
+        raise DraftError(message)
     if review.get("verdict") not in autonomy.VERDICTS:
         message = f"{kind} review has an unknown verdict"
-        raise ContractError(message)
+        raise DraftError(message)
     report = review_report(feature.relative, kind)
     if review.get("report") != report:
         message = f"{kind} review report must be {report}"
-        raise ContractError(message)
+        raise DraftError(message)
     _repo_path(feature, report, "review report")
     findings = review.get("findings")
     if not isinstance(findings, list) or len(findings) > 100:  # noqa: PLR2004
         message = f"{kind} review findings must be a list"
-        raise ContractError(message)
+        raise DraftError(message)
     checked = []
     for finding in findings:
         if not isinstance(finding, dict) or not FINDING_ID.fullmatch(
             str(finding.get("id"))
         ):
             message = f"{kind} review has a finding without an F-NNN id"
-            raise ContractError(message)
+            raise DraftError(message)
         for field, allowed in (
             ("severity", autonomy.SEVERITIES),
             ("label", autonomy.FINDING_LABELS),
@@ -1901,7 +1927,7 @@ def _validate_review(  # noqa: C901, PLR0912 - one field per rule
         ):
             if finding.get(field) not in allowed:
                 message = f"{kind} finding {finding['id']} has an invalid {field}"
-                raise ContractError(message)
+                raise DraftError(message)
         reason = finding.get("reason")
         if reason is not None:
             reason = _text_field(reason, f"finding {finding['id']} reason", 1000)
@@ -1930,7 +1956,7 @@ def _validate_review(  # noqa: C901, PLR0912 - one field per rule
             k not in autonomy.REVIEW_KINDS for k in required
         ):
             message = f"{kind} review declares unknown required kinds"
-            raise ContractError(message)
+            raise DraftError(message)
         entry["required_kinds"] = sorted(set(required))
     if "privileged_actions" in review:
         entry["privileged_actions"] = _string_list(
@@ -1945,7 +1971,7 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
     """Check one decision draft against the draft contract."""
     if not isinstance(data, dict):
         message = f"{point} draft must be a JSON object"
-        raise ContractError(message)
+        raise DraftError(message)
     notes = [
         f"ignored runner-owned field {key}"
         for key in sorted(data)
@@ -1957,40 +1983,40 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
     ]
     if data.get("point") != point:
         message = f"draft point {data.get('point')!r} does not match {point}"
-        raise ContractError(message)
+        raise DraftError(message)
     if data.get("decision") != autonomy.POINT_DECISION[point]:
         message = f"{point} decision must be {autonomy.POINT_DECISION[point]}"
-        raise ContractError(message)
+        raise DraftError(message)
     summary = _text_field(data.get("summary"), "summary", 500)
     if "\n" in summary or "\r" in summary:
         message = "summary must be one line"
-        raise ContractError(message)
+        raise DraftError(message)
     basis = _text_field(data.get("basis"), "basis", 2000)
     artifact = _repo_path(feature, data.get("artifact"), "artifact")
     artifact_path = feature.root / artifact
     if not artifact_path.is_file():
         message = f"artifact {artifact!r} must be a regular file"
-        raise ContractError(message)
+        raise DraftError(message)
     model = data.get("model")
     if model is None:
         model = "unreported"
     elif not isinstance(model, str) or not MODEL.fullmatch(model):
         message = "model must be a short model name"
-        raise ContractError(message)
+        raise DraftError(message)
     material = data.get("material", False)
     supersedes = data.get("supersedes")
     if not isinstance(material, bool) or (
         supersedes is not None and not re.fullmatch(r"PD-\d{4}", str(supersedes))
     ):
         message = "material must be a boolean and supersedes a PD-NNNN id or null"
-        raise ContractError(message)
+        raise DraftError(message)
     risk = data.get("risk")
     if risk is not None and risk not in autonomy.RISKS:
         message = "risk must be R0, R1 or R2"
-        raise ContractError(message)
+        raise DraftError(message)
     if "privileged_actions" not in data:
         message = "draft must list privileged_actions (empty when none)"
-        raise ContractError(message)
+        raise DraftError(message)
     entry = {
         "point": point,
         "decision": autonomy.POINT_DECISION[point],
@@ -2003,6 +2029,9 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
             "model": model,
             "role": step.get("role", "runner"),
             "step_id": step.get("step", "runner"),
+            # The wrapper's retries of this step (#21 R4), never the agent's.
+            "attempts": step.get("attempt", 1),
+            "refusals": list(step.get("refusals") or []),
         },
         "material": material,
         "supersedes": supersedes,
@@ -2021,18 +2050,18 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
         )
     elif data.get("review") is not None:
         message = f"{point} draft must not carry a review"
-        raise ContractError(message)
+        raise DraftError(message)
     assumption = data.get("assumption")
     if point == "clarification":
         if not isinstance(assumption, dict):
             message = "clarification draft needs an assumption"
-            raise ContractError(message)
+            raise DraftError(message)
         if assumption.get("reversible") is not True:
             message = (
                 "clarification assumption must be reversible; a non-reversible "
                 "choice must be a block"
             )
-            raise ContractError(message)
+            raise DraftError(message)
         entry["assumption"] = {
             "question": _text_field(assumption.get("question"), "question", 1000),
             "default": _text_field(assumption.get("default"), "default", 1000),
@@ -2040,7 +2069,7 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
         }
     elif assumption is not None:
         message = f"{point} draft must not carry an assumption"
-        raise ContractError(message)
+        raise DraftError(message)
     if notes:
         entry["notes"] = notes
     return entry
@@ -2051,7 +2080,9 @@ def _qualifying_steps(steps: list[dict], point: str) -> list[dict]:
 
     The immediately preceding agent step, or, for a review point, the trailing
     run of reviewer steps (review-implementation then review-specialists).
+    Attempts whose drafts the wrapper refused and set aside never qualify.
     """
+    steps = [step for step in steps if not step.get("refused")]
     if not steps or not steps[-1].get("ran"):
         return []
     if point not in autonomy.REVIEW_POINTS:
@@ -2109,7 +2140,7 @@ def _collect_drafts(  # noqa: C901 - every draft source is checked
         point = _draft_point(name, points)
         if point is None:
             message = f"unexpected draft {name} for {points[0]}"
-            raise ContractError(message)
+            raise DraftError(message)
         copy = autonomy.snapshot_draft(feature.root, run["run_id"], step["step"], name)
         data = copy.read_bytes()
         if hashlib.sha256(data).hexdigest() != digest:
@@ -2119,7 +2150,7 @@ def _collect_drafts(  # noqa: C901 - every draft source is checked
             drafts.append((name, point, json.loads(data), step))
         except ValueError as error:
             message = f"draft {name} is not valid JSON"
-            raise ContractError(message) from error
+            raise DraftError(message) from error
     return drafts, qualifying
 
 
@@ -2160,18 +2191,19 @@ def _check_narrative(feature: Feature, review: dict) -> None:
             f"{review['report']} carries findings or severity tags in its narrative; "
             "every finding belongs in the review draft"
         )
-        raise ContractError(message)
+        raise DraftError(message)
 
 
-def _check_dispositions(review: dict) -> None:
+def _check_dispositions(review: dict, *, fixing: bool = False) -> None:
+    """#27's rule; while a fix cycle remains, `open` means "fix this" (#21 R2)."""
     for finding in review["findings"]:
         severity, disposition = finding["severity"], finding["disposition"]
-        if disposition == "open" and severity not in {"low", "info"}:
+        if disposition == "open" and severity not in {"low", "info"} and not fixing:
             message = f"{finding['id']}: open is valid only for low and info findings"
-            raise ContractError(message)
+            raise DraftError(message)
         if disposition == "accepted-provisionally" and not finding["reason"]:
             message = f"{finding['id']}: accepted-provisionally needs a reason"
-            raise ContractError(message)
+            raise DraftError(message)
 
 
 def _changed_since_baseline(feature: Feature) -> list[str]:
@@ -2250,9 +2282,10 @@ def _frozen_check(feature: Feature, *, required: bool = False) -> None:
         _block(
             feature,
             "postcondition",
-            "files outside the feature directory changed after implementation "
-            "review; after the reviews only the spec, plan, tasks, decisions and "
-            "drafts may change (no fix loop in #27)",
+            "files outside the feature directory changed after the last "
+            "implementation review froze the tree; after it only the spec, plan, "
+            "tasks, decisions and drafts may change (code fixes belong in the fix "
+            "loop, before the freeze)",
         )
 
 
@@ -2410,14 +2443,270 @@ def _expected_drafts(point: str, drafts: list[tuple]) -> None:
     main = f"{point}.json"
     if names.count(main) != 1:
         message = f"the preceding agent step wrote no {main} draft"
-        raise ContractError(message)
+        raise DraftError(message)
+
+
+# --- Fix loop (#21 R1-R3) ----------------------------------------------------
+
+FIX_INPUT_DIR = ".specify/workflow-state/fix-input"
+# Characters of each failed check's output the fix input carries.
+OUTPUT_TAIL = 4000
+
+
+def _printable(text: str, limit: int) -> str:
+    """Untrusted text made printable (newlines and tabs kept), last `limit` chars."""
+    return "".join(c if c.isprintable() or c in "\n\t" else "?" for c in text[-limit:])
+
+
+def fix_loop(feature: Feature) -> bool:
+    """Whether the run's own workflow copy has the fix loop (#21 R19).
+
+    The engine resumes a run from its own copy: a run started under
+    ballast-autonomous 1.1.0 has no fix step, so its findings block as in #27.
+    """
+    path = feature.root / ".specify/workflows/runs" / feature.key / "workflow.yml"
+    try:
+        return "speckit.ballast.fix" in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def _failed_feedback(feature: Feature) -> list[dict]:
+    """Failed commands of the latest `run-checks --feedback` run."""
+    run = _require_run(feature)
+    entries = autonomy.read_feedback(feature.root, run["run_id"])
+    if not entries:
+        return []
+    return [r for r in entries[-1]["results"] if r.get("exit") != 0]
+
+
+def _check_text(result: dict) -> str:
+    outcome = "timed out" if result.get("timed_out") else f"exit {result.get('exit')}"
+    return f"check {result.get('command')!r} ({outcome})"
+
+
+def _blocking(reviews: list[dict]) -> list[str]:
+    """High or critical findings and non-approved verdicts (#27's stop rule)."""
+    found = [
+        f"{review['kind']} {finding['id']} ({finding['severity']})"
+        for review in reviews
+        for finding in review["findings"]
+        if finding["severity"] in autonomy.BLOCKING_SEVERITIES
+    ]
+    return found + [
+        f"{review['kind']} verdict {review['verdict']}"
+        for review in reviews
+        if review["verdict"] != "approved"
+    ]
+
+
+def _open_to_fix(reviews: list[dict]) -> list[str]:
+    """Medium findings left `open`: while a cycle remains, open means fix (R2)."""
+    return [
+        f"{review['kind']} {finding['id']} ({finding['severity']}, open)"
+        for review in reviews
+        for finding in review["findings"]
+        if finding["disposition"] == "open"
+        and finding["severity"] not in {"low", "info"}
+        and finding["severity"] not in autonomy.BLOCKING_SEVERITIES
+    ]
+
+
+def review_rule(feature: Feature, point: str, reviews: list[dict]) -> tuple[str, list]:
+    """How a review point's recorder treats these reviews.
+
+    Returns ("block", reasons) for #27's review-finding stop, ("limit",
+    reasons) when the fix cycles are spent, ("fixing", []) while a cycle
+    remains (the relaxed disposition rule) or ("strict", []).
+    """
+    blocking = _blocking(reviews)
+    if point not in {"implementation-review", "specialist-review"} or not fix_loop(
+        feature
+    ):
+        return ("block", blocking) if blocking else ("strict", [])
+    if autonomy.fix_state(_require_run(feature))["cycles"] < autonomy.FIX_CYCLES:
+        return "fixing", []
+    failed = [_check_text(r) for r in _failed_feedback(feature)]
+    if blocking or failed:
+        return "limit", blocking + failed
+    return "strict", []
+
+
+def _write_fix_input(feature: Feature, stored: list[dict], failed: list[dict]) -> None:
+    """Write what the fix step reads: findings and failed checks, as data (R3).
+
+    Under `.specify/`, which agent steps see read-only.
+    """
+    run = _require_run(feature)
+    findings = []
+    verdicts = []
+    for entry in stored:
+        review = entry.get("review")
+        if not review:
+            continue
+        if review["verdict"] != "approved":
+            verdicts.append(
+                {
+                    "decision": entry["id"],
+                    "kind": review["kind"],
+                    "verdict": review["verdict"],
+                    "report": review["report"],
+                }
+            )
+        findings += [
+            {
+                "decision": entry["id"],
+                "kind": review["kind"],
+                "id": finding["id"],
+                "severity": finding["severity"],
+                "label": finding["label"],
+                "reason": finding["reason"],
+                "report": review["report"],
+            }
+            for finding in review["findings"]
+            if finding["severity"] in autonomy.BLOCKING_SEVERITIES
+            or (
+                finding["disposition"] == "open"
+                and finding["severity"] not in {"low", "info"}
+            )
+        ]
+    checks = [
+        {
+            "command": result.get("command"),
+            "exit": result.get("exit"),
+            "timed_out": bool(result.get("timed_out")),
+            "output_tail": _printable(str(result.get("output_tail", "")), OUTPUT_TAIL),
+        }
+        for result in failed
+    ]
+    data = {
+        "feature": feature.relative,
+        "cycle": autonomy.fix_state(run)["cycles"] + 1,
+        "findings": findings,
+        "verdicts": verdicts,
+        "checks": checks,
+    }
+    relative = f"{FIX_INPUT_DIR}/{Path(feature.relative).name}.json"
+    autonomy.replace_file(
+        feature.root, relative, json.dumps(data, indent=2, sort_keys=True) + "\n"
+    )
+
+
+def _check_recheck(feature: Feature, reviews: list[dict]) -> None:
+    """Refuse a recheck that omits a finding the fix input listed (SEC2-003).
+
+    Each listed finding of a kind rechecked here must appear again, by ID,
+    with a disposition; a missing one is the reviewer's to correct.
+    """
+    if autonomy.fix_state(_require_run(feature))["state"] != "review-pending":
+        return
+    path = feature.root / FIX_INPUT_DIR / f"{Path(feature.relative).name}.json"
+    if not path.is_file() or path.is_symlink():
+        return
+    try:
+        listed = json.loads(path.read_text(encoding="utf-8")).get("findings") or []
+    except (ValueError, AttributeError) as error:
+        message = f"the fix input {path.name} is not valid JSON"
+        raise ContractError(message) from error
+    found = {(r["kind"], f["id"]) for r in reviews for f in r["findings"]}
+    kinds = {r["kind"] for r in reviews}
+    missing = sorted(
+        f"{f.get('kind')} {f.get('id')}"
+        for f in listed
+        if isinstance(f, dict)
+        and f.get("kind") in kinds
+        and (f.get("kind"), f.get("id")) not in found
+    )
+    if missing:
+        message = (
+            "the recheck omits findings the fix cycle had to fix; list each with "
+            f"its disposition: {', '.join(missing)}"
+        )
+        raise DraftError(message)
+
+
+def _supersede(feature: Feature, point: str, entries: list[dict]) -> None:
+    """Let a point recorded again replace its current decisions (#21 R6).
+
+    A single point supersedes its one current decision, as intent always
+    did; a review point supersedes every current entry of that point, and
+    implementation-review also every current specialist review.
+    """
+    if point in {"clarification", "decision-resolution"} or not entries:
+        return
+    run = _require_run(feature)
+    decisions = autonomy.read_decisions(feature.root, run["run_id"])
+    if point not in autonomy.REVIEW_POINTS:
+        found = autonomy.current(decisions, point)
+        for entry in entries:
+            if found and entry["supersedes"] is None:
+                entry["supersedes"] = found[-1]["id"]
+        return
+    points = {point} | (
+        {"specialist-review"} if point == "implementation-review" else set()
+    )
+    old = [
+        e["id"] for e in autonomy.current_decisions(decisions) if e["point"] in points
+    ]
+    if not old:
+        return
+    for entry in entries:
+        if entry["supersedes"] is not None:
+            entry.setdefault("notes", []).append(
+                f"ignored supersedes {entry['supersedes']}; the recorder replaces "
+                "the earlier reviews"
+            )
+        entry["supersedes"] = None
+    entries[0]["supersedes"] = old[0] if len(old) == 1 else old
+
+
+def _check_intent_evidence(feature: Feature, entry: dict) -> None:
+    """Provisional intent cites the discovery brief and the traced spec (#21 FR-004)."""
+    if not feature.file(DISCOVERY).exists():
+        return
+    needed = [f"{feature.relative}/{DISCOVERY}", f"{feature.relative}/spec.md"]
+    missing = [path for path in needed if path not in entry["evidence"]]
+    if missing:
+        message = (
+            "intent evidence must cite the discovery brief and the spec traced to "
+            f"it: add {', '.join(missing)}"
+        )
+        raise DraftError(message)
 
 
 def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
-    feature: Feature, point: str
+    feature: Feature, point: str, *, recheck: bool = False
 ) -> None:
-    """Validate the preceding step's drafts and append provisional decisions."""
+    """Validate the preceding step's drafts and append provisional decisions.
+
+    For implementation-review in a run with the fix loop, findings that need a
+    fix set the fix state to `fix-pending` while a cycle remains, instead of
+    blocking (#21 R2). `recheck` records the review after a fix cycle; it
+    writes nothing unless the fix state is `review-pending`.
+    """
     run = _require_run(feature)
+    fix = autonomy.fix_state(run)
+    if recheck:
+        if point != "implementation-review":
+            message = "--recheck applies only to implementation-review"
+            raise ContractError(message)
+        if fix["state"] != "review-pending":
+            return
+    elif point == "implementation-review" and fix["state"] != "idle":
+        message = (
+            f"the fix state is {fix['state']}; this review is recorded with --recheck"
+        )
+        raise ContractError(message)
+    if point == "decision-resolution" and (
+        fix["state"] != "idle" or not run.get("frozen_tree")
+    ):
+        _block(
+            feature,
+            "postcondition",
+            f"decision resolution needs a finished fix loop and a frozen tree; the "
+            f"fix state is {fix['state']}"
+            + ("" if run.get("frozen_tree") else " and no tree was frozen"),
+        )
     points = (
         [point, "specialist-review"] if point == "implementation-review" else [point]
     )
@@ -2427,6 +2716,9 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
         _validate_draft(feature, data, draft_point, step)
         for _, draft_point, data, step in drafts
     ]
+    if point == "intent":
+        for entry in entries:
+            _check_intent_evidence(feature, entry)
     if point in autonomy.REVIEW_POINTS:
         _reviewer_tree_check(feature, steps)
     if point in {"decision-resolution", "spec-reconciliation"}:
@@ -2434,30 +2726,33 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
     reviews = [entry["review"] for entry in entries if "review" in entry]
     for review in reviews:
         _check_narrative(feature, review)
+    if recheck:
+        _check_recheck(feature, reviews)
     for review in reviews:
         _render_findings(feature, review)
-    blocking = [
-        f"{review['kind']} {finding['id']} ({finding['severity']})"
-        for review in reviews
-        for finding in review["findings"]
-        if finding["severity"] in autonomy.BLOCKING_SEVERITIES
-    ]
-    # Only an approved review lets the run proceed; any other verdict stops it.
-    blocking += [
-        f"{review['kind']} verdict {review['verdict']}"
-        for review in reviews
-        if review["verdict"] != "approved"
-    ]
-    if blocking:
+    rule, reasons = review_rule(feature, point, reviews)
+    evidence = sorted({review["report"] for review in reviews})
+    if rule == "block":
         _block(
             feature,
             "review-finding",
             "reviews block the run (high or critical findings, or a verdict "
-            "other than approved): " + ", ".join(blocking),
-            evidence=sorted({review["report"] for review in reviews}),
+            "other than approved): " + ", ".join(reasons),
+            evidence=evidence,
+        )
+    if rule == "limit":
+        _block(
+            feature,
+            "limit",
+            autonomy.limit_condition(
+                "fix-cycles",
+                "still open after the last fix cycle: " + ", ".join(reasons),
+            ),
+            evidence=evidence,
+            limit="fix-cycles",
         )
     for review in reviews:
-        _check_dispositions(review)
+        _check_dispositions(review, fixing=rule == "fixing")
     if point == "implementation-review":
         missing = sorted(
             required_kinds(feature, reviews) - {r["kind"] for r in reviews}
@@ -2465,6 +2760,10 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
         if missing:
             message = f"required reviews missing: {', '.join(missing)}"
             raise ContractError(message)
+    failed = _failed_feedback(feature) if rule == "fixing" else []
+    needed = rule == "fixing" and bool(
+        _blocking(reviews) or _open_to_fix(reviews) or failed
+    )
     targets = (
         _resolution_targets(feature, drafts) if point == "decision-resolution" else {}
     )
@@ -2483,11 +2782,10 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
         spec = check_clarified_spec(feature)
         for entry in entries:
             entry["spec_digest"] = spec_digest(spec)
-            current = autonomy.current(
-                autonomy.read_decisions(feature.root, run["run_id"]), "intent"
-            )
-            if current and entry["supersedes"] is None:
-                entry["supersedes"] = current[-1]["id"]
+    if point == "implementation-review" and fix_loop(feature):
+        for entry in entries:
+            entry["fix_cycle"] = fix["cycles"]
+    _supersede(feature, point, entries)
     if point == "final-acceptance":
         for entry in entries:
             _final_check(feature, entry)
@@ -2503,7 +2801,13 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
             autonomy.raise_risk(run, level, boundaries, stored["id"])
     autonomy.raise_risk(run, None, boundaries, None)
     if point == "implementation-review":
-        run["frozen_tree"] = autonomy.tree_digest(feature.root, (feature.relative,))
+        if needed:
+            _write_fix_input(feature, [stored for _, stored in appended], failed)
+            run["fix"] = {"cycles": fix["cycles"], "state": "fix-pending"}
+        else:
+            run["frozen_tree"] = autonomy.tree_digest(feature.root, (feature.relative,))
+            if fix_loop(feature):
+                run["fix"] = {"cycles": fix["cycles"], "state": "idle"}
     autonomy.write_run(feature.root, run)
     for name, stored in appended:
         if name in targets:
@@ -2521,6 +2825,160 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
     _consume(feature, [name for name, *_ in drafts])
     if point == "intent":
         check_intent(feature)
+
+
+def _step_command(command: object) -> str:
+    """`/speckit-ballast-fix`, `$speckit-ballast-fix` -> `speckit-ballast-fix`."""
+    return str(command or "").lstrip("/$").replace(".", "-")
+
+
+def record_fix(feature: Feature) -> None:
+    """After a fix step: count the cycle and ask for the recheck (#21 R1).
+
+    Writes nothing unless the fix state is `fix-pending`. The fix step must
+    be the last agent step, and the implementation contract must still hold.
+    """
+    run = _require_run(feature)
+    fix = autonomy.fix_state(run)
+    if fix["state"] != "fix-pending":
+        return
+    steps = [
+        s
+        for s in autonomy.unconsumed_steps(feature.root, run["run_id"])
+        if not s.get("refused")
+    ]
+    last = steps[-1] if steps else {}
+    if (
+        not last.get("ran")
+        or _step_command(last.get("command")) != "speckit-ballast-fix"
+        or last.get("exit_code") != 0
+    ):
+        _block(
+            feature,
+            "postcondition",
+            "record-fix needs the fix step that ran just before it",
+        )
+    if last.get("reviews_before") != autonomy.reviews_digest(
+        feature.root, feature.relative
+    ):
+        _block(
+            feature,
+            "postcondition",
+            "the fix step changed reviews/; only reviewer steps write the reports",
+        )
+    check_implementation(feature)
+    run["fix"] = {"cycles": fix["cycles"] + 1, "state": "review-pending"}
+    autonomy.write_run(feature.root, run)
+    autonomy.consume_steps(feature.root, run["run_id"])
+    write_record(feature)
+
+
+# --- Draft checks inside the agent wrapper (#21 R4) --------------------------
+
+DECIDE_POINTS = ("scope", "intent", "plan", "tasks", "final-acceptance")
+REVIEW_ARGUMENTS = {
+    "plan": ("plan-review",),
+    "implementation": ("implementation-review", "specialist-review"),
+    "implementation-recheck": ("implementation-review", "specialist-review"),
+    "specialists": ("specialist-review",),
+    "specialists-recheck": ("specialist-review",),
+    "spec-reconciliation": ("spec-reconciliation",),
+}
+# Agent command (and its first argument) -> the draft points it writes.
+STEP_POINTS = {
+    "speckit-ballast-decide": {point: (point,) for point in DECIDE_POINTS},
+    "speckit-ballast-discover": {None: ("clarification",)},
+    "speckit-ballast-clarify": {None: ("clarification",)},
+    "speckit-ballast-review": REVIEW_ARGUMENTS,
+    "speckit-ballast-resolve": {None: ("decision-resolution",)},
+}
+
+
+def step_points(prompt: str) -> tuple[str, ...]:
+    """Return the draft points an agent prompt's command writes; () for none."""
+    words = prompt.split()
+    if not words:
+        return ()
+    table = STEP_POINTS.get(_step_command(words[0]))
+    if table is None:
+        return ()
+    if None in table:
+        return table[None]
+    return table.get(words[1] if len(words) > 1 else "", ())
+
+
+def check_step_drafts(  # noqa: C901 - the recorder's checks, in its order
+    feature: Feature, prompt: str, step: dict, *, blocked: bool = False
+) -> None:
+    """Check one agent step's drafts with the recorder's own draft contract.
+
+    Raises DraftError for what the agent can correct in its draft; returns
+    when the recorder will decide (including a terminal review block). The
+    drafts are read from their operator copies; nothing is written.
+    """
+    _require_run(feature)
+    created = step.get("drafts") or {}
+    if blocked:
+        if "block.json" not in created:
+            return  # run.py records its fallback decision block.
+        data = _step_draft(feature, step, "block.json")
+        try:
+            autonomy.validate_block_draft(data)
+        except autonomy.AutonomyError as error:
+            message = f"block.json: {error}"
+            raise DraftError(message) from error
+        return
+    points = step_points(prompt)
+    if not points:
+        return
+    drafts = []
+    for name in sorted(created):
+        point = _draft_point(name, list(points))
+        if point is None:
+            message = f"unexpected draft {name!r} for {points[0]}"
+            raise DraftError(message)
+        drafts.append((name, point, _step_draft(feature, step, name), step))
+    if points[0] not in autonomy.MULTI_ENTRY:
+        _expected_drafts(points[0], drafts)
+    entries = [
+        _validate_draft(feature, data, point, step) for _, point, data, _ in drafts
+    ]
+    for entry in entries:
+        if entry["point"] == "intent":
+            _check_intent_evidence(feature, entry)
+    reviews = [entry["review"] for entry in entries if "review" in entry]
+    for review in reviews:
+        _check_narrative(feature, review)
+    _check_recheck(feature, reviews)
+    rule, _ = review_rule(feature, points[0], reviews)
+    if rule in {"block", "limit"}:
+        return
+    for review in reviews:
+        _check_dispositions(review, fixing=rule == "fixing")
+
+
+def _step_draft(feature: Feature, step: dict, name: str) -> object:
+    """Parse a draft's operator copy; a draft that is not JSON is the agent's."""
+    run = _require_run(feature)
+    digest = (step.get("drafts") or {}).get(name)
+    if digest == "invalid":
+        message = f"draft {name!r} is not a regular file"
+        raise DraftError(message)
+    try:
+        data = autonomy.snapshot_draft(
+            feature.root, run["run_id"], step["step"], name
+        ).read_bytes()
+    except (OSError, autonomy.AutonomyError) as error:
+        message = f"draft {name} is unreadable"
+        raise ContractError(message) from error
+    if hashlib.sha256(data).hexdigest() != digest:
+        message = f"operator copy of draft {name} does not match its digest"
+        raise ContractError(message)
+    try:
+        return json.loads(data)
+    except ValueError as error:
+        message = f"draft {name} is not valid JSON"
+        raise DraftError(message) from error
 
 
 def renew_intent(feature: Feature) -> None:
@@ -2585,20 +3043,22 @@ class ChecksExhaustedError(Exception):
     """The time left ran out before the next check command."""
 
 
-def run_commands(
+def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     root: Path,
     feature: str,
     commands: list[str],
     timeout_minutes: int,
     *,
     remaining: object = None,
+    keep_output: bool = False,
 ) -> list[dict]:
     """Run trusted check commands, each confined; the mode-neutral core.
 
     `remaining`, when given, returns the seconds left before a deadline; an
     exhausted deadline raises ChecksExhaustedError before the next command,
     and no command may run past it. Without it (a Chat run, #20) only each
-    command's own timeout applies.
+    command's own timeout applies. With `keep_output` (#21 R3) a failed
+    command's result carries a bounded, printable `output_tail`.
     """
     env = autonomy.confined_env(dict(os.environ), None)
     results = []
@@ -2628,19 +3088,27 @@ def run_commands(
                     check=False,
                 )
                 code = done.returncode
+                output = done.stdout + done.stderr
                 sys.stdout.write(done.stdout[-4000:])
                 sys.stderr.write(done.stderr[-4000:])
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as error:
                 code, timed_out = 124, True
-            results.append(
-                {
-                    "command": command,
-                    "exit": code,
-                    "seconds": round(time.monotonic() - started, 1),
-                    "timed_out": timed_out,
-                    "provenance": "runner",
-                }
-            )
+                output = "".join(
+                    part.decode("utf-8", "replace") if isinstance(part, bytes) else part
+                    for part in (error.stdout or "", error.stderr or "")
+                )
+            result = {
+                "command": command,
+                "exit": code,
+                "seconds": round(time.monotonic() - started, 1),
+                "timed_out": timed_out,
+                "provenance": "runner",
+            }
+            if keep_output and code != 0:
+                # Project output: kept in operator state, bounded and
+                # printable, for the fix input only.
+                result["output_tail"] = _printable(output, OUTPUT_TAIL)
+            results.append(result)
     return results
 
 
@@ -2678,16 +3146,34 @@ def project_checks(root: Path, feature: str) -> dict:
     }
 
 
-def run_checks(feature: Feature) -> None:
-    """Run the trusted [checks] commands, confined, and record their results."""
+def _feedback_due(run: dict) -> bool:
+    """Whether a `run-checks --feedback` step has work (#21 R3).
+
+    After implementation (no review recorded, so no frozen tree) and in a
+    fix cycle under review; an idle cycle slot after the freeze has none.
+    """
+    state = autonomy.fix_state(run)["state"]
+    return state == "review-pending" or (state == "idle" and not run.get("frozen_tree"))
+
+
+def run_checks(feature: Feature, *, feedback: bool = False) -> None:
+    """Run the trusted [checks] commands, confined, and record their results.
+
+    With `feedback` (#21 R3) the results feed the fix loop: no frozen tree is
+    needed, a failed command is recorded in checks-feedback.jsonl rather than
+    blocking, and the tamper, tree-change and wall-time blocks still apply.
+    """
     run = _require_run(feature)
+    if feedback and not _feedback_due(run):
+        return
     try:
         checks = autonomy.parse_checks(autonomy.load_config(feature.root))
     except autonomy.AutonomyError as error:
         _block(feature, "postcondition", str(error))
-    # The review freeze holds across the checks: the reviewed code is what
-    # runs, and no check may change it (or anything else) on the way.
-    _frozen_check(feature, required=True)
+    # The review freeze holds across the final checks: the reviewed code is
+    # what runs, and no check may change it (or anything else) on the way.
+    if not feedback:
+        _frozen_check(feature, required=True)
     checked = autonomy.checked_digest(feature.root, feature.relative)
     before = _protected_digests(feature.root)
     try:
@@ -2697,12 +3183,25 @@ def run_checks(feature: Feature) -> None:
             checks["commands"],
             checks["timeout_minutes"],
             remaining=lambda: autonomy.remaining_seconds(run),
+            keep_output=feedback,
         )
     except ChecksExhaustedError:
         _block(feature, "limit", "wall-time limit exhausted before run-checks")
-    autonomy.write_json(
-        autonomy.run_dir(feature.root, run["run_id"]) / "checks.json", results
-    )
+    if feedback:
+        fix = autonomy.fix_state(run)
+        autonomy.append_feedback(
+            feature.root,
+            run["run_id"],
+            {
+                "cycle": fix["cycles"] if fix["state"] == "review-pending" else 0,
+                "at": autonomy.now(),
+                "results": results,
+            },
+        )
+    else:
+        autonomy.write_json(
+            autonomy.run_dir(feature.root, run["run_id"]) / "checks.json", results
+        )
     after = _protected_digests(feature.root)
     changed = sorted(
         n for n in before.keys() | after.keys() if before.get(n) != after.get(n)
@@ -2722,6 +3221,8 @@ def run_checks(feature: Feature) -> None:
             "reviewed tree as it is (only git-ignored outputs may change)",
         )
     write_record(feature)
+    if feedback:
+        return
     failed = [r for r in results if r["exit"] != 0]
     if failed:
         _block(
@@ -2812,6 +3313,7 @@ CHECKS = {
     "autonomous-preflight": check_autonomous_preflight,
     "continue-preflight": check_continue_preflight,
     "record-decision": record_decision,
+    "record-fix": record_fix,
     "record-provisional-intent": record_provisional_intent,
     "run-checks": run_checks,
     "discovery": check_discovery,
@@ -2851,9 +3353,11 @@ def _run_check(feature: Feature, arguments: argparse.Namespace) -> None:
         if arguments.point is None:
             message = "record-decision needs --point"
             raise ContractError(message)
-        record_decision(feature, arguments.point)
+        record_decision(feature, arguments.point, recheck=arguments.recheck)
     elif check == "record-provisional-intent":
         record_provisional_intent(feature, renew=arguments.renew)
+    elif check == "run-checks":
+        run_checks(feature, feedback=arguments.feedback)
     else:
         CHECKS[check](feature)
 
@@ -2870,6 +3374,8 @@ def main(argv: list[str] | None = None) -> int:
     target.add_argument("--feature", help="specs/<issue-number>-<slug>")
     parser.add_argument("--point", choices=autonomy.DECISION_POINTS)
     parser.add_argument("--renew", action="store_true")
+    parser.add_argument("--recheck", action="store_true")
+    parser.add_argument("--feedback", action="store_true")
     arguments = parser.parse_args(argv)
     feature = None
     try:

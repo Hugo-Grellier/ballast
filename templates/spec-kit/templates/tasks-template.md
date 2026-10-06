@@ -11,6 +11,8 @@ description: "Task list template for feature implementation"
 
 **Acceptance evidence**: Each behavior acceptance criterion needs a test or other explicit verification task. Do not omit tests merely because the spec did not ask for them; if no automated test seam is appropriate, record the manual evidence and reason.
 
+**Workflow-owned steps**: Never create tasks for steps the workflow runs itself after implementation: the full gate, quickstart runs, reviews (engineering, test, security, documentation and the other specialists), converge and spec reconciliation. `validate-implementation` requires every task in this file to be done before those steps run, so such a task can never be ticked in time and blocks the run. List what they must verify in plan.md or quickstart.md instead.
+
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
 ## Format: `[ID] [P?] [Story] Description`
@@ -157,7 +159,6 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
-- [ ] TXXX Run quickstart.md validation
 
 ---
 

@@ -7,9 +7,11 @@
         [--max-agent-steps N] -i issue=N -i idea="Issue #N: ..." \
         -i feature_directory=specs/N-slug [-i integration=auto|claude|codex]
     ballast run resume RUN_ID [-i integration=claude|codex]
+    ballast run resume RUN_ID [--ref TEXT]        # an Autonomous run
     ballast run continue RUN_ID --reason block-resolved|changes-requested \
         --ref TEXT [--mode chat|human-gated]
     ballast run publish RUN_ID
+    ballast run checkpoint RUN_ID                 # an Autonomous run
 
 Chat runs (#20), driven by the operator one action at a time:
 
@@ -45,10 +47,19 @@ read writes a snapshot saying so and goes on. `--mode autonomous` checks
 eligibility, writes the operator
 run record (autonomy.py) and runs ballast-autonomous, which has no approval
 gate; when it completes, this runner (never an agent) commits, pushes and opens
-one Draft PR. A stopped Autonomous run records a block; it continues only
-human-gated, through `continue`, which starts the gate-only ballast-continue.
-Autonomous `resume` is refused until Autonomous resume through branch
-synchronization (#21) exists.
+one Draft PR. A stopped Autonomous run records a block, with its class
+(conflict, missing authority, exhausted limits, unsafe uncertainty) and the
+next command. `resume` continues it in Autonomous (#21, ADR-0010): it takes
+only `--ref TEXT`, never a mode, limit or input; synchronizes the branch
+first; records the operator's `block-resolution` human decision; and
+re-enters the workflow at the blocked step, or earlier when a spec, plan,
+tasks or code input changed during the block. Mode, risk and limits stay as
+recorded at start, and only active time counts against the wall time.
+`continue` lowers a run to human-gated after implementation, through the
+gate-only ballast-continue; before implementation it points to `resume`.
+`checkpoint` refreshes an Autonomous run's Draft PR checkpoint and acceptance
+packet, in any status, without an agent. One invocation at a time holds a
+run's lock (start, resume, continue, publish, checkpoint).
 
 Branch sync: before the first agent step of every `start`, `resume` and
 `continue`, the check in branch_sync.py (imported here before any agent
@@ -86,6 +97,9 @@ receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
+import hashlib
 import itertools
 import json
 import os
@@ -148,7 +162,7 @@ RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 RUN_FORMAT = "ballast-run/1"
 # Ballast-driven Chat subcommands (#20), dispatched to chat.py.
 CHAT_COMMANDS = {"step", "status", "approve", "reject", "resolve", "checks", "mode"}
-COMMANDS = {"start", "resume", "continue", "publish", *CHAT_COMMANDS}
+COMMANDS = {"start", "resume", "continue", "publish", "checkpoint", *CHAT_COMMANDS}
 
 
 def _summary(run_id: str) -> None:
@@ -205,6 +219,100 @@ def _refuse(message: str, *, alternative: bool = False) -> int:
     if alternative:
         sys.stderr.write(autonomy.HUMAN_GATED_ALTERNATIVE + "\n")
     return EXIT_REFUSED
+
+
+class LockHeld(Exception):  # noqa: N818 - a refusal, not an error
+    """Another invocation of the same run holds its lock (#21 R13)."""
+
+
+@contextlib.contextmanager
+def _invocation_lock(run_id: str) -> object:
+    """Hold the run's exclusive, non-blocking invocation lock (#21 R13).
+
+    `<operator run dir>/invocation.lock`, outside every agent's reach. Not
+    inherited by the engine or the agents (close-on-exec).
+    """
+    path = autonomy.run_dir(ROOT, run_id) / "invocation.lock"
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            message = f"run {run_id} has an active invocation"
+            raise LockHeld(message) from error
+        yield
+    finally:
+        os.close(fd)
+
+
+def _clock(run_id: str, *, start: bool) -> bool:
+    """Open or close the run's active-time clock (#21 R8); False on failure.
+
+    A clock that cannot open fails closed: the caller starts no engine.
+    """
+    try:
+        record = autonomy.read_run(ROOT, run_id)
+        if start:
+            autonomy.open_invocation(record)
+        else:
+            autonomy.close_invocation(record)
+        autonomy.write_run(ROOT, record)
+    except autonomy.AutonomyError as error:
+        sys.stderr.write(f"ballast: autonomous run {run_id}: {error}\n")
+        return False
+    return True
+
+
+# Inputs of a block-time snapshot (feature-relative) and the step a change to
+# each sends a resume back to (#21 R6).
+REENTRY_INPUTS = {
+    "discovery.md": "validate-discovery",
+    "spec.md": "validate-spec",
+    "intent.md": "validate-intent",
+    "plan.md": "validate-plan",
+    "research.md": "validate-plan",
+    "data-model.md": "validate-plan",
+    "quickstart.md": "validate-plan",
+    "contracts/": "validate-plan",
+    "tasks.md": "validate-tasks",
+    "decisions.md": "validate-decisions",
+}
+OUTSIDE = "outside"
+
+
+def _digest(path: Path) -> str:
+    """Digest of a file or a directory's files; never through a link."""
+    if path.is_symlink():
+        return "symlink"
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    if not path.is_dir():
+        return "absent"
+    hasher = hashlib.sha256()
+    for child in sorted(path.rglob("*")):
+        if child.is_file() or child.is_symlink():
+            hasher.update(child.relative_to(path).as_posix().encode() + b"\0")
+            hasher.update(_digest(child).encode() + b"\0")
+    return hasher.hexdigest()
+
+
+def _block_inputs(run_id: str, feature: str) -> dict[str, str]:
+    """Digests of the re-entry inputs when a block is recorded (#21 R6).
+
+    The tree outside the feature directory counts once the implementation
+    baseline exists.
+    """
+    inputs = {
+        f"{feature}/{name}": _digest(ROOT / feature / name.rstrip("/"))
+        for name in REENTRY_INPUTS
+    }
+    baseline = (
+        ROOT / ".specify/workflow-state" / run_id / "implementation-baseline.json"
+    )
+    if baseline.is_file():
+        inputs[OUTSIDE] = autonomy.tree_digest(ROOT, (feature,))
+    return inputs
 
 
 def _environment(run_id: str) -> dict[str, str]:
@@ -515,7 +623,7 @@ def _number(value: str | None, name: str) -> int | None:
     return int(value)
 
 
-def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
+def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
     flags: dict[str, str], options: list[str], specify: str
 ) -> int:
     """Check eligibility, write the run record, run ballast-autonomous."""
@@ -591,6 +699,25 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         record["integration_fallback"] = fallback
     record["issue_title"] = result["issue_title"]
     autonomy.write_run(ROOT, record)
+    with _invocation_lock(run_id):
+        return _run_autonomous(run_id, record, result, inputs, specify, snapshot)
+
+
+def _run_autonomous(  # noqa: PLR0913, PLR0917 - the start's checked values
+    run_id: str,
+    record: dict,
+    result: dict,
+    inputs: dict[str, str],
+    specify: str,
+    snapshot: str,
+) -> int:
+    """Synchronize, then run ballast-autonomous with the active-time clock."""
+    limits, review, integration = (
+        record["limits"],
+        record["review_integration"],
+        record["integration"],
+    )
+    feature = record["feature"]
     sys.stdout.write(
         f"Autonomous run {run_id}: risk {result['risk']['level']}, "
         f"{limits['wall_time_minutes']} minutes, {limits['max_agent_steps']} agent "
@@ -618,7 +745,23 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         "-i",
         f"review_integration={review}",
     ]
-    status = _launch(command, run_id, start=True)
+    if not _clock(run_id, start=True):
+        try:
+            return _stop(
+                run_id,
+                autonomy.make_block(
+                    "postcondition",
+                    "the run's active-time clock could not start, so the wall-time "
+                    "limit could not be enforced; no agent step ran",
+                    run_id=run_id,
+                ),
+            )
+        finally:
+            _archive_operator(run_id)
+    try:
+        status = _launch(command, run_id, start=True)
+    finally:
+        _clock(run_id, start=False)
     try:
         return _finish(run_id, status)
     finally:
@@ -672,6 +815,91 @@ def _engine_state(run_id: str) -> dict:
     return state if isinstance(state, dict) else {}
 
 
+ENGINE_ITEM = re.compile(r"^( *)- (.*)$")
+ENGINE_ID = re.compile(r"^id: *['\"]?([A-Za-z0-9_.-]+)['\"]? *$")
+
+
+def _engine_dir(run_id: str) -> Path:
+    directory = ROOT / ".specify/workflows/runs" / run_id
+    if directory.is_symlink() or directory.parent.is_symlink():
+        message = "symlinked run state cannot be repositioned"
+        raise RuntimeError(message)
+    return directory
+
+
+def _engine_steps(run_id: str) -> list[str]:
+    """Top-level step IDs of the run's own workflow copy, in order (R7).
+
+    Read from the items of its top-level `steps:` list, whatever their key
+    order (no YAML library under `python3 -I -S`). An item without an ID
+    makes the list unusable: [].
+    """
+    path = _engine_dir(run_id) / "workflow.yml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    if "steps:" not in lines:
+        return []
+    steps: list[str | None] = []
+    indent = None
+    for line in lines[lines.index("steps:") + 1 :]:
+        if line and not line[0].isspace() and not line.startswith("-"):
+            break  # the next top-level key
+        item = ENGINE_ITEM.match(line)
+        if item and (indent is None or len(item.group(1)) == indent):
+            indent = len(item.group(1))
+            steps.append(None)
+            body = item.group(2)
+        elif steps and indent is not None and line.startswith(" " * (indent + 2)):
+            body = line[indent + 2 :]
+        else:
+            continue
+        found = ENGINE_ID.match(body)
+        if found and steps[-1] is None:
+            steps[-1] = found.group(1)
+    if not steps or None in steps:
+        return []
+    return [step for step in steps if step is not None]
+
+
+def _reposition_engine(run_id: str, step_id: str) -> None:
+    """Make `specify workflow resume` start at step_id (#21 R7).
+
+    Rewrites the run's engine state atomically: the step's index, its ID, the
+    results of it and every later step dropped, status `failed`. The log is
+    left as it is. Nothing changes when the failed step is the re-entry step.
+    """
+    directory = _engine_dir(run_id)
+    steps = _engine_steps(run_id)
+    if step_id not in steps:
+        message = f"{step_id} is not a step of run {run_id}'s workflow"
+        raise RuntimeError(message)
+    path = directory / "state.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if state.get("current_step_id") == step_id and state.get("status") in {
+        "failed",
+        "paused",
+    }:
+        return
+    index = steps.index(step_id)
+    earlier = set(steps[:index])
+    state.update(
+        current_step_index=index,
+        current_step_id=step_id,
+        step_results={
+            key: value
+            for key, value in (state.get("step_results") or {}).items()
+            if key in earlier
+        },
+        status="failed",
+    )
+    staged = directory / ".state.json.ballast"
+    staged.unlink(missing_ok=True)
+    staged.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    staged.replace(path)
+
+
 def _agent_block(run_id: str, record: dict, step: dict) -> dict:
     """Return the block an agent asked for (exit 3), from its operator draft copy."""
     name = "block.json"
@@ -704,7 +932,7 @@ def _agent_block(run_id: str, record: dict, step: dict) -> dict:
     )
 
 
-def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: PLR0911
+def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: C901, PLR0911
     """Categorize why an Autonomous run ended without completing (R-10)."""
     current = autonomy.read_block(ROOT, run_id)
     if current is not None:
@@ -726,14 +954,26 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: PLR091
         category = WRAPPER_CATEGORIES.get(code)
         if category is not None:
             condition = last.get("reason") or f"agent step ended with exit {code}"
+            limit = None
             if category == "tamper":
                 condition = "an agent step changed protected workflow files"
+            if category == "limit":
+                limit = last.get("limit")
+                if limit not in autonomy.LIMIT_KINDS:
+                    limit = "wall-time" if "wall-time" in condition else "agent-steps"
+                condition = autonomy.limit_condition(limit, condition)
+            restart = category == "limit" and _restart_only(
+                run_id, {"category": category, "limit": limit}
+            )
             return autonomy.make_block(
                 category,
                 condition,
                 run_id=run_id,
                 step_id=step_id,
                 evidence=[f".specify/workflow-state/{run_id}/agents/"],
+                limit=limit,
+                recovery=autonomy.RESTART_RECOVERY if restart else None,
+                command=autonomy.RESTART_COMMAND if restart else None,
             )
         if code == EXIT_REFUSED and "confinement" in str(last.get("reason")):
             return autonomy.make_block(
@@ -760,19 +1000,35 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: PLR091
 
 def _print_block(block: dict) -> None:
     lines = [
-        f"\nAutonomous run blocked ({block['category']}): {block['condition']}",
+        (
+            f"\nAutonomous run blocked ({autonomy.block_class(block)}: "
+            f"{block['category']}): {block['condition']}"
+        ),
         *(f"  option: {o['option']} -> {o['consequence']}" for o in block["options"]),
         f"Recovery: {block['recovery']}",
         f"Next: {block['command']}",
     ]
-    sys.stdout.write("\n".join(lines) + "\n")
+    # SEC2-004: block text may come from an agent's draft.
+    sys.stdout.write(autonomy.printable("\n".join(lines)) + "\n")
 
 
-def _stop(run_id: str, block: dict) -> int:
-    """Record the block, stop the run and tell the operator what to do."""
+def _stop(run_id: str, block: dict, inputs: dict[str, str] | None = None) -> int:
+    """Record the block, stop the run and tell the operator what to do.
+
+    The block keeps the digests of the re-entry inputs at this moment, or
+    the earlier snapshot it is given, so a resume sees what changed (R6).
+    """
     record = autonomy.read_run(ROOT, run_id)
     if autonomy.read_block(ROOT, run_id) != block:
         autonomy.record_block(ROOT, run_id, block)
+    current = autonomy.read_block(ROOT, run_id) or {}
+    if record["workflow"] == AUTONOMOUS and (inputs or not current.get("inputs")):
+        try:
+            block = autonomy.set_block_inputs(
+                ROOT, run_id, inputs or _block_inputs(run_id, record["feature"])
+            )
+        except (autonomy.AutonomyError, OSError) as error:
+            sys.stderr.write(f"ballast: block inputs not recorded: {error}\n")
     if record["status"] in {"active", "completed"}:
         autonomy.set_status(record, "stopped")
         autonomy.write_run(ROOT, record)
@@ -947,7 +1203,10 @@ def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity i
             "run or one stopped by a forge or permission block"
         )
     try:
-        return _publish(run_id)
+        with _invocation_lock(run_id):
+            return _publish(run_id)
+    except LockHeld as held:
+        return _refuse(str(held))
     except autonomy.AutonomyError as error:
         sys.stderr.write(f"ballast: publish failed: {error}\n")
         return EXIT_BLOCKED
@@ -955,8 +1214,58 @@ def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity i
         _archive_operator(run_id)
 
 
-def _continue_refusal(source: dict, reason: str) -> str | None:
-    """Return why a source run cannot be continued, or None."""
+def _checkpoint_command(options: list[str]) -> int:
+    """`ballast run checkpoint RUN_ID`: refresh the PR evidence, no agent (#21 R12).
+
+    Any run status. It never changes the run's records: only #17's
+    checkpoint and #19's packet run, and they never create a Draft PR here.
+    """
+    if len(options) != 1:
+        return _refuse("checkpoint needs exactly one RUN_ID")
+    record = _source_run(options[0])
+    if isinstance(record, str):
+        return _refuse(record)
+    run_id = record["run_id"]
+    try:
+        with _invocation_lock(run_id):
+            outcome = draft_pr.checkpoint(ROOT, run_id, create=False)
+    except LockHeld as held:
+        return _refuse(str(held))
+    if outcome.state == "skipped" and outcome.reason == "no-draft-pr":
+        return _refuse(
+            f"run {run_id} has no Draft PR yet; ballast run publish {run_id} opens "
+            "it once the run completes"
+        )
+    line = draft_pr.format_line(outcome)
+    if outcome.packet is not None:
+        line += "\n" + draft_pr.packet.format_line(outcome.packet)
+    sys.stdout.write(line + "\n")
+    return 0 if outcome.state == "reused" else EXIT_BLOCKED
+
+
+def _baseline_exists(run_id: str) -> bool:
+    """Whether the run reached implementation (its baseline was recorded)."""
+    path = ROOT / ".specify/workflow-state" / run_id / "implementation-baseline.json"
+    return path.is_file()
+
+
+def _restart_only(run_id: str, block: dict | None) -> bool:
+    """Return whether only a new run recovers: a fixed limit before implementation."""
+    return (
+        block is not None
+        and block["category"] == "limit"
+        and block.get("limit") in autonomy.FIXED_LIMITS
+        and not _baseline_exists(run_id)
+    )
+
+
+def _continue_refusal(source: dict, reason: str, mode: str) -> str | None:  # noqa: PLR0911
+    """Return why a source run cannot be continued in MODE, or None.
+
+    The pre-implementation refusals apply only to human-gated continuation:
+    ballast-continue only gates an existing implementation, while a Chat run
+    can do the missing work (#20 AC-022; #21 DEC-0002).
+    """
     run_id = source["run_id"]
     if source["status"] not in {"stopped", "completed", "published"}:
         return (
@@ -975,10 +1284,24 @@ def _continue_refusal(source: dict, reason: str) -> str | None:
         )
     if reason == "block-resolved" and block is None:
         return f"run {run_id} has no block to resolve"
+    if mode == "chat":
+        return None
+    if _restart_only(run_id, block):
+        return (
+            f"run {run_id} reached its fixed limit before implementation; nothing "
+            "exists to continue and a resume never raises a limit. Start a new run "
+            f"with a larger limit: {autonomy.RESTART_COMMAND}"
+        )
+    if not _baseline_exists(run_id):
+        # #21 R10: ballast-continue only gates an existing implementation.
+        return (
+            f"run {run_id} stopped before implementation; resume it in "
+            f"Autonomous: ballast run resume {run_id}"
+        )
     return None
 
 
-def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: C901, PLR0911, PLR0912
+def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: PLR0911
     """`ballast run continue`: record the human decision, lower, run gates.
 
     `--mode chat` continues in a linked Chat run (#20) instead of the
@@ -1008,8 +1331,21 @@ def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: 
     source = _source_run(options[0])
     if isinstance(source, str):
         return _refuse(source)
-    run_id = source["run_id"]
-    refusal = _continue_refusal(source, flags["--reason"])
+    try:
+        with _invocation_lock(source["run_id"]):  # SEC2-001: like resume
+            return _continue_locked(source["run_id"], flags, specify)
+    except LockHeld as held:
+        return _refuse(str(held))
+
+
+def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) -> int:  # noqa: PLR0911
+    """Lower and continue under the source run's lock, from a fresh read."""
+    source = _source_run(run_id)
+    if isinstance(source, str):
+        return _refuse(source)
+    refusal = _continue_refusal(
+        source, flags["--reason"], flags.get("--mode", "human-gated")
+    )
     if refusal is not None:
         return _refuse(refusal)
     if flags.get("--mode") == "chat":
@@ -1110,7 +1446,7 @@ def _continue_chat(source: dict, flags: dict[str, str]) -> int:
 
 
 def _render_source_record(source: dict) -> None:
-    """Re-render the committed record so it shows the lowering."""
+    """Re-render the committed record so it shows the lowering or the resume."""
     feature = ROOT / source["feature"]
     path = feature / "autonomous" / "record.md"
     if not feature.is_dir() or feature.is_symlink():
@@ -1119,14 +1455,7 @@ def _render_source_record(source: dict) -> None:
         message = f"{path} must not be a symlink"
         raise autonomy.AutonomyError(message)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        autonomy.render_record(
-            source,
-            autonomy.read_decisions(ROOT, source["run_id"]),
-            autonomy.read_checks(ROOT, source["run_id"]),
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(autonomy.render_run_record(ROOT, source), encoding="utf-8")
 
 
 def _copy_baseline(source: str, target: str) -> None:
@@ -1148,12 +1477,8 @@ def _complete_continuation(run_id: str, status: int) -> None:
         sys.stderr.write(f"ballast: continuation {run_id}: {error}\n")
 
 
-def _resume_refusal(run_id: str) -> str | None:
-    """Why an Autonomous run cannot be resumed (#18), or None."""
-    try:
-        record = autonomy.find_run(ROOT, run_id)
-    except autonomy.AutonomyError as error:
-        return f"run {run_id}: {error}"
+def _chat_resume_refusal(run_id: str, record: dict | None) -> str | None:
+    """Why `resume` refuses a Chat run or a run continued as one (#20), or None."""
     if record is not None and record["workflow"] == autonomy.CHAT:
         return (
             f"Chat runs continue with `ballast run step {run_id} PHASE`; see "
@@ -1165,14 +1490,327 @@ def _resume_refusal(run_id: str) -> str | None:
             f"run {run_id} continues as Chat run {linked}; use `ballast run step "
             f"{linked} PHASE` (see `ballast run status {linked}`)"
         )
-    if record is None or record["workflow"] != AUTONOMOUS:
-        return None
-    if record["status"] == "continued":
+    return None
+
+
+RESUME_FLAGS = {"-i", "--input", "--mode", "--wall-time", "--max-agent-steps"}
+
+
+def _resume_options(options: list[str]) -> str | None:
+    """Parse `RUN_ID [--ref TEXT]`; the --ref value, "" without one, or a refusal.
+
+    Returns a refusal prefixed with "!" (#21 R5, R18).
+    """
+    rest = options[1:]
+    if any(item.partition("=")[0] in RESUME_FLAGS for item in rest[::2]):
+        return (
+            "!an Autonomous resume keeps the mode, risk, limits and integrations "
+            "recorded at start; it accepts only --ref TEXT"
+        )
+    if not rest:
+        return ""
+    if len(rest) != 2 or rest[0] != "--ref":  # noqa: PLR2004
+        return "!an Autonomous resume accepts only --ref TEXT"
+    ref = rest[1]
+    if not 1 <= len(ref.strip()) <= 500:  # noqa: PLR2004
+        return "!--ref must be 1-500 characters"
+    if autonomy.HUMAN_APPROVAL.search(ref):
+        return (
+            "!--ref claims a human approval; a block resolution approves no "
+            "provisional decision (paraphrase and cite instead)"
+        )
+    return ref
+
+
+def _engine_exists(run_id: str) -> bool:
+    """Whether the run has engine state and its own workflow copy to resume."""
+    directory = ROOT / ".specify/workflows/runs" / run_id
+    return (directory / "state.json").is_file() and (
+        directory / "workflow.yml"
+    ).is_file()
+
+
+def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibility row
+    record: dict, block: dict | None
+) -> str | None:
+    """Why an Autonomous run cannot be resumed, naming the command that applies."""
+    run_id, status = record["run_id"], record["status"]
+    if status == "continued":
         return (
             f"run {run_id} was lowered and continues in a ballast-continue run; "
             "resume that run instead"
         )
-    return autonomy.RESUME_REFUSAL.format(run_id=run_id)
+    if status == "completed":
+        return f"run {run_id} is completed; publish it: ballast run publish {run_id}"
+    if status == "published":
+        return (
+            f"run {run_id} is published; refresh its Draft PR evidence with "
+            f"ballast run checkpoint {run_id}"
+        )
+    if autonomy.effective_mode(record) != "autonomous":
+        return f"run {run_id} is not an autonomous run"
+    if (autonomy.state_dir(ROOT) / "in-progress").exists():
+        return (
+            "an agent step did not finish and its changes were not checked; review "
+            "the checkout, then ballast discard-runs"
+        )
+    if status == "active":
+        return None  # The lock tells a live invocation from a dead one.
+    if block is None:
+        return f"run {run_id} is stopped without a recorded block; start it again"
+    category = block["category"]
+    if category in {"tamper", "unfinished-step"}:
+        return (
+            f"run {run_id} stopped on a {category} block; recover with "
+            "ballast discard-runs"
+        )
+    if category in autonomy.PUBLISH_RETRY:
+        return (
+            f"run {run_id} stopped on a {category} block; retry publication with "
+            f"ballast run publish {run_id}"
+        )
+    if category == "upstream-sync" and not _engine_exists(run_id):
+        return (
+            f"run {run_id} stopped before its first agent step; remove the cause, "
+            f"then start again: {autonomy.RESTART_COMMAND}"
+        )
+    if category == "limit" and not autonomy.resumable(category, block.get("limit")):
+        limit = autonomy.LIMIT_LABELS.get(block.get("limit") or "", "limit")
+        if _restart_only(run_id, block):
+            return (
+                f"run {run_id} reached its {limit} before implementation, and a "
+                "resume never raises a limit; start a new run with a larger limit: "
+                f"{autonomy.RESTART_COMMAND}"
+            )
+        return (
+            f"run {run_id} reached its {limit}, and a resume never raises a limit; "
+            f"continue human-gated: ballast run continue {run_id} --reason "
+            "block-resolved --ref TEXT, or start a new run with a larger limit"
+        )
+    if not _engine_exists(run_id):
+        return f"run {run_id} has no workflow state to resume; start it again"
+    return None
+
+
+def _block_step(failed: str | None, steps: list[str]) -> str | None:
+    """Return the step a resume re-runs for a block at `failed` (#21 R6).
+
+    A failed agent step or validator is re-run; a failed recorder re-runs
+    the agent step whose drafts it records (the first reviewer step for the
+    implementation reviews).
+    """
+    if failed is None or failed not in steps:
+        return None
+    if failed == "record-implementation-review":
+        return "review-implementation"
+    match = re.fullmatch(r"record-fix-review-(\d+)", failed)
+    if match:
+        return f"review-fix-{match.group(1)}"
+    if failed.startswith("record-"):
+        for step in reversed(steps[: steps.index(failed)]):
+            if step not in autonomy.AUTONOMOUS_SHELL_STEPS:
+                return step
+    return failed
+
+
+def _reentry(run_id: str, record: dict, block: dict) -> tuple[str, list[str]]:
+    """Return the earliest of the block step and changed inputs' steps (#21 R6)."""
+    steps = _engine_steps(run_id)
+    if not steps:
+        message = f"run {run_id}'s workflow copy lists no steps to resume at"
+        raise RuntimeError(message)
+    step = _block_step(_engine_state(run_id).get("current_step_id"), steps)
+    if step is None:
+        message = f"run {run_id}'s workflow state names no step to resume at"
+        raise RuntimeError(message)
+    recorded = block.get("inputs") or {}
+    current = _block_inputs(run_id, record["feature"]) if recorded else {}
+    changed = sorted(
+        name
+        for name in recorded.keys() | current.keys()
+        if recorded.get(name) != current.get(name)
+    )
+    feature = record["feature"] + "/"
+    for name in changed:
+        target = (
+            REENTRY_INPUTS.get(name.removeprefix(feature))
+            if name != OUTSIDE
+            else ("validate-implementation")
+        )
+        if target in steps and steps.index(target) < steps.index(step):
+            step = target
+    return step, changed
+
+
+def _interrupted(run_id: str, record: dict) -> dict:
+    """Close a dead invocation's clock and stop it as interrupted (#21 R8)."""
+    autonomy.close_crashed_invocation(record, autonomy.latest_recorded(ROOT, record))
+    autonomy.set_status(record, "stopped")
+    autonomy.write_run(ROOT, record)
+    block = autonomy.make_block(
+        "interrupted",
+        "the run's last invocation ended without finishing (the runner was "
+        "killed or the host stopped)",
+        run_id=run_id,
+        step_id=_engine_state(run_id).get("current_step_id"),
+    )
+    autonomy.record_block(ROOT, run_id, block)
+    return autonomy.set_block_inputs(
+        ROOT, run_id, _block_inputs(run_id, record["feature"])
+    )
+
+
+def _resume_autonomous(options: list[str], specify: str) -> int:
+    """`ballast run resume RUN_ID [--ref TEXT]` for an Autonomous run (#21 R5)."""
+    ref = _resume_options(options)
+    if ref is not None and ref.startswith("!"):
+        return _refuse(ref[1:])
+    run_id = options[0]
+    try:
+        record = autonomy.read_run(ROOT, run_id)
+        refusal = _resume_refusal(record, autonomy.read_block(ROOT, run_id))
+    except autonomy.AutonomyError as error:
+        return _refuse(f"run {run_id}: {error}")
+    if refusal is not None:
+        return _refuse(refusal)
+    pin = branch_sync.read_pin(ROOT, run_id)
+    if pin.get("feature") not in {None, record["feature"]}:
+        return _refuse(f"run {run_id}'s pin names another feature than its record")
+    try:
+        with _invocation_lock(run_id):
+            return _resume_locked(run_id, ref or "", pin, specify)
+    except LockHeld as held:
+        return _refuse(str(held))
+
+
+def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:  # noqa: PLR0911
+    """Resume under the run's lock: sync, decide, reposition, run."""
+    try:
+        record = autonomy.read_run(ROOT, run_id)
+        if record["status"] == "active":
+            block = _interrupted(run_id, record)
+        else:
+            block = autonomy.read_block(ROOT, run_id)
+        refusal = _resume_refusal(record, block)
+    except autonomy.AutonomyError as error:
+        return _refuse(f"run {run_id}: {error}")
+    if refusal is not None or block is None:
+        return _refuse(refusal or f"run {run_id} has no block to resolve")
+    # Before any agent step and before any record: a blocked check leaves only
+    # its own block, which this command resumes (ADR-0005).
+    outcome = _sync(run_id, feature=pin.get("feature"))
+    if outcome.outcome == "blocked":
+        detail = f": {outcome.detail}" if outcome.detail else ""
+        condition = (
+            f"BLOCKED_UPSTREAM_SYNC ({outcome.cause}){detail}. "
+            f"Recovery: {outcome.recovery}"
+        )[:4000]
+        try:
+            code = _stop(
+                run_id,
+                autonomy.make_block(
+                    "upstream-sync",
+                    condition,
+                    run_id=run_id,
+                    step_id=block.get("step_id"),
+                    recovery=autonomy.SYNC_RESUME_RECOVERY,
+                    command=f"ballast run resume {run_id}",
+                ),
+                inputs=block.get("inputs"),
+            )
+        except autonomy.AutonomyError as error:
+            sys.stderr.write(f"ballast: autonomous run {run_id}: {error}\n")
+            code = EXIT_BLOCKED
+        finally:
+            _archive_operator(run_id)
+        return EXIT_INTERRUPTED if outcome.interrupted else code
+    try:
+        # SEC2-001: a lowering or block change during the sync wins.
+        fresh = autonomy.read_run(ROOT, run_id)
+        moved = autonomy.read_block(ROOT, run_id) != block or any(
+            fresh.get(key) != record.get(key) for key in ("status", "mode_history")
+        )
+    except autonomy.AutonomyError as error:
+        return _refuse(f"run {run_id}: {error}")
+    if moved:
+        return _refuse(
+            f"run {run_id} changed during branch synchronization; check it, then "
+            "run the command that applies"
+        )
+    try:
+        reentry, changed = _reentry(run_id, record, block)
+        autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))
+        steps = _engine_steps(run_id)
+        review = "record-implementation-review"
+        reset = review in steps and steps.index(reentry) <= steps.index(review)
+        block_step = _engine_state(run_id).get("current_step_id")
+        decision = autonomy.append_human_decision(
+            ROOT,
+            run_id,
+            "block-resolution",
+            ref
+            or (
+                f"operator resumed after the {block['category']} block at "
+                f"{block_step or reentry}"
+            ),
+            resolves="block",
+        )
+        autonomy.resume_run(
+            ROOT,
+            record,
+            decision["id"],
+            {
+                "at": autonomy.now(),
+                "block_category": block["category"],
+                "block_step": block_step,
+                "reentry_step": reentry,
+                "changed_inputs": changed,
+            },
+            reset=reset,
+        )
+        autonomy.write_run(ROOT, record)
+        autonomy.resolve_block(ROOT, run_id)
+        _render_source_record(record)
+    except (autonomy.AutonomyError, RuntimeError, OSError, ValueError) as error:
+        return _refuse(f"run {run_id}: {error}")
+    sys.stdout.write(
+        f"Recorded {decision['id']} (block-resolution); run {run_id} resumes in "
+        f"Autonomous at {reentry}\n"
+        + (f"Changed during the block: {', '.join(changed)}\n" if changed else "")
+    )
+    return _resume_engine(run_id, reentry, pin, specify)
+
+
+def _resume_engine(run_id: str, reentry: str, pin: dict, specify: str) -> int:
+    """Point the feature, reposition the engine and run it from `reentry`."""
+    try:
+        if _point_feature(pin.get("feature")) is not None:
+            message = "cannot point .specify/feature.json at the feature"
+            raise RuntimeError(message)  # noqa: TRY301 - one failure path below
+        _reposition_engine(run_id, reentry)
+    except (RuntimeError, OSError, ValueError) as error:
+        _clock(run_id, start=False)
+        try:
+            return _stop(
+                run_id,
+                autonomy.make_block(
+                    "postcondition",
+                    f"the resume could not start the workflow: {error}",
+                    run_id=run_id,
+                    step_id=reentry,
+                ),
+            )
+        finally:
+            _archive_operator(run_id)
+    try:
+        status = _launch([specify, "workflow", "resume", run_id], run_id, start=False)
+    finally:
+        _clock(run_id, start=False)
+    try:
+        return _finish(run_id, status)
+    finally:
+        _archive_operator(run_id)
+        _checkpoint(run_id)
 
 
 def _point_feature(feature: str | None) -> int | None:
@@ -1209,16 +1847,25 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
             return _refuse("--wall-time and --max-agent-steps need --mode autonomous")
         if mode != "autonomous" and _option_feature(options) is None:
             return _refuse("start needs one -i feature_directory=specs/<issue>-<slug>")
+    autonomous_resume = False
     if argv[0] == "resume":
         rest = options[1:]
         if not options or not RUN_ID.fullmatch(options[0]):
             sys.stderr.write("resume needs a valid RUN_ID\n")
             return 2
+        try:
+            found = autonomy.find_run(ROOT, options[0])
+        except autonomy.AutonomyError as error:
+            return _refuse(f"run {options[0]}: {error}")
+        autonomous_resume = found is not None and found["workflow"] == AUTONOMOUS
         # Only the integration may change; the feature directory is fixed.
-        if len(rest) % 2 or any(
-            flag not in {"-i", "--input"}
-            or value.partition("=")[0] not in RESUMABLE_INPUTS
-            for flag, value in zip(rest[::2], rest[1::2], strict=True)
+        if not autonomous_resume and (
+            len(rest) % 2
+            or any(
+                flag not in {"-i", "--input"}
+                or value.partition("=")[0] not in RESUMABLE_INPUTS
+                for flag, value in zip(rest[::2], rest[1::2], strict=True)
+            )
         ):
             sys.stderr.write("resume accepts only: -i integration=claude|codex|auto\n")
             return 2
@@ -1235,8 +1882,24 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         return _publish_command(options)
     if argv[0] == "start" and flags.get("--mode") == "chat":
         return _chat(chat.start, ROOT, options)
-    if argv[0] == "resume":
-        refusal = _resume_refusal(options[0])
+    if argv[0] == "checkpoint":
+        return _checkpoint_command(options)
+    if argv[0] == "resume" and not autonomous_resume:
+        refusal = _chat_resume_refusal(options[0], found)
+        if refusal is not None:
+            return _refuse(refusal)
+    if autonomous_resume:
+        # Refusals first: they need no engine and write nothing.
+        ref = _resume_options(options)
+        if ref is not None and ref.startswith("!"):
+            return _refuse(ref[1:])
+        try:
+            refusal = _resume_refusal(
+                autonomy.read_run(ROOT, options[0]),
+                autonomy.read_block(ROOT, options[0]),
+            )
+        except autonomy.AutonomyError as error:
+            return _refuse(f"run {options[0]}: {error}")
         if refusal is not None:
             return _refuse(refusal)
     if argv[0] == "continue":
@@ -1247,6 +1910,8 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
             "specify CLI not found; see docs/policies/spec-kit-workflow.md\n"
         )
         return 2
+    if autonomous_resume:
+        return _resume_autonomous(options, specify)
     if flags.get("--mode") == "autonomous":
         return _start_autonomous(flags, options, specify)
     if argv[0] == "start":

@@ -605,8 +605,9 @@ def _stale_entries(run: _Run) -> list[str]:
 
 
 class _Checkpoint:
-    def __init__(self, root: Path, run_id: str) -> None:
+    def __init__(self, root: Path, run_id: str, *, create: bool = True) -> None:
         self.run = _Run(root, run_id)
+        self.create_pr = create
 
     # --- commands ---------------------------------------------------------
 
@@ -649,6 +650,9 @@ class _Checkpoint:
         settled = self.settle()
         if settled is not None:
             return settled
+        if not self.create_pr:
+            # `ballast run checkpoint` refreshes an existing PR only (#21 R12).
+            return Outcome("skipped", "no-draft-pr", issue=run.issue)
         self.compare()
         body = _after(self.template(), _section(run, _now()))
         return self.create(body)
@@ -1137,9 +1141,13 @@ def _record(run: _Run, outcome: Outcome) -> None:
     )
 
 
-def checkpoint(root: Path, run_id: str) -> Outcome:
-    """Create or reuse the feature's Draft PR; record and return the outcome."""
-    work = _Checkpoint(root, run_id)
+def checkpoint(root: Path, run_id: str, *, create: bool = True) -> Outcome:
+    """Create or reuse the feature's Draft PR; record and return the outcome.
+
+    With `create=False` a missing PR ends `skipped` (`no-draft-pr`): no
+    ledger event, no packet, nothing written (#21 R12).
+    """
+    work = _Checkpoint(root, run_id, create=create)
     try:
         outcome = work.execute()
     except _Stop as stop:
@@ -1149,6 +1157,10 @@ def checkpoint(root: Path, run_id: str) -> Outcome:
             _outcome("failed-retryable", "internal-error", issue=work.run.issue),
             detail=type(error).__name__,
         )
+    if not create and outcome.state in {"pending", "blocked-unlinked"}:
+        # No published branch or no linked Issue: no Ballast Draft PR can
+        # exist, so a refresh has nothing to update and records nothing.
+        outcome = Outcome("skipped", "no-draft-pr", issue=outcome.issue)
     if outcome.state != "skipped" and work.run.feature is not None:
         try:
             _record(work.run, outcome)

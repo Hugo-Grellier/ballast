@@ -98,11 +98,13 @@ An eligible feature can run unattended to a Draft PR. Every gate decision is the
 ```bash
 ballast run start --mode autonomous [--wall-time MINUTES] [--max-agent-steps N] \
     -i issue=N -i idea="Issue #N: OUTCOME" -i feature_directory=specs/N-slug [-i integration=auto]
+ballast run resume RUN_ID [--ref TEXT]
 ballast run continue RUN_ID --reason block-resolved|changes-requested --ref TEXT
 ballast run publish RUN_ID
+ballast run checkpoint RUN_ID
 ```
 
-`--wall-time` (1–1440 minutes, default 240) and `--max-agent-steps` (1–200, default 30) are accepted only with `--mode autonomous`. An ineligible start is refused before any agent step and prints the human-gated command instead. A run ends with a Draft PR or with a block that names its reason and the recovery command. `ballast run resume` refuses an Autonomous run; `continue` records the operator's decision, lowers the run to human-gated and starts the remaining human gates. `publish` retries a failed publication without running an agent. Nothing in an Autonomous run merges, marks a PR ready, releases or deploys.
+`--wall-time` (1–1440 active minutes, default 240) and `--max-agent-steps` (1–200, default 40) are accepted only with `--mode autonomous`. An ineligible start is refused before any agent step and prints the human-gated command instead. A run reviews its implementation, fixes what the reviews or the checks find within three fix cycles, and ends with a Draft PR or with a block that names its class, its reason and the next command. `ballast run resume` continues a blocked or interrupted Autonomous run in Autonomous after branch synchronization, recording your block resolution, and `ballast run checkpoint` refreshes a finished run's Draft PR checkpoint and acceptance packet without an agent; both stay agent-provisional, and merging the PR stays the single human approval. `continue` records the operator's decision, lowers the run to human-gated and starts the remaining human gates; before implementation it refuses and points to `resume`, unless `--mode chat` continues the run in Chat. `publish` retries a failed publication without running an agent. Nothing in an Autonomous run merges, marks a PR ready, releases or deploys.
 
 Two `ballast.toml` tables configure it:
 

@@ -162,8 +162,9 @@ class AgentWrapperAutonomousTests(WrapperCase):
                 autonomy.write_run(self.root, record)
                 result = self.wrapper()
                 self.assertEqual(result.returncode, 2)
-                # A-9: lifting the resume refusal belongs to #21.
-                self.assertIn("#21", result.stderr)
+                # #21: only the trusted resume makes a stopped run active again.
+                self.assertIn(f"{status}, not active", result.stderr)
+                self.assertIn("ballast run resume run42", result.stderr)
                 self.assertIsNone(self.ran())
 
     def test_confined_step_counts_and_hides_secrets(self) -> None:
@@ -195,8 +196,10 @@ class AgentWrapperAutonomousTests(WrapperCase):
 
     def test_reviewer_role(self) -> None:
         self.make_run()
+        # An argument with no draft contract: the fake writes no valid draft,
+        # and the draft retries (#21) are covered in test_autonomous_recovery.
         self.assertEqual(
-            self.wrapper(prompt="/speckit-ballast-review plan").returncode, 0
+            self.wrapper(prompt="/speckit-ballast-review audit").returncode, 0
         )
         self.assertEqual(self.steps()[0]["role"], "reviewer")
 
@@ -246,7 +249,7 @@ class AgentWrapperAutonomousTests(WrapperCase):
         drafts.mkdir(parents=True)
         (drafts / "plan-review.json").write_text('{"planted": true}')
         result = self.wrapper(
-            prompt="/speckit-ballast-review plan",
+            prompt="/speckit-ballast-review audit",
             FAKE_DRAFTS=str(drafts),
             FAKE_DRAFT_NAMES="plan-review.json",
         )
@@ -280,10 +283,6 @@ class AgentWrapperAutonomousTests(WrapperCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("confinement unavailable", result.stderr)
         self.assertIsNone(self.ran())
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class RunCase(WrapperCase):
@@ -376,6 +375,15 @@ class RunCase(WrapperCase):
         )
         record["checked_tree"] = autonomy.checked_digest(self.root, FEATURE)
         autonomy.write_run(self.root, record)
+        # What implementation-baseline leaves: implementation happened.
+        baseline = (
+            self.root
+            / ".specify/workflow-state"
+            / run_id
+            / "implementation-baseline.json"
+        )
+        baseline.parent.mkdir(parents=True, exist_ok=True)
+        baseline.write_text(json.dumps({"feature": FEATURE, "tree": "0" * 40}))
 
 
 class RunStartTests(RunCase):
@@ -765,16 +773,14 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["category"], "decision")
         self.assertIn("No safe, reversible default: Both change", block["condition"])
         self.assertEqual([o["option"] for o in block["options"]], ["Keep", "Drop"])
-        self.assertEqual(
-            block["command"],
-            f"ballast run continue {run_id} --reason block-resolved --ref TEXT",
-        )
+        # #21: the operator answers the decision, then resumes in Autonomous.
+        self.assertEqual(block["command"], f"ballast run resume {run_id}")
         self.assertEqual(autonomy.read_decisions(self.root, run_id), [])
         self.assertFalse(
             (autonomy.drafts_dir(self.root, FEATURE) / "block.json").exists()
         )
         self.assertIn("option: Keep -> More storage", self.out)
-        self.assertIn("Next: ballast run continue", self.out)
+        self.assertIn(f"Next: ballast run resume {run_id}", self.out)
 
     def test_invalid_or_missing_draft_still_blocks_as_decision(self) -> None:
         for name, drafts in (
@@ -892,21 +898,25 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["category"], "permission")
         self.assertEqual(block["command"], f"ballast run publish {run_id}")
 
-    def test_resume_is_refused_for_autonomous_runs(self) -> None:
-        """AC-014: names #21 (A-9 of #18) and the human-gated continuation."""
+    def test_autonomous_resume_refuses_mode_limits_and_inputs(self) -> None:
+        """#21 AC-016, AC-029 (was #18 AC-014): resume never changes the mode."""
         self.engine.update(status="failed", code=1, step="validate-plan")
         run_id = self.started()
-        code, _, err = self.main("resume", run_id)
-        self.assertEqual(code, 2)
-        self.assertIn(
-            "autonomous resume is not supported until Autonomous resume through "
-            "branch synchronization (#21)",
-            err,
-        )
-        self.assertIn(f"ballast run continue {run_id} --reason block-resolved", err)
+        before = autonomy.read_run(self.root, run_id)
+        for extra in (
+            ("--mode", "autonomous"),
+            ("--mode", "human-gated"),
+            ("--wall-time", "999"),
+            ("--max-agent-steps", "200"),
+            ("-i", "integration=codex"),
+        ):
+            with self.subTest(extra=extra):
+                code, _, err = self.main("resume", run_id, *extra)
+                self.assertEqual(code, 2)
+                self.assertIn("keeps the mode, risk, limits and integrations", err)
+        self.assertEqual(autonomy.read_run(self.root, run_id), before)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
         self.assertEqual(len(self.launched), 1)
-        code, _, err = self.main("resume", run_id, "--mode", "autonomous")
-        self.assertEqual(code, 2)
 
     def test_resume_of_human_gated_run_is_unchanged(self) -> None:
         # What `ballast run start` leaves: the engine inputs and the pin (SEC-002).
@@ -993,7 +1003,7 @@ class UpstreamSyncRunTests(RunCase):
         self.assertIn(". Recovery: rebase by hand", block["condition"])
         self.assertEqual(autonomy.read_decisions(self.root, run_id), [])
         self.assertIn("BLOCKED_UPSTREAM_SYNC (conflict)", err)
-        self.assertIn("Autonomous run blocked (upstream-sync)", out)
+        self.assertIn("Autonomous run blocked (unsafe uncertainty: upstream-sync)", out)
         self.assertEqual([e["cause"] for e in self.sync_events(run_id)], ["conflict"])
         code, _, err = self.main(
             "continue", run_id, "--reason", "block-resolved", "--ref", "x"
@@ -1017,7 +1027,10 @@ class UpstreamSyncRunTests(RunCase):
         self.assertEqual(command, autonomy.RESTART_COMMAND)
         self.assertTrue(autonomy.BLOCK_COMMAND.fullmatch(command))
         self.assertIn("upstream-sync", autonomy.BLOCK_CATEGORIES)
-        self.assertIn("#21", autonomy.RESUME_REFUSAL)
+        # #21: every other resumable block names resume.
+        resume = autonomy.recovery_command("r1", "decision")
+        self.assertEqual(resume, "ballast run resume r1")
+        self.assertTrue(autonomy.BLOCK_COMMAND.fullmatch(resume))
 
     def test_continue_checks_then_pins_the_continuation(self) -> None:
         """Q4, second variant [AC-005, R12]."""
@@ -1090,7 +1103,7 @@ class UpstreamSyncRunTests(RunCase):
         )
         self.assertEqual(code, 1)
         self.assertIn(f"run {run_id} has no branch or feature pin", err)
-        self.assertIn("Recovery: start a new run", err)
+        self.assertIn("Recovery: after checking the feature in the run's record", err)
         self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
 
 
@@ -1470,3 +1483,136 @@ class PublisherCheckpointTests(RunCase):
         self.assertIn(f"Autonomous run {run_id} for #27", body)
         self.assertEqual(body.count(run.draft_pr.MARK_BEGIN), 1)
         self.assertTrue(body.rstrip().endswith(run.draft_pr.MARK_END))
+
+
+class InvocationLockTests(RunCase):
+    """#21 T006, R13: one invocation per run; the lock tells live from dead."""
+
+    def test_lock_is_exclusive_and_released(self) -> None:
+        autonomy.run_dir(self.root, "run42").mkdir(parents=True, exist_ok=True)
+        with (
+            run._invocation_lock("run42"),  # noqa: SLF001
+            self.assertRaisesRegex(run.LockHeld, "run run42 has an active"),
+            run._invocation_lock("run42"),  # noqa: SLF001
+        ):
+            pass
+        with run._invocation_lock("run42"):  # noqa: SLF001 - free again
+            pass
+        lock = autonomy.run_dir(self.root, "run42") / "invocation.lock"
+        self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
+
+    def test_publish_refuses_while_held(self) -> None:
+        self.engine.update(status="failed", code=1, step="record-final")
+        self.start()
+        run_id = self.launched[0][1]
+        autonomy.record_block(
+            self.root,
+            run_id,
+            autonomy.make_block("forge", "push failed", run_id=run_id),
+        )
+        with run._invocation_lock(run_id):  # noqa: SLF001
+            code, _, err = self.main("publish", run_id)
+        self.assertEqual(code, 2)
+        self.assertIn("has an active invocation", err)
+
+
+class ReentryTests(unittest.TestCase):
+    """#21 T018, R6: the block step and the inputs that send a resume back."""
+
+    STEPS: ClassVar[list[str]] = list(autonomy.AUTONOMOUS_STEPS)
+
+    def test_block_step(self) -> None:
+        for failed, expected in (
+            ("decide-tasks", "decide-tasks"),
+            ("record-tasks", "decide-tasks"),
+            ("record-scope", "decide-scope"),
+            ("record-provisional-intent", "decide-intent"),
+            ("record-implementation-review", "review-implementation"),
+            ("record-fix-review-2", "review-fix-2"),
+            ("record-fix-3", "fix-3"),
+            ("record-reconciliation", "reconcile-spec"),
+            ("validate-plan", "validate-plan"),
+            ("checks-fix-1", "checks-fix-1"),
+            ("renew-intent", "renew-intent"),
+            (None, None),
+            ("unknown", None),
+        ):
+            with self.subTest(failed=failed):
+                self.assertEqual(run._block_step(failed, self.STEPS), expected)  # noqa: SLF001
+
+    def test_every_input_maps_to_a_validator(self) -> None:
+        for step in run.REENTRY_INPUTS.values():
+            self.assertIn(step, self.STEPS)
+            self.assertTrue(step.startswith("validate-"))
+
+
+class ContinueRefusalTests(RunCase):
+    """#21 T022 [AC-011, FR-011]: continue before implementation points to resume."""
+
+    def test_pre_implementation_continue_points_to_resume(self) -> None:
+        self.engine.update(status="failed", code=1, step="decide-tasks")
+        self.start()
+        run_id = self.launched[0][1]
+        code, _, err = self.main(
+            "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+        )
+        self.assertEqual(code, 2)
+        self.assertIn(
+            f"run {run_id} stopped before implementation; resume it in Autonomous: "
+            f"ballast run resume {run_id}",
+            err,
+        )
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+        self.assertEqual(len(self.launched), 1)
+
+    def test_pre_implementation_fixed_limit_names_the_restart(self) -> None:
+        """SEC2-002: before implementation only a new run lifts a fixed limit."""
+        self.engine.update(status="failed", code=1, step="decide-tasks")
+        self.engine["scenario"] = lambda r: RunBlockTests.agent_step(
+            self,  # type: ignore[arg-type]
+            r,
+            EXIT_LIMIT,
+            reason="agent-step limit reached",
+            limit="agent-steps",
+        )
+        _, out, _ = self.start()
+        run_id = self.launched[0][1]
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual((block["category"], block["limit"]), ("limit", "agent-steps"))
+        self.assertEqual(block["command"], autonomy.RESTART_COMMAND)
+        self.assertIn(f"Next: {autonomy.RESTART_COMMAND}", out)
+        self.assertNotIn("continue human-gated", block["recovery"])
+        for argv in (
+            ("resume", run_id),
+            ("continue", run_id, "--reason", "block-resolved", "--ref", "x"),
+        ):
+            with self.subTest(command=argv[0]):
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2)
+                self.assertIn(autonomy.RESTART_COMMAND, err)
+                self.assertNotIn("ballast run continue", err)
+                self.assertNotIn("ballast run resume", err)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+        self.assertEqual(len(self.launched), 1)
+
+
+class HumanGatedUnchangedTests(WrapperCase):
+    """#21 T042 [AC-032, FR-025]: human-gated steps get no gate and no retry."""
+
+    def test_no_skip_and_no_retry_without_an_autonomous_record(self) -> None:
+        drafts = self.root / FEATURE / "autonomous/drafts"
+        result = self.wrapper(
+            prompt="/speckit-ballast-decide plan",
+            FAKE_DRAFTS=str(drafts),
+            FAKE_DRAFT_NAMES="plan.json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ran()["argv"][:2], ["-p", "/speckit-ballast-decide plan"])
+        self.assertNotIn("Ballast retry", " ".join(self.ran()["argv"]))
+        result = self.wrapper(prompt="/speckit-ballast-fix")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("skipped", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

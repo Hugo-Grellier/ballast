@@ -5,7 +5,8 @@ decision that is recorded as provisional; the human approves once, at merge.
 Everything that grants or records authority lives here, in operator state that
 no agent can write (`state_dir(root)/runs/<run-id>/`):
 
-- the run record (`run.json`): mode history, risk, eligibility, limits;
+- the run record (`run.json`): mode history, risk, eligibility, limits,
+  active time, the fix-loop state and the resumes;
 - the hash-chained decision logs (`decisions.jsonl`, `human-decisions.jsonl`);
 - the current block (`block.json`) and earlier blocks (`blocks.jsonl`).
 
@@ -29,7 +30,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
 
-from launcher import state_dir  # noqa: E402
+from launcher import digests, state_dir  # noqa: E402
 
 VERSION = 1
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -56,7 +57,8 @@ CHAT = "ballast-chat"
 INTEGRATIONS = ("claude", "codex")
 STATUSES = ("active", "stopped", "completed", "published", "continued")
 # Only trusted code moves a run; `stopped` reaches `published` only through
-# `ballast run publish` after a forge block.
+# `ballast run publish` after a forge block, and `active` again only through
+# `resume_run`, with a recorded block resolution (#21).
 TRANSITIONS = {
     "active": {"stopped", "completed"},
     "completed": {"published", "stopped", "continued"},
@@ -171,20 +173,98 @@ BRANCH_REFUSAL = (
     "autonomous needs a feature branch named for the Issue without an open PR"
 )
 ORIGIN_REFUSAL = "origin is not the GitHub repository pinned in ballast.toml"
-RESUME_REFUSAL = (
-    "autonomous resume is not supported until Autonomous resume through branch "
-    "synchronization (#21); continue human-gated: ballast run continue {run_id} "
-    "--reason block-resolved --ref TEXT"
-)
 BRANCH_SEPARATORS = re.compile(r"[/._-]")
 HUMAN_GATED_ALTERNATIVE = (
     "Run it human-gated instead: ballast run start -i idea=... -i feature_directory=..."
 )
 WIDENING = "ignored [autonomous] {key}: cannot widen eligibility"
 
+# Minutes of active time: only time inside invocations counts (#21 R8).
 WALL_TIME = (1, 1440, 240)
-AGENT_STEPS = (1, 200, 30)
+# Room for three fix cycles and a few retries under a limit resume cannot
+# raise (#21 R9).
+AGENT_STEPS = (1, 200, 40)
 CHECK_TIMEOUT = (1, 240, 30)
+# Fix cycles per run, never reset by a resume, and correctable-draft retries
+# per agent step invocation (#21 R1, R4).
+FIX_CYCLES = 3
+DRAFT_RETRIES = 2
+FIX_STATES = ("idle", "fix-pending", "review-pending")
+LIMIT_KINDS = ("agent-steps", "wall-time", "fix-cycles", "retries")
+# How a limit block's condition starts (FR-023).
+LIMIT_LABELS = {
+    "agent-steps": "agent-step limit",
+    "wall-time": "wall-time limit",
+    "fix-cycles": f"fix-cycle limit ({FIX_CYCLES})",
+    "retries": f"draft retries ({DRAFT_RETRIES})",
+}
+FIX_CYCLE_STEPS = (
+    "fix",
+    "record-fix",
+    "checks-fix",
+    "review-fix",
+    "review-specialists-fix",
+    "record-fix-review",
+)
+# Step IDs of ballast-autonomous 1.2.0 in order; a test compares them with
+# the workflow template. Resume uses the order to pick its re-entry step.
+AUTONOMOUS_STEPS = (
+    "preflight",
+    "decide-scope",
+    "record-scope",
+    "discover",
+    "record-discovery",
+    "validate-discovery",
+    "specify",
+    "validate-spec",
+    "clarify",
+    "record-clarifications",
+    "validate-clarified-spec",
+    "decide-intent",
+    "record-provisional-intent",
+    "validate-intent",
+    "plan",
+    "validate-plan",
+    "review-plan",
+    "record-plan-review",
+    "decide-plan",
+    "record-plan",
+    "tasks",
+    "validate-tasks",
+    "analyze",
+    "decide-tasks",
+    "record-tasks",
+    "implementation-baseline",
+    "implement",
+    "validate-implementation",
+    "checks-implementation",
+    "review-implementation",
+    "review-specialists",
+    "record-implementation-review",
+    *(
+        f"{name}-{cycle}"
+        for cycle in range(1, FIX_CYCLES + 1)
+        for name in FIX_CYCLE_STEPS
+    ),
+    "resolve-decisions",
+    "record-resolutions",
+    "renew-intent",
+    "validate-decisions",
+    "converge",
+    "reconcile-spec",
+    "record-reconciliation",
+    "validate-convergence",
+    "run-checks",
+    "decide-final",
+    "record-final",
+)
+# The shell steps among them; every other step runs an agent.
+AUTONOMOUS_SHELL_STEPS = frozenset(
+    step
+    for step in AUTONOMOUS_STEPS
+    if step.startswith(("record-", "validate-", "checks-"))
+    or step in {"preflight", "implementation-baseline", "renew-intent", "run-checks"}
+)
 RISKS = ("R0", "R1", "R2")
 NEVER_AUTHORIZED = ("merge", "release", "deploy", "mark ready")
 POLICY_KEYS = (
@@ -392,6 +472,7 @@ def new_run(  # noqa: PLR0913 - one record, every field explicit
         record["eligibility"] = eligibility
     if limits is not None:
         record["limits"] = limits
+        record["active_seconds"] = 0
     if workflow == CHAT:
         record |= {
             "start_head": start_head,
@@ -503,9 +584,14 @@ def validate_run(record: object, run_id: str) -> dict:
                 isinstance(record.get(key), dict), f"autonomous run record lacks {key}"
             )
         _require(record["risk"].get("level") in RISKS, "run record has an unknown risk")
-        _parse_time(record["limits"].get("deadline"))
+        # A v0.6.x record carries a fixed deadline; a newer one, active time.
+        if "deadline" in record["limits"]:
+            _parse_time(record["limits"]["deadline"])
+        else:
+            _require("active_seconds" in record, "run record has no active time")
     if record["workflow"] == CHAT:
         _validate_chat(record)
+    _validate_progress(record)
     return record
 
 
@@ -546,6 +632,43 @@ def _validate_chat(record: dict) -> None:
             "Chat run record has a malformed active step",
         )
         _parse_time(active["started_at"])
+
+
+def _number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _validate_progress(record: dict) -> None:
+    """Check the optional #21 fields: active time, invocation, fix state, resumes."""
+    if "active_seconds" in record:
+        _require(
+            _number(record["active_seconds"]) and record["active_seconds"] >= 0,
+            "run record has an invalid active time",
+        )
+    if record.get("invocation_started_at") is not None:
+        _parse_time(record["invocation_started_at"])
+    if "fix" in record:
+        fix = record["fix"]
+        _require(isinstance(fix, dict), "run record has an invalid fix state")
+        cycles = fix.get("cycles")
+        _require(
+            isinstance(cycles, int)
+            and not isinstance(cycles, bool)
+            and 0 <= cycles <= FIX_CYCLES
+            and fix.get("state") in FIX_STATES,
+            "run record has an invalid fix state",
+        )
+    resumes = record.get("resumes", [])
+    _require(
+        isinstance(resumes, list)
+        and all(
+            isinstance(entry, dict)
+            and re.fullmatch(r"HD-\d{4}", str(entry.get("decision_id")))
+            and entry.get("reentry_step") in AUTONOMOUS_STEPS
+            for entry in resumes
+        ),
+        "run record has an invalid resume entry",
+    )
 
 
 def run_file(root: Path, run_id: str) -> Path:
@@ -630,6 +753,58 @@ def change_mode(
     return record
 
 
+def fix_state(record: dict) -> dict:
+    """Return the run's fix-loop state; without one it is idle with no cycle."""
+    return dict(record.get("fix") or {"cycles": 0, "state": "idle"})
+
+
+def resume_run(  # noqa: PLR0913 - one transition, every input explicit
+    root: Path,
+    record: dict,
+    decision_id: str,
+    entry: dict,
+    *,
+    reset: bool,
+    at: datetime | None = None,
+) -> dict:
+    """Move a stopped Autonomous run back to active (#21 R5, R18).
+
+    Legal only with a recorded `block-resolution` human decision. The mode
+    history, risk, limits, integrations and eligibility are never touched:
+    resume continues the run as it was started. With `reset` (re-entry at or
+    before the implementation review) the review freeze, the checked tree and
+    the fix state are cleared; the fix cycles already used are kept (FR-001).
+    Consumes the agent steps of the blocked attempt and opens the invocation
+    clock. The caller writes the record.
+    """
+    if record["workflow"] != "ballast-autonomous" or effective_mode(record) != (
+        "autonomous"
+    ):
+        message = f"run {record['run_id']} is not an autonomous run"
+        raise AutonomyError(message)
+    if record["status"] != "stopped":
+        message = f"run {record['run_id']} is {record['status']}, not stopped"
+        raise AutonomyError(message)
+    found = [
+        e
+        for e in read_human_decisions(root, record["run_id"])
+        if e["id"] == decision_id
+    ]
+    if len(found) != 1 or found[0].get("kind") != "block-resolution":
+        message = f"{decision_id} is not a recorded block resolution of this run"
+        raise AutonomyError(message)
+    record["status"] = "active"
+    record.setdefault("resumes", []).append({**entry, "decision_id": decision_id})
+    # Steps of the blocked attempt are never recorded after the resume.
+    consume_steps(root, record["run_id"])
+    if reset:
+        record.pop("frozen_tree", None)
+        record.pop("checked_tree", None)
+        record["fix"] = {"cycles": fix_state(record)["cycles"], "state": "idle"}
+    open_invocation(record, at)
+    return validate_run(record, record["run_id"])
+
+
 # --- Hash-chained logs ----------------------------------------------------
 
 
@@ -700,9 +875,17 @@ def read_human_decisions(root: Path, run_id: str) -> list[dict]:
     return read_log(run_dir(root, run_id) / "human-decisions.jsonl", "HD")
 
 
+def _replaced_ids(entry: dict) -> list[str]:
+    """IDs an entry supersedes: one, or several for a review recorded again."""
+    value = entry.get("supersedes")
+    if isinstance(value, str):
+        return [value]
+    return [item for item in value or [] if isinstance(item, str)]
+
+
 def superseded(entries: list[dict]) -> dict[str, str]:
     """Map each superseded decision ID to the ID that replaced it."""
-    return {e["supersedes"]: e["id"] for e in entries if e.get("supersedes")}
+    return {old: e["id"] for e in entries for old in _replaced_ids(e)}
 
 
 def current_decisions(entries: list[dict]) -> list[dict]:
@@ -727,12 +910,22 @@ def append_decision(root: Path, run_id: str, entry: dict) -> dict:
         message = f"unknown decision {entry.get('decision')!r}"
         raise AutonomyError(message)
     replaces = entry.get("supersedes")
-    if replaces is not None:
-        if replaces not in {e["id"] for e in entries}:
-            message = f"supersedes unknown decision {replaces}"
+    if replaces is not None and not (
+        isinstance(replaces, str)
+        or (
+            isinstance(replaces, list)
+            and replaces
+            and len(set(replaces)) == len(replaces)
+        )
+    ):
+        message = "supersedes must name one decision or a list of distinct ones"
+        raise AutonomyError(message)
+    for old in _replaced_ids(entry):
+        if old not in {e["id"] for e in entries}:
+            message = f"supersedes unknown decision {old}"
             raise AutonomyError(message)
-        if replaces in superseded(entries):
-            message = f"{replaces} is already superseded"
+        if old in superseded(entries):
+            message = f"{old} is already superseded"
             raise AutonomyError(message)
     return append_log(path, "PD", entry)
 
@@ -854,6 +1047,62 @@ def read_steps(root: Path, run_id: str) -> list[dict]:
         raise AutonomyError(message) from error
 
 
+def append_feedback(root: Path, run_id: str, entry: dict) -> None:
+    """Record one `run-checks --feedback` run (written by artifacts.py only)."""
+    path = run_dir(root, run_id) / "checks-feedback.jsonl"
+    _ensure_dir(path.parent)
+    line = json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+    with os.fdopen(os.open(path, flags, 0o600), "wb") as handle:
+        handle.write(line.encode())
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def read_feedback(root: Path, run_id: str) -> list[dict]:
+    """Every feedback check run of a run, oldest first."""
+    path = run_dir(root, run_id) / "checks-feedback.jsonl"
+    if not os.path.lexists(path):
+        return []
+    data = _read_bytes(path)
+    try:
+        entries = [json.loads(line) for line in data.splitlines()]
+    except ValueError as error:
+        message = "checks-feedback.jsonl is malformed"
+        raise AutonomyError(message) from error
+    if not all(
+        isinstance(e, dict) and isinstance(e.get("results"), list) for e in entries
+    ):
+        message = "checks-feedback.jsonl is malformed"
+        raise AutonomyError(message)
+    return entries
+
+
+def latest_recorded(root: Path, record: dict) -> str:
+    """Return the latest time a run recorded: last step, block or invocation start.
+
+    A crashed invocation is closed here, so its downtime never counts (R8).
+    """
+    times = [record.get("invocation_started_at") or record["started_at"]]
+    try:
+        steps = read_steps(root, record["run_id"])
+    except AutonomyError:
+        steps = []
+    times += [s["at"] for s in steps if isinstance(s.get("at"), str)]
+    path = run_dir(root, record["run_id"]) / "block.json"
+    if os.path.lexists(path):
+        block = read_json(path, "current block")
+        if isinstance(block, dict) and isinstance(block.get("at"), str):
+            times.append(block["at"])
+    moments = []
+    for value in times:
+        try:
+            moments.append(_parse_time(value))
+        except AutonomyError:
+            continue
+    return max(moments).isoformat()
+
+
 def unconsumed_steps(root: Path, run_id: str) -> list[dict]:
     """Agent steps since the last recorder."""
     path = run_dir(root, run_id) / "cursor.json"
@@ -883,13 +1132,15 @@ def snapshot_draft(root: Path, run_id: str, step: str, name: str) -> Path:
 
 BLOCK_COMMAND = re.compile(
     r"ballast (?:run continue [A-Za-z0-9_-]{1,64} \S.*|run publish [A-Za-z0-9_-]{1,64}"
-    r"|discard-runs|run start \S.*)"
+    r"|run resume [A-Za-z0-9_-]{1,64}|discard-runs|run start \S.*)"
 )
 
 
 # Blocks that `ballast run publish` retries: the forge refused or the operator's
 # forge credential was unavailable; nothing in the run itself needs changing.
 PUBLISH_RETRY = ("forge", "permission")
+# Limits a resume could only escape by raising them, which it never does.
+FIXED_LIMITS = ("agent-steps", "wall-time")
 
 
 RESTART_COMMAND = (
@@ -897,43 +1148,93 @@ RESTART_COMMAND = (
 )
 
 
-def recovery_command(run_id: str, category: str) -> str:
+def resumable(category: str, limit: str | None = None) -> bool:
+    """Whether `ballast run resume` continues a block of this category (#21)."""
+    if category == "limit":
+        return limit in LIMIT_KINDS and limit not in FIXED_LIMITS
+    return category not in {
+        *PUBLISH_RETRY,
+        "tamper",
+        "unfinished-step",
+        "upstream-sync",
+    }
+
+
+def recovery_command(run_id: str, category: str, limit: str | None = None) -> str:
     """Return the one command that recovers from a block of this category."""
     if category in PUBLISH_RETRY:
         return f"ballast run publish {run_id}"
     if category in {"tamper", "unfinished-step"}:
         return "ballast discard-runs"
     if category == "upstream-sync":
-        # Blocked before the first agent step: nothing exists to continue.
+        # Blocked before the first agent step: nothing exists to continue. A
+        # resume's own sync block names resume instead (make_block command=).
         return RESTART_COMMAND
+    if resumable(category, limit):
+        return f"ballast run resume {run_id}"
     return f"ballast run continue {run_id} --reason block-resolved --ref TEXT"
 
 
 RECOVERY = {
-    "decision": "Choose an option and record it in the spec, then continue "
+    "decision": "Choose an option and record it in the spec, then resume, or "
+    "continue human-gated.",
+    "contradiction": "Resolve the contradiction in the spec, then resume, or "
+    "continue human-gated.",
+    "review-finding": "Fix or reject the finding, then resume, or continue "
     "human-gated.",
-    "contradiction": "Resolve the contradiction in the spec, then continue "
-    "human-gated.",
-    "review-finding": "Fix or reject the finding, then continue human-gated.",
     "limit": "Review the evidence so far, then continue human-gated or start a "
-    "new run with a larger limit.",
-    "postcondition": "Fix the failed contract, then continue human-gated.",
+    "new run with a larger limit; resume never raises a limit.",
+    "postcondition": "Fix the failed contract, then resume, or continue human-gated.",
     "tamper": "Restore the protected files and recreate .venv, delete the "
     "marker, review the checkout, then discard the run state and trust again.",
     "unfinished-step": "Review the checkout, discard the run state, then start again.",
     "permission": "Restore the missing permission or credential, then retry.",
-    "ineligible": "Run the feature human-gated instead.",
+    "ineligible": "Remove the cause, then resume, or run the feature human-gated "
+    "instead.",
     "forge": "Fix forge access, then retry publication.",
-    "interrupted": "Review the checkout, then continue human-gated.",
+    "interrupted": "Review the checkout, then resume, or continue human-gated.",
     "upstream-sync": "Remove the cause shown, then start the run again.",
 }
+# Limits that a fix by hand, then a resume, can recover from.
+LIMIT_RECOVERY = {
+    "fix-cycles": "Fix the named findings or checks by hand, then resume, or "
+    "continue human-gated.",
+    "retries": "Read the refused draft and the validator's message in the agent "
+    "logs, then resume, or continue human-gated.",
+}
+# A fixed limit before implementation (SEC2-002): nothing to continue yet.
+RESTART_RECOVERY = (
+    "Review the evidence so far, then start a new run with a larger limit; "
+    "resume never raises a limit and nothing exists yet to continue."
+)
+SYNC_RESUME_RECOVERY = "Remove the cause shown, then resume again."
+# The class each category belongs to (FR-023); derived, never stored.
+BLOCK_CLASSES = {
+    "contradiction": "conflict",
+    "review-finding": "conflict",
+    "permission": "missing authority",
+    "ineligible": "missing authority",
+    "forge": "missing authority",
+    "limit": "exhausted limits",
+    "decision": "unsafe uncertainty",
+    "postcondition": "unsafe uncertainty",
+    "tamper": "unsafe uncertainty",
+    "unfinished-step": "unsafe uncertainty",
+    "interrupted": "unsafe uncertainty",
+    "upstream-sync": "unsafe uncertainty",
+}
+
+
+def printable(text: str) -> str:
+    """Agent text for the terminal: control characters but newline and tab escaped."""
+    return "".join(c if c.isprintable() or c in "\n\t" else repr(c)[1:-1] for c in text)
 
 
 def _text(value: object, name: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         message = f"{name} must be 1-{limit} characters"
         raise AutonomyError(message)
-    return value
+    return printable(value)
 
 
 def _guard_wording(name: str, value: str) -> None:
@@ -984,6 +1285,17 @@ def validate_block(block: object) -> dict:
     if not isinstance(evidence, list) or not all(isinstance(e, str) for e in evidence):
         message = "block evidence must be a list of paths"
         raise AutonomyError(message)
+    if "limit" in block and (
+        block["category"] != "limit" or block["limit"] not in LIMIT_KINDS
+    ):
+        message = "only a limit block names its limit, one of " + ", ".join(LIMIT_KINDS)
+        raise AutonomyError(message)
+    inputs = block.get("inputs", {})
+    if not isinstance(inputs, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in inputs.items()
+    ):
+        message = "block inputs must map paths to digests"
+        raise AutonomyError(message)
     _parse_time(block.get("at"))
     return block
 
@@ -997,20 +1309,36 @@ def make_block(  # noqa: PLR0913 - one record, every field explicit
     options: list[dict] | None = None,
     recovery: str | None = None,
     evidence: list[str] | None = None,
+    limit: str | None = None,
+    command: str | None = None,
 ) -> dict:
     """Build a validated block with its recovery command."""
-    return validate_block(
-        {
-            "category": category,
-            "step_id": step_id,
-            "condition": condition,
-            "options": options or [],
-            "recovery": recovery or RECOVERY[category],
-            "command": recovery_command(run_id, category),
-            "evidence": evidence or [],
-            "at": now(),
-        }
-    )
+    block = {
+        "category": category,
+        "step_id": step_id,
+        "condition": condition,
+        "options": options or [],
+        "recovery": recovery
+        or (LIMIT_RECOVERY.get(limit or "") if category == "limit" else None)
+        or RECOVERY[category],
+        "command": command or recovery_command(run_id, category, limit),
+        "evidence": evidence or [],
+        "at": now(),
+    }
+    if limit is not None:
+        block["limit"] = limit
+    return validate_block(block)
+
+
+def block_class(block: dict) -> str:
+    """Return the class of a block's category (FR-023)."""
+    return BLOCK_CLASSES[block["category"]]
+
+
+def limit_condition(limit: str, reason: str) -> str:
+    """Return a limit block's condition, starting with the limit reached."""
+    label = LIMIT_LABELS[limit]
+    return reason if reason.startswith(label) else f"{label} reached: {reason}"
 
 
 def validate_block_draft(draft: object) -> dict:
@@ -1047,20 +1375,44 @@ def validate_block_draft(draft: object) -> dict:
     }
 
 
+def _retire_block(directory: Path) -> None:
+    """Move the current block, if any, to the history in blocks.jsonl."""
+    path = directory / "block.json"
+    if not os.path.lexists(path):
+        return
+    previous = read_json(path, "current block")
+    line = json.dumps(previous, sort_keys=True, separators=(",", ":")) + "\n"
+    _ensure_dir(directory)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+    with os.fdopen(os.open(directory / "blocks.jsonl", flags, 0o600), "wb") as h:
+        h.write(line.encode())
+
+
 def record_block(root: Path, run_id: str, block: dict) -> dict:
     """Make block current; the previous current block moves to blocks.jsonl."""
     validate_block(block)
     directory = run_dir(root, run_id)
-    path = directory / "block.json"
-    if os.path.lexists(path):
-        previous = read_json(path, "current block")
-        line = json.dumps(previous, sort_keys=True, separators=(",", ":")) + "\n"
-        _ensure_dir(directory)
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
-        with os.fdopen(os.open(directory / "blocks.jsonl", flags, 0o600), "wb") as h:
-            h.write(line.encode())
-    write_json(path, block)
+    _retire_block(directory)
+    write_json(directory / "block.json", block)
     return block
+
+
+def set_block_inputs(root: Path, run_id: str, inputs: dict[str, str]) -> dict:
+    """Add the block-time input digests to the current block, in place (R6)."""
+    block = read_block(root, run_id)
+    if block is None:
+        message = f"run {run_id} has no current block"
+        raise AutonomyError(message)
+    block["inputs"] = dict(sorted(inputs.items()))
+    write_json(run_dir(root, run_id) / "block.json", validate_block(block))
+    return block
+
+
+def resolve_block(root: Path, run_id: str) -> None:
+    """Retire the current block of a resumed run to the history."""
+    directory = run_dir(root, run_id)
+    _retire_block(directory)
+    (directory / "block.json").unlink(missing_ok=True)
 
 
 def read_block(root: Path, run_id: str) -> dict | None:
@@ -1181,9 +1533,11 @@ def resolve_limits(
     defaults: dict,
     wall_time: int | None = None,
     max_steps: int | None = None,
-    start: datetime | None = None,
 ) -> dict:
-    """Limits by precedence operator > project > built-in default."""
+    """Limits by precedence operator > project > built-in default.
+
+    The wall time is active minutes (R8): the record keeps no deadline.
+    """
     minutes = WALL_TIME[2]
     steps = AGENT_STEPS[2]
     source = "default"
@@ -1197,19 +1551,75 @@ def resolve_limits(
         minutes = _bounded(wall_time, "--wall-time", WALL_TIME)
     if max_steps is not None:
         steps = _bounded(max_steps, "--max-agent-steps", AGENT_STEPS)
-    begin = (start or datetime.now(UTC)).replace(microsecond=0)
     return {
         "wall_time_minutes": minutes,
-        "deadline": (begin + timedelta(minutes=minutes)).isoformat(),
         "max_agent_steps": steps,
         "source": source,
     }
 
 
-def remaining_seconds(record: dict) -> float:
-    """Seconds left before the run's deadline (negative once passed)."""
-    deadline = _parse_time(record["limits"]["deadline"])
-    return (deadline - datetime.now(UTC)).total_seconds()
+def remaining_seconds(record: dict, at: datetime | None = None) -> float:
+    """Seconds of wall time left (negative once spent).
+
+    The limit less the closed invocations' active time and the open one's
+    elapsed time. A v0.6.x record keeps its fixed deadline until a resume
+    seeds its active time.
+    """
+    moment = at or datetime.now(UTC)
+    limits = record["limits"]
+    if "deadline" in limits:
+        return (_parse_time(limits["deadline"]) - moment).total_seconds()
+    used = float(record.get("active_seconds", 0))
+    started = record.get("invocation_started_at")
+    if started:
+        used += max((moment - _parse_time(started)).total_seconds(), 0.0)
+    return limits["wall_time_minutes"] * 60 - used
+
+
+def open_invocation(record: dict, at: datetime | None = None) -> dict:
+    """Start the active-time clock of one invocation."""
+    record["invocation_started_at"] = (
+        (at or datetime.now(UTC)).replace(microsecond=0).isoformat()
+    )
+    return record
+
+
+def close_invocation(record: dict, at: datetime | None = None) -> dict:
+    """Stop the clock; its time joins `active_seconds`, which never decreases."""
+    started = record.get("invocation_started_at")
+    if started and "deadline" not in record["limits"]:
+        elapsed = ((at or datetime.now(UTC)) - _parse_time(started)).total_seconds()
+        record["active_seconds"] = float(record.get("active_seconds", 0)) + max(
+            elapsed, 0.0
+        )
+    record["invocation_started_at"] = None
+    return record
+
+
+def close_crashed_invocation(record: dict, latest: str) -> dict:
+    """Close an invocation that died with its clock open, at its last record.
+
+    The time between the last thing the run recorded and the resume is
+    downtime, never active time.
+    """
+    return close_invocation(record, _parse_time(latest))
+
+
+def seed_active_time(record: dict, latest: str) -> dict:
+    """Give a v0.6.x record active time and drop its fixed deadline (R8).
+
+    The run counts as active from its start to its latest recorded time,
+    capped at the limit; a resume then cannot grant it more than it had.
+    """
+    limits = record["limits"]
+    if "deadline" not in limits:
+        return record
+    spent = (_parse_time(latest) - _parse_time(record["started_at"])).total_seconds()
+    record["active_seconds"] = min(
+        float(limits["wall_time_minutes"] * 60), max(spent, 0.0)
+    )
+    del limits["deadline"]
+    return record
 
 
 # --- Git ------------------------------------------------------------------
@@ -1326,6 +1736,17 @@ def tree_digest(root: Path, exclude: tuple[str, ...] = ()) -> str:
             env=env,
         )
         return git(root, "write-tree", env=env).stdout.strip()
+
+
+def reviews_digest(root: Path, feature: str) -> str:
+    """Digest of `<feature>/reviews/`, which only reviewer steps write (SEC2-003)."""
+    base = root / feature / "reviews"
+    found = (
+        {"(link)": str(base.readlink())}
+        if base.is_symlink()
+        else digests(root, [base], [])
+    )
+    return hashlib.sha256(json.dumps(found, sort_keys=True).encode()).hexdigest()
 
 
 def checked_digest(root: Path, feature: str) -> str:
@@ -2279,6 +2700,11 @@ def raise_risk(record: dict, level: str | None, boundaries: list[str], pd: str) 
 # --- Rendering ------------------------------------------------------------
 
 MENTION = re.compile(r"@(?=[A-Za-z0-9_-])")
+# FR-022: the step limit is the attempt and spend bound.
+SPEND_LINE = (
+    "- Spend: bounded by the agent-step limit; every agent step, retry and fix "
+    "cycle counts; monetary spend is not measured"
+)
 
 
 def neutralize(text: str) -> str:
@@ -2332,6 +2758,7 @@ def _mode_lines(run: dict) -> list[str]:
             f"- Limits ({limits['source']}): {limits['wall_time_minutes']} minutes "
             f"wall time, {limits['max_agent_steps']} agent steps"
         )
+        lines.append(SPEND_LINE)
     lines.append(
         f"- Authoring integration: {run['integration']}; review integration: "
         f"{run['review_integration']}"
@@ -2369,6 +2796,19 @@ def _decided_by(entry: dict) -> str:
     )
 
 
+def _retries(entry: dict) -> int:
+    """How many refused drafts came before the recorded one (R4)."""
+    attempts = (entry.get("agent") or {}).get("attempts", 1)
+    return attempts - 1 if isinstance(attempts, int) and attempts > 1 else 0
+
+
+def _after_retries(entry: dict) -> str:
+    count = _retries(entry)
+    if not count:
+        return ""
+    return f", after {count} {'retry' if count == 1 else 'retries'}"
+
+
 def _decision_rows(decisions: list[dict], link: object, *, short: bool) -> list[str]:
     replaced = superseded(decisions)
     if short:
@@ -2391,7 +2831,8 @@ def _decision_rows(decisions: list[dict], link: object, *, short: bool) -> list[
         evidence = ", ".join(link(item) for item in entry.get("evidence", []))
         lines.append(
             f"| {entry['id']} | {entry['point']} | {entry['decision']} "
-            f"(agent-provisional) | {neutralize(entry['summary'])} | "
+            f"(agent-provisional{_after_retries(entry)}) | "
+            f"{neutralize(entry['summary'])} | "
             f"{_decided_by(entry)} | {link(artifact.get('path', ''))} "
             f"{_code(str(artifact.get('sha256', ''))[:12])} | {evidence} | "
             f"{replaced.get(entry['id'], '')} |"
@@ -2462,6 +2903,85 @@ def _check_lines(checks: list[dict] | None) -> list[str]:
     return lines
 
 
+def _feedback_text(entry: dict) -> str:
+    results = entry.get("results") or []
+    if not results:
+        return "no command"
+    return ", ".join(
+        f"{_code(r.get('command', ''))} "
+        + ("timed out" if r.get("timed_out") else f"exited {r.get('exit')}")
+        for r in results
+    )
+
+
+def _fix_lines(run: dict, decisions: list[dict], feedback: list[dict]) -> list[str]:
+    """Cycles used, then each cycle's reviews and feedback checks (R14)."""
+    if "fix" not in run and not feedback:
+        return []
+    fix = fix_state(run)
+    lines = [
+        "## Fix loop",
+        "",
+        f"- Cycles used: {fix['cycles']} of {FIX_CYCLES}",
+    ]
+    reviews = [
+        e
+        for e in decisions
+        if e.get("point") in {"implementation-review", "specialist-review"}
+    ]
+    cycles = sorted(
+        {e.get("fix_cycle", 0) for e in reviews} | {f.get("cycle", 0) for f in feedback}
+    )
+    for cycle in cycles:
+        label = "implementation" if cycle == 0 else f"after fix cycle {cycle}"
+        found = [
+            f"{e['id']} {e['review']['kind']}: {e['review']['verdict']}"
+            for e in reviews
+            if e.get("fix_cycle", 0) == cycle and e.get("review")
+        ]
+        checks = [_feedback_text(f) for f in feedback if f.get("cycle", 0) == cycle]
+        lines.append(
+            f"- Cycle {cycle} ({label}): reviews "
+            + ("; ".join(found) or "none recorded")
+            + "; feedback checks: "
+            + (" / ".join(checks) or "not run")
+        )
+    return [*lines, ""]
+
+
+def _resolution_lines(run: dict, human: list[dict]) -> list[str]:
+    """Every block resolution, with the block and the re-entry step (R14)."""
+    resolutions = [h for h in human if h.get("kind") == "block-resolution"]
+    if not resolutions:
+        return []
+    resumes = {r["decision_id"]: r for r in run.get("resumes", [])}
+    lines = ["## Block resolutions", ""]
+    for entry in resolutions:
+        resume = resumes.get(entry["id"])
+        lowered = any(
+            m.get("action") == "lower" and m.get("decision_id") == entry["id"]
+            for m in run["mode_history"]
+        )
+        if resume:
+            where = (
+                f"resolved the {resume.get('block_category')} block at "
+                f"{neutralize(resume.get('block_step') or 'unknown step')}; "
+                f"resumed in Autonomous at {resume['reentry_step']}"
+            )
+        elif lowered:
+            where = "resolved the block; the run continued human-gated"
+        else:
+            # Recorded, then the resume stopped before the workflow restarted.
+            where = "resolved the block; the run did not resume"
+        changed = ", ".join(_code(p) for p in (resume or {}).get("changed_inputs", []))
+        lines.append(
+            f"- {entry['id']} at {entry.get('at')} by {entry.get('by')}: {where}"
+            + (f"; changed during the block: {changed}" if changed else "")
+            + f"; reference: {neutralize(entry.get('ref', ''))}"
+        )
+    return [*lines, ""]
+
+
 def _relative_link(record_dir: str) -> object:
     depth = len(Path(record_dir).parts)
 
@@ -2476,13 +2996,15 @@ def _relative_link(record_dir: str) -> object:
     return link
 
 
-def _sections(
+def _sections(  # noqa: PLR0913 - one rendering, every input explicit
     run: dict,
     decisions: list[dict],
     checks: list[dict] | None,
     link: object,
     *,
     short: bool = False,
+    human: list[dict] | None = None,
+    feedback: list[dict] | None = None,
 ) -> list[str]:
     material = [e for e in current_decisions(decisions) if e.get("material")]
     lines = [*_mode_lines(run), *_r2_lines(run, decisions)]
@@ -2501,8 +3023,18 @@ def _sections(
             if notes:
                 lines += ["Runner notes:", "", *(f"- {neutralize(n)}" for n in notes)]
                 lines.append("")
+            refusals = (entry.get("agent") or {}).get("refusals") or []
+            if refusals:
+                lines += [
+                    "Refused drafts before this one (agent-provisional retries):",
+                    "",
+                    *(f"- {neutralize(r)}" for r in refusals),
+                    "",
+                ]
     lines += _review_lines(run, decisions, link)
     lines += _open_findings(decisions)
+    lines += _fix_lines(run, decisions, feedback or [])
+    lines += _resolution_lines(run, human or [])
     lines += _check_lines(checks)
     return lines
 
@@ -2512,7 +3044,14 @@ def record_path(feature: str) -> str:
     return f"{feature}/autonomous/record.md"
 
 
-def render_record(run: dict, decisions: list[dict], checks: list[dict] | None) -> str:
+def render_record(
+    run: dict,
+    decisions: list[dict],
+    checks: list[dict] | None,
+    *,
+    human: list[dict] | None = None,
+    feedback: list[dict] | None = None,
+) -> str:
     """Deterministic bytes of specs/<f>/autonomous/record.md."""
     record_dir = str(Path(record_path(run["feature"])).parent)
     lines = [
@@ -2526,9 +3065,28 @@ def render_record(run: dict, decisions: list[dict], checks: list[dict] | None) -
             "is the only human approval."
         ),
         "",
-        *_sections(run, decisions, checks, _relative_link(record_dir)),
+        *_sections(
+            run,
+            decisions,
+            checks,
+            _relative_link(record_dir),
+            human=human,
+            feedback=feedback,
+        ),
     ]
     return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def render_run_record(root: Path, run: dict) -> str:
+    """render_record from everything the operator records hold for the run."""
+    run_id = run["run_id"]
+    return render_record(
+        run,
+        read_decisions(root, run_id),
+        read_checks(root, run_id),
+        human=read_human_decisions(root, run_id),
+        feedback=read_feedback(root, run_id),
+    )
 
 
 def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
@@ -2539,6 +3097,8 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
     *,
     repo: str,
     branch: str,
+    human: list[dict] | None = None,
+    feedback: list[dict] | None = None,
 ) -> str:
     """Render the Draft PR body; short decision rows over 60,000 characters."""
 
@@ -2565,7 +3125,15 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
         f"Refs #{run['issue']}",
     ]
     for short in (False, True):
-        sections = _sections(run, decisions, checks, link, short=short)
+        sections = _sections(
+            run,
+            decisions,
+            checks,
+            link,
+            short=short,
+            human=human,
+            feedback=feedback,
+        )
         if short:
             sections.insert(
                 0, f"Full decision rows: {link(record_path(run['feature']))}"
@@ -2735,6 +3303,8 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
             staged,
             repo=repo,
             branch=branch,
+            human=read_human_decisions(root, run_id),
+            feedback=read_feedback(root, run_id),
         )
         _guard_body(body)
         title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]

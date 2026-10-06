@@ -7,6 +7,7 @@ Run `gold01` for #27 (`specs/27-demo-run`). Generated from the operator records;
 - Mode start: autonomous at 2026-10-03T12:00:00+00:00 by operator
 - Risk: R1 (scope-record); history: R1 at 2026-10-03T12:00:00+00:00
 - Limits (default): 240 minutes wall time, 30 agent steps
+- Spend: bounded by the agent-step limit; every agent step, retry and fix cycle counts; monetary spend is not measured
 - Authoring integration: claude; review integration: codex
 
 ## Material provisional changes

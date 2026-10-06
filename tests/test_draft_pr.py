@@ -1767,3 +1767,27 @@ class StaleEvidenceSectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefreshOnlyTests(CheckpointCase):
+    """#21 T032 [AC-025]: `create=False` refreshes an existing PR, never makes one."""
+
+    def test_no_pr_is_skipped_and_writes_nothing(self) -> None:
+        outcome = draft_pr.checkpoint(self.repo.root, RUN, create=False)
+        self.assertOutcome(outcome, "skipped", "no-draft-pr")
+        self.assertIsNone(outcome.packet)
+        self.assertNoWrite()
+        self.assertFalse(ledger.ledger_path(self.repo.root, RUN).exists())
+
+    def test_unpublished_branch_is_skipped_too(self) -> None:
+        git(self.repo.root, "config", "--unset", "branch.feat-x.merge")
+        outcome = draft_pr.checkpoint(self.repo.root, RUN, create=False)
+        self.assertOutcome(outcome, "skipped", "no-draft-pr")
+        self.assertFalse(ledger.ledger_path(self.repo.root, RUN).exists())
+
+    def test_existing_pr_is_reused(self) -> None:
+        self.assertOutcome(self.check(), "created")
+        self.fake.calls.clear()
+        outcome = draft_pr.checkpoint(self.repo.root, RUN, create=False)
+        self.assertEqual(outcome.state, "reused")
+        self.assertEqual(self.fake.gh_calls("create"), [])
