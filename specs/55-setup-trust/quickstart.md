@@ -30,7 +30,7 @@ Test module names are the plan's; `tasks.md` fixes the exact test names.
 | AC-013 | `.git` pointer to a forged repository in the checkout or a temp root, missing back-link, a link → skipped | `tests/test_setup_trust.py` |
 | AC-014 | unreachable URL, refused credentials (fake Git exit), missing/malformed `[github] repository`, timeout → skipped; with matching operator baseline → recorded | `tests/test_setup_trust.py` |
 | AC-015 | local `refs/remotes/origin/main`, `origin` URL and `url.*.insteadOf` in the checkout point at the changed config → observation ignores them, skipped; argv log shows only the pinned URL | `tests/test_setup_trust.py` |
-| AC-016 | `[github] repository` repointed to a repository whose default branch carries the same file, not in the reviewed record → skipped, no network command; never-trusted repository → skipped | `tests/test_setup_trust.py` |
+| AC-016 | `[github] repository` repointed to a repository whose default branch carries the same file, not in the reviewed record → skipped, no network command; never-trusted repository → skipped; a reviewed repository with a configuration never reviewed for it → skipped before the network (DEC-0008) | `tests/test_setup_trust.py` |
 | AC-017 | every skipped case: reason and `ballast trust` printed, exit status as without the feature, existing baseline bytes unchanged | `tests/test_setup_trust.py` (shared assertion) |
 | AC-018 | in-progress marker → setup refuses as today, no baseline | `tests/test_setup.py` |
 | AC-019 | `BALLAST_TAMPERED` → skipped | `tests/test_setup_trust.py` |
@@ -62,7 +62,7 @@ ballast ledger report --all   # first command prepares and records; no ballast t
 cd ../b
 git worktree add ~/e2e/b-56 -b feat/56-y && cd ~/e2e/b-56
 printf '\n# edit\n' >> ballast.toml && git commit -qam edit
-ballast setup                 # a changed ballast.toml needs its own installation: expect "No trust baseline recorded: ... differs from owner/scratch's default branch and from your last trusted baseline."
+ballast setup                 # a changed ballast.toml needs its own installation: expect "No trust baseline recorded: this configuration was not reviewed for owner/scratch." ("... differs from owner/scratch's default branch and from your last trusted baseline" once `ballast trust` reviewed that configuration)
 ballast ledger report --all   # expect: refusal naming ballast trust
 cd ../b && git worktree add --detach ~/e2e/b-57 feat/56-y && cd ~/e2e/b-57
 ballast ledger report --all   # prepared from b-56's installation: "No trust baseline recorded: ..."; refusal naming ballast trust
