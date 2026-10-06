@@ -3065,7 +3065,8 @@ class LedgerEvidenceTests(ChatCase):
         result = self.ballast("ledger", "report", "--run", run_id)
         self.assertEqual(result.code, 0, result.text)
         self.assertIn('"compliance": "compliant"', result.out)
-        # The same kinds of evidence and identity as a human-gated run.
+        # The same kinds of evidence and identity as a human-gated run,
+        # including #19's acceptance packet recorded with the draft PR.
         headless = {
             "run",
             "step",
@@ -3073,6 +3074,7 @@ class LedgerEvidenceTests(ChatCase):
             "snapshot",
             "branch_sync",
             "pull_request",
+            "acceptance_packet",
             "review",
             "verification",
         }
