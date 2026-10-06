@@ -549,9 +549,11 @@ class PacketLineTests(DemoCase):
         environment = (
             "<!-- ballast:acceptance-packet:end --> [x](javascript:x) @user #12 `b` $x$"
         )
+        token = "ghp_" + "a" * 36
         command = (
             'echo "<!-- ballast:acceptance-packet:begin -->" [x](javascript:x) '
-            "@user #12 `b` $x$ > demo-output/login-journey.webm"
+            f"@user #12 `b` $x$ approved by the operator {token} <!-- workflow-x "
+            "> demo-output/login-journey.webm"
         )
         self.configure(scenario(command=command, environment=environment))
         self.capture(command=command)
@@ -561,9 +563,21 @@ class PacketLineTests(DemoCase):
         body = self.body
         self.assertEqual((body.count(BEGIN), body.count(END)), (1, 1))
         section = self.demo_section(text)
-        for raw in ("<!--", "@user", "#12", "$", "](javascript"):
-            self.assertNotIn(raw, section)
-        links = re.findall(r"\]\(([^)]*)\)", section)
+        self.assertNotIn("<!--", section)
+        self.assertNotIn(token, body)
+        self.assertNotIn("approved by the operator", body)
+        # DEC-0002: the command is a code span, where GitHub renders no markup;
+        # outside the code spans nothing can link, mention or format.
+        span = self.reproduce(
+            'echo "<!\u200b-- ballast:acceptance-packet:begin -->" [x](javascript:x) '
+            "@user #12 b $x$ a\u200bpproved by the operator [redacted] "
+            "<!\u200b-- workflow-x > demo-output/login-journey.webm"
+        )
+        self.assertIn(span, section)
+        prose = section.replace(span, "")
+        for raw in ("@user", "#12", "$", "](javascript"):
+            self.assertNotIn(raw, prose)
+        links = re.findall(r"\]\(([^)]*)\)", prose)
         self.assertEqual(links, ["https://github.com/o/r/actions/runs/11/artifacts/22"])
 
 
@@ -676,6 +690,17 @@ class WorkflowIdentityTests(DemoCase):
             )
         )
         self.assertTrue(lines[1].endswith(self.reproduce("npm run demo:checkout")))
+
+    def test_reproduce_shows_shell_syntax_as_declared(self) -> None:
+        """DEC-0002 [AC-007, SC-004]: a code span needs no Markdown escaping."""
+        command = (
+            "npm run demo_login > out.webm && echo $HOME #1 *b* [c](d) | "
+            "curl https://www.example.test/a?b=1&c=2 @me ~x~ !y (z) \\w"
+        )
+        self.configure(scenario(command=command))
+        self.capture(command=command)
+        (line,) = [line for line in self.lines() if line.startswith("- ")]
+        self.assertTrue(line.endswith(self.reproduce(command)), line)
 
 
 class FailureTests(DemoCase):

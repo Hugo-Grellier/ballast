@@ -24,7 +24,7 @@ A demo video helps a reviewer see behavior. It is not evidence for any criterion
 | One line per declared scenario, in declaration order. A scenario's newest `demo_capture` event decides the line. | FR-010, AC-006, PD-0006 |
 | `[video](…)` appears only for `captured` and not `stale`. Every other state shows `[job](…)` when a run is known, or no link. | FR-011, FR-012, SC-002 |
 | `stale` precedes everything when the capture's commit ≠ head. It shows the outcome at that commit, with its reason. A stale `captured` links the job, not the video. | FR-011, AC-003, PD-0005 |
-| Scenario name, environment and command are passed through `packet.inert`. The command is shown in a code span with backticks removed from the inert text. | FR-018 |
+| Scenario name and environment are passed through `packet.inert`. The command is shown as declared in a code span, where GitHub renders no markup: backticks are removed, control characters become spaces, tokens are redacted, and `<!--` and approval wording are broken by a zero-width space ([DEC-0002](../decisions.md#dec-0002--resolution)). | FR-018, AC-007 |
 | `(declared command changed since this capture)` is appended when the digests differ. | AC-007, research R7 |
 | An event for a scenario that is no longer declared renders `<name>: no longer declared`, with no link. | SC-002 |
 | `not configured` and `configuration invalid (<reason>)` are single lines. The rest of the packet publishes. | AC-015, AC-016 |

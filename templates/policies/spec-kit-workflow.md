@@ -1316,10 +1316,12 @@ downloads a log or the video. An event for a scenario that is no longer
 declared shows `no longer declared`, with no link. A new run started by
 `ballast run continue` lists its scenarios as `not yet requested`.
 
-**Reproducing locally.** Each line names the scenario's command. Check out
-the captured commit in a clean checkout and run that command, without
-credentials, to see the same journey. When the declared command changed after
-the capture, the line says so.
+**Reproducing locally.** Each line names the scenario's command as declared,
+in a code span you can copy. Check out the captured commit in a clean checkout
+and run that command, without credentials, to see the same journey. When the
+declared command changed after the capture, the line says so. A backtick in
+the command is dropped from the line, and a token-like value is shown as
+`[redacted]`; take such a command from `ballast.toml`.
 
 ## Project status and component choices
 

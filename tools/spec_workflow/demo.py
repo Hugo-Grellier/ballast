@@ -532,7 +532,21 @@ def _artifact_link(repo: str, run: int | None, artifact: int | None) -> str:
 
 
 def _code(text: str) -> str:
-    return "`" + packet.inert(text, COMMAND_LIMIT).replace("`", "") + "`"
+    """Show a command as declared, in a code span (DEC-0002).
+
+    GitHub renders no Markdown, HTML, link, mention or math inside a code
+    span, so only what could leave the span or forge packet text is
+    neutralized: backticks, control characters, tokens, `<!--` markers and
+    approval wording.
+    """
+    text = packet.AUTHORIZATION.sub("[redacted]", packet.TOKEN.sub("[redacted]", text))
+    text = " ".join(packet.CONTROL.sub(" ", text.replace("`", "")).split())
+    if len(text) > COMMAND_LIMIT:
+        text = text[: COMMAND_LIMIT - 1] + "…"
+    text = packet.autonomy.HUMAN_APPROVAL.sub(
+        lambda match: match.group(0)[0] + "\u200b" + match.group(0)[1:], text
+    )
+    return "`" + (text.replace("<!--", "<!\u200b--") or "…") + "`"
 
 
 def _state(capture: DemoCapture) -> str:
