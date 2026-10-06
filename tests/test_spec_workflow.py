@@ -21,13 +21,15 @@ import sys
 import time
 import tomllib
 import unittest
-from collections.abc import Iterator
 from contextlib import nullcontext, redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from unittest.mock import Mock, patch
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import yaml
 
