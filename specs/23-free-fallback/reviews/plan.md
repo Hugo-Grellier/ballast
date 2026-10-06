@@ -1,54 +1,50 @@
 # Plan review: Qualify one zero-cost provider fallback
 
-- Review: plan (independent, agent-provisional)
+- Review: plan (independent, agent-provisional), rerun after the contradiction block at `decide-tasks` was resolved (DEC-0001, HD-0001)
 - Reviewer: claude/claude-opus-5-5, fresh context
-- Artifacts: `plan.md`, `research.md` (R1 to R10), `data-model.md`, `contracts/operator-cli.md`, `contracts/wrapper-fallback.md`, `contracts/ledger.md`, `quickstart.md`, against `spec.md` (AC-001 to AC-021, FR-001 to FR-011, SC-001 to SC-005), `intent.md` and the run record. `tasks.md` and `decisions.md` do not exist yet, as expected at this point.
-- Policies: `AGENTS.md` invariants, `docs/policies/workflow.md` (risk and review matrix), `docs/policies/engineering.md` via the engineering review skill, the R2 boundaries in `docs/policies/project/workflow.md`.
+- Artifacts: `plan.md`, `research.md` (R1 to R10), `data-model.md`, `contracts/operator-cli.md`, `contracts/wrapper-fallback.md`, `contracts/ledger.md`, `quickstart.md` and `decisions.md` (DEC-0001), checked against `spec.md` (AC-001 to AC-021, FR-001 to FR-011, SC-001 to SC-005), `intent.md` and the run record. `tasks.md` exists but is out of scope for this review; the tasks gate judges it.
+- Policies: `AGENTS.md` invariants, `docs/policies/workflow.md` (risk and review matrix), `docs/policies/engineering.md` via the engineering review skill, and the R2 boundaries in `docs/policies/project/workflow.md`.
 
 ## What was checked
 
-**Requirement coverage.** Every AC and SC maps to a planned test or artifact in `quickstart.md`. FR-001 (off by default, operator-only setting) maps to `--local-fallback` on `ballast run start|resume`, stored in `fallback.json` under the run's operator directory. FR-002 maps to the fixed cause set in R2, where anything unknown is non-recoverable. FR-003 and FR-004 map to the ordered checks in R5, which fail closed. FR-005 maps to the R6 argv and env construction plus the explicit `permission_mismatch` check. FR-006 maps to R9 and the existing `_autonomous_run` count. FR-007 maps to the additive ledger enums in R8 and `contracts/ledger.md`, with schema version 1 unchanged. FR-009 holds because the plan ships no model list. FR-010 maps to `evaluation.md` and the documentation rows. FR-011 holds because the plan uses only `urllib`, `json` and `ipaddress`.
+**The DEC-0001 resolution keeps the spec.** The plan now matches the spec as written:
 
-**Code anchors.** The symbols the plan builds on exist with the shapes it assumes:
+- The fallback is considered only after the step's first primary attempt. It is never followed by a draft retry or by another fallback (R9, the `agent.main` flow, the data-model decision tree). A step that falls back makes exactly two attempts, which meets SC-005 and FR-006 without reinterpreting them.
+- The changed-state evidence now covers git-ignored worktree paths (an `lstat` metadata digest that includes `ctime_ns`) and `HEAD` plus every ref. When the evidence cannot be established, the fallback is refused as `changed-state` (R3). This closes the residual risk of replaying a partial mutation, which the spec lists as a non-goal (AC-009, FR-003).
+- The earlier F-003 (the `route_source: fallback` cross-field rule) is now identical in `data-model.md` and `contracts/ledger.md`.
+- The earlier F-004 now has a defined human-gated run record: `fallback.json` is kept after `off`, `ballast run status` prints a line, each step's `meta.json` carries `local_fallback`, and the ledger holds `route` events.
 
-- in `tools/spec_workflow/autonomy.py`: `tree_digest`, `reviews_digest`, `codex_sandbox_nests`, `run_dir`, `trusted_program`, `confined_env`, `confined_argv` and `append_step`;
-- in `tools/spec_workflow/agent.py`: `main`, `_attempt`, `permission_args`, `_real_executable`, `_autonomous_run`, `FORBIDDEN` and the `EXIT_*` codes;
-- in `tools/spec_workflow/ledger.py`: the `ENUM_FIELDS`/`FIELDS` entries for `route`, the `runner` and `client-counter` sources, and the `ID`/`LABEL`/`MODEL` patterns;
-- in `tools/spec_workflow/artifacts.py`: the `cross_provider` derivation that R8 corrects.
+**F-001 of the earlier review is closed by design.** The fallback runs with a fresh, wrapper-owned, empty `CODEX_HOME` inside the attempt's private directory. `agent.py` already creates a private `mkdtemp` directory per attempt, so this applies in both modes. R5 check 11 refuses with `permission-mismatch` when any other Codex configuration layer exists, or when the pilot could not establish the list of layers. `permission_mismatch` allows `CODEX_HOME` only with that private path. With no user configuration read, the fallback gets no MCP servers, `notify` program or profiles, so it cannot be wider than a Claude primary.
 
-`main` returns early on `_real_executable` failure today. The plan explicitly restructures that path for `cli-unavailable` when the setting is on, and keeps the off path unchanged.
+**Requirement coverage.** Every AC, FR and SC maps to a design element and to a planned test or artifact in `quickstart.md`. The new DEC-0001 tests are mapped: `test_retry_attempt_never_falls_back`, `test_ignored_path_change_refuses`, `test_primary_commit_refuses`, `test_unverifiable_state_refuses`, `test_user_codex_config_not_read`, `test_other_codex_config_layer_refuses`, `test_probe_deadline_refuses`, the human-gated provenance and status tests, and `test_stdlib_only_no_model_list` for FR-009 and FR-011.
+
+**Code anchors spot-checked.**
+
+- `agent.permission_args` pins Codex to `workspace-write`, network off and no extra writable roots, and gives Claude `--strict-mcp-config` with project-only settings. The canonical profile R6 compares against therefore exists.
+- The wrapper takes the run ID from `SPECKIT_WORKFLOW_RUN_ID`, which it does in both modes, so `read_setting(root, run_id)` works for human-gated steps.
+- `autonomy.run_dir` sits under `state_dir`, outside the checkout.
+- The headless Claude settings allow no write outside the checkout, and Codex's writable roots are pinned. So in a human-gated run, as well as under bubblewrap, no agent can write `fallback.json` (AC-020).
+- `autonomy.agent_homes` overlays the `CODEX_HOME` named in the environment, which R6 relies on under bubblewrap.
+- `ledger.py` derives `cross_provider` from `reviewer_provider`, which the R8 report rule overrides conservatively for runs that hold a fallback review route.
 
 **Boundaries and failure behavior.**
 
-- Source authority stays single: the launcher owns the setting, the wrapper owns attempts and the ledger stays the one record.
-- The off path is byte-for-byte unchanged, and a test is planned to prove it.
-- A refused fallback returns the primary's exit code.
-- A failed fallback ends the step without a retry.
-- Idempotency rests on `ledger.append`'s per-event-ID comparison.
-- An HTTP probe sends only the model name, through an opener with no proxy.
-- The endpoint must be a loopback IP literal. Host names, including `localhost`, are refused.
-- Codex's sandbox is never loosened. An Autonomous step on this host is expected to refuse as `incompatible-capability` (DEC-0004), and SC-004 accepts that outcome.
-- The plan records two residual risks: changes under git-ignored paths outside `tree_digest`, and a model-pull race.
+- Source authority stays single: the launcher owns the setting, the wrapper owns attempts and their records, and the ledger is the only record.
+- The off path takes no digests, runs no probes and writes nothing, and a test compares argv, `steps.jsonl` and the ledger with and without the feature.
+- The probes send only the model name, through a proxy-less opener, to a loopback IP literal. They share a 10 s deadline and fail closed.
+- Codex's sandbox is never loosened. On this host an Autonomous step is expected to refuse as `incompatible-capability` (DEC-0004), and SC-004 accepts that outcome.
+- Bytecode writes cannot trip the ignored-path digest, because the wrapper already sets `PYTHONPYCACHEPREFIX` away from the tree.
 
-**Unnecessary complexity.** The plan adds one new module and keeps the other changes small and additive. It adds no adapter layer and no new store, and it ships no model list. The proposed ADR-0012 is the right place for the boundary decision.
+**Unnecessary complexity.** The plan adds one new stdlib module and makes small additive changes elsewhere. It adds no adapter layer, no new store and no model list. The ignored-path walk is the main new cost: it runs only while the setting is on, is capped, and a refusal only means a missed fallback. ADR-0012 is the right place to record the boundary.
 
-**Gaps.** Three are recorded in the draft's findings:
-
-- The permission comparison and the privacy probes cover argv, env and the Ollama model entry, but not the user's Codex configuration file. In a Claude-primary run this can give the fallback MCP servers or a `notify` program that the primary step (`--strict-mcp-config`, project-only settings) never had.
-- SC-005 ("no step ever makes more than two attempts") is reinterpreted in R9 so that the existing draft-retry loop does not count. The plan does not record that interpretation as a decision.
-- The contracts disagree on one ledger cross-field rule. There is also no human-gated record of the setting when no fallback is ever considered.
-
-None of these blocks task generation: each is a bounded change that a task can address. They are listed so that the tasks and the merge review pick them up.
+**Remaining gap.** The plan has one minor capability gap, recorded in the draft. In a Claude-primary run, `codex_prompt` turns `/speckit-x` into `$speckit-x`, but no probe checks that the project has Codex's Spec Kit skill for that command installed. In a project with only the Claude integration installed, the fallback would start, use an agent step and fail its postconditions. Content stays on loopback, so this is a wasted attempt, not a boundary breach.
 
 ## Uncertainty
 
-Host facts are unknown until the R10 pilot. These include the exact Codex `--config` key for the Ollama base URL, the `--json` event shape, whether Codex's sandbox nests on this host, and the quota message text. Every check that depends on one of them fails closed, so an unknown result can only refuse a fallback, never send content. I did not run Codex or Ollama.
+Host facts stay unknown until the R10 pilot: the Codex `--config` key for the Ollama base URL, the `--json` event shape, the Codex configuration layers, sandbox nesting, and the quota message text. Every check that depends on one of them fails closed. If no quota signature can be pinned, the plan records that as a discovery, because AC-001 could then never be met on a real run. I did not run Codex or Ollama, and I did not review `tasks.md`.
 
 <!-- ballast-findings: begin -->
 ## Findings (recorded from the review draft)
 
-- F-001 (medium, spec-violation, accepted-provisionally): R6 permission_mismatch and the R5 privacy probes inspect only argv, env and the Ollama model entry. Codex still reads the operator's config.toml (agent_homes only overlays CODEX_HOME), so its mcp_servers, notify program or profiles reach the fallback. A Claude primary runs with --strict-mcp-config and project-only settings, so the fallback can be wider than the actual primary (AC-008) and can send content off loopback through an MCP server or notify (AC-006). It does not block planning because the config is operator-owned, not agent-writable, and a task can close it: pin mcp_servers and notify empty through allowlisted --config overrides, or refuse as permission-mismatch when they are set, with tests and a pilot check.
-- F-002 (low, spec-ambiguity, open): SC-005 says no step ever makes more than two attempts, but R9 reads it as two attempts beyond the existing draft-retry loop and lets a draft-retry primary fall back. That reading is reasonable, because draft retries predate this feature, but it should be recorded as a decision or a spec wording clarification rather than left implicit in research.md.
-- F-003 (low, spec-ambiguity, open): The two contracts disagree. data-model.md says route_source fallback forbids failure_cause; contracts/ledger.md says it forbids failure_cause and fallback. Pick one rule before tasks are written so ledger tests have one source.
-- F-004 (low, spec-ambiguity, open): AC-020 asks that the run record show whether the fallback was on. Autonomous runs get a record.md line, but a human-gated run has no record.md and writes nothing about the setting unless a fallback is considered. Its only trace is fallback.json and the printed start line. A task should state what counts as the human-gated run record.
+- F-001 (low, architecture-issue, open): In a Claude-primary run, codex_prompt maps /speckit-x to $speckit-x, but no R5 check confirms the project has Codex's Spec Kit skill for that command installed. In a project with only the Claude integration installed, the fallback would start, use an agent step and fail its postconditions. Content stays on loopback, so no boundary is crossed. A task could add an incompatible-capability refusal when the Codex skill is missing, or the pilot and evaluation.md could state the Codex integration as a prerequisite.
 <!-- ballast-findings: end -->

@@ -13,7 +13,7 @@ Implements FR-002 to FR-009 and AC-001 to AC-016. Decisions are in [research.md]
 | `validate_model(text)`, `validate_endpoint(text)` | raise `SettingError` with the fixed messages in [operator-cli.md](operator-cli.md) |
 | `classify(integration, exit_code, blocked, contained, tail, *, cli_found) -> str` | the normalized cause; pure |
 | `RECOVERABLE` | `frozenset({"quota-exhausted", "provider-unavailable", "cli-unavailable"})` |
-| `probe(setting, *, root, autonomous, codex) -> str \| None` | runs checks 5 to 11 of research R5 in order within one 10 s budget; returns the refusal reason or `None`; sends only the model name |
+| `probe(setting, *, root, autonomous, codex, prompt) -> str \| None` | runs checks 5 to 11 of research R5 in order within one 10 s budget; returns the refusal reason or `None`; sends only the model name |
 | `fallback_argv(codex, prompt, setting) -> list[str]` | research R6; never forwards primary extra arguments |
 | `fallback_env(env, codex_home) -> dict` | `confined_env(env, None)` minus `OLLAMA_HOST`, `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, with `CODEX_HOME` set to the wrapper's private, empty directory (research R6) |
 | `permission_mismatch(argv, env, codex_home) -> bool` | true when argv or env is wider than the canonical headless Codex profile, or `CODEX_HOME` is anything but `codex_home` |
@@ -60,7 +60,7 @@ else:
 | `changed-state` | tree, reviews, drafts, ignored paths or refs differ after the primary, or any of them cannot be checked |
 | `privacy-exclusion` | endpoint not a loopback literal; model entry remote or cloud |
 | `unknown-free-status` | model not listed, or listed without size and digest |
-| `incompatible-capability` | server not answering; codex missing or without `--oss`/`--local-provider`; Codex sandbox not starting under the step's confinement; the checks exceeding their 10 s budget |
+| `incompatible-capability` | server not answering; codex missing or without `--oss`/`--local-provider`; the project's Codex skill for the step's Spec Kit command missing; Codex sandbox not starting under the step's confinement; the checks exceeding their 10 s budget |
 | `permission-mismatch` | argv or env wider than the canonical headless Codex profile; a Codex configuration layer outside the private `CODEX_HOME` exists or could not be established |
 
 ## Review provenance

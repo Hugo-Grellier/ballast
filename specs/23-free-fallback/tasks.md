@@ -9,7 +9,7 @@ description: "Task list for Qualify one zero-cost provider fallback"
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md), [decisions.md](decisions.md)
 
-**Risk**: R2, Autonomous run. Merging the PR is the single human approval (BL-INV-006). DEC-0001 in [decisions.md](decisions.md) keeps the spec as written. A step falls back only after its first primary attempt (SC-005, FR-006). Changed-state evidence covers git-ignored worktree paths and refs, and refuses when it cannot be checked (AC-009, FR-003).
+**Risk**: R2, Autonomous run. Merging the PR is the single human approval (BL-INV-006). DEC-0001 in [decisions.md](decisions.md) keeps the spec as written. A step falls back only after its first primary attempt (SC-005, FR-006). Changed-state evidence covers git-ignored worktree paths and refs, and refuses when it cannot be checked (AC-009, FR-003). The open plan-review finding PD-0010 F-001 is closed by an `incompatible-capability` refusal when the project lacks Codex's Spec Kit skill for the step's command (research R5 check 9; T001, T013, T015, T029).
 
 **Acceptance evidence**: Every behavior acceptance criterion (AC-001 to AC-021) has a test or an explicit verification task below that cites its ID. Test names follow the [quickstart map](quickstart.md#offline-gate). Offline tests use a loopback stub Ollama (`http.server` on an ephemeral `127.0.0.1` port) that records every request. They also use fake `claude` and `codex` executables that record argv, prompt and environment. "Nothing sent" means the stub saw no request outside `/api/version`, `/api/tags` and `/api/show`, and the fake Codex never received the prompt.
 
@@ -40,6 +40,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - the `/api/version`, `/api/tags` and `/api/show` response fields for one local tag and one cloud tag (`remote_host`, `remote_model`, `size`, `digest`);
   - the `codex exec --json` event shape (`agent_message` items, `turn.completed` usage fields), from one `codex exec --oss --local-provider ollama -m qwen3:4b --json` run of a trivial prompt in a scratch directory, with `CODEX_HOME` set to an empty directory, which also shows whether `--oss` needs any login;
   - every Codex configuration layer that run reads (user, system, project `.codex/config.toml`);
+  - the project path where Codex finds a Spec Kit skill for a `$speckit-x` prompt (expected `.agents/skills/<command>/SKILL.md`), from a run in a scratch project with the Codex integration installed;
   - `autonomy.codex_sandbox_nests` with bubblewrap, and the same `codex sandbox` probe without it;
   - quota-exhausted and provider-unavailable messages from `claude` and `codex`, with account, quota and credential details redacted. Each one comes from a captured run, the CLI's source or documentation, or an earlier run's logs (research R2), and its source is recorded. When a cause has no signature for an integration, list it.
 
@@ -48,7 +49,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - `StubOllama`, a loopback `http.server` on an ephemeral `127.0.0.1` port that serves configurable `/api/version`, `/api/tags` and `/api/show` responses, with an optional delay, and records every request;
   - helpers that write fake `claude` and `codex` executables into a temporary `PATH` directory. They record argv, environment, `CODEX_HOME` contents and prompt to a file, and print configurable output (including `--json` event streams) and exit codes;
   - module-level fixtures holding the redacted quota and availability messages and the `--json` event sample from T001;
-  - a temporary `XDG_STATE_HOME`, `HOME` and Git checkout per test.
+  - a temporary `XDG_STATE_HOME`, `HOME` and Git checkout per test, with the Codex Spec Kit skill of the test's command installed at the path T001 recorded unless a test removes it.
 
 ---
 
@@ -58,20 +59,20 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
 **⚠️ CRITICAL**: No user story work begins until this phase is complete; story tasks name these tasks as explicit dependencies.
 
-- [ ] T003 [P] Add ledger tests to `tests/test_agent_run_ledger.py` [AC-017]:
+- [X] T003 [P] Add ledger tests to `tests/test_agent_run_ledger.py` [AC-017]:
   - `route_source: fallback` is accepted.
   - `failure_cause` (`quota-exhausted`, `provider-unavailable`, `cli-unavailable`, `unrecognized`), `fallback` (`selected`, `refused`) and `fallback_reason` (`unknown-free-status`, `privacy-exclusion`, `incompatible-capability`, `permission-mismatch`, `changed-state`) are accepted. Any other value, or free text, is rejected.
   - The single cross-field rule set of [contracts/ledger.md](contracts/ledger.md#validation-ledgerpy), which data-model.md now repeats: `fallback_reason` without `fallback: refused` is rejected; `fallback: refused` without `fallback_reason` is rejected; `route_source: fallback` with `failure_cause` or `fallback` is rejected; a primary `route` with `failure_cause` and no `fallback` is accepted.
   - `schema_version` stays 1.
   - A `usage` event with `counter_source: codex-exec-json` and `provider: ollama` validates.
   - `ledger.report` counts `fallback` in `route_sources` and shows refusal reasons in `actual_routes`.
-- [ ] T004 Implement the additive ledger changes in `tools/spec_workflow/ledger.py` (depends on T003):
+- [X] T004 Implement the additive ledger changes in `tools/spec_workflow/ledger.py` (depends on T003):
   - `ENUM_FIELDS["route"]` gains the `route_source` value `fallback` and the `failure_cause`, `fallback` and `fallback_reason` enums;
   - `FIELDS["route"]` gains the three optional label fields;
   - `validate`/`_semantic_problems` enforce the cross-field rules;
   - `report` counts fallbacks and lists refusal reasons;
   - `schema_version` is unchanged.
-- [ ] T005 [P] Add one paragraph to `tools/spec_workflow/ledger-schema.md` (depends on T004). It describes the new `route` value and fields, the cross-field rules and the report's fallback review rule of [contracts/ledger.md](contracts/ledger.md#report). It also states that the schema version is unchanged and that an older pinned Ballast rejects a stream holding them.
+- [X] T005 [P] Add one paragraph to `tools/spec_workflow/ledger-schema.md` (depends on T004). It describes the new `route` value and fields, the cross-field rules and the report's fallback review rule of [contracts/ledger.md](contracts/ledger.md#report). It also states that the schema version is unchanged and that an older pinned Ballast rejects a stream holding them.
 - [ ] T006 Add `SettingTests` to `tests/test_fallback.py` [AC-006, AC-020] (depends on T002):
   - `validate_model` accepts `qwen3:4b`. It rejects an empty name, a leading `-`, a name outside the ledger `MODEL` pattern and cloud tags (`:cloud`, `-cloud`), with the fixed messages of [contracts/operator-cli.md](contracts/operator-cli.md#start).
   - `validate_endpoint` accepts `http://127.0.0.1:PORT`, other `127.0.0.0/8` literals and `http://[::1]:PORT`. It rejects `localhost`, any host name, a non-loopback IP, `https`, a path, user info, a query and a missing port (`test_non_loopback_endpoint_refused`).
@@ -129,12 +130,12 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - `fallback_env(env, codex_home)`: `autonomy.confined_env(env, None)` minus the three OSS variables, with `CODEX_HOME=codex_home`;
   - `permission_mismatch(argv, env, codex_home)`, against the canonical headless Codex profile: `workspace-write`, `network_access=false`, `writable_roots=[]`, no `FORBIDDEN` token; no extra `--sandbox`, `--add-dir`, `--dangerously-*` or `--profile`; no `-c`/`--config` key outside the allowlist; no environment variable beyond `confined_env` except `CODEX_HOME` equal to `codex_home`;
   - `parse_events`: raises `EventError` on an unparsable stream; `complete` only when every turn reported usage.
-- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex)` in `tools/spec_workflow/fallback.py` (depends on T012). It runs research R5 checks 5 to 11 in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
+- [ ] T013 [US1] Implement `probe(setting, *, root, autonomous, codex, prompt)` in `tools/spec_workflow/fallback.py` (depends on T012). It runs research R5 checks 5 to 11 in order, under one 10 s deadline, with `urllib.request.build_opener(ProxyHandler({}))`, a per-request timeout capped by the remaining budget, and a 1 MiB response cap:
   1. the endpoint is a loopback literal;
   2. `GET /api/version`;
   3. `GET /api/tags` lists the exact name with a nonzero size and digest;
   4. there is no `remote_host`/`remote_model` in the tag entry or in `POST /api/show`, and no cloud tag;
-  5. a trusted `codex` via `autonomy.trusted_program`, whose `codex exec --help` lists `--oss` and `--local-provider`;
+  5. a trusted `codex` via `autonomy.trusted_program`, whose `codex exec --help` lists `--oss` and `--local-provider`; and, when `codex_prompt(prompt)` starts with `$<command>`, the project's Codex skill for that command at the path T001 recorded (a regular file inside `root`, checked with `lstat`, never followed through a symlink); a missing skill refuses as `incompatible-capability` with the detail `codex skill <command> is not installed`;
   6. Codex's sandbox starts: `autonomy.codex_sandbox_nests` for Autonomous, and for human-gated the same `codex sandbox` probe without bubblewrap, added as a helper in `tools/spec_workflow/autonomy.py` if none exists;
   7. no Codex configuration layer outside the private home exists among those T001 found, and the layer list is known.
 
@@ -146,7 +147,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
     - take `fallback.state_evidence` before the primary `_attempt`;
     - after the attempt, call `fallback.classify`.
   - Consider the fallback only when all of these hold: the run is not Chat; the cause is recoverable; this is the step's first attempt (`attempt == 1` and no refused draft before it).
-  - Then compare the state evidence, run `probe` and `permission_mismatch`, and call `_autonomous_run` to count the step; an exhausted limit takes the existing limit path. Then run exactly one `_attempt(..., fallback=setting)`.
+  - Then compare the state evidence, run `probe` (passing the step's prompt) and `permission_mismatch`, and call `_autonomous_run` to count the step; an exhausted limit takes the existing limit path. Then run exactly one `_attempt(..., fallback=setting)`.
   - Add the `fallback` keyword to `_attempt`:
     - fallback argv and environment, `integration="codex"`;
     - a fresh 0700 `CODEX_HOME` inside the attempt's private directory (one is created for a human-gated step), exposed as the Codex home under bubblewrap through the existing agent-home overlay, and removed afterwards;
@@ -177,6 +178,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
     - `test_remote_host_refuses_privacy`: `remote_host`/`remote_model` in tags or show;
     - `test_server_down_refuses_capability`;
     - `test_codex_without_oss_refuses_capability`;
+    - `test_codex_skill_missing_refuses_capability`: a Claude-primary `/speckit-plan` step in a project with no `.agents/skills/speckit-plan/SKILL.md`, and the same with that path as a symlink out of the worktree. Both refuse with `incompatible-capability`, use no agent step and never start the fake Codex with the prompt;
     - `test_sandbox_not_nesting_refuses_capability`, in both modes;
     - `test_probe_deadline_refuses`: a slow stub exhausts the 10 s budget (patched clock) and the result is `incompatible-capability`;
     - a proxy environment (`http_proxy`) that does not redirect a probe.
@@ -301,6 +303,7 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
   - each pilot probe from T001, with command, outcome and context (operator terminal or confined step);
   - the sandbox-nesting result in both modes;
   - the Codex configuration layers found and the empty-`CODEX_HOME` run;
+  - the Codex Spec Kit skill path, and that a project needs Spec Kit's Codex integration installed for a fallback to run (otherwise it refuses as `incompatible-capability`);
   - the raw `codex exec --json` run's duration, outcome and usage;
   - the R2 signatures adopted, with their redacted sources, and any cause left `unrecognized`;
   - the expected Autonomous refusal per DEC-0004 of the run record;
@@ -308,14 +311,14 @@ Workflow tools live in `tools/spec_workflow/`, tests in `tests/` (unittest, stdl
 
   Note that the workflow runs quickstart pilot steps 3 to 5 and appends them there.
 - [ ] T029 [P] [US4] Add a "Local fallback" subsection to `templates/policies/spec-kit-workflow.md` [AC-019] (depends on T016, T026). It covers:
-  - how to enable it with `--local-fallback MODEL` and the endpoint option;
+  - how to enable it with `--local-fallback MODEL` and the endpoint option, and that the project needs Spec Kit's Codex integration installed (a missing Codex skill refuses as `incompatible-capability`);
   - what each refusal reason means, including `changed-state` for an uncheckable worktree and `permission-mismatch` for a Codex configuration layer;
   - that it applies only to a step's first attempt;
   - how to turn it off: `resume RUN --local-fallback off`, or start without the flag;
   - where the setting shows: `ballast run status`, `record.md`, and the step's `meta.json`;
   - that it is never available in Chat runs, never routes to a paid or remote backend, never reads the user's Codex configuration and never loosens a sandbox;
   - where to read the evidence: `./scripts/agent-metrics --run RUN`.
-- [ ] T030 [P] [US4] Add one paragraph to `templates/policies/model-routing.md` [AC-016, AC-019]: the local fallback is a zero-cost availability route, not a routing profile, and a review it completes never counts as cross-provider review.
+- [X] T030 [P] [US4] Add one paragraph to `templates/policies/model-routing.md` [AC-016, AC-019]: the local fallback is a zero-cost availability route, not a routing profile, and a review it completes never counts as cross-provider review.
 - [ ] T031 [P] [US4] Add one line about `--local-fallback` under the `ballast run` options in `README.md`, linking the spec-kit-workflow subsection (depends on T026).
 
 **Checkpoint**: All four stories pass independently.

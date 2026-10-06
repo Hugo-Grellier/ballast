@@ -191,6 +191,7 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
             "human-override",
             "escalation",
             "operator-choice",
+            "fallback",
         },
         "outcome": {
             "success",
@@ -198,6 +199,21 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
             "mechanical-failure",
             "rejected",
             "incomplete",
+        },
+        # The local zero-cost fallback (#23): normalized labels, never CLI text.
+        "failure_cause": {
+            "quota-exhausted",
+            "provider-unavailable",
+            "cli-unavailable",
+            "unrecognized",
+        },
+        "fallback": {"selected", "refused"},
+        "fallback_reason": {
+            "unknown-free-status",
+            "privacy-exclusion",
+            "incompatible-capability",
+            "permission-mismatch",
+            "changed-state",
         },
     },
     "escalation": {
@@ -287,6 +303,9 @@ FIELDS: dict[str, dict[str, str]] = {
         "outcome?": "label",
         "alternate_available?": "bool",
         "author_provider?": "label",
+        "failure_cause?": "label",
+        "fallback?": "label",
+        "fallback_reason?": "label",
     },
     "classifier": {"stage": "label", "invocation_id": "id"},
     "escalation": {
@@ -671,6 +690,8 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
             fail(f"{data['outcome']} needs reason")
         if "reason" in data and data["reason"] not in PR_REASONS[data["outcome"]]:
             fail(f"reason does not apply to {data['outcome']}")
+    if event["kind"] == "route":
+        _validate_fallback(data)
     if event["kind"] == "branch_sync":
         _validate_branch_sync(data)
     if event["kind"] == "acceptance_packet":
@@ -690,6 +711,18 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
     }.get(event["kind"])
     if required_source and event["source"] != required_source:
         fail(f"{event['kind']} requires {required_source} source")
+
+
+def _validate_fallback(data: dict[str, Any]) -> None:
+    """Apply the local fallback's cross-field rules (#23 contracts/ledger.md)."""
+    if "fallback_reason" in data and data.get("fallback") != "refused":
+        fail("fallback_reason needs fallback refused")
+    if data.get("fallback") == "refused" and "fallback_reason" not in data:
+        fail("fallback refused needs fallback_reason")
+    if data["route_source"] == "fallback" and (
+        "failure_cause" in data or "fallback" in data
+    ):
+        fail("fallback route has no failure_cause or fallback")
 
 
 def _validate_branch_sync(data: dict[str, Any]) -> None:

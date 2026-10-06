@@ -54,7 +54,7 @@ Host probes could not run while planning: this planning session had no approval 
   6. `GET /api/version` answers within 5 s, else `incompatible-capability`;
   7. `GET /api/tags` lists the model by exact name with a nonzero size and digest, else `unknown-free-status`;
   8. that entry and `POST /api/show {"model": MODEL}` carry no `remote_host` or `remote_model` and the name has no `cloud` tag, else `privacy-exclusion`;
-  9. a trusted `codex` (`autonomy.trusted_program`) whose `codex exec --help` lists `--oss` and `--local-provider`, else `incompatible-capability`;
+  9. a trusted `codex` (`autonomy.trusted_program`) whose `codex exec --help` lists `--oss` and `--local-provider`, and, when the prompt names a Spec Kit command, the project's Codex skill for it (`.agents/skills/<command>/SKILL.md`, a regular file inside the worktree, at the path the pilot confirms) exists, else `incompatible-capability`. A project with only the Claude integration installed has no such skill, so the fallback would only use an agent step and fail its postconditions (plan-review PD-0010 F-001);
   10. Codex's sandbox starts under the confinement the step would use: `autonomy.codex_sandbox_nests` for an Autonomous step, the same `codex sandbox` probe without bubblewrap for a human-gated step, else `incompatible-capability`;
   11. no Codex configuration layer outside the fallback's private `CODEX_HOME` exists among those the pilot found Codex reads (R6), else `permission-mismatch`;
   12. the built fallback argv and environment pass the permission comparison (R6), else `permission-mismatch`;
@@ -94,7 +94,8 @@ Host probes could not run while planning: this planning session had no approval 
   2. `codex sandbox` nesting inside Ballast's bubblewrap (`codex_sandbox_nests`) and without it;
   3. one real `codex exec --oss --local-provider ollama -m qwen3:4b --json` run of a small Spec Kit step in a scratch project under the wrapper's confinement, with duration, `--json` event shape and usage;
   4. captured, redacted quota and unavailability messages from both CLIs, to pin R2's signatures.
-  5. the Codex configuration layers `codex exec --oss` reads (user, system, project), and a run with an empty private `CODEX_HOME` (R6).
+  5. the Codex configuration layers `codex exec --oss` reads (user, system, project), and a run with an empty private `CODEX_HOME` (R6);
+  6. the project path where Codex finds a Spec Kit skill for a `$speckit-x` prompt (R5 check 9).
 
   The sandbox probes of item 2 and the layer check of item 5 run from the operator's own terminal, not from inside a confined agent step, because nested confinement can change the result. `evaluation.md` says which context each result came from.
 - **Known risk**: This run already recorded that Codex's sandbox does not start inside Ballast's confinement on this host (DEC-0004 in [record.md](autonomous/record.md)). The expected pilot result is therefore: Autonomous steps refuse the fallback as `incompatible-capability`, and human-gated steps may run it. A 4B CPU model may also be too weak or too slow to satisfy a step's postconditions. Either outcome is acceptable under SC-004 ("completes or is refused with a recorded cause"). A pilot that rejects the candidate outright, for example because `--oss` is missing or the model cannot finish any step, is recorded in `decisions.md` as a discovery. It never leads to a silent switch of backend.
