@@ -56,3 +56,9 @@ None of these changes the design, a boundary or product scope. Each can be settl
 - F-006 (low, spec-ambiguity, open): R8 says project-owned paths init creates are probed and must not be ignored (AC-013), but no stage says what happens when an existing rule ignores one (for example ballast.toml or AGENTS.md). Pick the behaviour in tasks: report it not-ready with a patch proposal, without rewriting the rule.
 - F-007 (info, spec-ambiguity, open): init-tool.md says no program other than git is started, yet the install stage runs setup, which starts uvx and patch. Scope the sentence and the AC-015 audit hook to init's own stages (or to the faked setup) so the contract matches reality.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+F-001 to F-007 were carried into tasks (tasks.md: F-001 → T036, F-002 → T010/T040, F-003 → T018, F-004 → T006/T027, F-005 → T005/T048/T049, F-006 → T021/T028, F-007 → T027/T048), all done and tested; the implementation reviews found none still open.
+
+- Verdict: approved

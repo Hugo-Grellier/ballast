@@ -33,3 +33,13 @@ The runner's `[checks]` failed again after cycle 3 with the same signatures as c
 - F-001 (low, spec-ambiguity, open): Unchanged since cycle 0. verifier() accepts make &lt;one target&gt;, npm/pnpm/yarn/bun run &lt;any script&gt;, uv run &lt;anything&gt; and uvx &lt;anything&gt; from a CI run: line, so a deploy or publish step can become an active [checks] entry. Bounded by operator review of ballast.toml before trust and confined checks with a sanitized environment. Fix option: keep such lines inferred unless the target is a known verifier.
 - F-002 (info, spec-ambiguity, open): Unchanged since cycle 0. A manifest description (bounded, printable, no backtick) becomes text in the generated AGENTS.md and constitution. It is the repository's own content at the same trust level, cited with its source and reviewed before commit; nothing needs doing.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+- F-001: accepted (low, spec ambiguity); same as engineering F-001. Bounded by evidence comments, operator review before trust and confinement.
+- F-002: accepted (info); nothing to do.
+- Hardening from the engineering review: `tools/init` now refuses an abbreviated or repeated `--project`/`--ref`, so the root and ref it acts on are the ones the CLI validated.
+
+Gates on the host after the rebase onto `origin/main` (with #82): `uvx ruff check && uvx ruff format --check` pass; the full suite `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` passes (counts in [convergence.md](convergence.md)). The networked end-to-end run is in [e2e.md](e2e.md).
+
+- Verdict: approved

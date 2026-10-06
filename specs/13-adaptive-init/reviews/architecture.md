@@ -32,3 +32,15 @@ No further ADR is needed. The failed checks are environmental (read-only `~/.loc
 - F-002 (low, implementation-bug, open): Unchanged since cycle 0. fill() replaces each {{name}} in turn on the growing text; a description containing {{gates}} is substituted again, and any other {{word}} stops plan with a remedy that blames the standard. --description works around it. Fix: one MUSTACHE.sub pass, or reject {{ in description_error.
 - F-003 (info, architecture-issue, open): Unchanged since cycle 0. tools/init calls setup._open_dir and launcher._refusal. Acceptable because the files ship and version together and ADR-0012 gives the standard ownership, but a refactor of either private helper must update tools/init too.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+Human-gated continuation of run `3ee0601b`, fixed test-first in `tests/test_init.py` `ReviewFindingTests`.
+
+- F-001: fixed. `report_stop` now names the append to an existing `.gitignore` (`test_a_stop_after_an_append_reports_it`).
+- F-002: fixed. `fill()` substitutes in one `MUSTACHE.sub` pass after checking every placeholder has a value, so a description holding `{{...}}` stays verbatim (`test_a_description_with_braces_is_kept_verbatim`).
+- F-003: accepted (info). `tools/init` ships and versions with `tools/setup` and the launcher (ADR-0012); `test_init.py` exercises both private helpers, so a refactor that breaks them fails the suite.
+
+Gates on the host after the rebase onto `origin/main` (with #82): `uvx ruff check && uvx ruff format --check` pass; the full suite `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` passes (counts in [convergence.md](convergence.md)). The networked end-to-end run is in [e2e.md](e2e.md).
+
+- Verdict: approved

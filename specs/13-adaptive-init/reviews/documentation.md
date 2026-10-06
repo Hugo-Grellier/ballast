@@ -28,3 +28,14 @@ Flags, supported stacks, absent-only writes, the single `.gitignore` append, the
 - F-003 (info, implementation-bug, open): Unchanged since cycle 0. A .gitignore over the 1 MiB limit is refused or skipped with the shared TOO_LARGE text, larger than 256 KiB, so the reason states the wrong limit.
 - F-004 (info, spec-ambiguity, open): Unchanged since cycle 0. AGENTS.md still says there are no ADRs yet, although docs/adr holds ADR-0001 to ADR-0012. The line predates this change but sits next to the edited layout line.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+- F-001: fixed. The README evidence list no longer names `docs/policies/project/`; research R6 now says only `docs/policies/project/testing.md` is checked, for existence. FR-005 lists the directory as permitted evidence, not required.
+- F-002: fixed. The TECHNICAL-SPEC #13 status gives the order the code and ADR-0012 use: the existing pin (a different `--ref` cannot move it), otherwise `--ref`, otherwise the CLI's release.
+- F-003: fixed test-first. The size reason names the limit that applied (`too_large(limit)`: "larger than 1024 KiB" for `.gitignore`), and an oversized `.gitignore` no longer gets the link remedy (`test_an_oversized_gitignore_names_its_limit`).
+- F-004: fixed. `AGENTS.md` says decisions are ADRs under `docs/adr/`.
+
+Gates on the host after the rebase onto `origin/main` (with #82): `uvx ruff check && uvx ruff format --check` pass; the full suite `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` passes (counts in [convergence.md](convergence.md)). The networked end-to-end run is in [e2e.md](e2e.md).
+
+- Verdict: approved

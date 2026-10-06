@@ -28,3 +28,9 @@ Recommendation: accept.
 
 None.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+No findings. Gates on the host after the rebase onto `origin/main` (with #82): `uvx ruff check && uvx ruff format --check` pass; the full suite `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` passes (counts in [convergence.md](convergence.md)). The networked end-to-end run is in [e2e.md](e2e.md).
+
+- Verdict: approved

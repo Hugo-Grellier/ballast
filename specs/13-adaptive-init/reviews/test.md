@@ -37,3 +37,14 @@ The tests cover the acceptance criteria with real seams and meaningful negative 
 - F-003 (low, missing-test, open): Still present: no test covers an evidence file that is itself a symbolic link pointing outside the root. The code handles that case with O_NOFOLLOW and fstat.
 - F-004 (medium, missing-test, accepted-provisionally): docs/policies/project/testing.md requires an end-to-end scratch-project run for a tools/ballast change, and here it should include ballast init on a blank and an established repository. The unit gate has also never passed in this sandbox. Only the operator runs ballast trust, so the PR must show both runs before merge.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+- F-001: accepted (low). Keeping the prior installation when setup fails is setup's own ADR-0007 behavior, covered by `tests/test_setup.py` (#14); init only calls `Setup.main` in process and maps its exceptions to a stop at `install`, which `test_a_failed_install_names_the_stage` covers.
+- F-002: fixed. `test_an_established_terminal_run_asks_nothing` attaches a terminal and makes `input()` fail.
+- F-003: fixed. `test_a_linked_evidence_file_outside_the_root_is_never_read` links `pyproject.toml` outside the root: skipped as `symbolic link`, its description never used.
+- F-004: resolved. The full gate passes on the host, and the networked end-to-end run on a blank and an established (cloned public) repository is recorded in [e2e.md](e2e.md). It found one wording defect, fixed test-first (`test_no_check_at_all_is_named_as_missing`).
+
+Gates on the host after the rebase onto `origin/main` (with #82): `uvx ruff check && uvx ruff format --check` pass; the full suite `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` passes (counts in [convergence.md](convergence.md)). The networked end-to-end run is in [e2e.md](e2e.md).
+
+- Verdict: approved

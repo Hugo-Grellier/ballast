@@ -52,3 +52,15 @@ The implementation still meets the approved spec and plan. All open code finding
 - F-004 (info, spec-ambiguity, open): Still present: decisions.md does not exist, so the FR-003 wording fix noted under PD-0019 is not recorded. Spec reconciliation should record it.
 - F-005 (medium, missing-test, accepted-provisionally): Ruff and the unit suite have failed in all four cycles because ~/.local/state and the uv tool directory are read-only in the sandbox, so tools/init and its tests have never passed in a recorded run. No fix cycle remains and code cannot fix it. Merge review must see a passing gate run with writable state, recorded in the PR.
 <!-- ballast-findings: end -->
+
+## Resolution
+
+- F-001: accepted (spec ambiguity, low). FR-012/AC-021 make a CI step that runs a verification command an active check; `make TARGET`, `uv run` and `uvx` are how many projects run their gate. Every active entry carries its evidence line, the operator reviews `ballast.toml` before `ballast trust`, and checks run confined with a sanitized environment. Narrowing the list is a product change left to a follow-up Issue if pilots show deploy steps becoming checks.
+- F-002: fixed test-first. `tools/init` parses with `allow_abbrev=False`, and `--project` and `--ref` refuse a second value, so neither an abbreviation nor a repeated option passed through the CLI's `parse_known_args` can override the root or ref the CLI checked (`test_an_abbreviated_or_repeated_option_is_refused`).
+- F-003: fixed test-first. A linked `AGENTS.md` without the section names its target and the section template instead of a patch that does not exist (`test_a_linked_agents_md_names_no_missing_patch`).
+- F-004: resolved in spec reconciliation. FR-003's wording now matches the accepted clarification (an established repository is never asked; unresolved evidence is marked to confirm). It is a wording clarification of approved behavior, not a product change, so no `decisions.md` proposal was needed; the operator re-approves the spec at the continuation's `approve-intent` gate.
+- F-005: resolved. ruff and the full suite pass on the host after the rebase (#82 also lets confined steps run them).
+
+Gates on the host after the rebase onto `origin/main` (with #82): `uvx ruff check && uvx ruff format --check` pass; the full suite `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` passes (counts in [convergence.md](convergence.md)). The networked end-to-end run is in [e2e.md](e2e.md).
+
+- Verdict: approved
