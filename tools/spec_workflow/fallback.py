@@ -48,7 +48,15 @@ if TYPE_CHECKING:
 VERSION = 1
 PROVIDER = "ollama"
 SETTING_FILE = "fallback.json"
-SETTING_FIELDS = {"version", "enabled", "provider", "model", "set_at", "set_by"}
+SETTING_FIELDS = {
+    "version",
+    "enabled",
+    "provider",
+    "model",
+    "digest",
+    "set_at",
+    "set_by",
+}
 # Ollama's default endpoint, the one `codex --oss` uses without an override
 # (DEC-0003). There is no endpoint option: probes and Codex use the same one.
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
@@ -169,6 +177,7 @@ class Setting:
 
     model: str
     provider: str = PROVIDER
+    digest: str | None = None  # the model's /api/tags digest at opt-in (SEC2-002)
 
 
 class Refused(NamedTuple):
@@ -221,8 +230,28 @@ def setting_path(root: Path, run_id: str) -> Path:
     return autonomy.run_dir(root, run_id) / SETTING_FILE
 
 
-def write_setting(root: Path, run_id: str, model: str | None) -> Setting | None:
-    """Write the operator's setting, mode 0600; `None` turns the fallback off."""
+def served_digest(model: str) -> str | None:
+    """Return the digest Ollama serves `model` under now, or None if unknown."""
+    try:
+        models = _request(_Budget(PROBE_SECONDS), "/api/tags").get("models")
+        digest = next(
+            item.get("digest")
+            for item in models or []
+            if isinstance(item, dict) and model in {item.get("name"), item.get("model")}
+        )
+    except (OSError, ValueError, StopIteration, _ExpiredError):
+        return None
+    return digest if isinstance(digest, str) and digest else None
+
+
+def write_setting(
+    root: Path, run_id: str, model: str | None, digest: str | None = None
+) -> Setting | None:
+    """Write the operator's setting, mode 0600; `None` turns the fallback off.
+
+    `digest` pins the model's identity: the probes refuse a model served under
+    another digest (SEC2-002).
+    """
     if model is not None:
         validate_model(model)
     data = {
@@ -230,6 +259,7 @@ def write_setting(root: Path, run_id: str, model: str | None) -> Setting | None:
         "enabled": model is not None,
         "provider": PROVIDER,
         "model": model,
+        "digest": digest,
         "set_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "set_by": "operator",
     }
@@ -241,8 +271,9 @@ def write_setting(root: Path, run_id: str, model: str | None) -> Setting | None:
             data["model"] = validate_model(kept)
         except SettingError:
             del data["model"]
+        del data["digest"]
     autonomy.write_json(setting_path(root, run_id), data)
-    return Setting(model) if model is not None else None
+    return Setting(model, digest=digest) if model is not None else None
 
 
 def _read(path: Path) -> object:
@@ -278,7 +309,9 @@ def read_setting(root: Path, run_id: str) -> Setting | None:
         message = "local fallback setting must be a JSON object"
         raise SettingError(message)
     allowed = SETTING_FIELDS
-    required = SETTING_FIELDS - ({"model"} if data.get("enabled") is False else set())
+    required = SETTING_FIELDS - (
+        {"model", "digest"} if data.get("enabled") is False else set()
+    )
     if not required <= set(data) <= allowed:
         message = "local fallback setting has missing or unknown fields"
         raise SettingError(message)
@@ -298,9 +331,12 @@ def read_setting(root: Path, run_id: str) -> Setting | None:
         raise SettingError(message) from error
     if "model" in data:
         validate_model(data["model"])
+    if not isinstance(data.get("digest"), str | None):
+        message = "local fallback setting has an invalid digest"
+        raise SettingError(message)
     if not data["enabled"]:
         return None
-    return Setting(data["model"])
+    return Setting(data["model"], digest=data.get("digest"))
 
 
 def describe(root: Path, run_id: str) -> str | None:
@@ -567,7 +603,7 @@ def _skills_empty(home: Path) -> bool:
 def _layers_absent(root: Path) -> bool:
     """Whether no Codex configuration layer outside the private home exists.
 
-    System files (`/etc/codex`) and a project `.codex/config.toml`; an
+    System files (`/etc/codex`) and any entry under a project `.codex`; an
     unreadable location counts as present.
     """
     try:
@@ -577,7 +613,12 @@ def _layers_absent(root: Path) -> bool:
             or next(CODEX_SYSTEM_DIR.iterdir(), None) is not None
         ):
             return False
-        return not os.path.lexists(root / ".codex" / "config.toml")
+        project = root / ".codex"
+        return not os.path.lexists(project) or (
+            project.is_dir()
+            and not project.is_symlink()
+            and next(project.iterdir(), None) is None
+        )
     except OSError:
         return False
 
@@ -687,6 +728,12 @@ def _checks(  # noqa: C901, PLR0911, PLR0912, PLR0913 - the ordered checks of R5
         return Refused(CAPABILITY, "server not answering")
     if _remote(shown):
         return Refused(PRIVACY, f"model {model} is remote or cloud")
+    # 8b. The model is the one the operator opted in with, not a same-name
+    # replacement made through the unauthenticated local API (SEC2-002).
+    if setting.digest is None:
+        return Refused(CAPABILITY, "model not pinned at opt-in")
+    if digest != setting.digest:
+        return Refused(CAPABILITY, "model changed since opt-in")
     # 9. A trusted codex with --oss, and the project's Codex skill.
     if codex is None:
         return Refused(CAPABILITY, "codex is not installed")

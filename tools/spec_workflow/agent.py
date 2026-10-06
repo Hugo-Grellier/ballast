@@ -1494,6 +1494,7 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             feature=feature,
             env=env,
             integration=integration,
+            with_login=route is None,  # `--oss` needs no login (SEC2-001)
         )
         env = autonomy.confined_env(env, integration)
     if route is not None:

@@ -2341,7 +2341,11 @@ def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
 
 
 def _agent_home_binds(
-    home: Path, env: dict[str, str], private: Path, integration: str | None
+    home: Path,
+    env: dict[str, str],
+    private: Path,
+    integration: str | None,
+    with_login: bool = True,  # noqa: FBT001, FBT002 - from confined_argv
 ) -> list[str]:
     """Show a step only its own CLI's homes and login; empty the others (#81).
 
@@ -2361,7 +2365,7 @@ def _agent_home_binds(
         "claude": (".credentials.json", "credentials"),
         "codex": ("auth.json", "codex-auth"),
     }.get(integration or "", ("", ""))
-    for index, path in enumerate(own):
+    for index, path in enumerate(own if with_login else ()):
         if os.path.lexists(path / login):
             agent = _agent_login(path / login, private / f"{copy}-{index}.json")
             args += ["--ro-bind", agent, str(path / login)]
@@ -2417,6 +2421,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     interactive_pty: bool = False,
     readonly_extra: tuple[str, ...] = (),
     integration: str | None,
+    with_login: bool = True,
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
@@ -2435,6 +2440,9 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     Chat step whose stdio is a wrapper-owned pty, already its controlling
     terminal, passes it (#20 D-3): TIOCSTI then reaches only the agent's own
     pty. Every other caller keeps `--new-session`.
+
+    `with_login=False` keeps the overlays but copies no login: the local
+    fallback (`codex exec --oss`) needs none (#23 SEC2-001).
     """
     if integration is not None and integration not in AGENT_HOMES:
         message = f"unknown integration {integration!r}"
@@ -2492,7 +2500,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         path = home / name
         if os.path.lexists(path):
             args += ["--ro-bind", "/dev/null", str(path)]
-    args += _agent_home_binds(home, env, private, integration)
+    args += _agent_home_binds(home, env, private, integration, with_login)
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature)
     args += _installed_skill_binds(root)

@@ -264,7 +264,7 @@ class FallbackCase(WrapperCase):
         self.driver.write_text(DRIVER)
 
     def enable(self, model: str = MODEL) -> None:
-        fallback.write_setting(self.root, RUN, model)
+        fallback.write_setting(self.root, RUN, model, DIGEST)
 
     def step(
         self, prompt: str = "/speckit-plan", name: str = "claude", **env: str
@@ -367,7 +367,9 @@ class SettingTests(FallbackCase):
 
     def test_write_and_read(self) -> None:
         self.assertIsNone(fallback.read_setting(self.root, RUN))
-        self.assertEqual(fallback.write_setting(self.root, RUN, MODEL).model, MODEL)
+        self.assertEqual(
+            fallback.write_setting(self.root, RUN, MODEL, DIGEST).model, MODEL
+        )
         path = fallback.setting_path(self.root, RUN)
         self.assertEqual(path.parent, autonomy.run_dir(self.root, RUN))
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -379,10 +381,14 @@ class SettingTests(FallbackCase):
                 "enabled": True,
                 "provider": "ollama",
                 "model": MODEL,
+                "digest": DIGEST,
                 "set_by": "operator",
             },
         )
-        self.assertEqual(fallback.read_setting(self.root, RUN), fallback.Setting(MODEL))
+        self.assertEqual(
+            fallback.read_setting(self.root, RUN),
+            fallback.Setting(MODEL, digest=DIGEST),
+        )
         self.assertIsNone(fallback.write_setting(self.root, RUN, None))
         data = json.loads(path.read_text())
         self.assertEqual(data["enabled"], 0)
@@ -814,7 +820,7 @@ class PermissionTests(unittest.TestCase):
                 env = {**self.env, name: "http://10.0.0.1:1"}
                 self.assertTrue(self.mismatch(self.argv, env))
                 refused = fallback.probe(
-                    fallback.Setting(MODEL),
+                    fallback.Setting(MODEL, digest=DIGEST),
                     root=Path("/nonexistent"),
                     autonomous=False,
                     codex="codex",
@@ -846,7 +852,7 @@ class ProbeCase(FallbackCase):
         codex, _ = autonomy.trusted_program("codex", self.root)
         with patch.dict(os.environ, env):
             return fallback.probe(
-                fallback.Setting(MODEL),
+                fallback.Setting(MODEL, digest=DIGEST),
                 root=self.root,
                 autonomous=autonomous,
                 codex=codex,
@@ -877,6 +883,29 @@ class ProbeTests(ProbeCase):
         self.stub.tags = {"models": [{"name": MODEL, "size": 0, "digest": ""}]}
         self.assert_refused(
             "unknown-free-status", f"model {MODEL} has no size or digest"
+        )
+
+    def test_model_digest_pinned_at_opt_in(self) -> None:
+        """SEC2-002: a model replaced under the same name is refused."""
+        self.assertEqual(fallback.served_digest(MODEL), DIGEST)
+        self.stub.tags = {"models": []}
+        self.assertIsNone(fallback.served_digest(MODEL))
+        self.stub.reset()
+        self.stub.tags["models"][0]["digest"] = "b" * 64
+        self.assert_refused("incompatible-capability", "model changed since opt-in")
+        self.assertEqual(fallback.served_digest(MODEL), "b" * 64)
+        self.stub.reset()
+        refused = fallback.probe(
+            fallback.Setting(MODEL),
+            root=self.root,
+            autonomous=False,
+            codex=None,
+            prompt="/speckit-plan",
+            env={},
+        )
+        self.assertEqual(
+            refused,
+            fallback.Refused("incompatible-capability", "model not pinned at opt-in"),
         )
 
     def test_cloud_model_refuses_privacy(self) -> None:
@@ -915,7 +944,7 @@ class ProbeTests(ProbeCase):
             FAKE_NO_OSS="1",
         )
         refused = fallback.probe(
-            fallback.Setting(MODEL),
+            fallback.Setting(MODEL, digest=DIGEST),
             root=self.root,
             autonomous=False,
             codex=None,
@@ -1054,6 +1083,11 @@ class LayerTests(ProbeCase):
         project.parent.mkdir()
         project.write_text('[mcp_servers.x]\ncommand = "x"\n')
         self.assert_refused("permission-mismatch", detail)
+        # SEC2-003: any entry under a project .codex refuses, not just config.toml.
+        project.unlink()
+        self.assertIsNone(self.probe())
+        (project.parent / "hooks.json").write_text("{}")
+        self.assert_refused("permission-mismatch", detail)
 
 
 class ModuleTests(unittest.TestCase):
@@ -1122,6 +1156,32 @@ class ConfinementCompositionTests(FallbackCase):
         self.assertIn(f"--ro-bind /dev/null {self.home / '.claude.json'}", joined)
         self.assertFalse(any(private.glob("credentials*")))
         self.assertEqual(list(private_home.iterdir()), [])
+
+    def test_fallback_step_gets_no_codex_login(self) -> None:
+        """SEC2-001: `--oss` needs no login; the operator's token is not copied."""
+        codex = self.home / ".codex"
+        codex.mkdir()
+        (codex / "auth.json").write_text('{"tokens": {"access_token": "synthetic"}}')
+        private_home = self.base / "codex-private"
+        private_home.mkdir()
+        for login, copies in ((True, 1), (False, 0)):
+            with self.subTest(login=login):
+                private = self.base / f"private-{login}"
+                private.mkdir()
+                joined = " ".join(
+                    autonomy.confined_argv(
+                        self.root,
+                        ["codex", "exec"],
+                        private=private,
+                        home=self.home,
+                        env={"CODEX_HOME": str(private_home)},
+                        integration="codex",
+                        **({} if login else {"with_login": False}),
+                    )
+                )
+                self.assertEqual(len(list(private.glob("codex-auth-*"))), copies)
+                self.assertEqual("auth.json" in joined, bool(copies))
+                self.assertIn(f"--tmp-overlay {private_home}", joined)
 
 
 # --- The wrapper -----------------------------------------------------------------
@@ -1401,7 +1461,7 @@ class WrapperFallbackTests(FallbackCase):
             self.assertIsNone(agent._fallback_setting(self.root, RUN))  # noqa: SLF001
         self.assertEqual(
             agent._fallback_setting(self.root, RUN),  # noqa: SLF001
-            fallback.Setting(MODEL),
+            fallback.Setting(MODEL, digest=DIGEST),
         )
 
 
@@ -1541,6 +1601,14 @@ class RefusalTests(FallbackCase):
         (route,) = self.routes()
         self.assertEqual(route["attempt"], 2)
         self.assertNotIn("fallback", route)
+
+    def test_replaced_model_refuses_before_any_prompt(self) -> None:
+        self.enable()
+        self.stub.tags["models"][0]["digest"] = "b" * 64
+        self.assert_refused(
+            self.quota(), "incompatible-capability", "model changed since opt-in"
+        )
+        self.assertEqual(self.codex_runs(), [])
 
     def test_probe_refusal_returns_primary_code(self) -> None:
         self.enable()
@@ -1868,6 +1936,18 @@ class RunCliTests(RunCase):
             fallback.write_setting(self.root, run_id, MODEL)
         self.assertNotIn("fallback", (self.root / "ballast.toml").read_text())
         self.assertFalse(any("FALLBACK" in name for name in os.environ))
+
+    def test_opt_in_records_the_served_digest(self) -> None:
+        """SEC2-002: the launcher pins the model's digest; unreachable is null."""
+        for served in (DIGEST, None):
+            with self.subTest(served=served):
+                self.launched.clear()
+                with patch.object(fallback, "served_digest", return_value=served):
+                    code, out, err = self.gated("--local-fallback", MODEL)
+                self.assertEqual(code, 0, err)
+                ((_, run_id),) = self.launched
+                self.assertEqual(self.setting(run_id)["digest"], served)
+                self.assertEqual("not pinned" in out, served is None)
 
     def test_status_shows_setting(self) -> None:
         code, _, err = self.gated("--local-fallback", MODEL)

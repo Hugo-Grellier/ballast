@@ -599,7 +599,8 @@ def _set_local_fallback(run_id: str, value: str | None) -> None:
     """Write the operator's setting before the engine starts, and say so."""
     if value is None:
         return
-    fallback.write_setting(ROOT, run_id, None if value == "off" else value)
+    digest = None if value == "off" else fallback.served_digest(value)
+    fallback.write_setting(ROOT, run_id, None if value == "off" else value, digest)
     if value == "off":
         sys.stdout.write("Local fallback: off\n")
         return
@@ -608,6 +609,11 @@ def _set_local_fallback(run_id: str, value: str | None) -> None:
         f"Local fallback: on ({fallback.PROVIDER} {value} at {endpoint}); turn it "
         f"off with ballast run resume {run_id} {LOCAL_FALLBACK} off\n"
     )
+    if digest is None:
+        sys.stdout.write(
+            f"Local fallback: model {value} is not served, so it is not pinned and "
+            f"the fallback will refuse; serve it, then resume with {LOCAL_FALLBACK}\n"
+        )
 
 
 def _split_mode(options: list[str]) -> tuple[dict[str, str], list[str]] | str:

@@ -12,6 +12,7 @@ Entities from [spec.md](spec.md) (Key Entities) as they are stored. Decisions ar
 | `enabled` | bool | `false` after `--local-fallback off` |
 | `provider` | label | `ollama` (the only value) |
 | `model` | string | ledger `MODEL` pattern, not starting with `-`, no `cloud` tag (`:cloud`, `-cloud`) |
+| `digest` | string or null | the model's `/api/tags` digest read by the launcher at opt-in (SEC2-002); null when Ollama could not say, and the fallback then refuses (`model not pinned at opt-in`); absent after `off` |
 | `set_at` | string | UTC ISO time |
 | `set_by` | string | `operator` |
 

@@ -51,3 +51,14 @@ The proxy blackhole stops Codex's start-up requests only while Codex honors the 
 The R2 boundary holds as designed: nothing the agent or the checkout controls can enable the fallback, redirect it off loopback, widen its argv or environment, or make a mutated tree eligible; refusals happen before any prompt is sent and are recorded. The two low findings are a credential the fallback is given without needing it (SEC2-001, Autonomous only) and a model identity that is not pinned against a mutable unauthenticated service (SEC2-002). Both are defense in depth with small fixes and neither is a disclosure path on the qualified host, where the Autonomous fallback refuses. They should be fixed or recorded as accepted residual risk in ADR-0014 before or with the merge; they do not block it.
 
 - Verdict: approved
+
+## Resolution
+
+Fixed test-first (each new test failed before its fix). Agent-provisional, not human approval.
+
+- **SEC2-001 fixed.** `autonomy.confined_argv` and `_agent_home_binds` take `with_login` (default true, so #89's per-CLI semantics hold for normal steps). The fallback route passes `with_login=False`: the Codex home overlay stays, no `codex-auth-*` copy and no `auth.json` bind exist, and the route's environment already carries no Codex key (`fallback_env` starts from `confined_env(env, None)`). Test: `ConfinementCompositionTests.test_fallback_step_gets_no_codex_login` (synthetic `~/.codex/auth.json`; default binds one copy, `with_login=False` none).
+- **SEC2-002 fixed.** `run.py` records `fallback.served_digest(model)` (the `/api/tags` digest) as `digest` in `fallback.json` at opt-in; null, with a printed note, when Ollama does not serve the model. After the remote/cloud checks the probes refuse with `incompatible-capability` when the served digest differs (`model changed since opt-in`) or none was pinned (`model not pinned at opt-in`); no new reason was added. Tests: `ProbeTests.test_model_digest_pinned_at_opt_in`, `WrapperFallbackTests.test_replaced_model_refuses_before_any_prompt`, `RunCliTests.test_opt_in_records_the_served_digest`, and the setting round trip. ADR-0014, data-model, operator-cli and wrapper-fallback contracts and the quickstart are updated. Residual: a model replaced before opt-in is trusted, and an operator who re-pulls the model must resume with the flag to re-pin.
+- **SEC2-003 fixed.** `_layers_absent` refuses on any entry under `root/.codex` (extended `test_other_codex_config_layer_refuses` with a `hooks.json`).
+- **SEC2-004, SEC2-005:** no action, as recorded.
+
+Verification: `uvx ruff check && uvx ruff format --check` clean; `unittest tests/test_fallback.py tests/test_autonomy.py tests/test_spec_workflow.py`: `Ran 421 tests`, `OK`.

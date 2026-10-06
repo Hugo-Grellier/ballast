@@ -47,7 +47,7 @@ else:
 ```
 
 - The fallback is considered only on the step's first attempt. A draft-retry attempt never falls back, and a fallback is never followed by a draft retry, so a step that falls back makes exactly two attempts (SC-005, FR-006, DEC-0001).
-- The fallback's `CODEX_HOME` is a fresh 0700 directory inside the attempt's private directory, removed after the attempt. Under bubblewrap it is the Codex home the confinement exposes. No user Codex configuration file is read (plan-review F-001), and a non-empty `~/.agents/skills` refuses the fallback (F-003).
+- The fallback's `CODEX_HOME` is a fresh 0700 directory inside the attempt's private directory, removed after the attempt. Under bubblewrap it is the Codex home the confinement exposes, as a throwaway overlay with no copy of the operator's `~/.codex/auth.json` (`confined_argv(..., with_login=False)`): `--oss` needs no login (SEC2-001). No user Codex configuration file is read (plan-review F-001), and a non-empty `~/.agents/skills` refuses the fallback (F-003).
 - With the setting off, no new digest, probe, file or ledger event exists: the step behaves byte-for-byte as before (AC-003). Tests compare argv, `steps.jsonl` and ledger with and without the feature present.
 - `_attempt` gains one keyword, `fallback: Setting | None`. When set, it uses `fallback_argv`/`fallback_env`, `integration="codex"`, `--json` parsing for `BLOCKING` and the terminal, the timeout of research R9, and writes `route`, `provider` and `model` into `meta.json` and the entry. Confinement, scope, subreaper, protected-state check, tamper marker and draft snapshotting are the same code path as a primary attempt.
 - A fallback that exits 0 with a refused draft ends the step with `EXIT_LIMIT`, `limit: "retries"` and the reason `draft refused after the local fallback: <message>`, using the existing limit-condition wording. It is not retried.
@@ -60,8 +60,8 @@ else:
 | `changed-state` | tree, reviews, drafts, ignored paths or refs differ after the primary, or any of them cannot be checked |
 | `privacy-exclusion` | an endpoint override variable (`CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OLLAMA_HOST`) in the built environment; model entry remote or cloud |
 | `unknown-free-status` | model not listed, or listed without size and digest |
-| `incompatible-capability` | server not answering, or older than Ollama 0.13.4 or of unknown version; served context below 16384 or unknown (`num_ctx`, DEC-0004); codex missing or without `--oss`/`--local-provider`; the project's Codex skill for the step's Spec Kit command missing; Codex sandbox not starting under the step's confinement; the checks exceeding their 10 s budget |
-| `permission-mismatch` | argv or env not exactly the one the wrapper builds (any added, removed or changed token); a Codex configuration layer outside the private `CODEX_HOME` exists or could not be established; the user skills directory `~/.agents/skills` is non-empty, a symlink or unreadable (plan-review F-003) |
+| `incompatible-capability` | server not answering, or older than Ollama 0.13.4 or of unknown version; served context below 16384 or unknown (`num_ctx`, DEC-0004); codex missing or without `--oss`/`--local-provider`; the project's Codex skill for the step's Spec Kit command missing; Codex sandbox not starting under the step's confinement; the model's served digest differs from the one recorded at opt-in (`model changed since opt-in`) or none was recorded (`model not pinned at opt-in`; SEC2-002); the checks exceeding their 10 s budget |
+| `permission-mismatch` | argv or env not exactly the one the wrapper builds (any added, removed or changed token); a Codex configuration layer outside the private `CODEX_HOME` exists (any entry under the project's `.codex`, SEC2-003) or could not be established; the user skills directory `~/.agents/skills` is non-empty, a symlink or unreadable (plan-review F-003) |
 
 ## Review provenance
 
