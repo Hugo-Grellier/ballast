@@ -129,7 +129,7 @@ Policies, templates and workflow state keep agent-provisional decisions visibly 
 
 - The base advances while a run is paused, and synchronization conflicts: the run blocks before any agent step with the conflict named. [S: docs/adr/0005-launcher-branch-synchronization.md]
 - A pre-implementation block has no implementation baseline yet; resume must not require one before implementation runs. [S: Issue comment Hugo-Grellier 2026-10-05T20:44:26Z]
-- The fix loop and retries together approach the default 30-step limit; the run blocks as exhausted limits rather than overrunning. [I]
+- The fix loop and retries together approach the default 40-step limit; the run blocks as exhausted limits rather than overrunning. [I]
 - The wall-time limit is reached in the middle of an agent step; the run stops at the end of that step and blocks as exhausted limits. [S: tools/spec_workflow/autonomy.py]
 - A retried step produces a valid draft that contradicts accepted intent; that is a content refusal and blocks without further retry. [P: D-05]
 - The refresh runs while another invocation of the same run is active; it refuses rather than racing the active invocation. [I]
@@ -203,7 +203,7 @@ Every Issue acceptance criterion (IAC-1 to IAC-4) is covered by an acceptance cr
 
 ## Assumptions
 
-- The default limits (240 minutes active wall time, 30 agent steps) are checked by the plan against the workflow's step count plus three fix cycles and retries; changing a default is a recorded plan decision. [I]
+- The default limits (240 minutes active wall time, 40 agent steps) are checked by the plan against the workflow's step count plus three fix cycles and retries; changing a default is a recorded plan decision. [I]
 - Resume re-entering at the earliest step whose recorded input changed is how a spec fix made during a block is handled; the plan defines how a changed input is detected. [I]
 - A correctable refusal is one the agent can fix by rewriting its own draft (format, length, approval wording); the plan lists the recorder errors in that class. [P: D-05]
 - The plan orders the resume and retry fixes first, because they unblock the pilot run for AC-001. [I]
