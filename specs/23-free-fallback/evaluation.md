@@ -6,7 +6,7 @@ Evidence for [research.md](research.md) R10 and AC-018. Task T028 completes this
 
 - **Run**: task T001, 2026-10-06, by the driving agent (claude/claude-opus-5-5) acting from the operator side: a host shell outside Ballast's confinement, not a confined agent step and not through `ballast run` (DEC-0002 option 1).
 - **Context**: every probe ran from that host shell. Each ran in a scratch directory outside the feature worktree, written `$SCRATCH` below. The Codex runs used `CODEX_HOME=$SCRATCH/<probe>/home`, an empty directory. No Ollama sign-in and no cloud tag pull happened. Account, quota and credential details are redacted, and dates and times in captured messages are replaced with `<date>` and `<time>`.
-- **Outcome**: **stop condition holds.** The `--oss` run can't reach the model on this host because Codex 0.155.1 refuses Ollama 0.6.8. A second problem contradicts research R6: no `--config` key can pin the base URL of Codex's built-in Ollama provider. Both are recorded as DEC-0003 in [decisions.md](decisions.md). T001 stays open.
+- **Outcome**: **stop condition holds.** The `--oss` run can't reach the model on this host because Codex 0.155.1 refuses Ollama 0.6.8. A second problem contradicts research R6: no `--config` key can pin the base URL of Codex's built-in Ollama provider. Both are recorded as DEC-0003 in [decisions.md](decisions.md). T001 stays open. **Update, 2026-10-06 (item 9)**: after the Ollama 0.35.1 upgrade the version gate passes, but a trivial `--oss` run still fails because the host serves `qwen3:4b` with a 4096-token context, below Codex's roughly 7.7k-token prompt. T001 stays open (DEC-0004).
 
 ### 1. Versions and help
 
@@ -111,3 +111,17 @@ Instructions and skills also load from outside `CODEX_HOME`: `~/.agents/skills` 
 | claude | provider-unavailable | `Connection error.`, `Request timed out`, `Unable to connect to API: …`, `overloaded_error` | Claude Code 2.1.290 binary strings |
 
 The earlier logs searched were the wrapper's `stdout.log` and `stderr.log` files under `.specify/workflow-state/` in the operator's local checkouts (85 non-empty files), plus Ballast's operator state. They held one real quota message (Codex, above). Claude printed both captured messages on stdout, not stderr. No cause lacks a signature for either integration.
+
+### 9. Rerun on Ollama 0.35.1 (2026-10-06, operator host, outside confinement)
+
+Context: the operator upgraded Ollama after DEC-0003. Every probe ran from the host shell in `$SCRATCH` (a scratch directory under the session scratchpad, holding an empty `CODEX_HOME` and a scratch Git repository). No Ollama sign-in, no cloud pull. The Ollama server's own settings were not read or changed.
+
+| Command | Outcome |
+| --- | --- |
+| `ollama --version` | `ollama version is 0.35.1` |
+| `curl --noproxy '*' http://127.0.0.1:11434/api/version` | `{"version":"0.35.1"}` |
+| `curl … /api/tags` | one local model, `qwen3:4b`: `size` 2620788019, `digest` `a383baf4…d45378`, `details.context_length` 40960, `capabilities` `tools`, `thinking`, `completion`. No `remote_model` or `remote_host`. |
+| `curl … /api/show -d '{"model":"qwen3:4b"}'` | keys `capabilities`, `details`, `license`, `model_info`, `modelfile`, `modified_at`, `parameters`, `template`. `remote_host`, `remote_model`, `size` and `digest` are all absent, as on 0.6.8. A cloud tag could not be observed (none pulled). The recognition rule of item 3 stands: non-empty `remote_model` or `remote_host`, or a `cloud` tag. |
+| `CODEX_HOME=$SCRATCH/home codex exec --oss --local-provider ollama -m qwen3:4b --json --skip-git-repo-check "Reply with the word ok" < /dev/null` (no base-URL override, no environment override) | exit 1 after 15 s. The version check now passes and Codex reaches the default `127.0.0.1:11434` without any login or sign-in. Events: `thread.started`, the same `item.completed` of type `error` ("Model metadata for `qwen3:4b` not found…"), `turn.started`, five `error` events `Reconnecting... N/5 (stream disconnected before completion: …)`, a final `error`, then `turn.failed`. Every error carries the server's `exceed_context_size_error` (HTTP 400): `request (7684 tokens) exceeds the available context size (4096 tokens)` (`n_prompt_tokens` 7684, `n_ctx` 4096). No `agent_message` and no `turn.completed` were emitted. |
+
+**Result**: the Ollama version gate is cleared and `--oss` needs no login (the run reached the model server on the default endpoint, with an empty `CODEX_HOME`). The default endpoint works with no override. The model still **cannot answer**: Codex's own instructions for even a trivial prompt are about 7.7k tokens, and Ollama served `qwen3:4b` with a 4096-token context, so the server rejects every request. The `--json` shape of a successful `--oss` run therefore stays unobserved (the stub-fed shape of item 4 is the only evidence). Stop condition: model cannot answer. → DEC-0004.

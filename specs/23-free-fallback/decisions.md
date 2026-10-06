@@ -70,3 +70,14 @@
 
 - **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The Ollama upgrade to 0.13.4 or newer is an operator host action, requested 2026-10-06.
 - **Resolution**: option 1. The fallback talks only to Ollama's default loopback endpoint `127.0.0.1:11434`; `--local-fallback-endpoint` is dropped, and the wrapper keeps stripping `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, so nothing an agent or the checkout controls can redirect the provider. No boundary widens. The pilot's `--oss` run (and whether it needs a login) is repeated after the upgrade, before T001 is ticked.
+
+## DEC-0004 — Discovery
+
+- **Found during**: task T001, the host pilot rerun on 2026-10-06 from the operator side, after the Ollama upgrade to 0.35.1. Evidence is in [evaluation.md](evaluation.md#9-rerun-on-ollama-0351-2026-10-06-operator-host-outside-confinement).
+- **Conflict**: DEC-0003 option 1 is met (Ollama 0.35.1, default endpoint, no login needed), but `codex exec --oss --local-provider ollama -m qwen3:4b --json` still fails on a trivial prompt. Codex sends about 7.7k tokens of instructions, and the host's Ollama serves the model with a 4096-token context, so the server returns `exceed_context_size_error` (HTTP 400) and Codex retries five times, then emits `turn.failed`. T001's stop rule applies: the model cannot answer through the candidate. R1 and R5 assume a model that runs under Codex, and none of them states a minimum context length. The `--oss` provider offers no per-run way to raise the context (Ollama's context comes from the server setting, the model's `num_ctx` or the Modelfile, not from Codex). An agent can't change it without changing host state.
+- **Label**: spec ambiguity (no requirement on the model's served context length) and architecture issue (R5's checks 7 and 8 judge the model by size and digest, so a model the server cannot run for Codex passes them).
+- **Options**:
+  1. The operator raises the host's served context (the `OLLAMA_CONTEXT_LENGTH` server setting, or a local model variant with a larger `num_ctx`) to at least 16k tokens, restarts Ollama, and the pilot's item 4 is rerun. The plan then adds an R5 check that refuses a model whose served context is below a recorded minimum, if `/api/show` or `/api/ps` exposes it. This changes the host, not the spec, and is an operator action.
+  2. Qualify a different, larger-context local model. The operator pulls it, and the pilot reruns with that tag. R1 and the quickstart name the new tag.
+  3. Reject the candidate for now: record that no zero-cost fallback qualifies on this host and close the feature with evidence.
+- **Needs**: an operator resolution and a host change (options 1 or 2) before T001 is ticked. T001 stays open and the implement step does not continue.
