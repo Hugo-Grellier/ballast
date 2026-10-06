@@ -1,0 +1,46 @@
+{
+  "point": "specialist-review",
+  "decision": "accept-finding",
+  "summary": "Demo capture keeps agent authority unchanged: operator-only dispatch on the feature branch, protected command, secretless read-only job, verified definition and commit",
+  "basis": "Traced the request path in run.py and demo.py, the workflow template and ADR-0012 against docs/policies/security.md and the R2 boundaries in docs/policies/project/workflow.md. Only the trusted ballast run demo can dispatch, after the tamper and in-progress markers and the run lock; agents keep gh, .github and ballast.toml denied. The command comes only from the protected [demo] table and is validated. Dispatch uses the feature branch, after a blob-identity check of the workflow; the job checks GITHUB_SHA and HEAD, and Ballast links only a run whose head_sha is the requested commit. The template has workflow_dispatch only, contents: read, no secrets or environment, inputs only via env, SHA-pinned actions, persist-credentials false, no cache. gh output is parsed into fixed codes; the ledger event is runner-only and text-free; packet text is inert. Two residual points are low/info and open. docs/policies/project/security.md does not exist. Same-provider review; live GitHub cache-scope behavior is post-merge pilot evidence.",
+  "evidence": [
+    "specs/22-ui-demo/reviews/security.md",
+    "tools/spec_workflow/demo.py",
+    "tools/spec_workflow/run.py",
+    "templates/github/workflows/ballast-demo.yml",
+    "docs/adr/0012-demo-capture-dispatch.md",
+    "tests/test_demo.py",
+    "docs/policies/security.md",
+    "docs/policies/project/workflow.md"
+  ],
+  "artifact": "tools/spec_workflow/demo.py",
+  "model": "claude-opus-5-5",
+  "material": false,
+  "supersedes": null,
+  "privileged_actions": [],
+  "review": {
+    "kind": "security",
+    "verdict": "approved",
+    "report": "specs/22-ui-demo/reviews/security.md",
+    "findings": [
+      {
+        "id": "F-001",
+        "severity": "low",
+        "label": "implementation-bug",
+        "disposition": "open",
+        "reason": "demo._Request.dispatch refuses a branch equal to the run's base, not the repository default branch that check_workflow already read. They differ only for a PR whose base is not the default branch, and the published branch is the runner's own feature branch, so this is defense in depth: compare against the fetched default branch as well.",
+        "evidence": ["tools/spec_workflow/demo.py"]
+      },
+      {
+        "id": "F-002",
+        "severity": "info",
+        "label": "spec-ambiguity",
+        "disposition": "open",
+        "reason": "The outcome steps run in the same job as PR-head code, which can write GITHUB_OUTPUT/GITHUB_ENV or leave a background process, so captured versus failed is reported by untrusted code. Acceptable because a video is never evidence or approval (FR-014); worth one sentence in the policy's Demo capture section.",
+        "evidence": ["templates/github/workflows/ballast-demo.yml", "templates/policies/spec-kit-workflow.md"]
+      }
+    ],
+    "required_kinds": []
+  },
+  "assumption": null
+}
