@@ -986,7 +986,7 @@ class ConfinementTests(AutonomyCase):
                     self.root, ["true"], private=private, home=home, env=env
                 )
                 joined = " ".join(argv)
-                copy = private / "credentials.json"
+                copy = private / "credentials-0.json"
                 bind = f"--ro-bind {copy} {login}"
                 self.assertIn(bind, joined)
                 self.assertGreater(
@@ -999,6 +999,38 @@ class ConfinementTests(AutonomyCase):
                 )
                 self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
                 self.assertIn("refresh", login.read_text())
+
+    def test_every_claude_home_gets_a_login_without_refresh_tokens(self) -> None:
+        """#65 SEC-001: CLAUDE_CONFIG_DIR does not leave ~/.claude's login readable."""
+        home = self.base / "home"
+        config = self.base / "config"
+        logins = [config / ".credentials.json", home / ".claude/.credentials.json"]
+        for login in logins:
+            login.parent.mkdir(parents=True)
+            login.write_text(
+                json.dumps({"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}})
+            )
+        private = self.base / "private"
+        private.mkdir()
+        argv = autonomy.confined_argv(
+            self.root,
+            ["true"],
+            private=private,
+            home=home,
+            env={"CLAUDE_CONFIG_DIR": str(config)},
+        )
+        joined = " ".join(argv)
+        for index, login in enumerate(logins):
+            copy = private / f"credentials-{index}.json"
+            self.assertIn(f"--tmp-overlay {login.parent}", joined)
+            self.assertIn(f"--ro-bind {copy} {login}", joined)
+            self.assertEqual(
+                json.loads(copy.read_text()), {"claudeAiOauth": {"accessToken": "a"}}
+            )
+        self.assertEqual(
+            autonomy.claude_homes(home, {"CLAUDE_CONFIG_DIR": str(home / ".claude")}),
+            [home / ".claude"],
+        )
 
     def test_unreadable_claude_login_is_hidden(self) -> None:
         home = self.base / "home"
@@ -1544,6 +1576,39 @@ class RealConfinementTests(AutonomyCase):
         self.assertEqual(seen, {"claudeAiOauth": {"accessToken": "a"}})
         self.assertFalse(renamed)
         self.assertEqual(login.read_text(), original)
+
+    def test_no_claude_home_shows_a_refresh_token(self) -> None:
+        """#65 SEC-001: both the selected and the default home, under real bwrap."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        base = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp")))
+        home, config = base / "home", base / "config"
+        logins = [config / ".credentials.json", home / ".claude/.credentials.json"]
+        for name, login in zip(("env", "default"), logins, strict=True):
+            login.parent.mkdir(parents=True)
+            login.write_text(
+                json.dumps(
+                    {"claudeAiOauth": {"accessToken": f"A-{name}", "refreshToken": "R"}}
+                )
+            )
+        private = self.base / "private"
+        private.mkdir()
+        env = autonomy.confined_env(dict(os.environ), None)
+        env["PATH"] = self.real_path
+        argv = autonomy.confined_argv(
+            self.root,
+            ["cat", *map(str, logins)],
+            private=private,
+            home=home,
+            env={**env, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(config)},
+        )
+        result = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, check=False, env=env, timeout=60
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("A-env", result.stdout)
+        self.assertIn("A-default", result.stdout)
+        self.assertNotIn("refreshToken", result.stdout)
 
     def test_operator_processes_bus_and_credentials_unreachable(self) -> None:
         code = (

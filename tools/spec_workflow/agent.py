@@ -988,9 +988,22 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
         attempt += 1
 
 
-def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear agent run
+def _attempt(root: Path, **kwargs: object) -> tuple[int, dict]:
+    """Run `_attempt_in` with a private directory that never outlives it.
+
+    The directory holds the step's copy of the Claude login (an access token),
+    so it is removed however the attempt ends (#65 SEC-002).
+    """
+    with tempfile.TemporaryDirectory(
+        prefix="ballast-agent-", ignore_cleanup_errors=True
+    ) as private:
+        return _attempt_in(root, private=Path(private), **kwargs)  # type: ignore[arg-type]
+
+
+def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear agent run
     root: Path,
     *,
+    private: Path,
     integration: str,
     argv: list[str],
     scope: tuple[str, list[str]],
@@ -1009,7 +1022,6 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
     if git is not None:
         env["BALLAST_GIT"] = git
         env["PATH"] = os.pathsep.join((str(GUARD), env.get("PATH", "")))
-    private = None
     step_record: dict = {}
     if record is not None:
         feature = record["feature"]
@@ -1030,7 +1042,6 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
                 "--disallowedTools",
                 *CONFINED_DENY,
             ]
-        private = Path(tempfile.mkdtemp(prefix="ballast-agent-"))
         # The operator's environment names the credential locations to hide.
         argv = autonomy.confined_argv(
             root, argv, private=private, feature=feature, env=env
@@ -1181,8 +1192,6 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
         }
         if limit_hit:
             entry["limit"] = "wall-time"
-    if private is not None:
-        shutil.rmtree(private, ignore_errors=True)
     with meta_file:
         meta_file.write((json.dumps(meta, indent=2) + "\n").encode())
     return exit_code, entry

@@ -564,7 +564,10 @@ A confined Claude step reads the operator's login without its refresh token,
 so it can never rotate the operator out of their session. When the access token
 expires during a step, the step stops with a `credential` block: sign in again
 outside the sandbox (run `claude` once, or `claude /login`), then
-`ballast run resume RUN_ID` re-enters at the failed step.
+`ballast run resume RUN_ID` re-enters at the failed step. Every Claude home a
+step could read gets this treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude` when
+both exist. A human-gated or Chat step that hits the same error fails with
+`Blocked (credential)` and the same remedy.
 
 **Fix loop.** After implementation the trusted runner runs the `[checks]`
 commands as feedback (`checks-implementation`): a failure is recorded for the

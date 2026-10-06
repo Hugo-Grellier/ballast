@@ -832,10 +832,10 @@ class RunBlockTests(RunCase):
         self.assertEqual(block["category"], "credential")
         self.assertIn(reason, block["condition"])
         self.assertIn("claude /login", block["recovery"])
-        self.assertEqual(
-            block["command"],
-            f"ballast run continue {run_id} --reason block-resolved --ref TEXT",
-        )
+        self.assertIn("then resume", block["recovery"])
+        # #65 SEC-006: resume re-enters at the failed step (#21).
+        self.assertEqual(block["command"], f"ballast run resume {run_id}")
+        self.assertEqual(autonomy.block_class(block), "missing authority")
 
     def test_tamper_keeps_its_category_despite_the_kept_marker(self) -> None:
         """The wrapper keeps the in-progress marker after tampering on purpose."""
