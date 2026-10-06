@@ -47,21 +47,25 @@ Additional tests: `record_baseline` write order and crash between writes (proven
 
 ## End-to-end check (recorded in the PR)
 
-On a scratch GitHub repository the operator can read, with `[github] repository` set and the project pinned to the feature's build (`BALLAST_STANDARD_DIR` at a separate checkout of this branch):
+On a scratch GitHub repository the operator can read, with the project pinned in `ballast.toml` and `BALLAST_STANDARD_DIR` set to a separate checkout of this branch kept outside `/tmp`. Put every clone under the home directory (a primary checkout under `/tmp` or `$TMPDIR` is refused for worktrees), and use an `XDG_STATE_HOME` outside the checkouts and `/tmp`. The scratch repository's default branch must carry a committed `ballast.toml` with `[standard] ref` and `[github] repository = "OWNER/scratch"`, the constitution `.specify/memory/constitution.md` and the Ballast `.gitignore` block.
 
 ```bash
 git clone <scratch> a && cd a
 ballast setup                 # expect: "No trust baseline recorded: the pinned repository is not one you trusted on this machine."
-ballast trust                 # records the repository as reviewed
+ballast trust                 # records the baseline and OWNER/scratch as reviewed
 cd .. && git clone <scratch> b && cd b
-ballast setup                 # expect: "Recorded the trust baseline ... default branch main at <commit>."
-ballast doctor                # expect trust: "baseline recorded by ballast setup"
-ballast run start --help      # the launcher accepts the checkout
-git worktree add ../b-55 -b feat/55-x && cd ../b-55
-ballast run start --help      # first command prepares and records; no ballast trust
+ballast setup                 # expect: "Recorded the trust baseline for N protected inputs: ballast.toml and the constitution match owner/scratch's default branch main at <12 hex>."
+ballast doctor                # expect trust: "the launcher accepts this checkout; baseline recorded by ballast setup"
+ballast ledger report --all   # the launcher accepts the checkout: no refusal
+git worktree add ~/e2e/b-55 -b feat/55-x && cd ~/e2e/b-55
+ballast ledger report --all   # first command prepares and records; no ballast trust
+cd ../b
+git worktree add ~/e2e/b-56 -b feat/56-y && cd ~/e2e/b-56
 printf '\n# edit\n' >> ballast.toml && git commit -qam edit
-git worktree add ../b-56 -b feat/56-y feat/55-x && cd ../b-56
-ballast run start --help      # expect: prepared, "No trust baseline recorded: ...", refusal naming ballast trust
+ballast setup                 # a changed ballast.toml needs its own installation: expect "No trust baseline recorded: ... differs from owner/scratch's default branch and from your last trusted baseline."
+ballast ledger report --all   # expect: refusal naming ballast trust
+cd ../b && git worktree add --detach ~/e2e/b-57 feat/56-y && cd ~/e2e/b-57
+ballast ledger report --all   # prepared from b-56's installation: "No trust baseline recorded: ..."; refusal naming ballast trust
 ```
 
-Expected outcomes are the comments; record the outputs and the Git version in the PR.
+Also try both clone transports (an `https://` and an `ssh://` origin, which choose the URL scheme), the same `ballast setup` with the network down (expect `offline or unreachable`) and, if you have a repository you cannot read, the pin `[github] repository` of it in a branch (expect `no access with your Git credentials` only after that repository was trusted once). Expected outcomes are the comments; record the outputs and the Git version in the PR, with hosts and paths removed.
