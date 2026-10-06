@@ -1665,6 +1665,7 @@ def git(
         [executable, *GIT_HARDENING, *overrides, *args],
         cwd=root,
         env=env,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         check=False,
@@ -1739,6 +1740,12 @@ def tree_digest(root: Path, exclude: tuple[str, ...] = ()) -> str:
             "--",
             *(f":(top){path}" for path in excluded),
             env=env,
+        )
+        head = git(root, "rev-parse", "-q", "--verify", "HEAD^{commit}", check=False)
+        refuse_embedded(
+            root,
+            head.stdout.strip() if head.returncode == 0 else None,
+            lambda *args: git(root, *args, env=env).stdout,
         )
         return git(root, "write-tree", env=env).stdout.strip()
 
@@ -2025,10 +2032,120 @@ def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
                 if path.is_symlink():
                     continue
             args += ["--bind", str(path), str(path)]
-    git = root / ".git"
-    if git.is_dir() and not git.is_symlink():
-        args += ["--ro-bind", str(git), str(git)]
+    return args + _git_binds(root)
+
+
+def _git_binds(root: Path) -> list[str]:
+    """Read-only binds for `.git` and the Git directories it names.
+
+    A linked worktree's `.git` is a pointer file: read-only like a primary
+    `.git` directory, or a rewritten pointer would hand the operator's next
+    git a forged config (core.fsmonitor, hooks). Its admin directory under
+    the common dir (HEAD, index, gitdir, commondir, config.worktree) too.
+    Every initialized submodule's `.git` and admin directory under
+    `<common>/modules/` likewise, recursively: the operator's git recurses
+    into submodules, so a rewritten submodule pointer is the same attack.
+    """
+    args: list[str] = []
+    pointer = root / ".git"
+    if pointer.is_symlink():
+        message = f"{pointer} is a symlink; refusing to confine a step"
+        raise AutonomyError(message, "ineligible")
+    if os.path.lexists(pointer):
+        args += ["--ro-bind", str(pointer), str(pointer)]
+    checkout = root.resolve()
+    for flag in ("--absolute-git-dir", "--git-common-dir"):
+        found = git(root, "rev-parse", "--path-format=absolute", flag, check=False)
+        # A `.git` git cannot resolve (say a regular file that is not a
+        # `gitdir:` pointer) names no admin directory: the bind above is all.
+        path = Path(found.stdout.strip()).resolve() if found.returncode == 0 else None
+        # Never a directory holding the checkout: that would make it read-only.
+        if path and path.is_dir() and not checkout.is_relative_to(path):
+            args += ["--ro-bind", str(path), str(path)]
+    # Gitlinks come from the index, which lives in the read-only admin dir.
+    listed = git(root, "ls-files", "-s", "-z", check=False)
+    for path in _gitlinks(listed.stdout if listed.returncode == 0 else ""):
+        if os.path.lexists(root / path / ".git"):
+            args += _git_binds(root / path)
     return args
+
+
+def _gitlinks(listing: str) -> set[str]:
+    """Paths of the gitlinks (mode 160000) in `ls-files -s -z`/`ls-tree -r -z`."""
+    return {
+        entry.split("\t", 1)[1]
+        for entry in listing.split("\0")
+        if entry.startswith("160000 ") and "\t" in entry
+    }
+
+
+def embedded_repositories(
+    root: Path, index: str, base: str, modules: Path
+) -> list[str]:
+    """Paths in a staged index that would publish a repository a step made.
+
+    `index` is the staged `git ls-files -s -z`, `base` the base tree's
+    `git ls-tree -r -z` ("" when there is none) and `modules` the absolute
+    `<common>/modules`. A step can `git init` a directory in its writable
+    tree; `git add --all` records it as a gitlink, and the operator's next git
+    that recurses into it runs that repository's config (core.fsmonitor,
+    hooks). Refused: a gitlink the base lacks; any staged path under a
+    directory holding a `.git` that is not a base gitlink; and a base gitlink
+    whose `.git` is not a pointer into `modules` (a step populated an
+    uninitialized submodule).
+    """
+    known = _gitlinks(base)
+    found = _gitlinks(index) - known
+    seen: set[str] = set()
+    for entry in index.split("\0"):
+        if "\t" not in entry:
+            continue
+        parts = entry.split("\t", 1)[1].split("/")
+        for depth in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:depth])
+            if prefix in seen:
+                continue
+            seen.add(prefix)
+            dot_git = root / prefix / ".git"
+            if prefix in known:
+                if os.path.lexists(dot_git) and not _module_pointer(dot_git, modules):
+                    found.add(prefix)
+                break
+            if os.path.lexists(dot_git):
+                found.add(prefix)
+                break
+    return sorted(found)
+
+
+def _module_pointer(dot_git: Path, modules: Path) -> bool:
+    """Whether `dot_git` is a `gitdir:` pointer file into `modules`."""
+    if dot_git.is_symlink() or not dot_git.is_file():
+        return False
+    text = dot_git.read_text(encoding="utf-8", errors="replace").strip()
+    if not text.startswith("gitdir: "):
+        return False
+    target = (dot_git.parent / text.removeprefix("gitdir: ")).resolve()
+    return target.is_relative_to(modules.resolve())
+
+
+def refuse_embedded(root: Path, base: str | None, run: Callable[..., str]) -> None:
+    """Raise when the staged index would publish an embedded repository.
+
+    `run(*args)` runs the caller's hardened git in `root` against the staged
+    index and returns its stdout; `base` is the base commit, None if unborn.
+    """
+    common = run("rev-parse", "--path-format=absolute", "--git-common-dir")
+    found = embedded_repositories(
+        root,
+        run("ls-files", "-s", "-z"),
+        run("ls-tree", "-r", "-z", base) if base else "",
+        Path(common.strip()) / "modules",
+    )
+    if found:
+        message = "refusing to stage an embedded Git repository: " + ", ".join(
+            found[:10]
+        )
+        raise AutonomyError(message, "postcondition")
 
 
 TMPFS_HIDDEN = (Path("/tmp"), Path("/run"))  # noqa: S108 - emptied in the sandbox
@@ -3344,6 +3461,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
         # The record is rendered by trusted recorders, so it is always publishable.
         allowed.add(record_path(run["feature"]))
         git(root, "add", "--all")
+        _refuse_staged_embedded(root, head)
         staged = git(
             root, "diff", "--cached", "--name-only", "--no-renames", head
         ).stdout.split()
@@ -3407,6 +3525,15 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
     return {"ok": True, "category": None, "message": "published", "url": url}
 
 
+def _refuse_staged_embedded(root: Path, head: str) -> None:
+    """Unstage and refuse when the index would publish an embedded repository."""
+    try:
+        refuse_embedded(root, head, lambda *args: git(root, *args).stdout)
+    except AutonomyError:
+        git(root, "reset", "-q", check=False)
+        raise
+
+
 def _publish_chat(root: Path, run: dict) -> dict:
     """Publish a Chat run (#20 D-6): the Autonomous commit, push and PR path.
 
@@ -3437,6 +3564,7 @@ def _publish_chat(root: Path, run: dict) -> dict:
             return refuse("postcondition", "; ".join(findings))
         head = run["start_head"]
         git(root, "add", "--all")
+        _refuse_staged_embedded(root, head)
         staged = git(
             root, "diff", "--cached", "--name-only", "--no-renames", head
         ).stdout.split()

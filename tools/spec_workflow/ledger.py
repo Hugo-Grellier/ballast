@@ -37,7 +37,7 @@ sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN  # noqa: E402
-from autonomy import AutonomyError, filter_flags  # noqa: E402
+from autonomy import AutonomyError, filter_flags, refuse_embedded  # noqa: E402
 from launcher import agent_temp_roots  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -895,6 +895,14 @@ def implementation_tree(root: Path) -> str:
         # Fixed pathspecs avoid interpreting untrusted filenames as Git magic.
         _git(root, *NO_HOOKS, "add", "-A", "--", ".", ":!specs", env=env)
         _git(root, *NO_HOOKS, *DROP_SPECS, env=env)
+        try:
+            refuse_embedded(
+                root,
+                "HEAD" if _has_head(root) else None,
+                lambda *args: _git(root, *NO_HOOKS, *args, env=env),
+            )
+        except AutonomyError as error:
+            fail(str(error))
         tree_oid = _git(root, *NO_HOOKS, "write-tree", env=env)
         return hashlib.sha256(tree_oid.encode("ascii")).hexdigest()
 
