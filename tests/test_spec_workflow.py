@@ -1433,8 +1433,10 @@ class RunFormatTests(unittest.TestCase):
     # every shipped workflow's step IDs. Record a new entry only together with
     # a new [runs] format (and a decision on [runs] resumes).
     BASIS: ClassVar[dict[str, str]] = {
+        # ballast-autonomous 1.2.0 (#21) added fix steps; a run started under
+        # 1.1.0 still resumes from its own workflow copy (#21 R19).
         "ballast-run/1": (
-            "67ad04f92da7349fdb4ef1b0237349da9fcb9ecf1680df537efc1bd65c571421"
+            "1aced2c4b3f9cef84956b39304132dcc0f096b909542420370e693ca922dabdc"
         ),
     }
 
