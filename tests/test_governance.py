@@ -266,5 +266,37 @@ class ChatGovernanceTests(unittest.TestCase):
         self.assertIn("never raised to Autonomous", workflow)
 
 
+class DemoPolicyTests(unittest.TestCase):
+    """#22 T024 [AC-007, AC-009]: the policy documents demo capture."""
+
+    def test_demo_capture_subsection(self) -> None:
+        spec_kit = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
+        section = spec_kit[spec_kit.index("### Demo capture") :]
+        section = " ".join(section[: section.index("\n## ")].split())
+        for text in (
+            "`ballast run demo RUN_ID SCENARIO [--no-wait]`",
+            "Check out the captured commit in a clean checkout and run that command",
+            "only seeded, nonsensitive data and fake accounts",
+            "readable by anyone with repository read access",
+            "A command that itself exits 124 or 137",
+            "reported `timed-out`",
+            "Every feature branch must carry the default branch's `ballast-demo.yml`",
+            "It is never evidence for a criterion",
+        ):
+            self.assertIn(text, section)
+        for state in (
+            "captured",
+            "in progress",
+            "failed",
+            "missing",
+            "stale",
+            "not yet requested",
+            "not configured",
+            "configuration invalid",
+        ):
+            with self.subTest(state=state):
+                self.assertIn(f"| `{state}` |", section)
+
+
 if __name__ == "__main__":
     unittest.main()

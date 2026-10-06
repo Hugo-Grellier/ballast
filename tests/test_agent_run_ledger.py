@@ -3048,6 +3048,111 @@ class AcceptancePacketEventTests(unittest.TestCase):
         self.assertNotIn("acceptance_packet", ledger.aggregate(self.root))
 
 
+DEMO_CAPTURE = {
+    "scenario": "login-journey",
+    "commit": OID_A,
+    "request": "0123456789abcdef",
+    "command_digest": "d" * 64,
+    "pr_number": 7,
+}
+
+
+class DemoCaptureEventTests(unittest.TestCase):
+    """#22 T004: the runner-only `demo_capture` kind (AC-006, FR-018)."""
+
+    setUp = AcceptancePacketEventTests.setUp
+    tearDown = AcceptancePacketEventTests.tearDown
+
+    def event(
+        self, data: dict[str, object], source: str = "runner", event_id: str = "d"
+    ) -> object:
+        return ledger.new_event(
+            "run_1", FEATURE, "demo_capture", source, data, event_id
+        )
+
+    def test_a_runner_event_is_accepted(self) -> None:
+        self.event(DEMO_CAPTURE)
+        self.event({**DEMO_CAPTURE, "commit": "b" * 64, "scenario": "a.b_c-1"})
+
+    def test_values_outside_the_contract_are_rejected(self) -> None:
+        cases: dict[str, dict[str, object]] = {
+            "scenario with a space": {**DEMO_CAPTURE, "scenario": "login journey"},
+            "scenario with markup": {**DEMO_CAPTURE, "scenario": "[x](y)"},
+            "scenario too long": {**DEMO_CAPTURE, "scenario": "a" * 65},
+            "request not 16 hex": {**DEMO_CAPTURE, "request": "0123456789abcdeg"},
+            "request too short": {**DEMO_CAPTURE, "request": "0123"},
+            "short command digest": {**DEMO_CAPTURE, "command_digest": "d" * 63},
+            "short commit": {**DEMO_CAPTURE, "commit": "a" * 12},
+            "pr_number zero": {**DEMO_CAPTURE, "pr_number": 0},
+            "pr_number text": {**DEMO_CAPTURE, "pr_number": "7"},
+            "free text": {**DEMO_CAPTURE, "command": "npm run demo"},
+        }
+        for field in DEMO_CAPTURE:
+            data = dict(DEMO_CAPTURE)
+            del data[field]
+            cases[f"without {field}"] = data
+        for name, data in cases.items():
+            with self.subTest(name=name), self.assertRaises(ledger.LedgerError):
+                self.event(data)
+        for source in ("agent-reported", "operator-attested"):
+            with (
+                self.subTest(source=source),
+                self.assertRaisesRegex(ledger.LedgerError, "requires runner"),
+            ):
+                self.event(DEMO_CAPTURE, source)
+
+    def test_record_does_not_offer_the_kind(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            self.assertRaises(SystemExit),
+        ):
+            ledger.main(
+                [
+                    "record",
+                    "run_1",
+                    "demo_capture",
+                    "--source",
+                    "agent-reported",
+                    "--data",
+                    json.dumps(DEMO_CAPTURE),
+                ]
+            )
+        self.assertIn("invalid choice", output.getvalue())
+
+    def test_report_shows_the_newest_capture_per_scenario(self) -> None:
+        LedgerTests.write_run(self, [])  # type: ignore[arg-type]
+        ledger.import_run(self.root, "run_1")
+        self.assertNotIn("demo_capture", ledger.report(self.root, "run_1"))
+        for index, data in enumerate(
+            (
+                DEMO_CAPTURE,
+                {**DEMO_CAPTURE, "scenario": "checkout"},
+                {**DEMO_CAPTURE, "request": "fedcba9876543210"},
+            )
+        ):
+            ledger.append(self.root, self.event(data, event_id=f"d{index}"))
+        events, _ = ledger.read(self.root, "run_1")
+        report = ledger.report(self.root, "run_1")
+        newest = {
+            event["data"]["scenario"]: {
+                **event["data"],
+                "observed_at": event["observed_at"],
+            }
+            for event in events
+            if event["kind"] == "demo_capture"
+        }
+        self.assertEqual(report["demo_capture"], newest)
+        self.assertEqual(
+            report["demo_capture"]["login-journey"]["request"], "fedcba9876543210"
+        )
+        self.assertIn(
+            "demo_capture: " + json.dumps(newest, sort_keys=True),
+            ledger._text_report(report).splitlines(),  # noqa: SLF001
+        )
+
+
 class ChatModeLedgerTests(unittest.TestCase):
     """#20 AC-014, FR-013, SC-007: the additive run `mode` field."""
 

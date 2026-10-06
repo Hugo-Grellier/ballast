@@ -9,7 +9,8 @@ canonical source pinned to that commit.
 
 - `collect` reads: the PR (head and base commits), the feature artifacts from
   the local object store at head, the run ledger, the operator's Autonomous
-  records, GitHub check runs at head, and an optional OpenAPI document.
+  records, GitHub check runs at head, an optional OpenAPI document, and the
+  workflow runs of requested demo captures (`demo.collect`, #22).
   Every command goes through the checkpoint's `git`/`gh` and `_command`,
   except `ledger.commit_tree`, which needs a private `GIT_INDEX_FILE` that
   `_command` strips: it runs ledger's resolved Git with filters, hooks and
@@ -40,6 +41,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import autonomy
+import demo
 import draft_pr
 import ledger
 
@@ -296,6 +298,8 @@ class Sources:
     config: ReviewConfig = field(default_factory=ReviewConfig)
     api: ApiComparison | None = None
     ui: tuple[UiResult, ...] = ()
+    # Never read by criteria, counts or evidence states (#22 FR-014).
+    demo: demo.DemoSection | None = None
 
 
 @dataclass(frozen=True)
@@ -992,6 +996,10 @@ class _Step:
                 replace(c, ui=tuple(u for u in ui if c.id in u.criteria))
                 for c in evaluated
             ]
+        try:
+            demos = demo.collect(self, head, events)
+        except demo.ReadError as error:
+            self.fail("failed-retryable", error.cause)
         return Sources(
             repo=self.repo,
             run_id=run.run_id,
@@ -1018,6 +1026,7 @@ class _Step:
             config=config,
             api=api,
             ui=ui,
+            demo=demos,
         )
 
     def check_runs(self, head: str) -> tuple[CheckRun, ...]:
@@ -1609,6 +1618,7 @@ def render(sources: Sources, level: int = 1, *, archive: bool = False) -> str:
         *_check_lines(sources),
         *_api_lines(sources, level, archive),
         *_ui_lines(sources, level, archive),
+        *demo.lines(sources.demo, level),
         *_source_lines(sources),
         END,
     ]

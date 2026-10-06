@@ -1,0 +1,146 @@
+# Ballast demo capture (copy-once template). Commit it as
+# .github/workflows/ballast-demo.yml on the default branch; feature branches
+# carry the same file. `ballast run demo RUN_ID SCENARIO` dispatches it on the
+# feature branch only when that branch's copy is byte-identical to the default
+# branch's, and links a video only when the run's commit is the requested one.
+# See "Demo capture" in docs/policies/spec-kit-workflow.md.
+#
+# The job has no credentials and a read-only token. The scenario's command
+# must use seeded, nonsensitive data and fake accounts: the video is readable
+# by anyone with read access to the repository.
+name: Ballast demo
+run-name: Ballast demo ${{ inputs.request }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Request ID chosen by Ballast (16 hex digits)
+        required: true
+        type: string
+      scenario:
+        description: Scenario name declared in ballast.toml
+        required: true
+        type: string
+      commit:
+        description: PR head commit to capture
+        required: true
+        type: string
+      command:
+        description: The scenario's command, run with bash at the repository root
+        required: true
+        type: string
+      video:
+        description: The one video file the command writes (relative path)
+        required: true
+        type: string
+      timeout_minutes:
+        description: Command timeout in minutes (1-60)
+        required: true
+        type: string
+      retention_days:
+        description: Artifact retention in days (1-90)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    # A backstop only: the command step's `timeout` enforces timeout_minutes.
+    # 60 minutes at most, the 30 s kill grace, checkout and upload.
+    timeout-minutes: 65
+    steps:
+      - name: Validate demo request
+        env:
+          REQUEST: ${{ inputs.request }}
+          SCENARIO: ${{ inputs.scenario }}
+          COMMIT: ${{ inputs.commit }}
+          DEMO_COMMAND: ${{ inputs.command }}
+          VIDEO: ${{ inputs.video }}
+          TIMEOUT: ${{ inputs.timeout_minutes }}
+          RETENTION: ${{ inputs.retention_days }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          request='^[0-9a-f]{16}$'
+          scenario='^[A-Za-z0-9._-]{1,64}$'
+          commit='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          small='^[1-9][0-9]?$'
+          [[ $REQUEST =~ $request ]] || fail "request is not 16 hex digits"
+          [[ $SCENARIO =~ $scenario ]] || fail "scenario name is invalid"
+          [[ $COMMIT =~ $commit ]] || fail "commit is not a full commit ID"
+          [[ $TIMEOUT =~ $small ]] && (( TIMEOUT <= 60 )) \
+            || fail "timeout_minutes must be 1-60"
+          [[ $RETENTION =~ $small ]] && (( RETENTION <= 90 )) \
+            || fail "retention_days must be 1-90"
+          [[ -n $VIDEO && $VIDEO != /* ]] || fail "video must be a relative path"
+          case "/$VIDEO/" in
+            */../*) fail "video must not contain .." ;;
+          esac
+          [[ -n $DEMO_COMMAND && $DEMO_COMMAND != *$'\n'* ]] \
+            || fail "command must be one non-empty line"
+          # The branch tip GitHub ran is the requested commit.
+          [[ $GITHUB_SHA == "$COMMIT" ]] || fail "the run's commit is not the request's"
+
+      - name: Check out the requested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run demo command
+        id: demo
+        env:
+          COMMIT: ${{ inputs.commit }}
+          DEMO_COMMAND: ${{ inputs.command }}
+          TIMEOUT: ${{ inputs.timeout_minutes }}
+          CI: "true"
+        run: |
+          set -uo pipefail
+          if [[ $(git rev-parse HEAD) != "$COMMIT" ]]; then
+            echo "::error::the checked-out commit is not the request's"
+            exit 1
+          fi
+          set +e
+          timeout --kill-after=30s "${TIMEOUT}m" bash -c "$DEMO_COMMAND"
+          status=$?
+          echo "exit=$status" >> "$GITHUB_OUTPUT"
+
+      # 124 when `timeout` stopped the command, 137 when the kill grace ended.
+      # A command that itself exits 124 or 137 is reported as timed out too.
+      - name: Demo command timed out
+        if: steps.demo.outputs.exit == '124' || steps.demo.outputs.exit == '137'
+        run: exit 1
+
+      - name: Demo command failed
+        if: >-
+          steps.demo.outputs.exit != '0'
+          && steps.demo.outputs.exit != '124'
+          && steps.demo.outputs.exit != '137'
+        run: exit 1
+
+      - name: Demo video missing
+        if: steps.demo.outputs.exit == '0'
+        env:
+          VIDEO: ${{ inputs.video }}
+        run: |
+          set -euo pipefail
+          path=$(realpath -e -- "$VIDEO" 2>/dev/null) || exit 1
+          case "$path" in
+            "$GITHUB_WORKSPACE"/*) ;;
+            *) exit 1 ;;
+          esac
+          [[ -f $path ]] || exit 1
+
+      - name: Upload demo video
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ballast-demo-${{ inputs.request }}
+          path: ${{ inputs.video }}
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+          compression-level: 0

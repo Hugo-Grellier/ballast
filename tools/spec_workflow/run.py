@@ -12,6 +12,7 @@
         --ref TEXT [--mode chat|human-gated]
     ballast run publish RUN_ID
     ballast run checkpoint RUN_ID                 # an Autonomous run
+    ballast run demo RUN_ID SCENARIO [--no-wait]  # a run with an open Draft PR
 
 Chat runs (#20), driven by the operator one action at a time:
 
@@ -58,8 +59,12 @@ recorded at start, and only active time counts against the wall time.
 `continue` lowers a run to human-gated after implementation, through the
 gate-only ballast-continue; before implementation it points to `resume`.
 `checkpoint` refreshes an Autonomous run's Draft PR checkpoint and acceptance
-packet, in any status, without an agent. One invocation at a time holds a
-run's lock (start, resume, continue, publish, checkpoint).
+packet, in any status, without an agent. `demo` (#22, demo.py) dispatches
+one declared demo capture for the run's open Draft PR, records it, waits at
+most 120 s (none with `--no-wait`) and refreshes the packet; it starts no
+agent and refuses while the tamper or in-progress marker exists. One
+invocation at a time holds a run's lock (start, resume, continue, publish,
+checkpoint, demo).
 
 Branch sync: before the first agent step of every `start`, `resume` and
 `continue`, the check in branch_sync.py (imported here before any agent
@@ -130,6 +135,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autonomy  # noqa: E402
 import branch_sync  # noqa: E402
 import chat  # noqa: E402
+import demo  # noqa: E402
 import draft_pr  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
@@ -168,7 +174,15 @@ RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 RUN_FORMAT = "ballast-run/1"
 # Ballast-driven Chat subcommands (#20), dispatched to chat.py.
 CHAT_COMMANDS = {"step", "status", "approve", "reject", "resolve", "checks", "mode"}
-COMMANDS = {"start", "resume", "continue", "publish", "checkpoint", *CHAT_COMMANDS}
+COMMANDS = {
+    "start",
+    "resume",
+    "continue",
+    "publish",
+    "checkpoint",
+    "demo",
+    *CHAT_COMMANDS,
+}
 
 
 def _summary(run_id: str) -> None:
@@ -1249,6 +1263,50 @@ def _checkpoint_command(options: list[str]) -> int:
     return 0 if outcome.state == "reused" else EXIT_BLOCKED
 
 
+def _demo_command(options: list[str]) -> int:
+    """`ballast run demo RUN_ID SCENARIO [--no-wait]`: request a demo capture (#22).
+
+    Any run mode with an open Ballast Draft PR; no agent starts. The markers
+    and the run's lock are checked before any `gh` call. Refusals and GitHub
+    failures exit 1; a dispatched capture exits 0 whatever its outcome.
+    """
+    rest = [option for option in options if option != "--no-wait"]
+    wait = rest == options
+    if len(options) - len(rest) > 1 or len(rest) != 2:  # noqa: PLR2004 - RUN_ID SCENARIO
+        return _refuse("demo needs RUN_ID SCENARIO [--no-wait]")
+    run_id, scenario = rest
+    if not RUN_ID.fullmatch(run_id):
+        return _refuse("demo needs a valid RUN_ID")
+    untrusted = draft_pr._untrusted(ROOT)  # noqa: SLF001
+    if untrusted:
+        outcome = demo.DemoOutcome("refused", "untrusted", remedy=untrusted)
+        sys.stdout.write(demo.format_outcome(outcome) + "\n")
+        return EXIT_BLOCKED
+    try:
+        with _invocation_lock(run_id):
+            outcome = demo.request(ROOT, run_id, scenario, wait=wait)
+    except LockHeld:
+        outcome = demo.DemoOutcome(
+            "refused",
+            "lock-held",
+            remedy=f"wait for the other invocation of run {run_id}",
+        )
+    except Exception as error:  # noqa: BLE001 - One fixed line, never a trace.
+        outcome = demo.DemoOutcome(
+            "failed-retryable",
+            "internal-error",
+            remedy=f"report it with the run ID; {type(error).__name__}",
+        )
+    lines = [demo.format_outcome(outcome)]
+    checkpoint = outcome.refresh or outcome.draft
+    if checkpoint is not None:
+        lines.append(draft_pr.format_line(checkpoint))
+        if checkpoint.packet is not None:
+            lines.append(draft_pr.packet.format_line(checkpoint.packet))
+    sys.stdout.write("\n".join(lines) + "\n")
+    return EXIT_BLOCKED if outcome.state in {"refused", "failed-retryable"} else 0
+
+
 def _baseline_exists(run_id: str) -> bool:
     """Whether the run reached implementation (its baseline was recorded)."""
     path = ROOT / ".specify/workflow-state" / run_id / "implementation-baseline.json"
@@ -1875,6 +1933,9 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         ):
             sys.stderr.write("resume accepts only: -i integration=claude|codex|auto\n")
             return 2
+    if argv[0] == "demo":
+        # Its own `refused (untrusted)` line covers the tamper marker too.
+        return _demo_command(options)
     if os.path.lexists(ROOT / TAMPER_MARKER):
         sys.stderr.write(TAMPER_MESSAGE)
         return 2

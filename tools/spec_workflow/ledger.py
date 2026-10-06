@@ -405,9 +405,17 @@ FIELDS: dict[str, dict[str, str]] = {
         "shortened?": "bool",
         **{f"{count}?": "int" for count in PACKET_COUNTS},
     },
+    # One dispatched demo capture (#22); written only after the dispatch.
+    "demo_capture": {
+        "scenario": "scenario",
+        "commit": "oid",
+        "request": "request",
+        "command_digest": "sha",
+        "pr_number": "int",
+    },
 }
-# Written only by the runner, its Draft PR checkpoint or its branch
-# synchronization, never by `record`.
+# Written only by the runner, its Draft PR checkpoint, its branch
+# synchronization or `ballast run demo`, never by `record`.
 RUNNER_ONLY = frozenset(
     {
         "run",
@@ -417,8 +425,11 @@ RUNNER_ONLY = frozenset(
         "pull_request",
         "branch_sync",
         "acceptance_packet",
+        "demo_capture",
     }
 )
+DEMO_SCENARIO = re.compile(r"[A-Za-z0-9._-]{1,64}")
+DEMO_REQUEST = re.compile(r"[0-9a-f]{16}")
 
 
 class LedgerError(ValueError):
@@ -575,6 +586,8 @@ def _valid_value(kind: str, value: object) -> bool:
         "url": PR_URL,
         "ref": REF,
         "run_id": RUN_ID_PATTERN,
+        "scenario": DEMO_SCENARIO,
+        "request": DEMO_REQUEST,
     }[kind]
     return bool(pattern.fullmatch(value))
 
@@ -662,6 +675,8 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
         _validate_branch_sync(data)
     if event["kind"] == "acceptance_packet":
         _validate_packet(data)
+    if event["kind"] == "demo_capture" and data["pr_number"] < 1:
+        fail("invalid pr_number")
     required_source = {
         "run": "runner",
         "step": "runner",
@@ -669,6 +684,7 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
         "pull_request": "runner",
         "branch_sync": "runner",
         "acceptance_packet": "runner",
+        "demo_capture": "runner",
         "usage": "client-counter",
         "human_action": "operator-attested",
     }.get(event["kind"])
@@ -2018,6 +2034,15 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
         if packets
         else {"available": False, "reason": "no packet recorded"}
     )
+    demos: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if event["kind"] == "demo_capture":
+            demos[event["data"]["scenario"]] = {
+                **event["data"],
+                "observed_at": event["observed_at"],
+            }
+    if demos:
+        result["demo_capture"] = demos
     syncs = [event for event in events if event["kind"] == "branch_sync"]
     result["branch_sync"] = (
         {**syncs[-1]["data"], "observed_at": syncs[-1]["observed_at"]}
@@ -2696,6 +2721,7 @@ def _text_report(data: dict[str, Any]) -> str:
         "pull_request",
         "branch_sync",
         "acceptance_packet",
+        "demo_capture",
     ):
         if name in data:
             lines.append(f"{name}: {json.dumps(data[name], sort_keys=True)}")
