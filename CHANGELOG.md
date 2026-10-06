@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/Hugo-Grellier/ballast/compare/v0.7.1...v0.8.0) (2026-10-06)
+
+
+### Features
+
+* **init:** adapt Ballast to blank and established repositories ([#86](https://github.com/Hugo-Grellier/ballast/issues/86)) ([685e2ca](https://github.com/Hugo-Grellier/ballast/commit/685e2cabe0a62f1c8819299d52b9e9f6ae3f46f9))
+* **review:** capture a UI walkthrough on demand and link it to the PR ([#87](https://github.com/Hugo-Grellier/ballast/issues/87)) ([28dd890](https://github.com/Hugo-Grellier/ballast/commit/28dd8908349008df6ee897bc3810fcef440869da))
+
+
+### Bug Fixes
+
+* **agent:** keep a linked worktree's git pointer and admin files read-only in confined steps ([#85](https://github.com/Hugo-Grellier/ballast/issues/85)) ([1d153b2](https://github.com/Hugo-Grellier/ballast/commit/1d153b2c00a494817c9838748b88fdec19ae3f1b))
+
 ## [0.7.1](https://github.com/Hugo-Grellier/ballast/compare/v0.7.0...v0.7.1) (2026-10-06)
 
 
