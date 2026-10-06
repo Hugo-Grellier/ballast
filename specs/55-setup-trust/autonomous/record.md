@@ -63,6 +63,7 @@ None.
 ## Block resolutions
 
 - HD-0001 at 2026-10-06T17:45:45+00:00 by operator: resolved the upstream-sync block at discover; resumed in Autonomous at discover; changed during the block: `specs/55-setup-trust/discovery.md`; reference: operator resumed after the upstream-sync block at discover
+- HD-0002 at 2026-10-06T17:48:28+00:00 by operator: resolved the postcondition block at validate-discovery; resumed in Autonomous at validate-discovery; changed during the block: `specs/55-setup-trust/discovery.md`; reference: operator resumed after the postcondition block at validate-discovery
 
 ## Checks
 
