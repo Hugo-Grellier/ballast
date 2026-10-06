@@ -123,6 +123,7 @@ class ShimTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
         self.assertEqual(shim.TEMP_ROOTS, launcher.TEMP_ROOTS)
+        self.assertEqual(shim.REF.pattern, launcher.REF.pattern)
 
     def test_runs_the_launcher_of_the_pinned_version(self) -> None:
         archive = self.base / "standard.tar.gz"

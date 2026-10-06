@@ -1436,7 +1436,7 @@ def compare(root: Path, ref: str, target: Path, work: Path) -> dict:
     tracked = set(git_output(root, "ls-files", "-z").split("\0"))
     owned = sorted(
         p
-        for p in after
+        for p in (*after, *paths["removed"])
         if p in tracked or p.startswith("docs/policies/project/") or p == SEEDS[2]
     )
     return {

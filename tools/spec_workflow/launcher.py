@@ -72,6 +72,8 @@ SKIPPED = (
 # Agents run in a systemd user scope: a cgroup they cannot leave, because
 # Codex's sandbox denies writes to /sys/fs/cgroup. Killing the scope stops every
 # process the agent started, even after its wrapper was killed.
+# A tag or commit of the standard; the same pattern as tools/ballast's REF.
+REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 SCOPE = re.compile(r"ballast-agent-[A-Za-z0-9_.-]{1,200}\.scope")
 SCOPE_SECONDS = 10.0
 # `systemctl is-active` exit status for a stopped unit (3) or a collected one
@@ -227,14 +229,15 @@ def checkout_lock(state: Path, *, shared: bool) -> int | None:
 
 
 def pinned_ref(root: Path) -> str | None:
-    """Return the `[standard] ref` of the checkout's ballast.toml, as data."""
+    """Return the checkout's `[standard] ref`, or None unless it is a valid ref."""
     try:
         config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     standard = config.get("standard")
     ref = standard.get("ref") if isinstance(standard, dict) else None
-    return ref if isinstance(ref, str) else None
+    valid = isinstance(ref, str) and REF.fullmatch(ref) and ".." not in ref
+    return ref if valid else None
 
 
 def _setup_refusal(root: Path, state: Path) -> str | None:

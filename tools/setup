@@ -223,9 +223,7 @@ class Setup:
         config = project / "ballast.toml"
         self.config_bytes = config.read_bytes() if config.is_file() else b""
         self.config = tomllib.loads(self.config_bytes.decode())
-        standard = self.config.get("standard")
-        ref = standard.get("ref") if isinstance(standard, dict) else None
-        self.ref = ref if isinstance(ref, str) else None
+        self.ref = launcher.pinned_ref(project)
         self._fingerprint: str | None = None
 
     def fingerprint(self) -> str:
@@ -312,9 +310,11 @@ class Setup:
         """Entries installed here: by rule, plus those a valid record lists."""
         listed = record.get("entries", []) if record else []
         names = entries(self.root)
-        return names + sorted(
+        names += sorted(
             n for n in set(listed) - set(names) if isinstance(n, str) and _safe(n)
         )
+        held = tracked(self.root, names)
+        return [n for n in names if n not in held]
 
     def current(self, state: Path) -> bool:
         """Whether the live installation is this version's and matches its record."""
@@ -330,10 +330,11 @@ class Setup:
         """Report whether this checkout holds the current installation."""
         try:
             state = launcher.state_dir(self.root)
-        except OSError:
-            state = None
-        record = self.recorded(state) if state else None
-        if state and os.path.lexists(state / launcher.SETUP_ATTEMPT):
+        except OSError as error:
+            sys.stdout.write(f"unverified: {error}\n")
+            return False
+        record = self.recorded(state)
+        if os.path.lexists(state / launcher.SETUP_ATTEMPT):
             status = "interrupted: run `ballast setup`"
         elif not self.stamp.is_file():
             status = "absent"
@@ -614,6 +615,9 @@ class Setup:
         unexpected = _unexpected(stage, names)
         if unexpected:
             fail("validate stage paths", f"unexpected output {unexpected}")
+        held = sorted(tracked(self.root, names))
+        if held:
+            fail("validate stage paths", f"{held[0]} is tracked by git")
         markers = {str(stage).encode(), str(stage.resolve()).encode()}
         for name, digest in files.items():
             path = stage / name
@@ -917,6 +921,21 @@ def entries(root: Path) -> list[str]:
     for pattern in (*SKILLS, POLICIES):
         found += sorted(str(p.relative_to(root)) for p in root.glob(pattern))
     return found
+
+
+def tracked(root: Path, names: list[str]) -> set[str]:
+    """Return the entries that are, or hold, a tracked file: never installed."""
+    if not names:
+        return set()
+    result = subprocess.run(  # noqa: S603 - fixed git subcommand, names as data
+        ["git", "--literal-pathspecs", "ls-files", "-z", "--", *names],  # noqa: S607
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    files = [f for f in result.stdout.split("\0") if f]
+    return {n for n in names if any(f == n or f.startswith(n + "/") for f in files)}
 
 
 def _unexpected(stage: Path, names: list[str]) -> str | None:

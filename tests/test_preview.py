@@ -340,6 +340,14 @@ class PreviewTests(unittest.TestCase):
             text,
         )
 
+    def test_tracked_removal_is_project_owned(self) -> None:
+        # SEC2-004: vB no longer ships a policy the project force-added.
+        shim.git_output(self.project, "add", "-f", "docs/policies/old.md")
+        _, report = self.report("vB")
+        self.assertEqual(report["paths"]["removed"], ["docs/policies/old.md"])
+        self.assertEqual(report["project_owned_changed"], ["docs/policies/old.md"])
+        self.assertIn("project-owned files would change", report["blockers"])
+
     def test_checkout_text_cannot_drive_the_terminal(self) -> None:
         # Run IDs and states come from the agent-writable checkout.
         run = self.project / ".specify/workflows/runs/r\x1b]0;x\x07"

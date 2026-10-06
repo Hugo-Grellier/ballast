@@ -837,6 +837,48 @@ class RecoverableSetupTests(ProjectCase):
                 self.assertNotIn(digest, installed.values())
                 self.assertNotIn(f"link:{planted}", installed.values())
 
+    def test_tracked_files_are_never_removed_or_replaced(self) -> None:
+        # SEC2-004, FR-005: a project file force-added under an installed path.
+        custom = self.root / "docs/policies/custom.md"
+        custom.write_text("project policy\n")
+        git(self.root, "add", "-f", "docs/policies/custom.md")
+        self.pin("vB")
+        self.installed()
+        self.assertEqual(custom.read_text(), "project policy\n")
+        self.assertNotIn("docs/policies/custom.md", self.record()["entries"])
+        self.assertFalse((self.root / setup.KEPT / "docs/policies/custom.md").exists())
+        self.assertEqual(
+            self.setup()[1], "nothing changed: vB is set up and verified\n"
+        )
+        git(self.root, "add", "-f", "docs/policies/workflow.md")
+        before = self.snapshot()["checkout"]
+        self.pin("vA")
+        code, _, err = self.setup()
+        self.assertEqual(code, 1)
+        self.assertIn(
+            "validate stage paths failed: docs/policies/workflow.md is tracked by git",
+            err,
+        )
+        self.pin("vB")
+        self.assertEqual(self.snapshot()["checkout"], before)
+
+    def test_check_without_operator_state_is_unverified(self) -> None:
+        # SEC2-007: doctor must not show current where the launcher refuses.
+        inside = str(self.root / ".state")
+        with patch.dict(os.environ, {"XDG_STATE_HOME": inside}):
+            result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stdout.startswith("unverified: state directory "))
+
+    def test_invalid_pin_is_never_printed(self) -> None:
+        # SEC2-009: in developer mode nothing validates the pin before setup.
+        self.pin("v\\u001b]0;x\\u0007")
+        for _ in range(2):
+            code, out, err = self.setup()
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("\x1b", out + err)
+        self.assertIsNone(setup.launcher.pinned_ref(self.root))
+
     @property
     def a_checkout(self) -> dict[str, str]:
         root = self.new_project("fresh-a")
