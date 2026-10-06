@@ -333,7 +333,7 @@ write. Every command refuses an `XDG_STATE_HOME` that is relative or lies
 inside the checkout, `/tmp`, `/var/tmp`, `/dev/shm` or `$TMPDIR`, which
 agents can write. `ballast run ...` and `ballast ledger ...` then
 refuse, before executing any checkout code, if those inputs changed since
-`trust`, if `BALLAST_TAMPERED` exists, or if an agent step never finished its
+`trust` (or since the baseline setup recorded), if `BALLAST_TAMPERED` exists, or if an agent step never finished its
 check (for example because the agent killed the wrapper). Saved run state is
 not in the baseline, so after an unfinished step `trust` also refuses: review
 the checkout, run `ballast discard-runs`, then `trust` and start a
@@ -354,11 +354,14 @@ when every protected input is exactly what setup installed (no `.venv`, no
 committed `.specify` file other than the constitution, no edited installed
 file, a linked worktree's `.git` pointer naming a worktree of its own
 repository), `ballast.toml` and the constitution are committed and unchanged,
-and equal either the checkout's earlier baseline from `ballast trust` or the
-default branch of the repository pinned in `[github] repository`. That branch is
+and equal the default branch of the repository pinned in `[github] repository`
+(`ballast setup` also accepts the checkout's earlier baseline from `ballast
+trust`; a preparation never reads a baseline). That branch is
 read live, from the pinned repository only, with the operator's own Git
 authority (it needs network access and never prompts), and only for a
-repository `ballast trust` already reviewed on this machine; nothing the
+repository `ballast trust` already reviewed on this machine (a baseline from
+before this version does not count; each project needs one `ballast trust` per
+machine first); nothing the
 checkout's Git configuration names is used. Setup records nothing when saved run
 state, an unfinished run, `BALLAST_TAMPERED` or an agent step's marker exists, so
 an agent step can never lead to a recorded baseline; it then says why and that

@@ -23,7 +23,7 @@ Setup, and a preparation that just installed a worktree, record the baseline the
 7. A linked worktree's `.git` pointer names a worktree of the repository it belongs to, outside the checkout and every agent temp directory, with a matching back-link.
 8. Both configuration files are committed and unchanged from `HEAD`.
 9. Both are reviewed, meaning equal to one of:
-   - the checkout's previous baseline when `ballast trust` recorded it (no network); or
+   - the checkout's previous baseline when `ballast trust` recorded it (no network; `ballast setup` only, since a preparation never opens a baseline); or
    - the files on the default branch of the repository `ballast.toml` pins in `[github] repository`, observed live, when that repository is in the machine's record of repositories `ballast trust` reviewed.
 
 Recording is atomic and verified: the inputs are snapshotted once, written, and snapshotted again; a difference, or a failed write, removes the new baseline and restores the previous one. A preparation first removes a baseline or provenance left at a reused path and never opens another checkout's.
@@ -41,6 +41,12 @@ Recording is atomic and verified: the inputs are snapshotted once, written, and 
 - Recording through the previous operator baseline replaces its `trust` provenance with `setup`, so the next re-setup at a changed pin with unchanged configuration needs the network or `ballast trust` again. This fails closed and is stated in the documentation (plan-review F-005).
 - Setup holds the checkout lock for up to a few minutes while it asks the network; a hung request ends in "timed out" and no baseline.
 - Preparation is no longer strictly offline: it never downloads the standard, but an eligible one asks the pinned repository.
+
+## Residual risks, stated plainly
+
+- "Reviewed" means equal to the default branch of a repository you ran `ballast trust` for, and the record is machine-wide, not tied to a project. Branch protection on that default branch is what makes it reviewed; remove a repository from `$XDG_STATE_HOME/ballast/reviewed-repositories.json` when it changes hands or its protection is dropped. A commit that repoints `[github] repository` to another repository you reviewed, whose default branch carries the same `ballast.toml` and constitution, makes the checkout eligible: the configuration is one a human reviewed, for that other project. Binding a repository to one project would need an identity the checkout cannot forge, which the design does not have; see `specs/55-setup-trust/decisions.md` DEC-0008.
+- The check that the configuration is committed and unchanged from `HEAD`, and the scheme read from `origin`, use the agent-writable `.git`. They are early, precise refusals, not the boundary: a forged `HEAD` or `origin` cannot make unreviewed configuration equal a reviewed reference, and `origin` only picks HTTPS or SSH for the pinned repository.
+- A local Git command never uses a transport (`protocol.allow=never`), because `GIT_NO_LAZY_FETCH` only exists from Git 2.44 and the checkout's configuration could otherwise name a promisor remote.
 
 ## Agent inferences narrowing the operator's answer (D-02), listed for merge review
 
