@@ -1761,7 +1761,7 @@ class PrepareConcurrencyTests(WorktreeCase):
     def test_one_preparation_per_worktree(self) -> None:
         # AC-020, plan review F-001
         worktree = self.worktree()
-        first = self.child("sleep", 3, worktree, ("--prepare",), FAKE_NETWORK="deny")
+        first = self.child("sleep", 6, worktree, ("--prepare",), FAKE_NETWORK="deny")
         holder = self.state(worktree) / "setup-holder.json"
         deadline = time.monotonic() + 30
         while not (self.state(worktree) / "setup-attempt.json").exists():
@@ -1804,7 +1804,7 @@ class PrepareConcurrencyTests(WorktreeCase):
         )
         running.kill()
         # Unsequenced: one prepares, the other refuses or finds nothing to do.
-        for _ in range(5):
+        for _ in range(10):
             root = self.worktree()
             results = self.race([root, root])
             prepared = [r for r in results if r[0] == 0 and "Prepared the" in r[1]]

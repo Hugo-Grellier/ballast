@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import urllib.request
 from datetime import UTC, datetime
@@ -205,6 +206,8 @@ RETRY = "rerun `ballast setup`; if it fails again, restore the previous pin"
 # What wrote a journal or holds the lock: `ballast setup`, or a preparation by
 # the first `run`, `ledger` or `intake` in a new worktree (#15).
 SETUP, PREPARE = "setup", "prepare"
+# How long a preparation retries a lock another preparation holds for a moment.
+LOCK_RETRY_SECONDS = 2.0
 
 
 class RefusedError(RuntimeError):
@@ -443,11 +446,11 @@ class Setup:
         nothing = (
             f"nothing to prepare: this checkout is already installed for {self.ref}\n"
         )
-        if self.settled(state):
+        lock = self.hold(state)
+        if lock is None:
             # Another command prepared it and may be running (plan review F-001).
             sys.stdout.write(nothing)
             return
-        lock = self.lock(state)
         try:
             if _journal_mode(state) not in {None, PREPARE}:
                 refuse(
@@ -496,6 +499,23 @@ class Setup:
             return not unfinished and self.current(state)
         finally:
             os.close(fd)
+
+    def hold(self, state: Path) -> int | None:
+        """Hold this checkout to prepare it; None when it is already installed.
+
+        Another preparation checks `settled` under the shared lock for a
+        moment, which `lock` would take for a running command: retry briefly
+        before refusing, so two first commands never both refuse (AC-020).
+        """
+        deadline = time.monotonic() + LOCK_RETRY_SECONDS
+        while not self.settled(state):
+            try:
+                return self.lock(state)
+            except RefusedError:
+                if time.monotonic() > deadline:
+                    raise
+            time.sleep(0.02)
+        return None
 
     def lock(self, state: Path) -> int:
         """Hold this checkout exclusively, or name what holds it."""
