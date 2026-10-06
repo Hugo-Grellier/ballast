@@ -1246,7 +1246,9 @@ Ballast repository.
 A reviewer can ask for a short video of implemented UI behavior. The operator
 requests it; the capture runs on a GitHub-hosted runner, and the packet links
 the video. A video helps a reviewer see behavior. It is never evidence for a
-criterion, never changes a criterion's state, and is never an approval.
+criterion, never changes a criterion's state, and is never an approval. The
+capture's outcome is reported by the same job that runs the PR's code, so that
+code could make a failed journey read `captured`; watch the video.
 
 **Setup.** Declare the scenarios in the `[demo]` table of `ballast.toml`, which
 agents cannot change (run `ballast trust` after editing it):
@@ -1287,7 +1289,9 @@ progress. It dispatches the workflow for the PR's head commit, records a
 (<reason>)][ <scenario> at <commit>][: <remedy or link>]`, then the Draft PR
 and packet lines. A refusal or a GitHub failure dispatches nothing, records
 nothing, creates no PR and exits 1; a dispatched capture exits 0 whatever its
-outcome. A refusal names its reason and remedy: `not-configured`,
+outcome. A local error after the dispatch succeeded, such as a failed ledger
+write, prints `failed-retryable (internal-error)` and exits 1 although a run
+was dispatched; that run is never linked or shown, so request again. A refusal names its reason and remedy: `not-configured`,
 `config-invalid`, `unknown-scenario`, `no-draft-pr`, `pr-not-open`,
 `workflow-not-installed`, `workflow-disabled`, `workflow-differs`, `untrusted`
 or `lock-held`. A GitHub failure is `failed-retryable` with the Draft PR

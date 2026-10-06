@@ -8,7 +8,7 @@
 
 Feature 22 lets the operator request a short video of implemented UI behavior for the feature's open Draft PR, and shows the result in the acceptance packet. The capture runs the project's own scenario command on a GitHub-hosted runner, so Ballast never installs a browser or recorder and never runs the command locally. Starting that run needs Ballast's first GitHub write other than the PR body: a `workflow_dispatch`. Reading its result needs Actions reads ADR-0003 and ADR-0006 do not list.
 
-The capture job runs code from the PR head, which agents write. Any code in a job can obtain the run's Actions runtime token, and that token writes Actions cache entries scoped to the run's ref. A run whose ref is the default branch would let PR-head code write caches that every branch and the project's privileged default-branch workflows restore. A feature branch's own CI cannot write that scope today (research R15, plan review F-001).
+The capture job runs code from the PR head, which agents write. Any code in a job can obtain the run's Actions runtime token, and that token writes Actions cache entries scoped to the run's ref. A run whose ref is the default branch would let PR-head code write caches that every branch and the project's privileged default-branch workflows restore. A feature branch's own CI cannot write that scope today (research R15, plan review F-001). Under the feature branch's ref, PR-head code writes only that branch's cache scope, which only the branch's own runs and PRs based on the branch restore; those run code of the same branch lineage, which an agent could already change by a commit, so the capture adds no reach.
 
 ## Decision
 
