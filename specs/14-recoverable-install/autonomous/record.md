@@ -5,6 +5,7 @@ Run `8935922b` for #14 (`specs/14-recoverable-install`). Generated from the oper
 ## Mode and risk
 
 - Mode start: autonomous at 2026-10-05T21:54:30+00:00 by operator
+- Mode lower: human-gated at 2026-10-06T03:26:06+00:00 by operator, decision HD-0001: block-resolved
 - Risk: R2 (scope-record); history: R2 at 2026-10-05T21:54:30+00:00
 - Limits (default): 240 minutes wall time, 30 agent steps
 - Authoring integration: claude; review integration: claude
