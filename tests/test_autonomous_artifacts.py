@@ -83,6 +83,8 @@ class RecorderCase(AutonomyCase):
         *,
         role: str = "author",
         integration: str = "claude",
+        command: str = "/speckit-x",
+        **extra: object,
     ) -> str:
         """Fake one wrapped agent step that wrote drafts."""
         self.count += 1
@@ -107,7 +109,7 @@ class RecorderCase(AutonomyCase):
             {
                 "step": name,
                 "ran": True,
-                "command": "/speckit-x",
+                "command": command,
                 "integration": integration,
                 "role": role,
                 "set_aside": [],
@@ -115,6 +117,7 @@ class RecorderCase(AutonomyCase):
                 "drafts": listed,
                 "exit_code": 0,
                 "at": autonomy.now(),
+                **extra,
             },
         )
         return name
@@ -195,6 +198,12 @@ class RecorderCase(AutonomyCase):
         self.step({"intent.json": self.draft("intent")})
         self.ok(self.check("record-provisional-intent"))
 
+    def freeze(self) -> None:
+        """Leave what a clean implementation review leaves: idle, frozen code."""
+        record = autonomy.read_run(self.root, "run42")
+        record["frozen_tree"] = autonomy.tree_digest(self.root, (FEATURE,))
+        autonomy.write_run(self.root, record)
+
 
 class RecordDecisionTests(RecorderCase):
     """AC-002, AC-003, AC-007, FR-010, FR-011, FR-013: the generic recorder."""
@@ -214,6 +223,8 @@ class RecordDecisionTests(RecorderCase):
                 "model": "model-x",
                 "role": "author",
                 "step_id": step,
+                "attempts": 1,
+                "refusals": [],
             },
         )
         self.assertEqual(
@@ -308,10 +319,8 @@ class RecordDecisionTests(RecorderCase):
         block = self.block()
         self.assertEqual(block["category"], "postcondition")
         self.assertEqual(block["step_id"], "spec")
-        self.assertEqual(
-            block["command"],
-            "ballast run continue run42 --reason block-resolved --ref TEXT",
-        )
+        # #21: a postcondition block resumes in Autonomous once fixed.
+        self.assertEqual(block["command"], "ballast run resume run42")
 
     def test_inactive_run_refuses_every_check(self) -> None:
         record = autonomy.read_run(self.root, "run42")
@@ -470,6 +479,7 @@ class ProvisionalIntentTests(RecorderCase):
         self.intent()
         self.ok(self.check("record-provisional-intent", "--renew"))
         self.assertEqual(len(self.decisions()), 1)
+        self.freeze()
         self.step({"decision-resolution-1.json": self.draft("decision-resolution")})
         (self.feature / "decisions.md").write_text(
             "## DEC-0001 — Proposal\n\nx\n\n## DEC-0001 — Resolution\n\n"
@@ -719,7 +729,8 @@ class ImplementationReviewTests(RecorderCase):
         self.step({"decision-resolution-1.json": self.draft("decision-resolution")})
         (self.feature / "decisions.md").write_text("## DEC-0001 — Resolution\n\n- x\n")
         self.failed(
-            self.record("decision-resolution"), "changed after implementation review"
+            self.record("decision-resolution"),
+            "changed after the last implementation review froze the tree",
         )
 
     def test_r2_and_path_triggers_add_kinds(self) -> None:
@@ -805,6 +816,7 @@ class DecisionsTests(RecorderCase):
         self.intent()
         self.write_decisions("agent-provisional")
         self.failed(self.check("decisions"), "unresolved decisions: DEC-0001")
+        self.freeze()
         self.step(
             {
                 "decision-resolution-1.json": self.draft(
@@ -826,6 +838,7 @@ class DecisionsTests(RecorderCase):
 
     def test_draft_must_name_a_resolution(self) -> None:
         self.write_decisions("agent-provisional")
+        self.freeze()
         self.step({"decision-resolution-7.json": self.draft("decision-resolution")})
         self.failed(self.record("decision-resolution"), "match a resolution record")
 
@@ -950,12 +963,14 @@ class RunChecksTests(RecorderCase):
         marker = self.base / "check-ran"
         self.set_checks(f'["touch {marker}"]')
         (self.root / "README.md").write_text("changed after review\n")
-        self.failed(self.check("run-checks"), "after implementation review")
+        self.failed(self.check("run-checks"), "after the last implementation review")
         self.assertFalse(marker.exists())
         record = autonomy.read_run(self.root, "run42")
         del record["frozen_tree"]
         autonomy.write_run(self.root, record)
-        self.failed(self.check("run-checks"), "after implementation review")
+        self.failed(
+            self.check("run-checks"), "no tree was frozen after implementation review"
+        )
         self.assertFalse(marker.exists())
 
     def test_passing_checks_record_results_and_tree(self) -> None:
@@ -1252,3 +1267,520 @@ class ContinuePreflightTests(RecorderCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+sys.path.insert(0, str(TOOLS))
+try:
+    import artifacts
+finally:
+    sys.path.pop(0)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import discovery_fixtures
+finally:
+    sys.path.pop(0)
+
+FIX_WORKFLOW = "steps:\n- id: fix-1\n  command: speckit.ballast.fix\n"
+FINDING = {
+    "id": "F-001",
+    "severity": "medium",
+    "label": "implementation-bug",
+    "disposition": "open",
+    "reason": "The demo prints nothing useful",
+    "evidence": [],
+}
+
+
+class FixLoopCase(RecorderCase):
+    """A run past implementation, whose workflow copy has the fix loop."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.root / ".specify/workflows/runs/run42/workflow.yml").write_text(
+            FIX_WORKFLOW
+        )
+        state = self.root / ".specify/workflow-state/run42"
+        state.mkdir(parents=True)
+        tree = self.git("write-tree").strip()
+        (state / "implementation-baseline.json").write_text(
+            json.dumps({"feature": FEATURE, "tree": tree})
+        )
+        (self.feature / "plan.md").write_text(
+            "# Implementation Plan: Demo run\n\n**Spec**: [spec.md](spec.md)\n"
+        )
+        (self.feature / "tasks.md").write_text(
+            "# Tasks: Demo run\n\n- [x] T001 Implement demo in src/demo.py\n"
+        )
+        self.intent()
+        (self.root / "src").mkdir()
+        (self.root / "src/demo.py").write_text("print('demo')\n")
+
+    def reviews(
+        self,
+        findings: list | None = None,
+        verdict: str = "approved",
+        *extra: str,
+    ) -> dict:
+        main = self.review_draft("implementation-review", "engineering", findings)
+        main["review"]["verdict"] = verdict
+        return {
+            **{
+                f"specialist-review-{kind}.json": self.review_draft(
+                    "specialist-review", kind
+                )
+                for kind in extra
+            },
+            "implementation-review.json": main,
+            "specialist-review-test.json": self.review_draft(
+                "specialist-review", "test"
+            ),
+            "specialist-review-security.json": self.review_draft(
+                "specialist-review", "security"
+            ),
+        }
+
+    def fix_state(self) -> dict:
+        return autonomy.fix_state(autonomy.read_run(self.root, "run42"))
+
+    def set_fix(self, cycles: int, state: str) -> None:
+        """Put the run in a fix state, as the recorders would (record re-rendered)."""
+        record = autonomy.read_run(self.root, "run42")
+        record["fix"] = {"cycles": cycles, "state": state}
+        autonomy.write_run(self.root, record)
+        (self.feature / "autonomous/record.md").write_text(
+            autonomy.render_run_record(self.root, record)
+        )
+
+    def fix_input(self) -> dict:
+        path = (
+            self.root
+            / ".specify/workflow-state/fix-input"
+            / f"{Path(FEATURE).name}.json"
+        )
+        return json.loads(path.read_text())
+
+    def fix_step(self) -> None:
+        """Fake a fix step that changed the code and ran."""
+        (self.root / "src/demo.py").write_text("print('fixed demo')\n")
+        self.step(command="/speckit-ballast-fix")
+
+    def set_checks(self, commands: str) -> None:
+        (self.root / "ballast.toml").write_text(f"[checks]\ncommands = {commands}\n")
+
+
+class FeedbackChecksTests(FixLoopCase):
+    """#21 T008 [AC-006, FR-003]: feedback checks reach only operator state."""
+
+    def test_failed_check_is_recorded_not_blocked(self) -> None:
+        self.set_checks('["echo boom; exit 3", "true"]')
+        self.ok(self.check("run-checks", "--feedback"))
+        self.assertIsNone(self.block())
+        (entry,) = autonomy.read_feedback(self.root, "run42")
+        self.assertEqual(entry["cycle"], 0)
+        failed, passed = entry["results"]
+        self.assertEqual((failed["exit"], failed["provenance"]), (3, "runner"))
+        self.assertIn("boom", failed["output_tail"])
+        self.assertNotIn("output_tail", passed)
+        # The final run-checks result is a separate record.
+        self.assertFalse(
+            (autonomy.run_dir(self.root, "run42") / "checks.json").exists()
+        )
+        self.assertIn(
+            "## Fix loop", (self.feature / "autonomous/record.md").read_text()
+        )
+
+    def test_tamper_and_tree_change_still_block(self) -> None:
+        self.set_checks('["echo x >> README.md"]')
+        self.failed(self.check("run-checks", "--feedback"), "changed the working tree")
+        self.assertEqual(self.block()["category"], "postcondition")
+
+    def test_idle_cycle_after_the_freeze_writes_nothing(self) -> None:
+        self.set_checks('["false"]')
+        record = autonomy.read_run(self.root, "run42")
+        record["frozen_tree"] = autonomy.tree_digest(self.root, (FEATURE,))
+        autonomy.write_run(self.root, record)
+        self.ok(self.check("run-checks", "--feedback"))
+        self.assertEqual(autonomy.read_feedback(self.root, "run42"), [])
+        self.set_fix(1, "review-pending")
+        self.ok(self.check("run-checks", "--feedback"))
+        (entry,) = autonomy.read_feedback(self.root, "run42")
+        self.assertEqual(entry["cycle"], 1)
+
+    def test_output_tail_is_bounded_and_printable(self) -> None:
+        self.set_checks(
+            '["python3 -c \'print(\\"\\\\x1b[2J\\" + \\"y\\" * 9000)\'; exit 1"]'
+        )
+        self.ok(self.check("run-checks", "--feedback"))
+        (result,) = autonomy.read_feedback(self.root, "run42")[0]["results"]
+        self.assertLessEqual(len(result["output_tail"]), artifacts.OUTPUT_TAIL)
+        self.assertNotIn("\x1b", result["output_tail"])
+
+
+class FixStateTests(FixLoopCase):
+    """#21 T009 [AC-002, AC-003, FR-001, FR-002]: fix needed, cycles, blocks."""
+
+    def test_medium_open_finding_sets_fix_pending(self) -> None:
+        self.step(self.reviews([FINDING]), role="reviewer", integration="codex")
+        self.ok(self.record("implementation-review"))
+        self.assertIsNone(self.block())
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "fix-pending"})
+        self.assertNotIn("frozen_tree", autonomy.read_run(self.root, "run42"))
+        data = self.fix_input()
+        self.assertEqual(data["cycle"], 1)
+        (finding,) = data["findings"]
+        self.assertEqual(
+            (finding["id"], finding["severity"], finding["report"]),
+            ("F-001", "medium", f"{FEATURE}/reviews/engineering.md"),
+        )
+        self.assertTrue(all(e["fix_cycle"] == 0 for e in self.decisions()[1:]))
+
+    def test_failed_feedback_check_needs_a_fix(self) -> None:
+        self.set_checks('["echo broken; exit 1"]')
+        self.ok(self.check("run-checks", "--feedback"))
+        # ballast.toml changed since the baseline: documentation is required.
+        self.step(self.reviews(None, "approved", "documentation"), role="reviewer")
+        self.ok(self.record("implementation-review"))
+        self.assertEqual(self.fix_state()["state"], "fix-pending")
+        (check,) = self.fix_input()["checks"]
+        self.assertEqual(check["exit"], 1)
+        self.assertIn("broken", check["output_tail"])
+
+    def test_high_finding_and_verdict_need_a_fix_while_a_cycle_remains(self) -> None:
+        high = {**FINDING, "severity": "high", "disposition": "resolved"}
+        self.step(self.reviews([high], verdict="changes-requested"), role="reviewer")
+        self.ok(self.record("implementation-review"))
+        self.assertEqual(self.fix_state()["state"], "fix-pending")
+        self.assertEqual(
+            self.fix_input()["verdicts"][0]["verdict"], "changes-requested"
+        )
+
+    def test_clean_review_freezes_and_stays_idle(self) -> None:
+        self.step(self.reviews(), role="reviewer")
+        self.ok(self.record("implementation-review"))
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "idle"})
+        self.assertTrue(autonomy.read_run(self.root, "run42")["frozen_tree"])
+
+    def test_high_finding_after_three_cycles_blocks_as_limit(self) -> None:
+        self.set_fix(3, "review-pending")
+        high = {**FINDING, "severity": "high"}
+        self.step(self.reviews([high]), role="reviewer")
+        self.failed(
+            self.check(
+                "record-decision", "--point", "implementation-review", "--recheck"
+            ),
+            "limit block",
+        )
+        block = self.block()
+        self.assertEqual((block["category"], block["limit"]), ("limit", "fix-cycles"))
+        self.assertTrue(block["condition"].startswith("fix-cycle limit (3)"))
+        self.assertIn("engineering F-001 (high)", block["condition"])
+        self.assertEqual(block["command"], "ballast run resume run42")
+        # Never published as provisionally passed: nothing was recorded.
+        self.assertEqual([e["point"] for e in self.decisions()], ["intent"])
+
+    def test_medium_open_on_the_last_review_is_a_draft_error(self) -> None:
+        self.set_fix(3, "review-pending")
+        self.step(self.reviews([FINDING]), role="reviewer")
+        result = self.check(
+            "record-decision", "--point", "implementation-review", "--recheck"
+        )
+        self.failed(result, "open is valid only for low and info findings")
+        accepted = {**FINDING, "disposition": "accepted-provisionally"}
+        for path in (self.feature / "autonomous/drafts").iterdir():
+            path.unlink()
+        (autonomy.run_dir(self.root, "run42") / "block.json").unlink()
+        autonomy.consume_steps(self.root, "run42")
+        self.step(self.reviews([accepted]), role="reviewer")
+        self.ok(
+            self.check(
+                "record-decision", "--point", "implementation-review", "--recheck"
+            )
+        )
+        self.assertEqual(self.fix_state(), {"cycles": 3, "state": "idle"})
+
+    def test_old_workflow_copy_blocks_as_before(self) -> None:
+        """R19: a 1.1.0 run has no fix step, so findings block as in #27."""
+        (self.root / ".specify/workflows/runs/run42/workflow.yml").write_text(
+            "steps:\n- id: implement\n"
+        )
+        high = {**FINDING, "severity": "high", "disposition": "resolved"}
+        self.step(self.reviews([high]), role="reviewer")
+        self.failed(self.record("implementation-review"), "review-finding block")
+        self.assertEqual(self.block()["category"], "review-finding")
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "idle"})
+
+    def test_resolutions_wait_for_an_idle_fix_state(self) -> None:
+        self.set_fix(1, "fix-pending")
+        self.step()
+        self.failed(self.record("decision-resolution"), "finished fix loop")
+        self.assertEqual(self.block()["category"], "postcondition")
+
+
+class RecordFixTests(FixLoopCase):
+    """#21 T010 [AC-002, FR-001]: a cycle counts only after a fix that ran."""
+
+    def pending(self) -> None:
+        self.step(self.reviews([FINDING]), role="reviewer")
+        self.ok(self.record("implementation-review"))
+
+    def test_counts_the_cycle_after_the_fix_step(self) -> None:
+        self.pending()
+        self.fix_step()
+        self.ok(self.check("record-fix"))
+        self.assertEqual(self.fix_state(), {"cycles": 1, "state": "review-pending"})
+        self.assertIn(
+            "- Cycles used: 1 of 3", (self.feature / "autonomous/record.md").read_text()
+        )
+        # The recheck records the new review and supersedes the earlier ones.
+        before = [e["id"] for e in self.decisions() if e["point"] != "intent"]
+        resolved = {**FINDING, "disposition": "resolved"}
+        self.step(self.reviews([resolved]), role="reviewer")
+        self.ok(
+            self.check(
+                "record-decision", "--point", "implementation-review", "--recheck"
+            )
+        )
+        current = autonomy.current_decisions(self.decisions())
+        self.assertFalse({e["id"] for e in current} & set(before))
+        rechecked = [e for e in current if e.get("review")]
+        self.assertEqual({e["fix_cycle"] for e in rechecked}, {1})
+        self.assertEqual(self.fix_state(), {"cycles": 1, "state": "idle"})
+        self.assertTrue(autonomy.read_run(self.root, "run42")["frozen_tree"])
+
+    def test_idle_cycle_slots_write_nothing(self) -> None:
+        before = autonomy.read_run(self.root, "run42")
+        self.ok(self.check("record-fix"))
+        self.ok(
+            self.check(
+                "record-decision", "--point", "implementation-review", "--recheck"
+            )
+        )
+        self.assertEqual(autonomy.read_run(self.root, "run42"), before)
+
+    def test_needs_the_fix_step_and_the_implementation_contract(self) -> None:
+        self.pending()
+        self.step()  # some other agent step
+        self.failed(self.check("record-fix"), "fix step that ran just before it")
+        self.assertEqual(self.fix_state()["cycles"], 0)
+        (autonomy.run_dir(self.root, "run42") / "block.json").unlink()
+        (self.feature / "tasks.md").write_text(
+            "# Tasks: Demo run\n\n- [ ] T001 Implement demo in src/demo.py\n"
+        )
+        self.fix_step()
+        self.failed(self.check("record-fix"), "pending tasks")
+        self.assertEqual(self.fix_state()["cycles"], 0)
+
+    def test_plain_review_refuses_a_pending_fix_state(self) -> None:
+        self.set_fix(1, "review-pending")
+        self.step(self.reviews(), role="reviewer")
+        self.failed(self.record("implementation-review"), "--recheck")
+
+
+class SupersessionTests(FixLoopCase):
+    """#21 T020 [FR-008, FR-009]: a point recorded again replaces its decision."""
+
+    def test_single_point_supersedes_its_current_decision(self) -> None:
+        self.step({"plan.json": self.draft("plan")})
+        self.ok(self.record("plan"))
+        self.step({"plan.json": self.draft("plan", summary="plan again")})
+        self.ok(self.record("plan"))
+        (current,) = autonomy.current(self.decisions(), "plan")
+        self.assertEqual(current["summary"], "plan again")
+        self.assertEqual(current["supersedes"], self.decisions()[1]["id"])
+
+    def test_review_point_supersedes_every_current_entry(self) -> None:
+        self.step(self.reviews(), role="reviewer")
+        self.ok(self.record("implementation-review"))
+        first = {e["id"] for e in self.decisions() if e.get("review")}
+        record = autonomy.read_run(self.root, "run42")
+        del record["frozen_tree"]
+        autonomy.write_run(self.root, record)
+        self.step(self.reviews(), role="reviewer")
+        self.ok(self.record("implementation-review"))
+        current = autonomy.current_decisions(self.decisions())
+        self.assertFalse({e["id"] for e in current} & first)
+        self.assertEqual(len([e for e in current if e.get("review")]), 3)
+
+    def test_existing_baseline_is_kept(self) -> None:
+        path = self.root / ".specify/workflow-state/run42/implementation-baseline.json"
+        before = path.read_text()
+        self.ok(self.check("implementation-baseline"))
+        self.assertEqual(path.read_text(), before)
+        path.write_text("{}")
+        self.ok(self.check("implementation-baseline"))
+        self.assertEqual(json.loads(path.read_text())["feature"], FEATURE)
+
+
+class IntentEvidenceTests(RecorderCase):
+    """#21 T017 [AC-007, FR-004]: provisional intent cites the brief and spec."""
+
+    def test_intent_cites_the_brief_and_spec(self) -> None:
+        (self.feature / "discovery.md").write_text(
+            discovery_fixtures.brief_text(
+                discovery_fixtures.SECTIONS, mode="autonomous"
+            )
+        )
+        (self.feature / "spec.md").write_text(discovery_fixtures.SPEC)
+        policy = self.root / discovery_fixtures.POLICY
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_text("# Demo policy\n")
+        self.step({"intent.json": self.draft("intent")})
+        self.failed(self.check("record-provisional-intent"), "cite the discovery brief")
+        self.assertEqual(self.decisions(), [])
+        (self.feature / "autonomous/drafts/intent.json").unlink()
+        (autonomy.run_dir(self.root, "run42") / "block.json").unlink()
+        autonomy.consume_steps(self.root, "run42")
+        evidence = [f"{FEATURE}/discovery.md", f"{FEATURE}/spec.md"]
+        self.step({"intent.json": self.draft("intent", evidence=evidence)})
+        self.ok(self.check("record-provisional-intent"))
+        (entry,) = self.decisions()
+        self.assertEqual(entry["evidence"], evidence)
+        self.assertIn(
+            "| PD-0001 | intent | accept (agent-provisional)",
+            (self.feature / "autonomous/record.md").read_text(),
+        )
+
+
+class StepDraftTests(FixLoopCase):
+    """#21 T007, T026 [FR-016, FR-017]: what the wrapper may retry."""
+
+    def feature_obj(self) -> object:
+        feature = artifacts.resolve_feature(self.root, "run42", None)
+        artifacts.load_run(feature)
+        return feature
+
+    def wrapper_step(self, drafts: dict, prompt: str) -> dict:
+        name = self.step(
+            drafts,
+            role="reviewer" if "review" in prompt else "author",
+            integration="codex" if "review" in prompt else "claude",
+        )
+        return autonomy.read_steps(self.root, "run42")[-1] | {"step": name}
+
+    def check_drafts(self, drafts: dict, prompt: str, *, blocked: bool = False) -> None:
+        step = self.wrapper_step(drafts, prompt)
+        artifacts.check_step_drafts(self.feature_obj(), prompt, step, blocked=blocked)
+
+    def test_step_points(self) -> None:
+        for prompt, points in (
+            ("/speckit-ballast-decide tasks", ("tasks",)),
+            (
+                "$speckit-ballast-review implementation-recheck",
+                (
+                    "implementation-review",
+                    "specialist-review",
+                ),
+            ),
+            ("/speckit-ballast-review specialists", ("specialist-review",)),
+            ("/speckit-ballast-discover autonomous", ("clarification",)),
+            ("/speckit-ballast-resolve", ("decision-resolution",)),
+            ("/speckit-implement", ()),
+            ("/speckit-ballast-fix", ()),
+            ("/speckit-ballast-decide nonsense", ()),
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(artifacts.step_points(prompt), points)
+
+    def test_correctable_refusals_are_draft_errors(self) -> None:
+        long_reason = {**FINDING, "disposition": "resolved", "reason": "r" * 1001}
+        cases = {
+            "overlong reason": (
+                self.reviews([long_reason]),
+                "/speckit-ballast-review implementation",
+                "reason must be 1-1000 characters",
+            ),
+            "quoted approval": (
+                {
+                    "plan.json": self.draft(
+                        "plan", basis='Epic: "approved by the operator"'
+                    )
+                },
+                "/speckit-ballast-decide plan",
+                "claims a human approval",
+            ),
+            "missing draft": ({}, "/speckit-ballast-decide plan", "wrote no plan.json"),
+            "wrong point": (
+                {"plan.json": self.draft("tasks")},
+                "/speckit-ballast-decide plan",
+                "does not match",
+            ),
+            "missing evidence": (
+                {"plan.json": self.draft("plan", evidence=[f"{FEATURE}/nope.md"])},
+                "/speckit-ballast-decide plan",
+                "does not exist",
+            ),
+            "not JSON": (
+                {"plan.json": b"{oops"},
+                "/speckit-ballast-decide plan",
+                "not valid JSON",
+            ),
+            "unexpected name": (
+                {"tasks.json": self.draft("tasks")},
+                "/speckit-ballast-decide plan",
+                "unexpected draft",
+            ),
+            "narrative finding": (
+                self.reviews(),
+                "/speckit-ballast-review implementation",
+                "carries findings",
+            ),
+        }
+        for name, (drafts, prompt, text) in cases.items():
+            with self.subTest(case=name):
+                if name == "narrative finding":
+                    (self.feature / "reviews/engineering.md").write_text(
+                        "# Review\n\n## Findings\n\n- [high] bad\n"
+                    )
+                with self.assertRaisesRegex(artifacts.DraftError, text):
+                    self.check_drafts(drafts, prompt)
+                for path in (self.feature / "autonomous/drafts").glob("*"):
+                    path.unlink()
+                (self.feature / "reviews/engineering.md").write_text("# Review\n")
+
+    def test_state_refusals_are_not_retried(self) -> None:
+        """AC-019: the recorder decides; the wrapper does not retry them."""
+        high = {**FINDING, "severity": "high", "disposition": "open"}
+        plan_review = {
+            "plan-review.json": self.review_draft("plan-review", "plan", [high])
+        }
+        # A high finding at plan review blocks terminally: no DraftError,
+        # although `open` is invalid for high there.
+        self.check_drafts(plan_review, "/speckit-ballast-review plan")
+        self.set_fix(3, "review-pending")
+        self.check_drafts(
+            self.reviews([high]), "/speckit-ballast-review implementation-recheck"
+        )
+        # While a cycle remains, `open` on a medium finding means "fix this".
+        self.set_fix(1, "review-pending")
+        self.check_drafts(
+            self.reviews([FINDING]), "/speckit-ballast-review implementation-recheck"
+        )
+
+    def test_block_draft_behind_exit_3(self) -> None:
+        bad = {"block.json": {"category": "decision", "condition": "x", "options": []}}
+        with self.assertRaisesRegex(artifacts.DraftError, "block.json"):
+            self.check_drafts(bad, "/speckit-ballast-decide plan", blocked=True)
+        for path in (self.feature / "autonomous/drafts").glob("*"):
+            path.unlink()
+        # No block draft at all: run.py's fallback decides, nothing to retry.
+        self.check_drafts({}, "/speckit-implement", blocked=True)
+
+    def test_refused_attempts_never_qualify(self) -> None:
+        self.step({"plan.json": self.draft("plan", summary="first")}, refused="x")
+        for path in (self.feature / "autonomous/drafts").glob("*"):
+            path.unlink()
+        self.step(
+            {"plan.json": self.draft("plan", summary="second")},
+            attempt=2,
+            refusals=["summary must be 1-500 characters"],
+        )
+        self.ok(self.record("plan"))
+        (entry,) = autonomy.current(self.decisions(), "plan")
+        self.assertEqual(entry["summary"], "second")
+        self.assertEqual(entry["agent"]["attempts"], 2)
+        self.assertEqual(
+            entry["agent"]["refusals"], ["summary must be 1-500 characters"]
+        )
+        self.assertIn(
+            "after 1 retry", (self.feature / "autonomous/record.md").read_text()
+        )
