@@ -664,6 +664,32 @@ class ResumeTests(StubCase):
         refusal = launcher._refusal(self.root)  # noqa: SLF001
         self.assertIn("run `trust`", refusal)
 
+    def test_active_time_after_a_long_pause(self) -> None:
+        """T036 [AC-027]: a ten-hour pause costs nothing; legacy runs are seeded."""
+        run_id = self.blocked_run()
+        record = autonomy.read_run(self.root, run_id)
+        started = datetime.fromisoformat(record["started_at"]) - timedelta(hours=10)
+        record["started_at"] = started.isoformat()
+        record["active_seconds"] = 600.0
+        autonomy.write_run(self.root, record)
+        self.engine.update(status="failed", code=1, step="record-tasks")
+        self.main("resume", run_id)
+        after = autonomy.read_run(self.root, run_id)
+        self.assertGreaterEqual(after["active_seconds"], 600.0)
+        self.assertLess(after["active_seconds"], 900.0)
+        self.assertIsNone(after["invocation_started_at"])
+        # A v0.6.x record: its fixed deadline becomes active time, capped.
+        legacy = self.blocked_run()
+        record = autonomy.read_run(self.root, legacy)
+        del record["active_seconds"]
+        record["limits"]["deadline"] = (started + timedelta(hours=4)).isoformat()
+        record["started_at"] = started.isoformat()
+        autonomy.write_run(self.root, record)
+        _, out, err = self.main("resume", legacy)
+        seeded = autonomy.read_run(self.root, legacy)
+        self.assertNotIn("deadline", seeded["limits"], out + err)
+        self.assertGreaterEqual(seeded["active_seconds"], 240 * 60)
+
     def test_resume_of_continued_run_refused(self) -> None:
         """AC-015: a lowered run resumes only as its continuation."""
         run_id = self.blocked_run()
@@ -822,6 +848,15 @@ class AttemptCountTests(offline.WrapperCase):
             autonomy.read_run(self.root, "run42"), [], None
         )
         self.assertIn("monetary spend is not measured", rendered)
+
+    def test_a_step_still_stops_at_the_limit(self) -> None:
+        """T036 [AC-027]: active time spent means no agent starts."""
+        self.make_run(active_seconds=240 * 60.0)
+        result = self.wrapper()
+        self.assertEqual(result.returncode, offline.EXIT_LIMIT)
+        self.assertIn("wall-time limit exhausted", result.stderr)
+        self.assertIsNone(self.ran())
+        self.assertEqual(self.steps()[-1]["limit"], "wall-time")
 
     def test_skipped_cycle_steps_do_not_count(self) -> None:
         self.make_run()
