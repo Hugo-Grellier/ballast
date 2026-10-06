@@ -393,35 +393,81 @@ def split_repository(value: object) -> tuple[str, str] | None:
     return (owner, name) if valid else None
 
 
-def reviewed_repositories(root: Path) -> frozenset[str]:
-    """Return the repositories `ballast trust` reviewed here, case-folded.
+DIGEST = re.compile(r"[0-9a-f]{64}")
 
-    Missing, unreadable, unknown-schema or malformed reads as empty. Holds
-    identities only, never digests (FR-005, FR-010).
+
+def _reviewed_record(root: Path) -> tuple[list[str], dict[str, list[list[str]]]]:
+    """Return the reviewed names and per-repository configuration digest pairs.
+
+    Missing, unreadable, unknown-schema or malformed reads as empty, whole: a
+    record that is wrong anywhere is trusted nowhere.
     """
     try:
-        path = state_base(root) / REVIEWED
-        found = json.loads(path.read_text(encoding="utf-8"))
+        found = json.loads((state_base(root) / REVIEWED).read_text(encoding="utf-8"))
         names = found["repositories"] if found["schema"] == 1 else []
-    except (OSError, ValueError, KeyError, TypeError):
-        return frozenset()
-    valid = isinstance(names, list) and all(
-        isinstance(n, str) and split_repository(n) for n in names
-    )
-    return frozenset(names) if valid else frozenset()
+        configs = found.get("configurations", {})
+        valid = (
+            isinstance(names, list)
+            and all(isinstance(n, str) and split_repository(n) for n in names)
+            and isinstance(configs, dict)
+            and all(
+                isinstance(pairs, list)
+                and all(
+                    isinstance(pair, list)
+                    and len(pair) == 2  # noqa: PLR2004
+                    and all(isinstance(d, str) and DIGEST.fullmatch(d) for d in pair)
+                    for pair in pairs
+                )
+                for pairs in configs.values()
+            )
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return [], {}
+    return (names, configs) if valid else ([], {})
 
 
-def add_reviewed(root: Path, repository: str) -> None:
-    """Add a repository to the reviewed record, under a lock; raises OSError."""
+def reviewed_repositories(root: Path) -> frozenset[str]:
+    """Return the repositories `ballast trust` reviewed here, case-folded."""
+    return frozenset(_reviewed_record(root)[0])
+
+
+def reviewed_configurations(root: Path, repository: str) -> frozenset[tuple[str, ...]]:
+    """Return the (`ballast.toml`, constitution) digests reviewed for a repository.
+
+    Setup counts the default branch only when it carries one of these pairs for
+    the repository the checkout pins (SEC2-001).
+    """
+    pairs = _reviewed_record(root)[1].get(repository.casefold(), [])
+    return frozenset(tuple(pair) for pair in pairs)
+
+
+def add_reviewed(
+    root: Path, repository: str, configuration: tuple[str, str] | None = None
+) -> bool:
+    """Record a repository, and the configuration reviewed for it, under a lock.
+
+    Returns whether the record changed; raises OSError. The record holds
+    identities and these two digests, nothing else.
+    """
     base = state_base(root)
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
     lock = os.open(base / REVIEWED_LOCK, flags, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        names = reviewed_repositories(root) | {repository.casefold()}
-        document = {"schema": 1, "repositories": sorted(names)}
-        write_atomic(base / REVIEWED, (json.dumps(document, indent=1) + "\n").encode())
+        names, before = _reviewed_record(root)
+        key = repository.casefold()
+        updated = sorted({*names, key})
+        configs = before
+        if configuration is not None and list(configuration) not in before.get(key, []):
+            configs = {**before, key: [*before.get(key, []), list(configuration)]}
+        document = {"schema": 1, "repositories": updated, "configurations": configs}
+        changed = updated != names or configs != before
+        if changed:
+            write_atomic(
+                base / REVIEWED, (json.dumps(document, indent=1) + "\n").encode()
+            )
+        return changed
     finally:
         os.close(lock)
 
@@ -628,8 +674,19 @@ def _review_repository(root: Path, inputs: dict[str, str]) -> None:
     value = github.get("repository") if isinstance(github, dict) else None
     if split_repository(value) is None:
         return
+    constitution = inputs.get(".specify/memory/constitution.md")
+    pair = (
+        (inputs["ballast.toml"], constitution)
+        if constitution and "ballast.toml" in inputs
+        else None
+    )
     try:
-        add_reviewed(root, value)
+        if add_reviewed(root, value, pair):
+            sys.stdout.write(
+                f"recorded {value} as reviewed on this machine: setup may trust "
+                "fresh checkouts of it whose ballast.toml and constitution equal "
+                "these and its default branch\n"
+            )
     except OSError as error:
         sys.stderr.write(
             f"could not record {value} as reviewed: {error}; setup will not "
@@ -666,6 +723,14 @@ def _hold(root: Path) -> str | None:
     return None
 
 
+def _reviewed_names(root: Path) -> list[str]:
+    """Return the reviewed repositories; none when the state directory is refused."""
+    try:
+        return sorted(reviewed_repositories(root))
+    except OSError:
+        return []
+
+
 def _status(root: Path, *, installed: bool) -> dict:
     """Return what `status --json` prints; it writes nothing."""
     try:
@@ -688,6 +753,9 @@ def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
     installed = (root / ".ballast/spec_workflow/run.py").is_file()
     if argv == ["status", "--json"]:
         sys.stdout.write(json.dumps(_status(root, installed=installed)) + "\n")
+        return 0
+    if argv == ["reviewed", "--json"]:
+        sys.stdout.write(json.dumps({"repositories": _reviewed_names(root)}) + "\n")
         return 0
     if not argv or argv[0] not in {*COMMANDS, "intake", "trust", "discard-runs"}:
         sys.stderr.write(__doc__ or "")

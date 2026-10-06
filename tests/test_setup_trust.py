@@ -7,6 +7,7 @@ A local bare repository stands in for the pinned repository through the
 from __future__ import annotations
 
 import ast
+import hashlib
 import io
 import json
 import os
@@ -46,6 +47,15 @@ CONSTITUTION = "project constitution\n"
 WIDENED = '\n[agents.permissions]\nextra_allow = ["Bash(*)"]\n'
 DIFFERS = f"differs from {REPO}'s default branch and from your last trusted baseline"
 POINTER = "the .git pointer does not name a worktree of this repository"
+NOT_FOR_REPO = "was not reviewed for"
+
+
+def digests(config: str = CONFIG, constitution: str = CONSTITUTION) -> tuple[str, str]:
+    """Return the pair `ballast trust` records for a reviewed repository."""
+    first, second = (
+        hashlib.sha256(text.encode()).hexdigest() for text in (config, constitution)
+    )
+    return first, second
 
 
 def _commit(root: Path, message: str = "change") -> None:
@@ -79,7 +89,7 @@ class TrustMixin:
                     patcher = patch.object(seam, attribute, replacement)
                     patcher.start()
                     self.addCleanup(patcher.stop)
-            launcher.add_reviewed(root, REPO)
+            launcher.add_reviewed(root, REPO, digests())
         return root
 
     def stand_in(
@@ -354,7 +364,7 @@ class OperatorBaselineTests(TrustCase):
         before = self.baseline()
         verdict = self.verdict()
         self.assertEqual(verdict.kind, "skipped", verdict)
-        self.assertIn(DIFFERS, verdict.text)
+        self.assertIn(NOT_FOR_REPO, verdict.text)
         self.assertEqual(self.baseline(), before)
 
     def test_unbound_provenance_does_not_count(self) -> None:
@@ -394,10 +404,10 @@ class LocalIneligibleTests(TrustCase):
         self.assert_skipped(self.verdict(), "has uncommitted changes")
 
     def test_committed_widened_permissions(self) -> None:
-        # AC-011: no operator baseline, differs from the default branch.
+        # AC-011: no operator baseline, and nobody reviewed this configuration.
         (self.root / "ballast.toml").write_text(CONFIG + WIDENED)
         _commit(self.root, "widen")
-        self.assert_skipped(self.verdict(), DIFFERS, network=True)
+        self.assert_skipped(self.verdict(), NOT_FOR_REPO)
 
     def test_extra_file_under_specify(self) -> None:
         # AC-012
@@ -535,7 +545,7 @@ class PreparationBaselineTests(TrustCase):
         )
         prepared = self.verdict(mode="prepare")
         self.assertEqual(prepared.kind, "skipped", prepared)
-        self.assertIn(DIFFERS, prepared.text)
+        self.assertIn(NOT_FOR_REPO, prepared.text)
         self.assertEqual(self.verdict(mode="setup").kind, "recorded")
 
 
@@ -785,7 +795,8 @@ class ObservationTests(TrustCase):
         real = setup_trust._run  # noqa: SLF001
 
         def run(argv: list[str], **kwargs: Any) -> setup_trust.Result:  # noqa: ANN401
-            return result if word in argv else real(argv, **kwargs)
+            hit = word in argv and "--get-url" not in argv
+            return result if hit else real(argv, **kwargs)
 
         return patch.object(setup_trust, "_run", run)
 
@@ -895,6 +906,7 @@ class ObservationTests(TrustCase):
 
     def test_local_refs_remotes_and_rewrites_are_ignored(self) -> None:
         # AC-015: an agent repoints everything local at the changed file.
+        launcher.add_reviewed(self.root, REPO, digests(CONFIG + WIDENED))
         (self.root / "ballast.toml").write_text(CONFIG + WIDENED)
         _commit(self.root, "widen")
         evil = self.stand_in(
@@ -945,7 +957,7 @@ class ObservationTests(TrustCase):
         # SEC-003: only the two network commands may use a transport.
         for _, argv in self.argv:
             verb = next(a for a in argv[1:] if a in verbs)
-            local = verb not in {"ls-remote", "fetch", "version"}
+            local = verb not in {"ls-remote", "fetch", "version"} or "--get-url" in argv
             self.assertEqual("protocol.allow=never" in argv, local, argv)
         self.assertEqual(found["checkout"], {"version", "rev-parse", "remote"})
         self.assertEqual(
@@ -1019,7 +1031,7 @@ class ReviewedRepositoryTests(TrustCase):
 
     def test_matching_is_case_insensitive(self) -> None:
         (launcher.state_base(self.root) / launcher.REVIEWED).unlink()
-        launcher.add_reviewed(self.root, "Example/PROJECT")
+        launcher.add_reviewed(self.root, "Example/PROJECT", digests())
         self.assertEqual(self.verdict().kind, "recorded")
 
     def test_a_malformed_record_reads_as_empty(self) -> None:
@@ -1035,6 +1047,110 @@ class ReviewedRepositoryTests(TrustCase):
                 self.assertEqual(launcher.reviewed_repositories(self.root), frozenset())
                 self.assertEqual(self.verdict().kind, "skipped")
                 self.fresh()
+
+
+class ReviewedConfigurationTests(TrustCase):
+    """SEC2-001, DEC-0008: a reviewed repository is bound to what was reviewed."""
+
+    PILOT = "other/pilot"
+
+    def repoint(self, config: str) -> None:
+        """Commit `config` pinning the pilot, whose default branch carries it."""
+        (self.root / "ballast.toml").write_text(config)
+        _commit(self.root, "repoint")
+        self.remotes[self.PILOT] = self.stand_in(
+            self.PILOT,
+            {
+                "ballast.toml": config,
+                ".specify/memory/constitution.md": CONSTITUTION,
+            },
+        )
+
+    def test_a_repointed_reviewed_repository_needs_its_own_review(self) -> None:
+        launcher.add_reviewed(
+            self.root, self.PILOT, digests(CONFIG.replace(REPO, self.PILOT))
+        )
+        self.repoint(CONFIG.replace(REPO, self.PILOT) + WIDENED)
+        self.assert_skipped(self.verdict(), f"{NOT_FOR_REPO} {self.PILOT}")
+
+    def test_the_exact_reviewed_configuration_is_eligible(self) -> None:
+        config = CONFIG.replace(REPO, self.PILOT) + WIDENED
+        launcher.add_reviewed(self.root, self.PILOT, digests(config))
+        self.repoint(config)
+        self.assertEqual(self.verdict().kind, "recorded")
+
+    def test_a_name_without_digests_is_not_eligible(self) -> None:
+        launcher.add_reviewed(self.root, self.PILOT)
+        self.repoint(CONFIG.replace(REPO, self.PILOT))
+        self.assert_skipped(self.verdict(), f"{NOT_FOR_REPO} {self.PILOT}")
+
+    def test_each_reviewed_configuration_accumulates(self) -> None:
+        launcher.add_reviewed(self.root, REPO, digests(CONFIG + WIDENED))
+        (self.root / "ballast.toml").write_text(CONFIG + WIDENED)
+        _commit(self.root, "widen")
+        self.remotes[REPO] = self.stand_in(
+            REPO,
+            {
+                "ballast.toml": CONFIG + WIDENED,
+                ".specify/memory/constitution.md": CONSTITUTION,
+            },
+        )
+        self.assertEqual(self.verdict().kind, "recorded")
+        self.fresh()
+        (self.root / "ballast.toml").write_text(CONFIG)
+        _commit(self.root, "back")
+        self.remotes[REPO] = self.stand_in(REPO)
+        self.assertEqual(self.verdict().kind, "recorded")
+
+    def test_it_is_decided_before_the_network(self) -> None:
+        launcher.add_reviewed(self.root, self.PILOT)
+        self.repoint(CONFIG.replace(REPO, self.PILOT))
+        self.verdict()
+        self.assertEqual(self.network_commands(), [])
+
+    def test_malformed_digests_read_as_empty(self) -> None:
+        path = launcher.state_base(self.root) / launcher.REVIEWED
+        good = digests()
+        for extra in (
+            {"configurations": []},
+            {"configurations": {REPO: "x"}},
+            {"configurations": {REPO: [["a", "b"]]}},
+            {"configurations": {REPO: [[good[0]]]}},
+            {"configurations": {REPO: [[1, 2]]}},
+        ):
+            with self.subTest(extra=extra):
+                path.write_text(
+                    json.dumps({"schema": 1, "repositories": [REPO], **extra})
+                )
+                self.assertEqual(self.verdict().kind, "skipped")
+                self.fresh()
+
+
+class RewrittenUrlTests(TrustCase):
+    """SEC2-002: a URL Git rewrites is not the pinned repository."""
+
+    def test_an_insteadof_rewrite_is_unobservable(self) -> None:
+        mirror = self.stand_in(REPO)  # an attacker's mirror carrying the same files
+        self.remotes[REPO] = self.stand_in(
+            REPO,
+            {
+                "ballast.toml": CONFIG + WIDENED,
+                ".specify/memory/constitution.md": CONSTITUTION,
+            },
+        )
+        configuration = self.base / "gitconfig"
+        configuration.write_text(
+            f'[url "file://{mirror}"]\n\tinsteadOf = file://{self.remotes[REPO]}\n'
+        )
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(configuration)}):
+            verdict = self.verdict()
+        self.assert_skipped(verdict, "rewritten by Git configuration", network=True)
+
+    def test_an_unrewritten_url_is_observed_as_before(self) -> None:
+        configuration = self.base / "gitconfig"
+        configuration.write_text("[core]\n\tpager = cat\n")
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(configuration)}):
+            self.assertEqual(self.verdict().kind, "recorded")
 
 
 class EveryRefusalTests(TrustCase):
@@ -1065,7 +1181,7 @@ class EveryRefusalTests(TrustCase):
             (root / launcher.TAMPER_MARKER).write_text("")
 
         cases = {
-            "widened": (widen, DIFFERS),
+            "widened": (widen, NOT_FOR_REPO),
             "uncommitted": (uncommitted, "has uncommitted changes"),
             "runs": (runs, "saved run state"),
             "unreviewed": (unreviewed, "not one you trusted"),

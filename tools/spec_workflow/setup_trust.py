@@ -18,9 +18,10 @@ and nothing reaches the network before the last):
 7. a linked worktree's `.git` pointer names a worktree of its own repository;
 8. both configuration files are committed and unchanged from `HEAD`;
 9. both equal the checkout's earlier baseline recorded by `ballast trust`, or
-   the pinned repository is one `ballast trust` reviewed and both equal its
-   default branch, observed live in a throwaway repository with the operator's
-   own Git authority and nothing from the checkout's Git configuration.
+   the pinned repository is one `ballast trust` reviewed with exactly these two
+   files, and both equal its default branch, observed live in a throwaway
+   repository with the operator's own Git authority and nothing from the
+   checkout's Git configuration.
 
 Standard library plus `launcher`, `ledger` and `autonomy` only; runs under
 `python3 -I -S` from the pinned standard, never from a checkout copy.
@@ -104,6 +105,7 @@ RUN_STATE = "saved run state shows agents ran here"
 NO_RECORD = "the installation record is missing or does not match this setup"
 POINTER = "the .git pointer does not name a worktree of this repository"
 NOT_REVIEWED = "the pinned repository is not one you trusted on this machine"
+NOT_FOR_REPOSITORY = "was not reviewed for"
 NO_REPOSITORY = "ballast.toml names no valid [github] repository"
 CHANGED = "protected inputs changed while setup checked them"
 SETUP_REMEDY = (
@@ -559,6 +561,11 @@ def _observe_in(  # noqa: C901 - one advertisement, read once
     )
     if made.returncode:
         _unseen("could not create a scratch repository")
+    # Git rewrites a URL silently (`url.<base>.insteadOf` in the operator's own
+    # configuration, which an operator shell hook can point into a checkout).
+    named = run("ls-remote", "--get-url", url)
+    if named.returncode or named.stdout.decode().strip() != url:
+        _unseen("the URL is rewritten by Git configuration")
     listed = run(
         "ls-remote", "--symref", url, "HEAD", timeout=LS_REMOTE_TIMEOUT, network=True
     )
@@ -666,6 +673,14 @@ def _default_branch(
     repository = "/".join(pinned)
     if repository.casefold() not in launcher.reviewed_repositories(root):
         _no(NOT_REVIEWED)
+    # Reviewed for this repository, not for another one a commit repointed to.
+    reviewed = launcher.reviewed_configurations(root, repository)
+    digests = tuple(
+        None if configs[path] is None else hashlib.sha256(configs[path]).hexdigest()
+        for path in CONFIGS
+    )
+    if digests not in reviewed:
+        _no(f"this configuration {NOT_FOR_REPOSITORY} {repository}")
     try:
         return _observe(root, state, git, pinned, configs)
     except _Unobservable as cause:

@@ -180,3 +180,13 @@ findings:
 The feature keeps the stated boundary: within the confined-step model, no path was found by which an agent-written protected input is recorded without a human having reviewed those bytes somewhere. The one working escalation (SEC2-001) is the residual the author already surfaced as DEC-0008; it is bounded by the operator's own reviewed repositories and belongs to the human merge decision, which this review hands it to with its severity stated. SEC2-002 and SEC2-003 are cheap follow-ups that make the DEC-0008 mitigations operable; they do not block.
 
 - Verdict: approved
+
+## Resolution
+
+Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), test-first; listed for merge review (not an operator approval).
+
+- SEC2-001: resolved (DEC-0008, option (b)). `ballast trust` records per repository the digests of the trusted `ballast.toml` and constitution; setup and preparation accept the default-branch observation only when the checkout's files equal a pair reviewed for the repository it pins, before any network request. `tests.test_setup_trust.ReviewedConfigurationTests` (repointed reviewed repository, exact reviewed configuration, name without digests, accumulation, malformed digests, no network first). ADR-0014's residual risks are rewritten.
+- SEC2-002: resolved. `git ls-remote --get-url <url>` runs in the throwaway's hardened environment first; a result other than `<url>` is "unobservable" (not eligible). `RewrittenUrlTests` uses an `insteadOf` in a `GIT_CONFIG_GLOBAL` fixture (it recorded from the mirror before the fix). ADR-0014 now states that the observation trusts the operator's Git environment. `branch_sync` is unchanged.
+- SEC2-003: resolved. `ballast trust` prints one `recorded OWNER/NAME as reviewed on this machine: ...` line when it changes the record; `launcher.py reviewed --json` and `ballast doctor`'s trust check list the reviewed repositories (`TrustProvenanceTests`, `TrustSourceTests`).
+- SEC2-004, SEC2-005: no action, as the review states (SEC2-005's moved-default-branch case is now also refused, because the new bytes were not reviewed).
+- SEC2-006: resolved. ADR-0014 states that the pointer check relies on the step sandbox.

@@ -18,7 +18,11 @@ record_baseline(root: Path, state: Path, inputs: dict[str, str], *,
 Unchanged: refusals (tamper marker, in-progress marker, not installed, lock, unfinished setup), the digest set and the output line `trusted N workflow inputs for ROOT`. Changed:
 
 1. Writes through `record_baseline(..., source="trust")`, so a provenance record naming `trust` is written with the baseline.
-2. Then adds the trusted `ballast.toml`'s `[github] repository`, case-folded, to `reviewed-repositories.json` when it is a valid `OWNER/NAME`; nothing otherwise. A failure to update that record is reported on stderr as a warning (`could not record OWNER/NAME as reviewed: <cause>; setup will not trust its fresh checkouts`) and does not change the exit status: the baseline itself was recorded.
+2. Then adds the trusted `ballast.toml`'s `[github] repository`, case-folded, to `reviewed-repositories.json` when it is a valid `OWNER/NAME`, together with the digests of the trusted `ballast.toml` and constitution (nothing otherwise), and prints `recorded OWNER/NAME as reviewed on this machine: ...` when that changes the record (SEC2-001, SEC2-003). A failure to update that record is reported on stderr as a warning (`could not record OWNER/NAME as reviewed: <cause>; setup will not trust its fresh checkouts`) and does not change the exit status: the baseline itself was recorded.
+
+## `reviewed --json` (SEC2-003)
+
+Prints `{"repositories": [...]}`, the case-folded reviewed names, and writes nothing; an `OSError` from the state directory prints an empty list. `ballast doctor`'s trust check appends `reviewed repositories on this machine: a, b` to its detail; an older launcher refuses the command and doctor shows nothing.
 
 ## `status --json`
 

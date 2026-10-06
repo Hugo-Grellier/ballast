@@ -29,10 +29,11 @@ All records live in operator state under `$XDG_STATE_HOME/ballast/` (default `~/
 | --- | --- | --- |
 | `schema` | int | `1` |
 | `repositories` | list of string | `owner/name`, case-folded, sorted, unique; each part matches the `[github] repository` name rule |
+| `configurations` | object | optional; `owner/name` (case-folded) to a list of `[ballast.toml digest, constitution digest]` pairs, each 64 lowercase hex characters (DEC-0008) |
 
 - **Writer**: the launcher's `_trust` only, after writing the baseline: adds the `[github] repository` of the trusted `ballast.toml` snapshot when valid; read-modify-write under `flock` on `ballast/reviewed-repositories.lock`, atomic replace, mode 0600.
 - **Readers**: `setup_trust` (setup and preparation). Missing, unreadable, unknown schema or malformed → empty.
-- **Holds no digests** and no checkout paths (FR-005, FR-010).
+- **Holds** the two configuration digests reviewed per repository (DEC-0008) and no checkout paths (FR-005, FR-010). A name without a pair is reviewed but eligible for nothing; any malformed part reads the whole record as empty.
 
 ## Installation record: `<state>/installation.json` (read only)
 
@@ -56,7 +57,7 @@ Evaluated once per setup or preparation, in this order; the first failing condit
 | 6 | linked worktree pointer names a worktree entry of its repository | the .git pointer does not name a worktree of this repository | FR-006, AC-013 |
 | 7 | both config files committed and unchanged from `HEAD` | `<path>` has uncommitted changes | FR-003, AC-010 |
 | 8a | both equal the previous operator-recorded baseline → **eligible** (`operator-baseline`) | — | FR-003, AC-004 |
-| 8b | `[github] repository` valid and in the reviewed-repositories record | the pinned repository is not one you trusted on this machine / ballast.toml names no valid [github] repository | FR-005, AC-016 |
+| 8b | `[github] repository` valid, in the reviewed-repositories record, and the two files' digests are one of its reviewed pairs (before any network) | the pinned repository is not one you trusted on this machine / this configuration was not reviewed for `<repo>` / ballast.toml names no valid [github] repository | FR-005, AC-016 |
 | 9 | default branch observed and both blob IDs equal → **eligible** (`default-branch`) | could not read `<repo>`'s default branch: `<cause>` / differs from `<repo>`'s default branch and from your last trusted baseline | FR-003, FR-004, AC-001, AC-011, AC-014, AC-015 |
 
 ## State transitions of a checkout's baseline

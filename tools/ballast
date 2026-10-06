@@ -1048,6 +1048,17 @@ def _recorder(status: dict) -> str | None:
     return names.get(source) if isinstance(source, str) else None
 
 
+def _reviewed(launcher: Path, root: Path) -> list[str]:
+    """List the repositories `ballast trust` reviewed; empty from an older launcher."""
+    result = probe([PYTHON, "-I", "-S", str(launcher), "reviewed", "--json"], cwd=root)
+    try:
+        names = json.loads(result.stdout)["repositories"] if result else []
+    except (AttributeError, TypeError, KeyError, ValueError):
+        return []
+    ok = isinstance(names, list) and all(isinstance(n, str) for n in names)
+    return [n for n in names if n.isprintable()] if ok else []
+
+
 def _refusal_remedy(refusal: str) -> str:
     """Return the operator's next step for a launcher refusal."""
     if "BALLAST_TAMPERED" in refusal:
@@ -1090,14 +1101,17 @@ def _trust(context: Context, probes: set[str]) -> Outcome:
         return "missing", "the workflow is not installed in this checkout", remedy
     recorder = _recorder(status)
     recorded = f"baseline recorded by {recorder}" if recorder else None
+    names = _reviewed(launcher, context.root)
+    listed = "reviewed repositories on this machine: " + ", ".join(names)
     if refusal is None:
-        accepts = "the launcher accepts this checkout"
-        return "passing", f"{accepts}; {recorded}" if recorded else accepts
+        detail = "the launcher accepts this checkout"
+        detail += f"; {recorded}" if recorded else ""
+        return "passing", detail + (f"; {listed}" if names else "")
     remedy = _refusal_remedy(refusal)
     detail = f"launcher will refuse: {refusal}"
     if recorder:
         detail += f"; the current baseline was recorded by {recorder}"
-    return "missing", detail, remedy
+    return "missing", detail + (f"; {listed}" if names else ""), remedy
 
 
 def project_checks(context: Context) -> list[Check]:

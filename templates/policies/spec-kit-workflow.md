@@ -359,9 +359,10 @@ and equal the default branch of the repository pinned in `[github] repository`
 trust`; a preparation never reads a baseline). That branch is
 read live, from the pinned repository only, with the operator's own Git
 authority (it needs network access and never prompts), and only for a
-repository `ballast trust` already reviewed on this machine (a baseline from
-before this version does not count; each project needs one `ballast trust` per
-machine first); nothing the
+repository `ballast trust` already reviewed on this machine, and only for the
+exact `ballast.toml` and constitution it reviewed for that repository (a
+baseline from before this version does not count; each project needs one
+`ballast trust` per machine first, and again after its default branch changes); nothing the
 checkout's Git configuration names is used. Setup records nothing when saved run
 state, an unfinished run, `BALLAST_TAMPERED` or an agent step's marker exists, so
 an agent step can never lead to a recorded baseline; it then says why and that

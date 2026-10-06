@@ -921,6 +921,26 @@ class TrustSourceTests(DoctorCase):
                     check["detail"], "launcher will refuse: no trusted baseline for x"
                 )
 
+    def test_the_trust_check_lists_the_reviewed_repositories(self) -> None:
+        # SEC2-003: the machine-wide record is visible, never silent
+        self.pin(self.REF)
+        standard = self.standard()
+        self.install(standard)
+        (standard / "tools/spec_workflow/launcher.py").write_text(
+            "import sys\n"
+            "if sys.argv[1] == 'reviewed':\n"
+            '    print(\'{"repositories": ["a/b", "c/d"]}\')\n'
+            "else:\n"
+            '    print(\'{"installed": true, "refusal": null}\')\n'
+        )
+        check = self.checks()[1]["trust"]
+        self.assertEqual(check["status"], "passing")
+        self.assertEqual(
+            check["detail"],
+            "the launcher accepts this checkout; reviewed repositories on this "
+            "machine: a/b, c/d",
+        )
+
     def test_the_real_launcher_reports_each_source(self) -> None:
         self.pin(self.REF)
         standard = self.standard()

@@ -4836,10 +4836,44 @@ class TrustProvenanceTests(LauncherStateCase):
         result = self.launch("trust")
         count = len(self.launcher.trusted_inputs(self.root))
         self.assertEqual(
-            result.stdout, f"trusted {count} workflow inputs for {self.root}\n"
+            result.stdout,
+            f"trusted {count} workflow inputs for {self.root}\n"
+            "recorded Acme/Demo as reviewed on this machine: setup may trust fresh "
+            "checkouts of it whose ballast.toml and constitution equal these and "
+            "its default branch\n",
         )
         self.assertEqual(result.stderr, "")
         self.assertEqual(self.reviewed(), frozenset({"acme/demo"}))
+
+    def test_trust_records_the_reviewed_digests_and_says_so_once(self) -> None:
+        # SEC2-001, SEC2-003
+        (self.root / ".specify/memory").mkdir()
+        (self.root / ".specify/memory/constitution.md").write_text("rules\n")
+        self.launch("trust")
+        record = json.loads(
+            (
+                Path(self.env["XDG_STATE_HOME"]) / "ballast/reviewed-repositories.json"
+            ).read_text()
+        )
+        inputs = self.launcher.trusted_inputs(self.root)
+        pair = [
+            inputs["ballast.toml"],
+            inputs.get(".specify/memory/constitution.md"),
+        ]
+        self.assertEqual(record["configurations"], {"acme/demo": [pair]})
+        again = self.launch("trust")
+        self.assertNotIn("as reviewed", again.stdout)
+        self.write_config('[github]\nrepository = "Acme/Demo"\n# changed\n')
+        changed = self.launch("trust")
+        self.assertIn("recorded Acme/Demo as reviewed", changed.stdout)
+
+    def test_reviewed_lists_the_repositories_and_writes_nothing(self) -> None:
+        # SEC2-003
+        empty = self.launch("reviewed", "--json")
+        self.assertEqual(json.loads(empty.stdout), {"repositories": []})
+        self.launch("trust")
+        listed = self.launch("reviewed", "--json")
+        self.assertEqual(json.loads(listed.stdout), {"repositories": ["acme/demo"]})
 
     def test_a_missing_or_malformed_repository_adds_nothing(self) -> None:
         for text in (
