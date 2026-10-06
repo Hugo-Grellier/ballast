@@ -1,7 +1,7 @@
 # Ballast installs itself here. Contributors developing the standard can set
 # BALLAST_STANDARD_DIR to this checkout to run their working copy instead.
 [standard]
-ref = "v0.7.1"
+ref = "v0.8.0"
 
 [agents.permissions]
 extra_allow = [
