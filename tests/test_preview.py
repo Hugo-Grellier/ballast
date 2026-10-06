@@ -349,6 +349,30 @@ class PreviewTests(unittest.TestCase):
         self.assertNotIn("\x1b", text)
         self.assertNotIn("\x07", text)
         self.assertIn("?[2Jpaused", text)
+        # So do the checks commands, and every other report value (SEC2-001).
+        (self.project / "ballast.toml").write_text(
+            '[standard]\nref = "vA"\n[checks]\ncommands = ["make\\u001b]0;x\\u0007"]\n'
+        )
+        code, out, _ = self.preview("vB", "--json")
+        report = json.loads(out)
+        self.assertIn("make\x1b]0;x\x07", report["steps"][-1])
+        planted = "docs/policies/x\x1b]0;owned\x07.md\nProject-owned files: none"
+        report["paths"]["added"].append(planted)
+        report["ignore"] = {"ok": False, "not_ignored": [planted], "block": "a/\n"}
+        report["project_owned_changed"] = [planted]
+        report["steps"].insert(0, "Add this block to .gitignore and commit it:\na/\n")
+        text = shim.render_preview(report)
+        self.assertNotIn("\x1b", text)
+        self.assertNotIn("\x07", text)
+        self.assertNotIn("\nProject-owned files: none", text)
+        self.assertIn("  1. Add this block to .gitignore and commit it:\na/\n", text)
+        self.assertIn("make?]0;x?", text)
+        with patch.object(
+            shim, "update_report", side_effect=shim.PreviewError("x\x1b[2Jy")
+        ):
+            code, _, err = self.preview("vB")
+        self.assertEqual(code, 1)
+        self.assertIn("ballast: preview of vB failed: x?[2Jy", err)
 
     def test_failed_build_reports_nothing_compatible(self) -> None:
         code, out, err = self.preview("vD")

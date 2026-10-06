@@ -1547,10 +1547,7 @@ def render_preview(report: dict) -> str:
             else f"cannot resume: {RESUME_BLOCKER}"
         )
         shown = run["format"] or "(no format)"
-        lines.append(
-            f"  {printable(run['id'])}  {printable(run['status'])}  "
-            f"{printable(shown)}  {resumable}"
-        )
+        lines.append(f"  {run['id']}  {run['status']}  {shown}  {resumable}")
     if not report["runs"]:
         lines.append("  none")
     lines += ["", "Installed paths"]
@@ -1569,10 +1566,17 @@ def render_preview(report: dict) -> str:
         "Project-owned files: " + (", ".join(owned) if owned else "none would change")
     )
     lines += ["", "To finish the update"]
-    lines += [f"  {n}. {step}" for n, step in enumerate(report["steps"], 1)]
+    block = ignore["block"] or ""
+    for n, step in enumerate(report["steps"], 1):
+        if block and step.endswith("\n" + block):
+            lines += [f"  {n}. {step[: -len(block) - 1]}", *block.splitlines(), ""]
+        else:
+            lines.append(f"  {n}. {step}")
     if report["blockers"]:
-        lines += ["", "Blocked: " + printable("; ".join(report["blockers"]))]
-    return "\n".join(lines) + "\n"
+        lines += ["", "Blocked: " + "; ".join(report["blockers"])]
+    # Steps, paths and run state carry checkout text: escape every line so
+    # none forges a line or drives the terminal (as doctor's render does).
+    return "\n".join(map(printable, lines)) + "\n"
 
 
 def preview(argv: list[str]) -> int:
@@ -1584,7 +1588,7 @@ def preview(argv: list[str]) -> int:
     root = Path.cwd()
     refusal = preview_refusal(root, arguments.ref)
     if refusal:
-        sys.stderr.write(f"ballast: refusing: {refusal}\n")
+        sys.stderr.write(f"ballast: refusing: {printable(refusal)}\n")
         return EXIT_REFUSED
     target = ensure_standard(root, arguments.ref)
     base = standard_dir(arguments.ref).parent.parent / "preview"
@@ -1593,7 +1597,8 @@ def preview(argv: list[str]) -> int:
     try:
         report = update_report(root, arguments.ref, target, work)
     except (PreviewError, OSError, ValueError) as error:
-        sys.stderr.write(f"ballast: preview of {arguments.ref} failed: {error}\n")
+        message = f"preview of {arguments.ref} failed: {error}"
+        sys.stderr.write(f"ballast: {printable(message)}\n")
         return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
