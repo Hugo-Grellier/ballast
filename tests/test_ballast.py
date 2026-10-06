@@ -1130,5 +1130,163 @@ class PrepareTriggerTests(unittest.TestCase):
         self.assertFalse(self.state(worktree).exists())
 
 
+# --- ballast init (#13) --------------------------------------------------------
+
+
+class Executed(Exception):  # noqa: N818 - stands in for a successful execv
+    """Raised by the fake execv."""
+
+
+class InitBootstrapTests(unittest.TestCase):
+    """The CLI only bootstraps init: ref, fetch, declaration, execv (AC-005, AC-033)."""
+
+    def setUp(self) -> None:
+        # Outside every temp root: the cache refuses one (and so would a run).
+        directory = TemporaryDirectory(dir=outside_temp())
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.project = self.base / "project"
+        self.project.mkdir()
+        self.standard = self.base / "standard"
+        (self.standard / "tools").mkdir(parents=True)
+        shutil.copy(ROOT / "tools/cli.toml", self.standard / "tools/cli.toml")
+        directory = Path.cwd()
+        os.chdir(self.project)
+        self.addCleanup(os.chdir, directory)
+        data = {"XDG_DATA_HOME": str(self.base / "data")}
+        environment = patch.dict(os.environ, data)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("BALLAST_STANDARD_DIR", None)
+        self.fetched: list[str] = []
+
+    def init(self, *args: str) -> tuple[int | None, list[str] | None, str]:
+        """Run `ballast init` in process; (exit code, execv argv, stderr)."""
+        calls: list[list[str]] = []
+
+        def fetch(root: Path, ref: str) -> Path:
+            self.assertEqual(root, self.project)
+            self.fetched.append(ref)
+            return self.standard
+
+        def execv(path: str, argv: list[str]) -> None:
+            self.assertEqual(path, shim.PYTHON)
+            calls.append(argv)
+            raise Executed
+
+        err = io.StringIO()
+        with (
+            patch.object(shim, "ensure_standard", fetch),
+            patch.object(shim.os, "execv", execv),
+            redirect_stderr(err),
+        ):
+            try:
+                code = shim.main(["init", *args])
+            except Executed:
+                code = None
+        return code, (calls[0] if calls else None), err.getvalue()
+
+    def expected(self, ref: str, *rest: str, standard: Path | None = None) -> list:
+        tool = (standard or self.standard) / "tools/init"
+        return [
+            shim.PYTHON,
+            "-IS",
+            str(tool),
+            *("--project", str(self.project), "--ref", ref),
+            *rest,
+        ]
+
+    def test_default_ref_is_the_cli_release(self) -> None:
+        flags = ("--description", "Demo", "--stack", "go")
+        code, argv, _ = self.init(*flags)
+        self.assertIsNone(code)
+        ref = f"v{shim.VERSION}"
+        self.assertEqual(argv, self.expected(ref, *flags))
+        self.assertEqual(self.fetched, [ref])
+        code, argv, _ = self.init("--ref", "v1.2.3")
+        self.assertEqual(argv, self.expected("v1.2.3"))
+
+    def test_invalid_refs_are_refused_before_fetching(self) -> None:
+        for ref in ("../x", "a..b", "a/b", "x y", "-x"):
+            with self.subTest(ref=ref):
+                code, argv, err = self.init(f"--ref={ref}")
+                self.assertEqual((code, argv), (2, None))
+                self.assertIn("is not a tag or commit of the standard", err)
+        self.assertEqual(self.fetched, [])
+        self.assertEqual(list(self.project.iterdir()), [])
+
+    def test_the_fetch_url_is_fixed(self) -> None:
+        urls: list[str] = []
+
+        def retrieve(url: str, _path: object) -> None:
+            urls.append(url)
+            message = "offline"
+            raise OSError(message)
+
+        with (
+            patch.object(shim.urllib.request, "urlretrieve", retrieve),
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            shim.main(["init"])
+        self.assertEqual(
+            urls,
+            [
+                f"https://github.com/{shim.REPOSITORY}/archive/v{shim.VERSION}.tar.gz",
+            ],
+        )
+        self.assertEqual(list(self.project.iterdir()), [])
+
+    def test_a_local_standard_is_used_as_is(self) -> None:
+        local = self.base / "local"
+        shutil.copytree(self.standard, local)
+        with patch.dict(os.environ, {"BALLAST_STANDARD_DIR": str(local)}):
+            code, argv, err = self.init()
+        self.assertIsNone(code)
+        self.assertEqual(argv, self.expected(f"v{shim.VERSION}", standard=local))
+        self.assertIn("using local standard", err)
+        self.assertEqual(self.fetched, [])
+
+    def test_a_pinned_repository_keeps_its_pin(self) -> None:
+        (self.project / "ballast.toml").write_text('[standard]\nref = "v0.1.0"\n')
+        code, argv, _ = self.init()
+        self.assertEqual(argv, self.expected("v0.1.0"))
+        code, argv, err = self.init("--ref", "v0.2.0")
+        self.assertEqual((code, argv), (2, None))
+        self.assertIn(
+            "ballast.toml pins v0.1.0; init keeps the pin. To move it, run "
+            "`ballast preview v0.2.0`, then edit the pin",
+            err,
+        )
+
+    def test_a_version_without_init_is_refused(self) -> None:
+        manifest = self.standard / "tools/cli.toml"
+        text = manifest.read_text()
+        manifest.write_text(text.replace("[init]", "[unused]"))
+        before = setup_tests.tree(self.project)
+        code, argv, err = self.init()
+        self.assertEqual((code, argv), (2, None))
+        self.assertIn("has no `init`; pass --ref with a release that has it", err)
+        self.assertEqual(setup_tests.tree(self.project), before)
+        # F-002: with a pin, the remedy is moving the pin, not --ref.
+        (self.project / "ballast.toml").write_text('[standard]\nref = "v0.1.0"\n')
+        code, argv, err = self.init()
+        self.assertEqual((code, argv), (2, None))
+        self.assertIn("which ballast.toml pins, has no `init`", err)
+        self.assertIn("`ballast preview REF`", err)
+        self.assertNotIn("--ref", err)
+
+    def test_a_cli_older_than_the_minimum_is_refused(self) -> None:
+        manifest = self.standard / "tools/cli.toml"
+        manifest.write_text(
+            manifest.read_text().replace('minimum = "0.1.0"', 'minimum = "99.0.0"')
+        )
+        code, argv, err = self.init()
+        self.assertEqual((code, argv), (2, None))
+        self.assertIn(f"needs CLI v99.0.0; this is v{shim.VERSION}", err)
+        self.assertIn(shim.install_line("v99.0.0"), err)
+        self.assertEqual(list(self.project.iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

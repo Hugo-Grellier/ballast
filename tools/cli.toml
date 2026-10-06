@@ -18,6 +18,10 @@ recoverable = true
 # installation prepares it from a verified installation on this machine (#15).
 prepare = true
 
+[init]
+# `ballast init` runs this version's tools/init before a project pins it (#13).
+supported = true
+
 [runs]
 # The saved-run format this version writes, and the formats it can resume.
 # Change `format` (and decide `resumes`) whenever saved run state stops being

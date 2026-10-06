@@ -8,6 +8,16 @@ released copy of this file, checks its SHA-256 and runs `self-install`:
     ballast --version
     ballast doctor [--json]    # read-only check of every prerequisite
 
+To adopt a repository, from its root (blank or established):
+
+    ballast init [--ref REF] [--description TEXT] [--stack STACK]
+
+`init` is the only command that runs before a pin exists. It pins REF (the
+existing pin on a rerun, else this CLI's own release), fetches that version
+and runs its tools/init, which writes only absent project files, proposes
+every other change as an ignored patch, installs through setup and ends with
+`ballast trust` as the operator's next action.
+
 Then, from a project root whose ballast.toml has `[standard] ref = "..."`:
 
     ballast setup              # fetch that version, run its tools/setup
@@ -76,7 +86,8 @@ ARCHIVE = "https://github.com/{repository}/archive/{ref}.tar.gz"
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PYTHON = "/usr/bin/python3"
 USAGE = (
-    "usage: ballast setup | preview REF [--json] | trust | run ... | ledger ..."
+    "usage: ballast init [--ref REF] [--description TEXT] [--stack STACK]"
+    " | setup | preview REF [--json] | trust | run ... | ledger ..."
     " | intake ..."
     " | doctor [--json]"
     " | self-install [--dir DIR] [--force] | --version"
@@ -84,6 +95,7 @@ USAGE = (
     " from a verified installation on this machine, without downloading."
 )
 DOCTOR_HINT = "; run `ballast doctor` for details"
+INIT_HINT = "; run `ballast init` to adopt this repository, or pin a version by hand"
 # The README's install line, with the version as a placeholder. A test keeps
 # both copies identical.
 INSTALL_LINE = (
@@ -133,7 +145,8 @@ def pinned_ref(root: Path) -> str:
     """Return the validated `[standard] ref` from the project's ballast.toml."""
     ref, error = read_pin(root)
     if error is not None:
-        fail(error + DOCTOR_HINT)
+        unreadable = error.startswith("cannot read ballast.toml")
+        fail(error + (INIT_HINT if unreadable else "") + DOCTOR_HINT)
     return ref
 
 
@@ -867,7 +880,8 @@ CHECKS_REMEDY = (
 )
 TRUST = "review the checkout, then run `ballast trust`"
 PIN_REMEDY = (
-    'set [standard] ref = "vX.Y.Z" (a tag or commit of the standard) in ballast.toml'
+    'run `ballast init`, or set [standard] ref = "vX.Y.Z" (a tag or commit of the'
+    " standard) in ballast.toml"
 )
 PROBE_FILES = ("tools/setup", "tools/spec_workflow/launcher.py")
 
@@ -1205,20 +1219,21 @@ class PreviewError(Exception):
 
 
 class Declarations(NamedTuple):
-    """What a version's tools/cli.toml declares about setup and runs."""
+    """What a version's tools/cli.toml declares about setup, runs and init."""
 
     recoverable: bool
     resumes: list[str]
     prepare: bool
+    init: bool = False
 
 
 def declarations(standard: Path) -> Declarations:
-    """Read `[setup] recoverable`, `[setup] prepare` and `[runs] resumes`, as data."""
+    """Read `[setup]`, `[runs] resumes` and `[init] supported`, as data."""
     try:
         data = tomllib.loads((standard / "tools/cli.toml").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return Declarations(recoverable=False, resumes=[], prepare=False)
-    setup, runs = data.get("setup"), data.get("runs")
+    setup, runs, adopt = data.get("setup"), data.get("runs"), data.get("init")
     resumes = runs.get("resumes") if isinstance(runs, dict) else None
     if not isinstance(resumes, list):
         resumes = []
@@ -1226,6 +1241,7 @@ def declarations(standard: Path) -> Declarations:
         recoverable=isinstance(setup, dict) and setup.get("recoverable") is True,
         resumes=[r for r in resumes if isinstance(r, str)],
         prepare=isinstance(setup, dict) and setup.get("prepare") is True,
+        init=isinstance(adopt, dict) and adopt.get("supported") is True,
     )
 
 
@@ -1421,7 +1437,8 @@ def compare(root: Path, ref: str, target: Path, work: Path) -> dict:
     """
     pin = pinned_ref(root)
     block, probes = ignore_block(target)
-    target_recoverable, resumes, _ = declarations(target)
+    declared = declarations(target)
+    target_recoverable, resumes = declared.recoverable, declared.resumes
     pinned = trusted_standard_dir(root, pin)
     both = target_recoverable and pinned.is_dir() and declarations(pinned).recoverable
     after_walk, after_record = disposable_build(
@@ -1721,7 +1738,85 @@ def prepare(root: Path, standard: Path) -> int:
     return code if code >= 0 else 1  # killed by a signal
 
 
-def main(argv: list[str]) -> int:
+# --- adopting a repository (#13) ---------------------------------------------
+
+
+def refuse(reason: str) -> int:
+    """Refuse before running anything from the standard (exit 2)."""
+    sys.stderr.write(f"ballast: refusing: {printable(reason)}\n")
+    return EXIT_REFUSED
+
+
+def init_ref(root: Path, wanted: str | None) -> tuple[str | None, str | None]:
+    """`(ref, None)` init pins, or `(None, refusal)` (research R2).
+
+    Without ballast.toml: `--ref`, else this CLI's own release. With one: its
+    pin, which init never moves.
+    """
+    if os.path.lexists(root / "ballast.toml"):
+        pin, error = read_pin(root)
+        if error is not None:
+            return None, error
+        if wanted is not None and wanted != pin:
+            return None, (
+                f"ballast.toml pins {pin}; init keeps the pin. To move it, run "
+                f"`ballast preview {wanted}`, then edit the pin"
+            )
+        return pin, None
+    ref = wanted or f"v{VERSION}"
+    if not REF.fullmatch(ref) or ".." in ref:
+        return None, f"{ref} is not a tag or commit of the standard"
+    return ref, None
+
+
+def init(argv: list[str]) -> int:
+    """Bootstrap `ballast init`: fetch the chosen version, run its tools/init.
+
+    Every refusal happens before anything from the standard runs and before
+    anything is written in the project; only the per-machine cache may be
+    filled first (AC-033, FR-020).
+    """
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--ref")
+    arguments, rest = parser.parse_known_args(argv)
+    root = Path.cwd()
+    pinned = os.path.lexists(root / "ballast.toml")
+    ref, refusal = init_ref(root, arguments.ref)
+    if refusal is not None:
+        return refuse(refusal)
+    local = os.environ.get("BALLAST_STANDARD_DIR")
+    if local:
+        standard = Path(local).resolve()
+        sys.stderr.write(f"ballast: using local standard {standard}\n")
+    else:
+        standard = ensure_standard(root, ref)
+    if not declarations(standard).init:
+        if pinned:
+            return refuse(
+                f"standard {ref}, which ballast.toml pins, has no `init`; move the "
+                "pin to a release that has it (`ballast preview REF`, then a "
+                "reviewed edit of ballast.toml)"
+            )
+        return refuse(
+            f"standard {ref} has no `init`; pass --ref with a release that has it, "
+            "or upgrade the CLI"
+        )
+    minimum, _, error = manifest(standard)
+    if error:
+        return refuse(error)
+    if minimum is not None and minimum > semver(VERSION):
+        wanted = "v" + ".".join(map(str, minimum))
+        return refuse(
+            f"standard {ref} needs CLI {wanted}; this is v{VERSION}. Install it: "
+            f"{install_line(wanted)}"
+        )
+    tool = standard / "tools/init"
+    command = [PYTHON, "-IS", str(tool), "--project", str(root), "--ref", ref]
+    os.execv(PYTHON, [*command, *rest])  # noqa: S606
+    return 1
+
+
+def main(argv: list[str]) -> int:  # noqa: PLR0911 - one return per command
     """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
     if not argv:
         fail(USAGE)
@@ -1734,6 +1829,8 @@ def main(argv: list[str]) -> int:
         return doctor(argv[1:])
     if argv[0] == "preview":
         return preview(argv[1:])
+    if argv[0] == "init":
+        return init(argv[1:])
     root = Path.cwd()
     standard = command_standard(root, argv[0])
     if argv[0] == "setup":
