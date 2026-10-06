@@ -4309,3 +4309,64 @@ class EngineStepListTests(unittest.TestCase):
             self.assertEqual(run_module._engine_steps("r1"), expected)  # noqa: SLF001
         (directory / "workflow.yml").write_text("steps:\n- type: shell\n")
         self.assertEqual(run_module._engine_steps("r1"), [])  # noqa: SLF001
+
+
+class DemoAuthorityTests(unittest.TestCase):
+    """#22 T036 [AC-019]: `ballast run demo` refuses before any `gh` call."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name).resolve()
+        self.run = _run_module()
+        self.enterContext(
+            patch.dict(os.environ, {"XDG_STATE_HOME": str(operator_state(self))})
+        )
+        self.enterContext(patch.object(self.run, "ROOT", self.root))
+        self.request = self.enterContext(
+            patch.object(self.run.demo, "request", side_effect=AssertionError("gh"))
+        )
+        self.command = self.enterContext(
+            patch.object(
+                self.run.draft_pr, "_command", side_effect=AssertionError("command")
+            )
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def main(self, *args: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            status = self.run.main(["demo", *args])
+        return status, out.getvalue()
+
+    def assertRefused(self, reason: str, remedy: str) -> None:  # noqa: N802
+        status, out = self.main("run22", "login-journey", "--no-wait")
+        self.assertEqual(status, 1)
+        self.assertEqual(out, f"Demo capture: refused ({reason}): {remedy}\n")
+        self.request.assert_not_called()
+        self.command.assert_not_called()
+
+    def test_tamper_marker_refuses_untrusted(self) -> None:
+        (self.root / "BALLAST_TAMPERED").write_text("x\n")
+        self.assertRefused("untrusted", "BALLAST_TAMPERED exists; restore the checkout")
+
+    def test_an_agent_step_in_progress_refuses_untrusted(self) -> None:
+        marker = self.run.draft_pr.IN_PROGRESS
+        state = self.run.draft_pr.state_dir(self.root)
+        state.mkdir(parents=True)
+        (state / marker).write_text("x\n")
+        self.assertRefused("untrusted", f"{marker} exists; restore the checkout")
+
+    def test_a_held_run_lock_refuses_lock_held(self) -> None:
+        with self.run._invocation_lock("run22"):  # noqa: SLF001
+            self.assertRefused(
+                "lock-held", "wait for the other invocation of run run22"
+            )
+
+    def test_bad_arguments_are_refused_without_a_call(self) -> None:
+        for args in ((), ("run22",), ("../x", "s"), ("run22", "s", "--no-wait", "x")):
+            with self.subTest(args=args):
+                status, _ = self.main(*args)
+                self.assertEqual(status, 2)
+        self.request.assert_not_called()

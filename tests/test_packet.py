@@ -12,6 +12,7 @@ import stat
 import sys
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
 
 import autonomy  # noqa: E402
+import demo  # noqa: E402
 import draft_pr  # noqa: E402
 import ledger  # noqa: E402
 import packet  # noqa: E402
@@ -1148,6 +1150,54 @@ class RepublishTests(PacketCase):
         self.assertEqual(self.body, "Edited meanwhile.")
 
 
+def outside_demo(text: str) -> str:
+    """Return a packet without its `### Demo captures` section."""
+    start = text.index("### Demo captures")
+    return text[:start] + text[text.index("### Sources", start) :]
+
+
+class DemoIsolationTests(PacketCase):
+    """#22 T011 (Q5) [AC-005]: demo data changes nothing outside its section."""
+
+    def sections(self, head: str) -> list[demo.DemoSection | None]:
+        item = demo.DemoScenario("s1", "cmd", "v.webm", "env", sha("cmd"))
+        config = demo.DemoConfig(configured=True, scenarios=(item,))
+        invalid = demo.DemoConfig(configured=True, error=demo.ERRORS["key"])
+        captures = (
+            demo.DemoCapture("s1", head, demo.CAPTURED, run_id=1, artifact_id=2),
+            demo.DemoCapture("s1", head, demo.IN_PROGRESS, "running", run_id=1),
+            demo.DemoCapture("s1", head, demo.IN_PROGRESS, "queued"),
+            demo.DemoCapture("s1", head, demo.FAILED, "command-failed", run_id=1),
+            demo.DemoCapture("s1", head, demo.MISSING, "expired", run_id=1),
+            demo.DemoCapture(
+                "s1", self.base_sha, demo.CAPTURED, stale=True, run_id=1, artifact_id=2
+            ),
+        )
+        return [
+            None,
+            demo.DemoSection("o/r", head, demo.DemoConfig()),
+            demo.DemoSection("o/r", head, invalid),
+            demo.DemoSection("o/r", head, config),
+            demo.DemoSection("o/r", head, config, removed=("old",)),
+            *(demo.DemoSection("o/r", head, config, (c,)) for c in captures),
+        ]
+
+    def test_every_demo_state_leaves_the_rest_identical(self) -> None:
+        sources = self.collect()
+        for level in (1, 3):
+            baseline = packet.render(sources, level)
+            for index, section in enumerate(self.sections(sources.head)):
+                with self.subTest(level=level, state=index):
+                    changed = replace(sources, demo=section)
+                    text = packet.render(changed, level)  # passes #19's guards
+                    self.assertEqual(outside_demo(text), outside_demo(baseline))
+                    self.assertEqual(packet.counts(changed), packet.counts(sources))
+                    part = text[text.index("### Demo captures") :]
+                    part = part[: part.index("### Sources")]
+                    self.assertNotIn("approved", part.lower())
+                    self.assertIsNone(autonomy.HUMAN_APPROVAL.search(part))
+
+
 class ReviewConfigTests(PacketCase):
     """US4 configuration (AC-015, R12)."""
 
@@ -1159,8 +1209,11 @@ class ReviewConfigTests(PacketCase):
     def test_not_configured_is_one_line_each(self) -> None:
         _, text = self.packet()
         self.assertIn("### API changes\n\nAPI: not configured.\n\n### UI states", text)
+        # #22: the demo section sits between UI states and Sources.
         self.assertIn(
-            "### UI states\n\nUI states: not configured.\n\n### Sources", text
+            "### UI states\n\nUI states: not configured.\n\n### Demo captures\n\n"
+            "Demo captures: not configured.\n\n### Sources",
+            text,
         )
         self.assertEqual(self.fake.gh_calls("contents"), [])
 

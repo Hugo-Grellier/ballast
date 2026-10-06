@@ -45,6 +45,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
+import demo  # noqa: F401 - Loaded here so run.py imports it before any agent step.
 import ledger
 import packet
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN
@@ -1147,6 +1148,42 @@ def checkpoint(root: Path, run_id: str, *, create: bool = True) -> Outcome:
     With `create=False` a missing PR ends `skipped` (`no-draft-pr`): no
     ledger event, no packet, nothing written (#21 R12).
     """
+    return checkpoint_work(root, run_id, create=create)[0]
+
+
+@dataclass(frozen=True)
+class PullHead:
+    """A PR's state and head commit, or the fixed cause of a failed read."""
+
+    state: str | None = None  # open, closed or merged
+    head: str | None = None
+    cause: str | None = None
+
+
+def pull_head(work: _Checkpoint, number: int) -> PullHead:
+    """Read PR `number` through the checkpoint's seam, validated as #17 does."""
+    run = work.run
+    result = work.api(f"repos/{run.owner}/{run.repo}/pulls/{number}")
+    if result.returncode:
+        return PullHead(cause=_classify(result))
+    data = _json(result)
+    pr = _pull_request(data, run) if isinstance(data, dict) else None
+    head = data["head"].get("sha") if pr is not None else None
+    if pr is None or pr.number != number:
+        return PullHead(cause="github-error")
+    if not isinstance(head, str) or not ledger.OID.fullmatch(head):
+        return PullHead(cause="github-error")
+    return PullHead(pr.state, head)
+
+
+def checkpoint_work(
+    root: Path, run_id: str, *, create: bool = True
+) -> tuple[Outcome, _Checkpoint]:
+    """`checkpoint`, also returning its `gh`/`api` seam and resolved identity.
+
+    `demo.request` makes its own reads and its one dispatch through the same
+    resolved `gh`, hardened environment and empty working directory.
+    """
     work = _Checkpoint(root, run_id, create=create)
     try:
         outcome = work.execute()
@@ -1167,7 +1204,7 @@ def checkpoint(root: Path, run_id: str, *, create: bool = True) -> Outcome:
         except Exception as error:  # noqa: BLE001 - The line is still printed.
             outcome = replace(outcome, detail=f"not recorded: {type(error).__name__}")
         outcome = replace(outcome, packet=_packet(work, outcome))
-    return outcome
+    return outcome, work
 
 
 def _packet(work: _Checkpoint, outcome: Outcome) -> packet.PacketOutcome:

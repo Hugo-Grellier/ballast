@@ -1241,6 +1241,93 @@ check runs at the head commit, the configured OpenAPI file) and local Git reads
 of the head commit; it never fetches, pushes or commits. See ADR-0006 in the
 Ballast repository.
 
+### Demo capture
+
+A reviewer can ask for a short video of implemented UI behavior. The operator
+requests it; the capture runs on a GitHub-hosted runner, and the packet links
+the video. A video helps a reviewer see behavior. It is never evidence for a
+criterion, never changes a criterion's state, and is never an approval. The
+capture's outcome is reported by the same job that runs the PR's code, so that
+code could make a failed journey read `captured`; watch the video.
+
+**Setup.** Declare the scenarios in the `[demo]` table of `ballast.toml`, which
+agents cannot change (run `ballast trust` after editing it):
+
+```toml
+[demo]
+retention_days = 14        # optional, 1-90; GitHub applies a lower repository limit
+timeout_minutes = 15       # optional, 1-60
+
+[[demo.scenarios]]         # 1-20, unique names
+name = "login-journey"     # [A-Za-z0-9._-]{1,64}
+command = "npm run demo:login"          # one line, at most 1000 characters
+video = "demo-output/login.webm"        # the one file the command writes
+environment = "Chromium 1280x720, seeded fixtures"   # 1-80 characters
+```
+
+Then copy `templates/github/workflows/ballast-demo.yml` of the pinned Ballast
+version to `.github/workflows/ballast-demo.yml` on the default branch. Every
+feature branch must carry the default branch's `ballast-demo.yml` unchanged:
+the capture runs on the feature branch's ref, so the PR's code can write no
+cache that the default branch's workflows restore, and Ballast refuses a
+branch whose copy is missing or differs (`workflow-differs`). Cut feature
+branches after installing the workflow, or sync them with the default branch.
+The command installs its own browser or recorder; Ballast installs and
+downloads none.
+
+**Data.** The job has no secrets and a read-only token. The command must use
+only seeded, nonsensitive data and fake accounts: the video and the job log
+are readable by anyone with repository read access, which on a public
+repository is everyone. The video is an Actions artifact; the log holds the
+command and everything it prints.
+
+**Requesting.** `ballast run demo RUN_ID SCENARIO [--no-wait]`, from the
+operator's terminal, for a run with an open Ballast Draft PR in any mode. It
+starts no agent, holds the run's lock and refuses while an agent step is in
+progress. It dispatches the workflow for the PR's head commit, records a
+`demo_capture` ledger event, waits at most 120 seconds (none with
+`--no-wait`) and refreshes the packet. It prints `Demo capture: <state>[
+(<reason>)][ <scenario> at <commit>][: <remedy or link>]`, then the Draft PR
+and packet lines. A refusal or a GitHub failure dispatches nothing, records
+nothing, creates no PR and exits 1; a dispatched capture exits 0 whatever its
+outcome. A local error after the dispatch succeeded, such as a failed ledger
+write, prints `failed-retryable (internal-error)` and exits 1 although a run
+was dispatched; that run is never linked or shown, so request again. A refusal names its reason and remedy: `not-configured`,
+`config-invalid`, `unknown-scenario`, `no-draft-pr`, `pr-not-open`,
+`workflow-not-installed`, `workflow-disabled`, `workflow-differs`, `untrusted`
+or `lock-held`. A GitHub failure is `failed-retryable` with the Draft PR
+line's causes; `gh-forbidden` means the operator's account needs Actions write
+access. An unfinished capture is refreshed by the next checkpoint, such as
+`ballast run checkpoint RUN_ID`.
+
+**Reading the result.** The packet's `### Demo captures` section has one line
+per declared scenario, for that scenario's newest request:
+
+| State | Meaning |
+| --- | --- |
+| `captured` | the run at the head commit succeeded; the line links the video |
+| `in progress` | `queued` (no run yet) or `running`; the line links the run when known |
+| `failed` | `command-failed`, `timed-out`, `cancelled`, `request-invalid`, `job-failed`, `run-not-found` (no run within 24 hours), `run-ambiguous`, `run-list-truncated` or `commit-mismatch` (the run is not at the requested commit) |
+| `missing` | the run ended without a usable video: `no-video`, `expired` or `artifact-absent` |
+| `stale` | the capture is for an earlier commit; the line shows that commit and the outcome there, and links the run, never the video |
+| `not yet requested` | the scenario is declared but no capture was requested in this run |
+| `not configured` | the one line when `ballast.toml` has no `[demo]` table |
+| `configuration invalid` | the one line when `[demo]` breaks a rule; it names the reason, and the rest of the packet is published |
+
+A command that itself exits 124 or 137, or is killed for lack of memory, is
+reported `timed-out`, like one stopped by the timeout. Ballast reads only the
+run's status, the failed step's name and the artifact's metadata; it never
+downloads a log or the video. An event for a scenario that is no longer
+declared shows `no longer declared`, with no link. A new run started by
+`ballast run continue` lists its scenarios as `not yet requested`.
+
+**Reproducing locally.** Each line names the scenario's command as declared,
+in a code span you can copy. Check out the captured commit in a clean checkout
+and run that command, without credentials, to see the same journey. When the
+declared command changed after the capture, the line says so. A backtick in
+the command is dropped from the line, and a token-like value is shown as
+`[redacted]`; take such a command from `ballast.toml`.
+
 ## Project status and component choices
 
 `speckit.status-report.show` derives a convenient overview from feature
