@@ -83,9 +83,15 @@ NO_MAINTENANCE = (
     "-c",
     "core.commitGraph=false",
 )
+# `GIT_NO_LAZY_FETCH` only exists from Git 2.44. A local command must never
+# lazy-fetch a missing object from a promisor remote the checkout's agent-writable
+# configuration names, whatever the version: no transport is allowed.
+NO_TRANSPORT = ("-c", "protocol.allow=never")
 # Reasons are fixed phrases; checkout-derived values are filled in and escaped
 # for display by the caller.
-UNTRUSTED_STANDARD = "setup runs from this checkout, which agents can write"
+UNTRUSTED_STANDARD = (
+    "setup runs from this checkout or a temp directory, which agents can write"
+)
 TAMPERED = (
     f"{launcher.TAMPER_MARKER} exists: an agent changed protected files; "
     "restore the checkout and delete it"
@@ -285,10 +291,30 @@ def _saved_runs(root: Path) -> bool:
     return False
 
 
-def _check_installation(snapshot: dict[str, str], record: dict | None) -> None:
+def _check_parents(root: Path, snapshot: dict[str, str]) -> None:
+    """No directory above a protected input is a link (a copy outside the checkout).
+
+    Setup's install path refuses linked parents; the launcher's digests follow
+    them, so a `.specify` linked to an identical outside copy would otherwise be
+    recorded and then edited from outside the checkout.
+    """
+    checked: set[str] = set()
+    for name in sorted(snapshot):
+        parts = Path(name).parts[:-1]
+        for count in range(1, len(parts) + 1):
+            parent = "/".join(parts[:count])
+            if parent not in checked and (root / parent).is_symlink():
+                _no(f"{parent} is a link, not a directory setup installed")
+            checked.add(parent)
+
+
+def _check_installation(
+    root: Path, snapshot: dict[str, str], record: dict | None
+) -> None:
     """Every other protected input is what the installation record lists."""
     if record is None:
         _no(NO_RECORD)
+    _check_parents(root, snapshot)
     files = record["files"]
     for name in sorted(snapshot):
         if name in CONFIGS or name == ".git":
@@ -302,7 +328,7 @@ def _check_installation(snapshot: dict[str, str], record: dict | None) -> None:
             _no(f"{name} was not written by setup")
 
 
-def _check_pointer(root: Path) -> None:
+def _check_pointer(root: Path, snapshot: dict[str, str]) -> None:
     """Require a linked worktree's `.git` pointer to name a worktree of its repo."""
     git = root / ".git"
     if git.is_symlink():
@@ -310,7 +336,10 @@ def _check_pointer(root: Path) -> None:
     if not git.is_file():
         return  # a primary checkout's `.git` directory is not a protected input
     try:
-        text = (_read_regular(git, POINTER_LIMIT) or b"").decode()
+        data = _read_regular(git, POINTER_LIMIT) or b""
+        if hashlib.sha256(data).hexdigest() != snapshot.get(".git"):
+            _no(CHANGED)
+        text = data.decode()
         match = re.fullmatch(r"gitdir: (/[^\n\0]+)\n?", text)
         if match is None:
             _no(POINTER)
@@ -401,6 +430,7 @@ class _Checkout:
             *autonomy.GIT_HARDENING,
             "-c",
             "core.commitGraph=false",
+            *NO_TRANSPORT,
             *args,
         ]
         return _run(
@@ -429,9 +459,14 @@ def _blob_id(data: bytes, algorithm: str) -> str:
     return hashlib.new(algorithm, b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def _check_committed(root: Path, configs: dict[str, bytes | None]) -> None:
-    """Both configuration files are committed and unchanged from `HEAD`."""
-    checkout = _Checkout(root, _git_program(root))
+def _check_committed(root: Path, git: str, configs: dict[str, bytes | None]) -> None:
+    """Both configuration files are committed and unchanged from `HEAD`.
+
+    `HEAD` lives in the agent-writable `.git`, so this is an early, precise
+    refusal of uncommitted edits, not the authority: eligibility still needs a
+    reviewed reference, which nothing in the checkout can supply.
+    """
+    checkout = _Checkout(root, git)
     algorithm = checkout.object_format()
     unborn = checkout.run("rev-parse", "--verify", "--quiet", "HEAD^{commit}")
     if unborn.returncode:
@@ -477,6 +512,8 @@ def _observe(
         origin=origin.stdout.decode().strip() if origin.returncode == 0 else "",
     )
     away = state / "setup-trust" / secrets.token_hex(8)
+    # The checkout lock is ours: a scratch directory a killed setup left is stale.
+    shutil.rmtree(away.parent, ignore_errors=True)
     away.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     bare = away / "reviewed.git"
     away.mkdir(mode=0o700)
@@ -509,7 +546,7 @@ def _observe_in(  # noqa: C901 - one advertisement, read once
         if args[0] != "init":
             env["GIT_DIR"] = str(bare)
         return _run(
-            [*prefix, *config, *args],
+            [*prefix, *(() if network else NO_TRANSPORT), *config, *args],
             cwd=bare.parent,
             env=env,
             timeout=timeout,
@@ -609,23 +646,13 @@ def _failure(result: Result) -> None:
 # --- the decision ------------------------------------------------------------
 
 
-def _reference(
-    root: Path,
-    state: Path,
-    snapshot: dict[str, str],
-    configs: dict[str, bytes | None],
-    mode: str,
+def _default_branch(
+    root: Path, state: Path, configs: dict[str, bytes | None], git: str
 ) -> dict[str, Any]:
-    """Return how both configuration files count as reviewed, or raise.
+    """Return the default-branch reference both configuration files equal, or raise.
 
-    A preparation installs a checkout that held nothing, so it never opens a
-    baseline in its state: one there predates it (ADR-0011, AC-008).
+    Counts only for a repository `ballast trust` reviewed on this machine.
     """
-    earlier = launcher.operator_baseline(state) if mode == "setup" else None
-    if earlier is not None and all(
-        earlier.get(path) == snapshot.get(path) for path in CONFIGS
-    ):
-        return {"kind": "operator-baseline"}
     pinned = None
     if configs["ballast.toml"] is not None:
         with contextlib.suppress(ValueError, UnicodeDecodeError):
@@ -639,7 +666,6 @@ def _reference(
     repository = "/".join(pinned)
     if repository.casefold() not in launcher.reviewed_repositories(root):
         _no(NOT_REVIEWED)
-    git = _git_program(root)
     try:
         return _observe(root, state, git, pinned, configs)
     except _Unobservable as cause:
@@ -647,15 +673,37 @@ def _reference(
         _no(message)
 
 
-def _evaluate(
-    root: Path, state: Path, record: dict | None, standard: Path, mode: str
-) -> tuple[dict[str, str], dict[str, Any]] | Verdict:
-    if standard.resolve().is_relative_to(root.resolve()):
+def _precheck(root: Path, state: Path, standard: Path) -> None:
+    """Refuse a standard an agent can write and any agent step's marker."""
+    unsafe = (root.resolve(), *ledger.agent_temp_roots())
+    if any(standard.resolve().is_relative_to(path) for path in unsafe):
         _no(UNTRUSTED_STANDARD)
     if os.path.lexists(root / launcher.TAMPER_MARKER):
         _no(TAMPERED)
     if os.path.lexists(state / launcher.IN_PROGRESS):
         _no(IN_PROGRESS)
+
+
+def _read_configs(root: Path, snapshot: dict[str, str]) -> dict[str, bytes | None]:
+    """Read both configuration files once; they must be the bytes snapshotted."""
+    configs: dict[str, bytes | None] = {}
+    for path in CONFIGS:
+        try:
+            data = _read_regular(root / path, READ_LIMIT)
+        except OSError as error:
+            message = f"{path} is not a regular file under 256 KiB ({error})"
+            _no(message)
+        digest = None if data is None else hashlib.sha256(data).hexdigest()
+        if digest != snapshot.get(path):
+            _no(CHANGED)
+        configs[path] = data
+    return configs
+
+
+def _evaluate(
+    root: Path, state: Path, record: dict | None, standard: Path, mode: str
+) -> tuple[dict[str, str], dict[str, Any]] | Verdict:
+    _precheck(root, state, standard)
     snapshot = launcher.trusted_inputs(root)
     held = None
     if mode == "setup":
@@ -667,22 +715,19 @@ def _evaluate(
         )
     if _saved_runs(root) or _unfinished_runs(state):
         _no(RUN_STATE)
-    configs: dict[str, bytes | None] = {}
-    for path in CONFIGS:
-        try:
-            data = _read_regular(root / path, READ_LIMIT)
-        except OSError as error:
-            message = f"{path} is not a regular file under 256 KiB ({error})"
-            _no(message)
-        if (None if data is None else hashlib.sha256(data).hexdigest()) != snapshot.get(
-            path
-        ):
-            _no(CHANGED)
-        configs[path] = data
-    _check_installation(snapshot, record)
-    _check_pointer(root)
-    _check_committed(root, configs)
-    return snapshot, _reference(root, state, snapshot, configs, mode)
+    configs = _read_configs(root, snapshot)
+    _check_installation(root, snapshot, record)
+    _check_pointer(root, snapshot)
+    git = _git_program(root)
+    _check_committed(root, git, configs)
+    # A preparation installs a checkout that held nothing, so it never opens a
+    # baseline in its state: one there predates it (ADR-0011, AC-008).
+    earlier = launcher.operator_baseline(state) if mode == "setup" else None
+    if earlier is not None and all(
+        earlier.get(path) == snapshot.get(path) for path in CONFIGS
+    ):
+        return snapshot, {"kind": "operator-baseline"}
+    return snapshot, _default_branch(root, state, configs, git)
 
 
 def _describe(reference: dict[str, Any]) -> str:
@@ -699,7 +744,7 @@ def _record(
 ) -> None:
     """Write the baseline; undo it, restoring the previous one, on any doubt."""
     paths = [state / launcher.TRUSTED, state / launcher.TRUSTED_SOURCE]
-    previous = [_read_regular(path, 1 << 20) for path in paths]
+    previous = [path.read_bytes() if path.exists() else None for path in paths]
     try:
         launcher.record_baseline(state, snapshot, source="setup", reference=reference)
         if launcher.trusted_inputs(root) != snapshot:
@@ -731,6 +776,6 @@ def settle(
         _record(root, state, snapshot, reference)
     except _Ineligible as reason:
         return Verdict("skipped", str(reason), mode=mode)
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+    except Exception as error:  # noqa: BLE001 - the installation is already committed
         return Verdict("skipped", f"could not record it ({error})", mode=mode)
     return Verdict("recorded", _describe(reference), len(snapshot), mode)

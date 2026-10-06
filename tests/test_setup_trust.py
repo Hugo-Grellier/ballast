@@ -11,9 +11,12 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -435,6 +438,66 @@ class LocalIneligibleTests(TrustCase):
         )
         self.assert_skipped(verdict, "setup runs from this checkout")
 
+    def test_a_linked_protected_directory_is_not_recorded(self) -> None:
+        # SEC-001: `.specify` linked to an identical copy outside the checkout.
+        reasons = {
+            ".specify": ".specify is a link",
+            ".ballast": ".ballast is a link",
+            # The constitution then has no entry in the launcher's snapshot.
+            ".specify/memory": "protected inputs changed while setup checked",
+        }
+        for name, reason in reasons.items():
+            with self.subTest(name=name):
+                path = self.root / name
+                outside = self.base / "outside-copy"
+                shutil.copytree(path, outside, symlinks=True)
+                shutil.rmtree(path)
+                path.symlink_to(outside)
+                self.assert_skipped(self.verdict(), reason)
+                path.unlink()
+                shutil.move(outside, path)
+        self.assertEqual(self.verdict().kind, "recorded")
+
+    def test_setup_says_so_for_a_linked_directory(self) -> None:
+        outside = self.base / "outside-copy"
+        shutil.copytree(self.root / ".specify", outside, symlinks=True)
+        shutil.rmtree(self.root / ".specify")
+        (self.root / ".specify").symlink_to(outside)
+        _, out, _ = self.setup()
+        self.assertIn("No trust baseline recorded: .specify is a link", out)
+        self.assertIsNone(self.baseline())
+
+    def test_a_standard_in_a_temp_directory(self) -> None:
+        # SEC-005: agents can write /tmp and $TMPDIR too.
+        with patch.object(setup_trust.ledger, "agent_temp_roots", lambda: (ts.ROOT,)):
+            self.assert_skipped(self.verdict(), "or a temp directory")
+
+    def test_an_unexpected_failure_never_escapes(self) -> None:
+        # ENG-002
+        with patch.object(setup_trust, "_evaluate", side_effect=RuntimeError("boom")):
+            verdict = self.verdict()
+        self.assertEqual(verdict.kind, "skipped")
+        self.assertIn("could not record it (boom)", verdict.text)
+        self.assertIsNone(self.baseline())
+
+    def test_a_crash_in_the_decision_never_fails_the_installation(self) -> None:
+        root = self.new_project("crash")
+        with patch.object(setup_trust, "settle", side_effect=ValueError("bad")):
+            code, out, err = self.setup(root)
+        self.assertEqual(code, 0, err)
+        self.assertIn(ts.SUCCESS, out)
+        self.assertIn("No trust baseline recorded: could not decide it (bad).", out)
+        self.assertIn("run `ballast trust`", out)
+        self.assertIsNone(self.baseline(root))
+
+    def test_stale_scratch_directories_are_removed(self) -> None:
+        # ENG-005: a killed setup left one behind.
+        stale = self.state() / "setup-trust/dead"
+        stale.mkdir(parents=True)
+        (stale / "reviewed.git").write_text("x")
+        self.assertEqual(self.verdict().kind, "recorded")
+        self.assertEqual(list((self.state() / "setup-trust").iterdir()), [])
+
     def test_a_missing_installation_record(self) -> None:
         verdict = setup_trust.settle(
             self.root, self.state(), None, standard=ts.ROOT, mode="setup"
@@ -457,6 +520,52 @@ class LocalIneligibleTests(TrustCase):
         for ref in shutil_target.iterdir():
             ref.unlink()
         self.assert_skipped(self.verdict(), "no commit")
+
+
+class PreparationBaselineTests(TrustCase):
+    """TEST-002: only setup counts the checkout's own earlier baseline."""
+
+    def test_a_preparation_never_reads_the_baseline(self) -> None:
+        (self.root / "ballast.toml").write_text(CONFIG + WIDENED)
+        _commit(self.root, "widen")
+        launcher.record_baseline(
+            self.state(),
+            {**launcher.trusted_inputs(self.root), "x": "0" * 64},
+            source="trust",
+        )
+        prepared = self.verdict(mode="prepare")
+        self.assertEqual(prepared.kind, "skipped", prepared)
+        self.assertIn(DIFFERS, prepared.text)
+        self.assertEqual(self.verdict(mode="setup").kind, "recorded")
+
+
+class ConfigurationReadTests(TrustCase):
+    """TEST-006, TEST-009: the bytes judged are the bytes snapshotted, from a file."""
+
+    def test_bytes_that_differ_from_the_snapshot(self) -> None:
+        real = setup_trust._read_regular  # noqa: SLF001
+
+        def swapped(path: Path, limit: int) -> bytes | None:
+            data = real(path, limit)
+            return data + b"# swapped\n" if path.name == "ballast.toml" else data
+
+        with patch.object(setup_trust, "_read_regular", swapped):
+            verdict = self.verdict()
+        self.assert_skipped(verdict, "protected inputs changed while setup checked")
+
+    def test_a_directory_or_a_pipe_is_not_a_configuration_file(self) -> None:
+        path = self.root / "ballast.toml"
+        path.rename(self.root / "moved.toml")
+        for make in (path.mkdir, lambda: os.mkfifo(path)):
+            with self.subTest(make=make):
+                make()
+                self.assert_skipped(
+                    self.verdict(), "ballast.toml is not a regular file"
+                )
+                if path.is_dir():
+                    path.rmdir()
+                else:
+                    path.unlink()
 
 
 class AgentTraceEligibilityTests(TrustCase):
@@ -553,6 +662,31 @@ class AgentTraceEligibilityTests(TrustCase):
         self.assertIsNone(self.baseline())
 
 
+class RecoveredSetupTests(TrustCase):
+    """TEST-001: an interrupted setup records nothing until it is recovered."""
+
+    def test_a_killed_setup_records_only_after_recovery(self) -> None:
+        for point in ("switching", "committed"):
+            with self.subTest(point=point):
+                root = self.new_project(f"killed-{point}")
+                self.kill(point, 0, root)
+                self.assertIsNone(self.baseline(root))
+                code, out, err = self.setup(root)
+                self.assertEqual(code, 0, err)
+                self.assertIn("recovered an interrupted setup: ", out)
+                self.assertIn("Recorded the trust baseline", out)
+                self.assertEqual(
+                    json.loads(self.baseline(root)), launcher.trusted_inputs(root)
+                )
+                self.assertEqual(self.provenance(root)["source"], "setup")
+
+    def test_an_interrupted_attempt_never_leaves_a_baseline(self) -> None:
+        root = self.new_project("killed-early")
+        self.kill("validate", 0, root)
+        self.assertIsNone(self.baseline(root))
+        self.assertFalse((self.state(root) / launcher.TRUSTED_SOURCE).exists())
+
+
 class WorktreePointerTests(TrustWorktreeCase):
     """AC-013."""
 
@@ -595,6 +729,26 @@ class WorktreePointerTests(TrustWorktreeCase):
     def test_a_wrong_back_link(self) -> None:
         admin = Path((self.wt / ".git").read_text().split(": ", 1)[1].strip())
         (admin / "gitdir").write_text(f"{self.base}/elsewhere/.git\n")
+        self.skipped_pointer()
+
+    def test_a_pointer_swapped_after_the_snapshot(self) -> None:
+        # SEC-002: the bytes judged are the bytes snapshotted.
+        real = launcher.trusted_inputs
+        stale = {".git": "0" * 64}
+        with patch.object(
+            setup_trust.launcher, "trusted_inputs", lambda r: {**real(r), **stale}
+        ):
+            verdict = self.verdict(self.wt, "prepare")
+        self.assertEqual(verdict.kind, "skipped")
+        self.assertIn("protected inputs changed while setup", verdict.text)
+
+    def test_an_admin_directory_that_is_not_a_worktree_entry(self) -> None:
+        # TEST-005: a consistent commondir and back-link, but no worktrees/<name>.
+        fake = self.base / "elsewhere/admin"
+        fake.mkdir(parents=True)
+        (fake / "commondir").write_text(f"{self.root / '.git'}\n")
+        (fake / "gitdir").write_text(f"{self.wt}/.git\n")
+        self.point(f"gitdir: {fake}\n")
         self.skipped_pointer()
 
     def test_a_symbolic_link(self) -> None:
@@ -680,6 +834,35 @@ class ObservationTests(TrustCase):
         )
         self.assertEqual(echo.stdout.strip(), b"True")
 
+    def test_the_network_commands_are_bounded(self) -> None:
+        seen: dict[str, float] = {}
+        real = setup_trust._run  # noqa: SLF001
+
+        def spy(argv: list[str], **kwargs: Any) -> setup_trust.Result:  # noqa: ANN401
+            for word in ("ls-remote", "fetch"):
+                if word in argv:
+                    seen[word] = kwargs["timeout"]
+            return real(argv, **kwargs)
+
+        with patch.object(setup_trust, "_run", spy):
+            self.assertEqual(self.verdict().kind, "recorded")
+        self.assertEqual(
+            seen,
+            {
+                "ls-remote": setup_trust.LS_REMOTE_TIMEOUT,
+                "fetch": setup_trust.FETCH_TIMEOUT,
+            },
+        )
+        self.assertLessEqual(seen["ls-remote"], 30)
+        self.assertLessEqual(seen["fetch"], 120)
+
+    def test_a_default_branch_name_the_tool_refuses(self) -> None:
+        # Valid for Git, outside the branch pattern Ballast passes on.
+        for name in ("feat@x", "caf\u00e9", "a+b"):
+            with self.subTest(name=name):
+                self.remotes[REPO] = self.stand_in(REPO, branch=name)
+                self.assert_skipped(self.verdict(), "no default branch", network=True)
+
     def test_no_default_branch(self) -> None:
         ts.git(self.remotes[REPO], "symbolic-ref", "HEAD", "refs/heads/nope")
         self.assert_skipped(self.verdict(), "no default branch", network=True)
@@ -759,6 +942,11 @@ class ObservationTests(TrustCase):
                 self.assertIn("core.hooksPath=/dev/null", argv)
                 self.assertIn("core.fsmonitor=false", argv)
             found[where].add(next(a for a in argv[1:] if a in verbs))
+        # SEC-003: only the two network commands may use a transport.
+        for _, argv in self.argv:
+            verb = next(a for a in argv[1:] if a in verbs)
+            local = verb not in {"ls-remote", "fetch", "version"}
+            self.assertEqual("protocol.allow=never" in argv, local, argv)
         self.assertEqual(found["checkout"], {"version", "rev-parse", "remote"})
         self.assertEqual(
             found["throwaway"], {"init", "ls-remote", "fetch", "rev-parse", "ls-tree"}
@@ -1043,11 +1231,15 @@ class PrepareTrustTests(TrustWorktreeCase):
                 state.mkdir(parents=True, exist_ok=True)
                 launcher.record_baseline(state, {"stale": "0" * 64}, source="trust")
                 stale = (state / launcher.TRUSTED).read_bytes()
+                self.assertTrue((state / launcher.TRUSTED_SOURCE).exists())
                 code, out, err = self.prepare(worktree)
                 self.assertEqual(code, 0, err)
                 self.assertIn("removed a trust baseline recorded before", out)
                 if changed:
                     self.assertIsNone(self.baseline(worktree))
+                    self.assertFalse(
+                        (self.state(worktree) / launcher.TRUSTED_SOURCE).exists()
+                    )
                 else:
                     self.assertNotEqual(self.baseline(worktree), stale)
                     self.assertEqual(self.provenance(worktree)["source"], "setup")
@@ -1082,6 +1274,112 @@ class PrepareTrustTests(TrustWorktreeCase):
         self.assertIn("nothing to prepare", out)
         self.assertEqual(self.baseline(worktree), before)
 
+    def test_a_killed_preparation_records_only_once_complete(self) -> None:
+        # TEST-001: an interrupted attempt never leaves a baseline; the recovery
+        # applies the same conditions to the recovered installation.
+        for point, count in (("validate", 0), ("switching", 0), ("committed", 0)):
+            with self.subTest(point=point):
+                worktree = self.worktree()
+                self.kill(point, count, worktree, ("--prepare",))
+                self.assertIsNone(self.baseline(worktree))
+                code, out, err = self.prepare(worktree)
+                self.assertEqual(code, 0, err)
+                self.assertIn("recovered an interrupted preparation: ", out)
+                self.assertIn("Recorded the trust baseline", out)
+                self.assertEqual(
+                    json.loads(self.baseline(worktree)),
+                    launcher.trusted_inputs(worktree),
+                )
+                self.assertEqual(self.provenance(worktree)["source"], "setup")
+
+    def test_a_recovered_preparation_that_is_ineligible_records_nothing(self) -> None:
+        worktree = self.branch_worktree({".specify/memory/constitution.md": "x\n"})
+        self.kill("committed", 0, worktree, ("--prepare",))
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(code, 0, err)
+        self.assertIn("is complete", out)
+        self.assertIn("No trust baseline recorded: ", out)
+        self.assertIsNone(self.baseline(worktree))
+
+    def test_two_preparations_at_once_record_once(self) -> None:
+        # TEST-010: the second finds the work done and records nothing.
+        worktree = self.worktree()
+        real = ts.setup.Setup.fill_from_candidates
+
+        def slow(setup_self: object, stage: Path, state: Path) -> Path:
+            time.sleep(1.0)
+            return real(setup_self, stage, state)
+
+        out = io.StringIO()
+        codes: list[int] = []
+        with (
+            patch.object(ts.setup.Setup, "fill_from_candidates", slow),
+            redirect_stdout(out),
+        ):
+            threads = [
+                threading.Thread(
+                    target=lambda: codes.append(
+                        ts.setup.cli(["--project", str(worktree), "--prepare"])
+                    )
+                )
+                for _ in range(2)
+            ]
+            threads[0].start()
+            time.sleep(0.3)
+            threads[1].start()
+            for thread in threads:
+                thread.join(timeout=60)
+        self.assertEqual(codes, [0, 0])
+        self.assertEqual(out.getvalue().count("Recorded the trust baseline"), 1)
+        self.assertIn("nothing to prepare", out.getvalue())
+        self.assertEqual(self.provenance(worktree)["source"], "setup")
+
+    def test_a_second_preparation_waits_for_a_baseline_decision(self) -> None:
+        # ENG-001: the holder may be asking the network; never refuse meanwhile.
+        worktree = self.worktree()
+        self.prepare(worktree)
+        state = self.state(worktree)
+        installation = ts.setup.Setup(worktree)
+        holder = state / "setup-holder.json"
+        descriptor = launcher.checkout_lock(state, shared=False)
+        self.assertIsNotNone(descriptor)
+        threading.Timer(1.5, os.close, (descriptor,)).start()
+        waits = {"phase": "settling", "pid": os.getpid()}
+        holder.write_text(json.dumps({"mode": "prepare", **waits}))
+        with patch.object(ts.setup, "LOCK_RETRY_SECONDS", 0.3):
+            held = installation.hold(state)
+        self.assertIsNone(held)  # it was installed meanwhile: nothing to prepare
+
+    def test_a_second_preparation_still_refuses_a_plain_holder(self) -> None:
+        worktree = self.worktree()
+        self.prepare(worktree)
+        state = self.state(worktree)
+        descriptor = launcher.checkout_lock(state, shared=False)
+        self.addCleanup(os.close, descriptor)
+        (state / "setup-holder.json").write_text(
+            json.dumps({"mode": "prepare", "pid": os.getpid()})
+        )
+        with (
+            patch.object(ts.setup, "LOCK_RETRY_SECONDS", 0.3),
+            self.assertRaises(ts.setup.RefusedError),
+        ):
+            ts.setup.Setup(worktree).hold(state)
+
+    def test_a_stale_settling_holder_does_not_wait(self) -> None:
+        worktree = self.worktree()
+        self.prepare(worktree)
+        state = self.state(worktree)
+        descriptor = launcher.checkout_lock(state, shared=False)
+        self.addCleanup(os.close, descriptor)
+        (state / "setup-holder.json").write_text(
+            json.dumps({"mode": "prepare", "phase": "settling", "pid": 2**22 + 7})
+        )
+        with (
+            patch.object(ts.setup, "LOCK_RETRY_SECONDS", 0.3),
+            self.assertRaises(ts.setup.RefusedError),
+        ):
+            ts.setup.Setup(worktree).hold(state)
+
     def test_a_marker_makes_preparation_refuse(self) -> None:
         # AC-018
         worktree = self.worktree()
@@ -1103,7 +1401,17 @@ class SharedRulesTests(unittest.TestCase):
     def test_branch_sync_shares_the_git_environment(self) -> None:
         self.assertIs(branch_sync.DROPPED_ENV, setup_trust.DROPPED_ENV)
         self.assertIs(branch_sync.draft_pr.GIT_LOCATION, setup_trust.GIT_LOCATION)
-        env = setup_trust.throwaway_environment(ROOT)
+        ambient = (
+            "GIT_TERMINAL_PROMPT",
+            "GIT_ASKPASS",
+            "SSH_ASKPASS_REQUIRE",
+            "GIT_NO_LAZY_FETCH",
+            "GIT_NO_REPLACE_OBJECTS",
+        )
+        with patch.dict(os.environ):
+            for key in ambient:
+                os.environ.pop(key, None)
+            env = setup_trust.throwaway_environment(ROOT)
         for key, value in {
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_ASKPASS": "",

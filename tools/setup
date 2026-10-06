@@ -316,6 +316,32 @@ SETUP_REMINDER = [
 ]
 # How long a preparation retries a lock another preparation holds for a moment.
 LOCK_RETRY_SECONDS = 2.0
+# ... and how long it waits for one that is deciding the trust baseline, which
+# may ask the pinned repository's default branch over the network (ADR-0014).
+SETTLE_WAIT_SECONDS = 240.0
+
+
+class Unrecorded:
+    """The verdict when the trust decision could not even be made.
+
+    Recording is optional: a failure there never turns a committed
+    installation into a failed setup. Mirrors `setup_trust.Verdict`.
+    """
+
+    kind = "skipped"
+
+    def __init__(self, reason: str, mode: str) -> None:
+        """Keep the reason and which command is asking."""
+        self.reason_line = f"No trust baseline recorded: {reason}."
+        self.remedy = (
+            "Review this worktree's protected inputs, then run `ballast trust`."
+            if mode == PREPARE
+            else SETUP_REMINDER[0]
+        )
+
+    def lines(self) -> list[str]:
+        """Return the reason and the operator's next step."""
+        return [self.reason_line, self.remedy]
 
 
 class RefusedError(RuntimeError):
@@ -641,15 +667,23 @@ class Setup:
         """
         if not self.records_trust:
             return None
-        path = str(STANDARD / "tools/spec_workflow")
-        if path not in sys.path:
-            sys.path.insert(0, path)
-        import setup_trust  # noqa: PLC0415 - only after an installation, never in --check
+        holder = _read_json(state / HOLDER)
+        if isinstance(holder, dict):
+            # A second preparation waits for this decision, which may use the network.
+            with contextlib.suppress(OSError):
+                _write_json(state / HOLDER, {**holder, "phase": "settling"})
+        try:
+            path = str(STANDARD / "tools/spec_workflow")
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            import setup_trust  # noqa: PLC0415 - only after an installation, never in --check
 
-        record = self.recorded(state) if self.current(state) else None
-        return setup_trust.settle(
-            self.root, state, record, standard=STANDARD, mode=self.mode
-        )
+            record = self.recorded(state) if self.current(state) else None
+            return setup_trust.settle(
+                self.root, state, record, standard=STANDARD, mode=self.mode
+            )
+        except Exception as error:  # noqa: BLE001 - the installation is committed
+            return Unrecorded(f"could not decide it ({printable(error)})", self.mode)
 
     def settled(self, state: Path) -> bool:
         """Whether the installation is current, read under the shared lock.
@@ -673,15 +707,30 @@ class Setup:
         moment, which `lock` would take for a running command: retry briefly
         before refusing, so two first commands never both refuse (AC-020).
         """
-        deadline = time.monotonic() + LOCK_RETRY_SECONDS
+        start = time.monotonic()
         while not self.settled(state):
             try:
                 return self.lock(state)
             except RefusedError:
-                if time.monotonic() > deadline:
+                wait = (
+                    SETTLE_WAIT_SECONDS if self.settling(state) else LOCK_RETRY_SECONDS
+                )
+                if time.monotonic() > start + wait:
                     raise
             time.sleep(0.02)
         return None
+
+    def settling(self, state: Path) -> bool:
+        """Whether the live holder is deciding the trust baseline (ADR-0014)."""
+        holder = _read_json(state / HOLDER)
+        pid = holder.get("pid") if isinstance(holder, dict) else None
+        if not isinstance(pid, int) or holder.get("phase") != "settling":
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
 
     def lock(self, state: Path) -> int:
         """Hold this checkout exclusively, or name what holds it."""
