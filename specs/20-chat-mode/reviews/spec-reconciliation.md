@@ -114,6 +114,27 @@ Every AC has an implementation and at least one deterministic test that runs in 
 - Quickstart scenarios 1 to 7 with a real GitHub remote, with run IDs and `ballast ledger report --run RUN` output. In scenario 4, reviews must come before `approve final` (DEC-0002).
 - The T071 operator part (fresh-clone `ballast setup`) and the T074 record that the real-bwrap and real-systemd Chat tests ran on that host and were not skipped.
 
-Each AC also has a deterministic test, so this pending manual evidence does not on its own block convergence. The verdict below is PARTIAL because G-1 (a MUST in FR-009, for the headless driver) and G-2 (false wording in the PR evidence) are actionable and unfixed. G-3 to G-5 need only artifact updates. Once G-1 and G-2 are fixed, or the merge reviewer explicitly defers them as tracked follow-ups, and G-3 to G-5 are recorded, this feature converges.
+Each AC also has a deterministic test, so this pending manual evidence does not on its own block convergence. At 110d8c8 the assessment was PARTIAL: G-1 (a MUST in FR-009, for the headless driver) and G-2 (false wording in the PR evidence) were actionable and unfixed, and G-3 to G-5 needed artifact updates. The Resolution below re-checks them.
 
-- Verdict: PARTIAL
+## Resolution
+
+I re-checked the gaps against `git diff 110d8c8 HEAD` (`83d04c2` fix, `cf2de2e` docs). I read the changes and ran the named single tests: `HeadlessForgeryTests.test_unconfirmed_headless_stop_leaves_the_step_open`, `HeadlessForgeryTests.test_headless_step_keeps_todays_argv`, `StepEntryTests.test_chat_settings_deny_prompts_outside_dont_ask` and `PublishTests.test_publish_commits_pushes_and_opens_one_draft`. All four pass. I did not run the full suite.
+
+| Gap | Status | Evidence |
+| --- | --- | --- |
+| G-1 | fixed | `chat._finish` now keeps the step open whenever `scope_stopped` is false, whatever the driver (`if not result["scope_stopped"]`). It exits 4 and writes no close entry. The marker that `agent.py` leaves keeps the launcher refusing until `ballast discard-runs`. The next invocation then closes the step through `late_close`, with uncertain attribution to the step and never to the operator. Test: `HeadlessForgeryTests.test_unconfirmed_headless_stop_leaves_the_step_open` (no `close` entry, `active_step.scope_stopped` false, exit 4). |
+| G-2 | fixed | `contracts/pr-evidence.md`, `chat.publish_section` and the publication test now share one header: every gate decision below was made by the operator through `ballast run approve` or `reject`, and publishing needs every gate's latest approval current. That holds with rejections and with `(stale)` or `(superseded)` rows. The wording rule now allows the approval phrase only in `gate-approval` rows. |
+| G-3 | fixed | The Assumptions in `spec.md` now state DEC-0001's Codex residual: the operator's own `/approvals` can widen a Codex session up to the bwrap bound, as an operator action rather than an agent prompt. Spec, DEC-0001, the shipped policy and the contract now agree. |
+| G-4 | fixed | `plan.md` follow-up F-5 lists the open low findings (SEC-001 for headless steps, SEC-002 cap, SEC-006, SEC-008 to SEC-010, ENG-005, ENG-007, ENG-008, ENG-010, ENG-012, ENG-013, TST-005 to TST-012), to be filed as one hardening Issue. SEC-007 is fixed by G-1. The hook's interpreter residual is also fixed: `agent.chat_settings` replaces `python3` with the trusted `sys.executable` by absolute path, and the hook test asserts it. |
+| G-5 | handled by the workflow | The driving agent copies this verdict into `reviews/convergence.md`, which `artifacts.check_convergence` and the `spec-reconciliation` gate read. No artifact change is needed for it here. |
+
+These are the only code changes since 110d8c8. They touch only the Chat paths and the Chat test file. The Autonomous and headless engine paths are unchanged, so SC-007 still holds.
+
+What remains:
+- **Workflow gates T073 to T077.** The driving agent reports that the full local gate at 110d8c8 ran 790 tests, OK, with none skipped, including the real bwrap and systemd Chat tests, and that ruff is clean. I did not verify this, and it predates `83d04c2`, so T073 and T074 should be recorded again at the final `HEAD`.
+- **Manual evidence.** Pilot P-3 to P-5 and quickstart scenarios 1 to 7 need a real TUI and a GitHub remote. Every AC also has a deterministic test, so this evidence adds confidence but does not block convergence.
+- **Low follow-ups.** They are tracked as F-5, and none contradicts an AC.
+
+Every AC and SC now has an implementation and deterministic executable evidence, and no actionable gap remains in the spec, plan, contracts or code.
+
+- Verdict: CONVERGED
