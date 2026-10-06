@@ -1,4 +1,4 @@
-# ADR-0006: Chat mode runs operator-driven steps through the trusted launcher
+# ADR-0009: Chat mode runs operator-driven steps through the trusted launcher
 
 - Status: Proposed (agent-provisional in Autonomous run `2cb9c5c5`; accepted only by the human merge decision)
 - Feature: [20-chat-mode](../../specs/20-chat-mode/spec.md); plan [§ Decisions for plan review](../../specs/20-chat-mode/plan.md#decisions-for-plan-review), decisions D-1 to D-7; research R1 to R15

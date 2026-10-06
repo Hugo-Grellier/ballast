@@ -1,14 +1,14 @@
 # Review: engineering and architecture
 
 - Reviewer: claude (model), fresh context, same provider as the author — Codex unavailable (usage limit)
-- Scope: feature #20 Chat mode, branch `feat/20-chat-mode`, committed code at `HEAD` (`6591e1a`) against base `52031c1`. Code: `tools/spec_workflow/chat.py` (new), `run.py`, `agent.py`, `autonomy.py`, `artifacts.py`, `branch_sync.py`, `draft_pr.py`, `ledger.py`, `launcher.py`. Architecture: ADR-0006 against ADR-0003, ADR-0004, ADR-0005 and `specs/TECHNICAL-SPEC.md` §91. Formatting is left to the linters.
+- Scope: feature #20 Chat mode, branch `feat/20-chat-mode`, committed code at `HEAD` (`6591e1a`) against base `52031c1`. Code: `tools/spec_workflow/chat.py` (new), `run.py`, `agent.py`, `autonomy.py`, `artifacts.py`, `branch_sync.py`, `draft_pr.py`, `ledger.py`, `launcher.py`. Architecture: ADR-0009 against ADR-0003, ADR-0004, ADR-0005 and `specs/TECHNICAL-SPEC.md` §91. Formatting is left to the linters.
 - Review kind: `review: engineering`
 
 ## What was examined
 
 - Intent and requirements: `specs/20-chat-mode/spec.md` (FR-001 to FR-023, AC-001 to AC-022, SC-001 to SC-007), `plan.md` (D-1 to D-7, Complexity Tracking), `data-model.md`, `research.md` (R14), every `contracts/*.md`, `tasks.md`, including the conventions (reuse list) and the implementation clarifications at the end.
 - Policy: `CLAUDE.md` (invariants, R2 rules). `docs/policies/engineering.md` is not in `HEAD`; it is an installed, git-ignored policy, so the review used the skill's checklist and `CLAUDE.md`.
-- ADRs: 0003, 0004, 0005 and the new 0006, and the §91 status line of `specs/TECHNICAL-SPEC.md`.
+- ADRs: 0003, 0004, 0005 and the new 0009, and the §91 status line of `specs/TECHNICAL-SPEC.md`.
 - Code: all of `chat.py`; the full `git diff 52031c1 HEAD -- tools/`; and the unchanged code that Chat calls: `agent.main`/`_autonomous_run`/`_log_dir`, `artifacts.check_intent`/`check_plan`/`check_convergence`/`_approval_path`, `autonomy.publish`, `branch_sync._Sync.intended_branch`/`save_pin` (N-07), `ledger._semantic_problems`/`append`, `run.py` `main`/`_continue_command`.
 - Tests: searched `tests/test_chat_mode.py` (93 tests) for the paths the findings name. No test was executed. Another agent is reformatting the working tree, so every finding comes from reading the committed code.
 
@@ -107,14 +107,14 @@
 - Evidence (facts): files a base merge brings in during `step` appear neither as an out-of-step change nor as step changes. Tree-bound approvals (`implementation`, `final`) become stale with no recorded cause, and the summary says only "the artifact changed since".
 - Required action: after a synchronization that changed `HEAD`, record an `out-of-step-change` (actor `sync`, with the ledger pointer) before taking `tree_before`.
 
-### ENG-011 — low — ADR-0006 does not name every decision it amends
+### ENG-011 — low — ADR-0009 does not name every decision it amends
 
-- Location: `docs/adr/0006-chat-mode-operator-driven-steps.md` ("Extends" line); `chat.py:2440-2443` (`mode` on an engine run writes the pin through private `branch_sync._write_json`/`_pin_path`).
+- Location: `docs/adr/0009-chat-mode-operator-driven-steps.md` ("Extends" line); `chat.py:2440-2443` (`mode` on an engine run writes the pin through private `branch_sync._write_json`/`_pin_path`).
 - Invariant or requirement: architecture authority (accepted ADRs govern; a change needs an explicit record).
 - Evidence (facts):
-  - ADR-0004 says a continuation "lowers the run to human-gated", "recovery is always human-gated until #18" and that bwrap is a prerequisite "for Autonomous only". ADR-0006 changes all three: lowering to `chat`, a Chat continuation, and bwrap for Chat. Yet it says it extends ADR-0004 only for the publisher.
+  - ADR-0004 says a continuation "lowers the run to human-gated", "recovery is always human-gated until #18" and that bwrap is a prerequisite "for Autonomous only". ADR-0009 changes all three: lowering to `chat`, a Chat continuation, and bwrap for Chat. Yet it says it extends ADR-0004 only for the publisher.
   - ADR-0005 says "only `ballast run start` pins a run's branch". The `mode` link copies a pin outside `branch_sync`'s write path.
-- Required action: list these amendments in ADR-0006 (Context and Consequences), and give `branch_sync` a public "inherit pin" entry point instead of the private calls.
+- Required action: list these amendments in ADR-0009 (Context and Consequences), and give `branch_sync` a public "inherit pin" entry point instead of the private calls.
 
 ### ENG-012 — low — a checks run that tampered with protected inputs still counts
 
@@ -146,12 +146,12 @@
 - **Agent authority**: an interactive step runs `dontAsk` or `-a never` under bwrap with operator state hidden and `.claude/` and `.codex/` read-only. Gates need a TTY, a typed confirmation, no active step and a digest re-check after confirmation, and the launcher refuses every command while `in-progress` exists. A `FORBIDDEN` marker is refused in the prompt and the model. Settings for an interactive step are written before the protected snapshot, and the deny list is a superset of the installed headless one.
 - **Crash consistency of a step**: the order is `active_step`, then the `start` entry, then the marker. An unconfirmed scope keeps the marker and exits 4. A late close writes `attribution: uncertain` and `protected_compared: false`. A close entry written without the `active_step` clear is detected by `_closed`. A failed postcondition stays in `events.jsonl` and blocks because checks are evaluated again; nothing stores a "blocked" flag (FR-010, AC-019).
 - **Mode rules**: `switch` is allowed only for `ballast-chat` between `chat` and `human-gated`, `lower` only from `autonomous`, and every move to `autonomous` is refused (FR-020, AC-021). A Chat run never writes a provisional decision, and carried PDs keep their provisional label with their superseding HD (BL-INV-006, AC-022).
-- **ADR-0006 against ADR-0003 and ADR-0005**: the Chat publisher runs behind the launcher in `run.py`'s process with the operator's `gh`, which is ADR-0003's boundary. Every `step` synchronizes once before its one agent step, which extends ADR-0005's list but not its rule. No new ADR beyond 0006 is needed. ENG-011 asks it to name the ADR-0004 and ADR-0005 amendments.
+- **ADR-0009 against ADR-0003 and ADR-0005**: the Chat publisher runs behind the launcher in `run.py`'s process with the operator's `gh`, which is ADR-0003's boundary. Every `step` synchronizes once before its one agent step, which extends ADR-0005's list but not its rule. No new ADR beyond 0009 is needed. ENG-011 asks it to name the ADR-0004 and ADR-0005 amendments.
 - **Scope**: every new subcommand, input and field traces to the contracts or the documented implementation clarifications. No silent scope expansion was found.
 
 ## Resolution
 
-- Verified against commit `110d8c8`, diff `f7e91fb..110d8c8` (code, contracts, `decisions.md`, ADR-0006, tests). The new and changed tests were read, not executed.
+- Verified against commit `110d8c8`, diff `f7e91fb..110d8c8` (code, contracts, `decisions.md`, ADR-0009, tests). The new and changed tests were read, not executed.
 - Status values: **fixed** (the change closes the finding), **accepted** (left as is, no action needed), **follow-up** (left open as a non-blocking issue to file).
 
 | ID | Status | Evidence | Closes the finding? |
@@ -166,14 +166,14 @@
 | ENG-008 | follow-up | Unchanged: the run record and the ledger still compute `cross_provider` in two ways. | No. Low and non-blocking. |
 | ENG-009 | accepted | Unchanged: the dead constants, `evaluate` and the double archive remain. These are cleanup only. | Not applicable. |
 | ENG-010 | follow-up | Unchanged: files a synchronization merge brings in are still unattributed. | No. Low and non-blocking. |
-| ENG-011 | fixed | ADR-0006 Consequences now list the three ADR-0004 amendments and the ADR-0005 pin-copy amendment. The private `branch_sync` calls in `_link_engine_run` remain. | Yes, for the architecture record. |
+| ENG-011 | fixed | ADR-0009 Consequences now list the three ADR-0004 amendments and the ADR-0005 pin-copy amendment. The private `branch_sync` calls in `_link_engine_run` remain. | Yes, for the architecture record. |
 | ENG-012 | follow-up | Unchanged: a checks run that tampered still records results that can count. | No. Low and non-blocking. |
 | ENG-013 | follow-up | Unchanged: an interactive launch error is still recorded as `interrupted`, exit 130. | No. Low and non-blocking. |
 
 ### Regressions checked
 
 - **Autonomous output**: unchanged. The `_publication_target` extraction keeps the Autonomous order (eligibility and risk checks first) and the same refusal texts and categories.
-- **Every confined step now binds the skills read-only**: `_installed_skill_binds` is added to `confined_argv` for every caller, Autonomous agent steps and `run-checks` included. This changes Autonomous argv (SC-007 scope). It is a security hardening (SEC-001), is recorded as an ADR-0004 amendment in ADR-0006, and has its own new test without changing existing assertions. It is not a regression.
+- **Every confined step now binds the skills read-only**: `_installed_skill_binds` is added to `confined_argv` for every caller, Autonomous agent steps and `run-checks` included. This changes Autonomous argv (SC-007 scope). It is a security hardening (SEC-001), is recorded as an ADR-0004 amendment in ADR-0009, and has its own new test without changing existing assertions. It is not a regression.
 - **More re-approvals before `final`**: `final` now needs a current `implementation` approval, and `implementation` binds the tree without `reviews/`. So a `reconcile-intent` or `converge` step that changes code after `approve implementation` means the operator must approve implementation again before `final`. This is intended under DEC-0002 (stricter, never weaker), but it adds operator friction worth stating in the workflow policy. It is not a defect.
 - **`open-write-scope` (DEC-0003)**: this entry check is new behavior from the security review. It only adds a blocking check (an out-of-scope change blocks later steps until restored or changed) and closes by operator action; no regression found.
 - **Unrelated security fixes in the same commit**: `chat_hook.py`, the terminal reset with `TCSAFLUSH`, and `_safe`/`printable` on agent text shown to the operator. They change no engineering behavior covered here and were not reviewed in depth; they belong to the security review.

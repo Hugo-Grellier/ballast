@@ -7,7 +7,7 @@
 
 ## What was examined
 
-- Policies and intent: `docs/policies/security.md`, `docs/policies/project/workflow.md`, constitution BL-INV-001..006, `specs/20-chat-mode/spec.md`, `plan.md`, `research.md` (R3), `contracts/step-runner.md`, `contracts/cli.md`, `contracts/phase-graph.md`, ADR-0006.
+- Policies and intent: `docs/policies/security.md`, `docs/policies/project/workflow.md`, constitution BL-INV-001..006, `specs/20-chat-mode/spec.md`, `plan.md`, `research.md` (R3), `contracts/step-runner.md`, `contracts/cli.md`, `contracts/phase-graph.md`, ADR-0009.
 - Code: `tools/spec_workflow/chat.py` (whole file), `agent.py` (`chat_settings`, `interactive_argv`, `run_interactive`, plus the headless `permission_args`/`main` for comparison), `autonomy.py` (`confined_argv`, `_binds_for_worktree`, `PROTECTED`, `tree_digest`, mode history, human-decision kinds and validation, `change_mode`, `_publish_chat`), `artifacts.py` (`Feature.from_operator_run`, `check_intent`/`record_intent` registration, `check_decisions` and `human_resolutions`, `project_checks`), `launcher.py` (`_unfinished`, `BASES`/`SKIPPED`, `state_dir`), `run.py` dispatch, `draft_pr._run_feature`, `ledger` Chat report, `claude-chat-settings.json`, `claude-settings.json`, `tools/setup` skill installation and `.gitignore`.
 - Traced: a Chat step from the launcher refusal through lock, late close, out-of-step record, branch sync, entry check, settings write, protected snapshot, pty session, scope stop, protected compare, postcondition, write-scope check and close. Also traced: approve/reject/resolve/mode/continue/checks/publish, the human-gated headless driver inside a Chat run, and a wrapper that died mid-step.
 - Adversary: an interactive agent during a Chat step, and a headless agent in a Chat run switched to human-gated.
@@ -99,13 +99,13 @@ findings:
   - id: SEC-003
     severity: medium
     invariant: BL-INV-003
-    location: tools/spec_workflow/agent.py:466-482; tools/spec_workflow/claude-chat-settings.json; specs/20-chat-mode/research.md:35; docs/adr/0006-chat-mode-operator-driven-steps.md (D-2)
+    location: tools/spec_workflow/agent.py:466-482; tools/spec_workflow/claude-chat-settings.json; specs/20-chat-mode/research.md:35; docs/adr/0009-chat-mode-operator-driven-steps.md (D-2)
     description: >
       Documented by the authors (research.md:35), not reproduced here. In an
       interactive session the operator can leave `dontAsk` with Shift+Tab
       and then gets permission prompts, or can use Codex `/approvals` to
       switch to full access. FR-005 and AC-003 say the operator MUST NOT be
-      prompted. ADR-0006 accepts this because a grant cannot get past bwrap.
+      prompted. ADR-0009 accepts this because a grant cannot get past bwrap.
       But bwrap is wider than the headless model. It keeps the host network
       (autonomy.py `_resolver_binds` docstring) and a read-only view of
       every host file that is not on the credential list. So an approved

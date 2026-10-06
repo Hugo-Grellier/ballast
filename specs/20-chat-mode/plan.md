@@ -116,7 +116,7 @@ How it works ([research.md](research.md)):
   - [ADR-0003](../../docs/adr/0003-launcher-github-authority.md), [ADR-0004](../../docs/adr/0004-autonomous-provisional-decisions.md), [ADR-0005](../../docs/adr/0005-launcher-branch-synchronization.md).
   - `templates/policies/spec-kit-workflow.md` "Workflow runner contract" and "Branch synchronization".
   - [Constitution](../../.specify/memory/constitution.md).
-- **Proposed architecture decisions**: Record ADR `docs/adr/0006-chat-mode-operator-driven-steps.md`. It covers:
+- **Proposed architecture decisions**: Record ADR `docs/adr/0009-chat-mode-operator-driven-steps.md`. It covers:
   - Ballast, not the Spec Kit engine, drives Chat runs, one invocation per action (R1);
   - interactive steps run under bwrap behind a wrapper-owned pty without `--new-session` (R3, R3a);
   - every Chat `step` is an invocation that runs branch synchronization (extends ADR-0005's list, not its rule);
@@ -146,7 +146,7 @@ New files:
 - `tools/spec_workflow/chat.py`: phase graph, entry conditions and gates, the step lifecycle, out-of-step detection, the handoff summary, Chat ledger events and the Chat PR section renderer.
 - `tools/spec_workflow/claude-chat-settings.json`.
 - `tests/test_chat_mode.py`, plus `tests/fixtures/chat/fake_tui.py` (a fake interactive agent that reads the pty and writes scripted artifacts or forgeries).
-- `docs/adr/0006-chat-mode-operator-driven-steps.md`.
+- `docs/adr/0009-chat-mode-operator-driven-steps.md`.
 
 Changed files:
 
@@ -217,7 +217,7 @@ Required reviews (review matrix):
 - engineering and test;
 - security (agent authority, trust model, confinement change D-3, publication);
 - documentation (public CLI, policy and ADR);
-- architecture (ADR-0006);
+- architecture (ADR-0009);
 - spec reconciliation before the PR.
 
 Use a cross-provider reviewer when Codex can run confined. Otherwise the record states single-provider review (DEC-0004 in the run record).

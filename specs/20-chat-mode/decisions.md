@@ -4,13 +4,13 @@
 
 - **Observed during**: implementation security review (`reviews/security.md`, SEC-003)
 - **Classification**: contract-discovery
-- **Observation**: FR-005 and AC-003 say a Chat agent gets nothing its headless rules do not allow, and the operator is never prompted to grant it. In an interactive Claude session, Shift+Tab leaves `dontAsk`, and the other permission modes prompt. In Codex, `/approvals` can switch the session's approval policy. ADR-0006 (D-2) accepted bwrap as the bound for any grant, but the spec forbids the prompt itself, and bwrap keeps host network access and command execution that a headless step's rules deny.
+- **Observation**: FR-005 and AC-003 say a Chat agent gets nothing its headless rules do not allow, and the operator is never prompted to grant it. In an interactive Claude session, Shift+Tab leaves `dontAsk`, and the other permission modes prompt. In Codex, `/approvals` can switch the session's approval policy. ADR-0009 (D-2) accepted bwrap as the bound for any grant, but the spec forbids the prompt itself, and bwrap keeps host network access and command execution that a headless step's rules deny.
 - **Proposed decision**:
   - Claude: the generated step settings add a `PreToolUse` hook (`.ballast/spec_workflow/chat_hook.py`, inside the trust baseline) that blocks every tool call unless the session's `permission_mode` is `dontAsk`. It fails closed when the field is missing, and the settings set `disableAllHooks: false`. Leaving `dontAsk` then leads to a denial that names the way back, never to a prompt.
   - Codex: no per-call hook exists. A slash command such as `/approvals` is a deliberate operator command, not a prompt the agent raises (`--ask-for-approval never`). Its effect stays inside Ballast's bwrap and scope, and protected inputs, operator state and `.git` stay out of reach.
   - Pilot checks P-4 (Shift+Tab) and P-5 (`/permissions`) verify this on the real CLIs.
-- **Evidence**: `tools/spec_workflow/chat_hook.py`; `tools/spec_workflow/claude-chat-settings.json`; `tests/test_chat_mode.py` `StepEntryTests.test_chat_settings_deny_prompts_outside_dont_ask`; `research.md` R3; ADR-0006 D-2.
-- **Affected artifacts**: `contracts/step-runner.md` § Interactive argv; ADR-0006 D-2 (unchanged: bwrap stays the outer bound)
+- **Evidence**: `tools/spec_workflow/chat_hook.py`; `tools/spec_workflow/claude-chat-settings.json`; `tests/test_chat_mode.py` `StepEntryTests.test_chat_settings_deny_prompts_outside_dont_ask`; `research.md` R3; ADR-0009 D-2.
+- **Affected artifacts**: `contracts/step-runner.md` § Interactive argv; ADR-0009 D-2 (unchanged: bwrap stays the outer bound)
 - **Status**: resolved below
 
 ## DEC-0001 — Resolution

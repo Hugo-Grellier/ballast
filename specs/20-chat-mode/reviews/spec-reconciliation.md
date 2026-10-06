@@ -2,7 +2,7 @@
 
 - Review: spec-reconciliation (with the Spec Kit converge assessment)
 - Reviewer: claude (model), fresh context, same provider as the author. Codex was unavailable, so there is no cross-provider reviewer.
-- Scope: branch `feat/20-chat-mode`, `HEAD` 110d8c8, base 52031c1. I read `spec.md`, `plan.md`, `tasks.md`, `decisions.md` (DEC-0001 to DEC-0003), `data-model.md`, `contracts/*.md`, every report in `reviews/` (with the Resolution sections now appended to the security, engineering and test reviews), the code in `tools/spec_workflow/` (`chat.py`, `run.py`, `agent.py`, `autonomy.py`, `artifacts.py`, `ledger.py`, `draft_pr.py`, `branch_sync.py`, `launcher.py`, `chat_hook.py`, `claude-chat-settings.json`), the new tests, and the public docs (`README.md`, `AGENTS.md`, `templates/policies/spec-kit-workflow.md`, `templates/policies/workflow.md`, `templates/AGENTS.md`, `templates/skills/ballast-feature-intake/SKILL.md`, ADR-0006).
+- Scope: branch `feat/20-chat-mode`, `HEAD` 110d8c8, base 52031c1. I read `spec.md`, `plan.md`, `tasks.md`, `decisions.md` (DEC-0001 to DEC-0003), `data-model.md`, `contracts/*.md`, every report in `reviews/` (with the Resolution sections now appended to the security, engineering and test reviews), the code in `tools/spec_workflow/` (`chat.py`, `run.py`, `agent.py`, `autonomy.py`, `artifacts.py`, `ledger.py`, `draft_pr.py`, `branch_sync.py`, `launcher.py`, `chat_hook.py`, `claude-chat-settings.json`), the new tests, and the public docs (`README.md`, `AGENTS.md`, `templates/policies/spec-kit-workflow.md`, `templates/policies/workflow.md`, `templates/AGENTS.md`, `templates/skills/ballast-feature-intake/SKILL.md`, ADR-0009).
 - Executed: 7 single tests, all passing (`PublishTests.test_a_review_changed_after_final_approval_blocks_publish`, `PublishTests.test_final_needs_every_earlier_approval_current`, `StepCloseTests.test_open_write_scope_violation_blocks_until_restored`, `StepEntryTests.test_chat_settings_deny_prompts_outside_dont_ask`, `ForgeryTests.test_each_forgery_attempt_changes_nothing`, `ContinueTests.test_blocked_continuation_is_recovered_by_the_next_step`, `EndToEndTests.test_conversational_feature`). I did not run the full suite; a separate process runs it.
 - Checked: `git diff 52031c1 HEAD -- tests/` (excluding the new Chat files) removes no line. `git diff 52031c1 HEAD` is empty for `templates/spec-kit/workflows`, `claude-settings.json`, `tools/ballast`, `tools/setup` and the constitution. `spec.md` has not changed since the spec commit.
 
@@ -47,7 +47,7 @@ Every AC has an implementation and at least one deterministic test that runs in 
 | SC-004 | `ForgeryTests.test_each_forgery_attempt_changes_nothing` (approval block, claims, resolution, launcher `approve`, `mode` and `step`); `HeadlessForgeryTests.*`; real-bwrap record-write test | Met |
 | SC-005 | `ModeSwitchTests.test_switches_keep_every_entry_and_every_failure` (chat and human-gated, both ways); `ContinueTests.test_lowering_keeps_failures_and_open_decisions` (autonomous to chat); `ModeSwitchTests.test_a_paused_engine_run_continues_as_a_linked_chat_run` (engine to chat: approvals only) | Met for three of the four switches. The engine-to-Chat link has no failed-check or open-decision case, but it uses the same `entry` and `_check` path (TST-003 residual, accepted). |
 | SC-006 | `HandoffTests.test_status_names_failures_gates_and_next_steps_from_the_record`; `StatusTests.test_summary_matches_the_golden_text` | Met |
-| SC-007 | No existing test line removed (checked above); unchanged surfaces have an empty diff (T072). | Met. One expected Autonomous change: every confined step now binds the installed skills read-only (SEC-001). ADR-0006 records it as an ADR-0004 amendment, and no existing assertion changed. |
+| SC-007 | No existing test line removed (checked above); unchanged surfaces have an empty diff (T072). | Met. One expected Autonomous change: every confined step now binds the installed skills read-only (SEC-001). ADR-0009 records it as an ADR-0004 amendment, and no existing assertion changed. |
 
 ## Functional requirements
 
@@ -65,7 +65,7 @@ Every AC has an implementation and at least one deterministic test that runs in 
 | FR-016, FR-017 | `chat.publish`, `_publish_chat`, `publish_section` | AC-016 and AC-017 tests | Met. The PR header wording is now inaccurate (gap G-2). |
 | FR-018, FR-019 | per-invocation actions, `summary` | AC-010 and AC-011 tests | Met |
 | FR-020, FR-021, FR-022 | `change_mode`, `continue_run`, `_link_engine_run` | AC-018 to AC-022 tests | Met |
-| FR-023 | Chat sections in the four shipped documents, README, AGENTS.md, ADR-0006 | `tests/test_governance.py` `test_each_document_describes_starting_and_inspecting_a_chat_run`, `test_spec_kit_policy_has_the_chat_section`; `tests/test_setup.py` `test_installs_chat_and_keeps_project_rules_for_chat_steps`; `reviews/documentation.md` (approved) | Met |
+| FR-023 | Chat sections in the four shipped documents, README, AGENTS.md, ADR-0009 | `tests/test_governance.py` `test_each_document_describes_starting_and_inspecting_a_chat_run`, `test_spec_kit_policy_has_the_chat_section`; `tests/test_setup.py` `test_installs_chat_and_keeps_project_rules_for_chat_steps`; `reviews/documentation.md` (approved) | Met |
 
 ## Edge cases
 
@@ -103,7 +103,7 @@ Every AC has an implementation and at least one deterministic test that runs in 
 ## Unbuilt tasks (converge)
 
 - T001 to T072 are marked done, and the code and tests above confirm each one. T071's fresh-clone `ballast setup` part was replaced by `tests/test_setup.py` `ChatInstallTests` and an install in `ChatCase`. The operator part is still open under T074 and the pilot.
-- T073 to T077 are unchecked. They are workflow gates, not feature work: the fast gate (T073, running in another process), the full local gate (T074), the pilot (T075, partly done in `reviews/pilot.md`), the reviews (T076: plan, engineering, security, test and documentation are all `approved` after resolution; there is no separate architecture report, and ADR-0006 was reviewed inside the engineering review), and reconciliation (T077, this report). None is unbuilt code.
+- T073 to T077 are unchecked. They are workflow gates, not feature work: the fast gate (T073, running in another process), the full local gate (T074), the pilot (T075, partly done in `reviews/pilot.md`), the reviews (T076: plan, engineering, security, test and documentation are all `approved` after resolution; there is no separate architecture report, and ADR-0009 was reviewed inside the engineering review), and reconciliation (T077, this report). None is unbuilt code.
 - Converge would append no new implementation task for an AC. If G-1 and G-2 are fixed in this feature, they become two small tasks (code with a test, and contract wording with a golden test).
 
 ## Manual evidence still pending
