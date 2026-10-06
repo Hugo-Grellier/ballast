@@ -522,6 +522,7 @@ class _Sync:
         branch: str | None,
         base: str | None,
         source_run: str | None,
+        rerun: str | None = None,
     ) -> None:
         self.root = root
         self.run_id = run_id
@@ -538,7 +539,10 @@ class _Sync:
         self.given_base = base
         self.source_run = source_run
         self.continuing = source_run is not None and not starting
-        if starting:
+        if rerun is not None:
+            # A Chat step names its own rerun command (#20 R5).
+            self.rerun = rerun
+        elif starting:
             self.rerun = "your ballast run start command"
         elif self.continuing:
             self.rerun = f"your ballast run continue {source_run} command"
@@ -1863,11 +1867,13 @@ def synchronize(  # noqa: PLR0913 - The contract's entry point.
     branch: str | None = None,
     base: str | None = None,
     source_run: str | None = None,
+    rerun: str | None = None,
 ) -> Outcome:
     """Check, and when safe update, the run's branch; never raises (contract).
 
     Records exactly one `branch_sync` event. An unexpected failure, Ctrl-C or
-    a failed record is `blocked` with cause `internal-error`.
+    a failed record is `blocked` with cause `internal-error`. `rerun` replaces
+    the command a recovery line ends with (a Chat step's `ballast run step`).
     """
     work = _Sync(
         root,
@@ -1877,6 +1883,7 @@ def synchronize(  # noqa: PLR0913 - The contract's entry point.
         branch=branch,
         base=base,
         source_run=source_run,
+        rerun=rerun,
     )
     try:
         outcome = work.execute()

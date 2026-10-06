@@ -1061,6 +1061,239 @@ class ConfinementTests(AutonomyCase):
         with self.assertRaisesRegex(autonomy.AutonomyError, "self-test reached"):
             autonomy.confinement_self_test(self.root)
 
+    def test_new_session_is_kept_unless_a_wrapper_owns_the_pty(self) -> None:
+        """#20 D-3, R3a: only interactive_pty=True omits --new-session."""
+        self.assertIn("--new-session", self.argv())
+        private = self.base / "private"
+        interactive = autonomy.confined_argv(
+            self.root, ["true"], private=private, home=self.base / "home",
+            env={}, interactive_pty=True,
+        )
+        self.assertNotIn("--new-session", interactive)
+        self.assertEqual(interactive[-2:], ["--", "true"])
+        for flag in ("--unshare-pid", "--unshare-ipc", "--die-with-parent"):
+            self.assertIn(flag, interactive)
+        # Every existing caller keeps the default: the self-test and the probe.
+        captured: list[list[str]] = []
+        real = autonomy.confined_argv
+
+        def spy(*args: object, **kwargs: object) -> list[str]:
+            argv = real(*args, **kwargs)
+            captured.append(argv)
+            return argv
+
+        ran = subprocess.CompletedProcess([], 0, stdout="{}\n", stderr="")
+        with (
+            patch.object(autonomy, "confined_argv", side_effect=spy),
+            patch.object(autonomy.subprocess, "run", return_value=ran),
+            patch.object(autonomy.shutil, "which", return_value="/bin/true"),
+        ):
+            autonomy.confinement_self_test(self.root)
+            self.assertTrue(autonomy.codex_sandbox_nests(self.root))
+        self.assertEqual(len(captured), 2)
+        for argv in captured:
+            self.assertIn("--new-session", argv)
+
+    def test_readonly_extra_binds_existing_paths_only(self) -> None:
+        (self.root / ".claude").mkdir()
+        private = self.base / "private"
+        private.mkdir(exist_ok=True)
+        argv = autonomy.confined_argv(
+            self.root, ["true"], private=private, home=self.base / "home", env={},
+            readonly_extra=(".claude", ".codex"),
+        )
+        joined = " ".join(argv)
+        claude = self.root / ".claude"
+        self.assertIn(f"--ro-bind {claude} {claude}", joined)
+        self.assertNotIn(str(self.root / ".codex"), joined)
+        # After the writable worktree bind, so it overrides it.
+        self.assertGreater(
+            joined.index(f"--ro-bind {claude}"), joined.index(f"--bind {self.root} ")
+        )
+        for outside in ("/etc", "../escape", ".claude/../../x", ""):
+            with self.subTest(outside=outside), self.assertRaisesRegex(
+                autonomy.AutonomyError, "inside the checkout"
+            ):
+                autonomy.confined_argv(
+                    self.root, ["true"], private=private, env={},
+                    readonly_extra=(outside,),
+                )
+
+
+def chat_record(case: AutonomyCase, run_id: str = "chat42", **changes: object) -> dict:
+    """A valid ballast-chat record for FEATURE."""
+    record = autonomy.new_run(
+        run_id=run_id,
+        feature=FEATURE,
+        issue=ISSUE,
+        workflow="ballast-chat",
+        mode="chat",
+        integration="claude",
+        review_integration="codex",
+        start_head=case.git("rev-parse", "HEAD").strip(),
+        last_manifest="a" * 64,
+    )
+    record.update(changes)
+    return record
+
+
+class ChatRecordTests(AutonomyCase):
+    """#20 FR-002, FR-020, FR-022, AC-018, AC-021, SC-007: the Chat run record."""
+
+    def test_modes_and_workflow(self) -> None:
+        self.assertIn("chat", autonomy.MODES)
+        self.assertIn("ballast-chat", autonomy.WORKFLOWS)
+
+    def test_chat_record_needs_no_risk_eligibility_or_limits(self) -> None:
+        record = chat_record(self)
+        for key in ("risk", "eligibility", "limits"):
+            self.assertNotIn(key, record)
+        self.assertIsNone(record["active_step"])
+        self.assertIsNone(record["baseline"])
+        self.assertEqual(record["mode_history"][0]["mode"], "chat")
+        self.assertEqual(record["mode_history"][0]["action"], "start")
+        self.assertTrue(record["cross_provider"])
+        autonomy.write_run(self.root, record)
+        self.assertEqual(autonomy.read_run(self.root, "chat42"), record)
+        # Still required for an Autonomous record.
+        autonomous = self.make_run()
+        del autonomous["limits"]
+        with self.assertRaisesRegex(autonomy.AutonomyError, "lacks limits"):
+            autonomy.validate_run(autonomous, "run42")
+
+    def test_malformed_chat_fields_are_refused(self) -> None:
+        for field, value in (
+            ("active_step", {"step": "x"}),
+            ("active_step", {"step": "../x", "phase": "plan", "unit": None, "started_at": autonomy.now()}),
+            ("active_step", "plan"),
+            ("baseline", {"tree": "nothex", "at": autonomy.now(), "approval": "HD-0001"}),
+            ("baseline", {"tree": "a" * 40, "at": autonomy.now()}),
+            ("last_manifest", "short"),
+            ("start_head", None),
+        ):
+            with self.subTest(field=field, value=value):
+                record = chat_record(self)
+                record[field] = value
+                with self.assertRaises(autonomy.AutonomyError):
+                    autonomy.validate_run(record, "chat42")
+        record = chat_record(self)
+        record["active_step"] = {
+            "step": "20261006T000000000000Z-plan-claude",
+            "phase": "plan",
+            "unit": "ballast-agent-chat42-20261006T000000000000Z-plan-claude.scope",
+            "started_at": autonomy.now(),
+        }
+        record["baseline"] = {"tree": "b" * 40, "at": autonomy.now(), "approval": "HD-0003"}
+        autonomy.validate_run(record, "chat42")
+
+    def test_switch_between_chat_and_human_gated_only(self) -> None:
+        record = chat_record(self)
+        with self.assertRaisesRegex(autonomy.AutonomyError, "reason"):
+            autonomy.change_mode(record, "human-gated", reason=None, decision_id="HD-0001")
+        with self.assertRaisesRegex(autonomy.AutonomyError, "human decision"):
+            autonomy.change_mode(record, "human-gated", reason="x", decision_id=None)
+        self.assertEqual(len(record["mode_history"]), 1)
+        autonomy.change_mode(record, "human-gated", reason="headless implement", decision_id="HD-0001")
+        autonomy.change_mode(record, "chat", reason="back", decision_id="HD-0002")
+        self.assertEqual(
+            [(c["mode"], c["action"]) for c in record["mode_history"]],
+            [("chat", "start"), ("human-gated", "switch"), ("chat", "switch")],
+        )
+        for change in record["mode_history"][1:]:
+            self.assertEqual(change["by"], "operator")
+            self.assertTrue(change["at"])
+        autonomy.validate_run(record, "chat42")
+        before = json.dumps(record)
+        with self.assertRaisesRegex(autonomy.AutonomyError, "never raised"):
+            autonomy.change_mode(record, "autonomous", reason="x", decision_id="HD-0003")
+        with self.assertRaisesRegex(autonomy.AutonomyError, "raising"):
+            autonomy.change_mode(record, "chat", reason="x", decision_id="HD-0003")
+        self.assertEqual(json.dumps(record), before)
+
+    def test_only_a_chat_run_switches(self) -> None:
+        human = autonomy.new_run(
+            run_id="human1",
+            feature=FEATURE,
+            issue=ISSUE,
+            workflow="ballast-continue",
+            mode="human-gated",
+            integration="claude",
+        )
+        with self.assertRaisesRegex(autonomy.AutonomyError, "never raised"):
+            autonomy.change_mode(human, "chat", reason="x", decision_id="HD-0001")
+        forged = chat_record(self)
+        forged["workflow"] = "ballast-feature"
+        for key in ("start_head", "baseline", "active_step", "last_manifest"):
+            forged.pop(key)
+        forged["mode_history"][0]["mode"] = "human-gated"
+        forged["mode_history"].append(
+            {**forged["mode_history"][0], "mode": "chat", "action": "switch",
+             "reason": "x", "decision_id": "HD-0001"}
+        )
+        with self.assertRaisesRegex(autonomy.AutonomyError, "only a Chat run switches"):
+            autonomy.validate_run(forged, "chat42")
+
+    def test_paused_autonomous_run_lowers_to_chat(self) -> None:
+        record = self.make_run()
+        autonomy.set_status(record, "stopped")
+        with self.assertRaisesRegex(autonomy.AutonomyError, "reason"):
+            autonomy.change_mode(record, "chat", reason=None, decision_id="HD-0001")
+        autonomy.change_mode(record, "chat", reason="block-resolved", decision_id="HD-0001")
+        self.assertEqual(record["mode_history"][-1]["action"], "lower")
+        self.assertEqual(autonomy.effective_mode(record), "chat")
+        with self.assertRaisesRegex(autonomy.AutonomyError, "never raised"):
+            autonomy.change_mode(record, "autonomous", reason="x", decision_id="HD-0002")
+        forged = self.make_run()
+        forged["mode_history"].append(
+            {**forged["mode_history"][0], "mode": "autonomous", "action": "switch",
+             "reason": "x", "decision_id": "HD-0001"}
+        )
+        with self.assertRaises(autonomy.AutonomyError):
+            autonomy.validate_run(forged, "run42")
+
+    def test_chat_human_decision_kinds(self) -> None:
+        for kind in ("gate-approval", "gate-rejection", "decision-resolution"):
+            self.assertIn(kind, autonomy.HUMAN_DECISION_KINDS)
+        autonomy.write_run(self.root, chat_record(self))
+        approval = autonomy.append_human_decision(
+            self.root, "chat42", "gate-approval", "approve plan", resolves=None,
+            extra={"gate": "plan", "artifact": f"{FEATURE}/plan.md",
+                   "digest": "sha256:" + "0" * 64, "supersedes_provisional": ["PD-0005"]},
+        )
+        self.assertEqual((approval["id"], approval["gate"]), ("HD-0001", "plan"))
+        autonomy.append_human_decision(
+            self.root, "chat42", "decision-resolution", "resolve DEC-0001",
+            resolves=None, extra={"decision": "DEC-0001", "digest": "sha256:" + "1" * 64},
+        )
+        for kind, extra in (
+            ("gate-approval", {"gate": "merge", "artifact": "x", "digest": "d",
+                               "supersedes_provisional": []}),
+            ("gate-approval", {"gate": "plan", "artifact": "x", "digest": "d",
+                               "supersedes_provisional": ["HD-0001"]}),
+            ("gate-rejection", {"gate": "plan", "artifact": "x"}),
+            ("decision-resolution", {"decision": "PD-0001", "digest": "d"}),
+            ("mode-change", {"from": "chat", "to": "autonomous-ish"}),
+        ):
+            with self.subTest(kind=kind, extra=extra), self.assertRaises(
+                autonomy.AutonomyError
+            ):
+                autonomy.append_human_decision(
+                    self.root, "chat42", kind, "x", resolves=None, extra=extra
+                )
+        self.assertEqual(len(autonomy.read_human_decisions(self.root, "chat42")), 2)
+
+    def test_chat_runs_return_to_active(self) -> None:
+        record = chat_record(self)
+        autonomy.set_status(record, "completed")
+        autonomy.set_status(record, "active")
+        autonomy.set_status(record, "completed")
+        autonomy.set_status(record, "published")
+        autonomy.set_status(record, "active")
+        autonomous = self.make_run()
+        autonomy.set_status(autonomous, "completed")
+        with self.assertRaises(autonomy.AutonomyError):
+            autonomy.set_status(autonomous, "active")
+
 
 @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
 class RealConfinementTests(AutonomyCase):

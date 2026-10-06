@@ -544,6 +544,56 @@ class IdentityTests(CheckpointCase):
                 self.assertOutcome(self.check(), "blocked-unlinked", "no-issue-number")
                 self.assertEqual(self.fake.calls, [])
 
+    def chat_record(self) -> None:
+        """A Ballast-driven Chat run (#20): an operator record, no engine inputs."""
+        import autonomy  # noqa: PLC0415
+
+        (self.repo.root / ".specify/workflows/runs" / RUN / "inputs.json").unlink()
+        head = subprocess.run(  # noqa: S603
+            [REAL_GIT, "rev-parse", "HEAD"],
+            cwd=self.repo.root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        autonomy.write_run(
+            self.repo.root,
+            autonomy.new_run(
+                run_id=RUN,
+                feature=FEATURE,
+                issue=17,
+                workflow="ballast-chat",
+                mode="chat",
+                integration="claude",
+                start_head=head,
+                last_manifest="a" * 64,
+            ),
+        )
+
+    def test_chat_run_feature_comes_from_its_operator_record(self) -> None:
+        """#20 R14: no engine inputs.json; the record, then the pin, names it."""
+        self.chat_record()
+        self.assertEqual(draft_pr._run_feature(self.repo.root, RUN), FEATURE)  # noqa: SLF001
+        self.assertOutcome(self.check(), "created")
+        events, _ = ledger.read(self.repo.root, RUN)
+        self.assertEqual(events[-1]["feature"], FEATURE)
+
+    def test_feature_falls_back_to_the_pin(self) -> None:
+        import branch_sync  # noqa: PLC0415
+
+        (self.repo.root / ".specify/workflows/runs" / RUN / "inputs.json").unlink()
+        self.assertIsNone(draft_pr._run_feature(self.repo.root, RUN))  # noqa: SLF001
+        path = branch_sync._pin_path(self.repo.root, RUN)  # noqa: SLF001
+        pin = json.loads(path.read_text())
+        path.write_text(json.dumps({**pin, "feature": FEATURE}))
+        self.assertEqual(draft_pr._run_feature(self.repo.root, RUN), FEATURE)  # noqa: SLF001
+        self.repo.inputs("specs/17-engine-run")
+        # An engine run is resolved from its inputs, as before.
+        self.assertEqual(
+            draft_pr._run_feature(self.repo.root, RUN),  # noqa: SLF001
+            "specs/17-engine-run",
+        )
+
     def test_detached_head_is_pending_no_branch(self) -> None:
         git(self.repo.root, "checkout", "-q", "--detach")
         self.assertOutcome(self.check(), "pending", "no-branch")

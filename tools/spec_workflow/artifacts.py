@@ -144,6 +144,9 @@ class Feature:
         self.run_id: str | None = None
         self.run: dict | None = None
         self.continued: dict | None = None
+        # The operator record of a Ballast-driven Chat run (#20); never `run`,
+        # so check_intent requires the registered human approval block.
+        self.chat: dict | None = None
         specs = (root / "specs").resolve()
         if (
             not specs.is_relative_to(root.resolve())
@@ -152,6 +155,21 @@ class Feature:
         ):
             message = f"{relative} must be a real directory directly under specs/"
             raise ContractError(message)
+
+    @classmethod
+    def from_operator_run(cls, root: Path, record: dict) -> Feature:
+        """The feature of a `ballast-chat` operator record (#20).
+
+        Its human approvals, implementation baseline and decision resolutions
+        come from operator state, never from agent-writable run state.
+        """
+        if record.get("workflow") != "ballast-chat":
+            message = "only a ballast-chat record builds a Chat feature"
+            raise ContractError(message)
+        feature = cls(root, record["feature"], record["run_id"])
+        feature.run_id = record["run_id"]
+        feature.chat = record
+        return feature
 
     def file(self, name: str) -> Path:
         """Return a regular, non-symlink artifact path inside the feature."""
@@ -271,21 +289,26 @@ def record_intent(feature: Feature) -> None:
     preserved; only the machine-managed approval block is replaced.
     """
     spec = check_clarified_spec(feature)
+    source = (
+        f"ballast run approve intent ({feature.key})"
+        if feature.chat is not None
+        else f"ballast-feature approve-intent gate ({feature.key})"
+    )
     block = "\n".join(
         (
             APPROVAL_START,
             "- **Approved by**: human user",
             f"- **Approved**: {datetime.now(UTC).replace(microsecond=0).isoformat()}",
-            f"- **Source**: ballast-feature approve-intent gate ({feature.key})",
+            f"- **Source**: {source}",
             f"- **Spec**: {feature.relative}/spec.md",
             f"- **Approved spec digest**: {spec_digest(spec)}",
             APPROVAL_END,
         )
     )
-    if feature.continued is not None:
-        # A human-gated continuation of an Autonomous run: this approval
-        # supersedes the agent-provisional intent, which stays in the operator
-        # log and autonomous/record.md.
+    if feature.continued is not None or feature.chat is not None:
+        # A human-gated or Chat continuation of an Autonomous run: this
+        # approval supersedes the agent-provisional intent, which stays in the
+        # operator log and autonomous/record.md.
         path = feature.file("intent.md")
         if path.exists():
             text = path.read_text(encoding="utf-8")
@@ -456,10 +479,18 @@ def record_baseline(feature: Feature) -> None:
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
-def check_implementation(feature: Feature) -> None:
-    """Require every task done and a repository change since the baseline."""
-    check_plan(feature)
-    tasks_text = _require_tasks_done(feature)
+def _baseline_tree(feature: Feature) -> str:
+    """The implementation baseline tree: operator state for a Chat run (#20)."""
+    if feature.chat is not None:
+        baseline = feature.chat.get("baseline") or {}
+        tree = baseline.get("tree")
+        if not isinstance(tree, str) or not TREE_ID.fullmatch(tree):
+            message = (
+                "no implementation baseline recorded before implementation; "
+                "approve tasks with ballast run approve"
+            )
+            raise ContractError(message)
+        return tree
     path = _state_file(feature, "implementation-baseline.json")
     if not path.exists():
         message = "no implementation baseline recorded before implementation"
@@ -477,6 +508,14 @@ def check_implementation(feature: Feature) -> None:
     if baseline.get("feature") != feature.relative:
         message = "implementation baseline belongs to another feature"
         raise ContractError(message)
+    return tree
+
+
+def check_implementation(feature: Feature) -> None:
+    """Require every task done and a repository change since the baseline."""
+    check_plan(feature)
+    tasks_text = _require_tasks_done(feature)
+    tree = _baseline_tree(feature)
     changed = _git(
         feature.root,
         "diff-tree",
@@ -511,6 +550,8 @@ def check_decisions(feature: Feature) -> None:
     proposals = {dec for dec, kind in records if kind.lower() == "proposal"}
     if feature.run is not None:
         resolved = _provisional_resolutions(feature, text)
+    elif feature.chat is not None:
+        resolved = human_resolutions(feature, text)
     else:
         # An agent-provisional resolution is never a human resolution.
         resolved = {
@@ -524,6 +565,59 @@ def check_decisions(feature: Feature) -> None:
             f"unresolved decisions: {', '.join(pending)}; resolve them interactively "
             "with speckit-intent-decisions"
         )
+        raise ContractError(message)
+
+
+def latest_resolutions(text: str) -> dict[str, str]:
+    """{DEC id: body of its last Resolution section} of decisions.md text."""
+    found: dict[str, str] = {}
+    for dec, kind, body in decision_sections(text):
+        if kind.lower() == "resolution":
+            found[dec] = body
+    return found
+
+
+def resolution_digest(body: str) -> str:
+    """Digest of a Resolution section's normalized text (#20 `resolve`)."""
+    return spec_digest(body)
+
+
+def human_resolutions(feature: Feature, text: str) -> set[str]:
+    """DEC ids whose last Resolution matches a current human resolution (#20).
+
+    Only `ballast run resolve` records a `decision-resolution` human decision
+    in operator state, bound to the resolution text: a resolution an agent
+    writes, or an edited one, resolves nothing.
+    """
+    if autonomy is None or feature.chat is None:
+        return set()
+    try:
+        entries = autonomy.read_human_decisions(feature.root, feature.chat["run_id"])
+        for entry in entries:
+            autonomy.validate_human_decision(entry)
+    except autonomy.AutonomyError as error:
+        message = f"human decisions are unreadable: {error}"
+        raise ContractError(message) from error
+    digests: dict[str, set[str]] = {}
+    for entry in entries:
+        if entry["kind"] == "decision-resolution":
+            digests.setdefault(entry["decision"], set()).add(entry["digest"])
+    return {
+        dec
+        for dec, body in latest_resolutions(text).items()
+        if resolution_digest(body) in digests.get(dec, set())
+    }
+
+
+def check_decision_structure(feature: Feature) -> None:
+    """decisions.md is well formed; resolutions may still be pending (#20)."""
+    check_intent(feature)
+    path = feature.file("decisions.md")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if len(DECISION_RECORD.findall(text)) != len(DECISION_HEADING.findall(text)):
+        message = f"{feature.relative}/decisions.md has malformed DEC headings"
         raise ContractError(message)
 
 
@@ -2487,42 +2581,50 @@ def _mark_tampered(root: Path, reasons: list[str]) -> None:
         marker.write("\n".join(reasons) + "\n")
 
 
-def run_checks(feature: Feature) -> None:
-    """Run the trusted [checks] commands, confined, and record their results."""
-    run = _require_run(feature)
-    try:
-        checks = autonomy.parse_checks(autonomy.load_config(feature.root))
-    except autonomy.AutonomyError as error:
-        _block(feature, "postcondition", str(error))
+class ChecksExhaustedError(Exception):
+    """The time left ran out before the next check command."""
+
+
+def run_commands(
+    root: Path,
+    feature: str,
+    commands: list[str],
+    timeout_minutes: int,
+    *,
+    remaining: object = None,
+) -> list[dict]:
+    """Run trusted check commands, each confined; the mode-neutral core.
+
+    `remaining`, when given, returns the seconds left before a deadline; an
+    exhausted deadline raises ChecksExhaustedError before the next command,
+    and no command may run past it. Without it (a Chat run, #20) only each
+    command's own timeout applies.
+    """
     env = autonomy.confined_env(dict(os.environ), None)
-    # The review freeze holds across the checks: the reviewed code is what
-    # runs, and no check may change it (or anything else) on the way.
-    _frozen_check(feature, required=True)
-    checked = autonomy.checked_digest(feature.root, feature.relative)
-    before = _protected_digests(feature.root)
     results = []
     with tempfile.TemporaryDirectory(prefix="ballast-checks-") as private:
-        for command in checks["commands"]:
-            remaining = autonomy.remaining_seconds(run)
-            if remaining <= 0:
-                _block(feature, "limit", "wall-time limit exhausted before run-checks")
+        for command in commands:
+            left = remaining() if callable(remaining) else None
+            if left is not None and left <= 0:
+                raise ChecksExhaustedError
             argv = autonomy.confined_argv(
-                feature.root,
+                root,
                 ["sh", "-c", command],
                 private=Path(private),
-                feature=feature.relative,
+                feature=feature,
                 env=dict(os.environ),
             )
+            timeout = timeout_minutes * 60
             started = time.monotonic()
             timed_out = False
             try:
                 done = subprocess.run(  # noqa: S603 - resolved bwrap, argument list
                     argv,
-                    cwd=feature.root,
+                    cwd=root,
                     env=env,
                     capture_output=True,
                     text=True,
-                    timeout=min(checks["timeout_minutes"] * 60, remaining),
+                    timeout=timeout if left is None else min(timeout, left),
                     check=False,
                 )
                 code = done.returncode
@@ -2539,6 +2641,60 @@ def run_checks(feature: Feature) -> None:
                     "provenance": "runner",
                 }
             )
+    return results
+
+
+def project_checks(root: Path, feature: str) -> dict:
+    """Run `[checks] commands` for a Chat run, with no limit or freeze (#20).
+
+    Returns {"results", "unavailable", "tree", "protected_changes"}: `tree`
+    is the tree digest (feature reviews excluded) the commands ran against;
+    no `[checks]` table is `unavailable`. A command that changed a protected
+    input leaves the tamper marker.
+    """
+    config = autonomy.load_config(root)
+    tree = autonomy.tree_digest(root, (f"{feature}/reviews",))
+    if config.get("checks") is None:
+        return {"results": [], "unavailable": True, "tree": tree, "protected_changes": []}
+    checks = autonomy.parse_checks(config)
+    before = _protected_digests(root)
+    results = run_commands(root, feature, checks["commands"], checks["timeout_minutes"])
+    after = _protected_digests(root)
+    changed = sorted(
+        n for n in before.keys() | after.keys() if before.get(n) != after.get(n)
+    )
+    if changed:
+        _mark_tampered(root, changed)
+    return {
+        "results": results,
+        "unavailable": False,
+        "tree": tree,
+        "protected_changes": changed,
+    }
+
+
+def run_checks(feature: Feature) -> None:
+    """Run the trusted [checks] commands, confined, and record their results."""
+    run = _require_run(feature)
+    try:
+        checks = autonomy.parse_checks(autonomy.load_config(feature.root))
+    except autonomy.AutonomyError as error:
+        _block(feature, "postcondition", str(error))
+    # The review freeze holds across the checks: the reviewed code is what
+    # runs, and no check may change it (or anything else) on the way.
+    _frozen_check(feature, required=True)
+    checked = autonomy.checked_digest(feature.root, feature.relative)
+    before = _protected_digests(feature.root)
+    try:
+        results = run_commands(
+            feature.root,
+            feature.relative,
+            checks["commands"],
+            checks["timeout_minutes"],
+            remaining=lambda: autonomy.remaining_seconds(run),
+        )
+    except ChecksExhaustedError:
+        _block(feature, "limit", "wall-time limit exhausted before run-checks")
     autonomy.write_json(
         autonomy.run_dir(feature.root, run["run_id"]) / "checks.json", results
     )

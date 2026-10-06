@@ -173,7 +173,9 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
             "cancelled",
             "interrupted",
             "aborted",
+            "mode-changed",
         },
+        "mode": {"human-gated", "autonomous", "chat"},
     },
     "step": {
         "action": {"started", "completed", "failed"},
@@ -260,6 +262,7 @@ FIELDS: dict[str, dict[str, str]] = {
         "workflow_version?": "label",
         "workflow_digest?": "sha",
         "policy_digest?": "sha",
+        "mode?": "label",
     },
     "step": {
         "action": "label",
@@ -640,6 +643,10 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
             fail(f"unknown {key}")
     if event["kind"] == "run" and data["action"] == "ended" and "status" not in data:
         fail("run end needs status")
+    if event["kind"] == "run" and data.get("status") == "mode-changed":
+        # A Chat run's mode switch or continuation (#20): the run goes on.
+        if "mode" not in data or data["action"] != "ended":
+            fail("mode-changed needs mode and action ended")
     if event["kind"] == "pull_request":
         if data["outcome"] in {"created", "reused"}:
             if "pr_number" not in data or "pr_url" not in data:
@@ -2010,6 +2017,13 @@ def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share thi
         # A start blocked by branch synchronization never ran a workflow.
         return result
     runs = [event for event in events if event["kind"] == "run"]
+    if runs and runs[0]["data"].get("mode") == "chat":
+        try:
+            return _chat_report(root, run_id, events, result)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            result["problems"].append(str(error))
+            result["status"] = "invalid"
+            return result
     result["status"] = (
         runs[-1]["data"].get("status", "incomplete") if runs else "incomplete"
     )
@@ -2446,6 +2460,99 @@ def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share thi
     except (OSError, ValueError, KeyError, TypeError) as error:
         result["problems"].append(str(error))
         result["status"] = "invalid"
+    return result
+
+
+def _chat_report(  # noqa: C901 - one pass per evidence kind
+    root: Path, run_id: str, events: list[dict[str, Any]], result: dict[str, Any]
+) -> dict[str, Any]:
+    """Report a Chat run (#20) against its archived definition and phase graph.
+
+    Reads `run/workflow.yml` and `run/chat.json`, never engine state: every
+    producer step's latest entry completed, and every gate's latest choice
+    `approve`, made after the latest completion of the steps it covers.
+    """
+    archive = archive_dir(root, run_id) / "run"
+    if archive.is_symlink():
+        fail("symlinked archived run is unavailable")
+    with archive_lock(root, run_id, exclusive=False):
+        graph = json.loads((archive / "chat.json").read_text(encoding="utf-8"))
+        definition = archive / "workflow.yml"
+        digest = _sha(definition) if definition.is_file() else None
+    runs = [event for event in events if event["kind"] == "run"]
+    if digest != runs[0]["data"].get("workflow_digest"):
+        fail("workflow definition digest mismatch")
+    producers = [
+        phase["step_id"] for phase in graph["phases"].values() if phase.get("step_id")
+    ]
+    gate_ids = {gate["gate_id"]: gate["covers"] for gate in graph["gates"].values()}
+    latest: dict[str, str] = {}
+    completed_at: dict[str, int] = {}
+    choice: dict[str, tuple[str, int]] = {}
+    for event in events:
+        data = event["data"]
+        if event["kind"] == "step" and data["step_id"] not in gate_ids:
+            if data["action"] == "started":
+                continue
+            ok = data["action"] == "completed" and data.get("status") == "completed"
+            latest[data["step_id"]] = "completed" if ok else "failed"
+            if ok:
+                completed_at[data["step_id"]] = event["sequence"]
+        elif event["kind"] == "gate":
+            choice[data["step_id"]] = (data["choice"], event["sequence"])
+    missing = [step for step in producers if latest.get(step) != "completed"]
+    missing_gates = [
+        gate for gate in gate_ids if choice.get(gate, ("", 0))[0] != "approve"
+    ]
+    stale_gates = [
+        gate
+        for gate, covers in gate_ids.items()
+        if choice.get(gate, ("", 0))[0] == "approve"
+        and any(completed_at.get(step, 0) > choice[gate][1] for step in covers)
+    ]
+    final = choice.get("final-acceptance", ("", 0))[0] == "approve"
+    gates = [event for event in events if event["kind"] == "gate"]
+    choices = Counter(event["data"]["choice"] for event in gates)
+    reviews = [event for event in events if event["kind"] == "review"]
+    checks = [event for event in events if event["kind"] == "verification"]
+    result["status"] = "completed" if final and not stale_gates else "incomplete"
+    result["mode"] = "chat"
+    result["workflow"] = {
+        "mode": "chat",
+        "mode_history": [
+            {
+                "mode": event["data"].get("mode"),
+                "change": event["data"].get("status", "started"),
+                "sequence": event["sequence"],
+            }
+            for event in runs
+        ],
+        "required_steps_completed": [s for s in producers if s not in missing],
+        "missing_steps": missing,
+        "gate_choices": dict(choices),
+        "missing_gate_approvals": missing_gates,
+        "stale_gate_approvals": stale_gates,
+        "compliance": "compliant"
+        if final and not missing and not missing_gates and not stale_gates
+        else "incomplete_or_noncompliant",
+    }
+    result["outcome"] = {
+        "reviews": [
+            {
+                "kind": event["data"]["kind"],
+                "verdict": event["data"]["verdict"],
+                "reviewer_provider": event["data"].get("reviewer_provider"),
+                "cross_provider": event["data"].get("reviewer_provider")
+                != event["data"].get("author_provider"),
+            }
+            for event in reviews
+        ],
+        "verification": dict(Counter(event["data"]["status"] for event in checks)),
+    }
+    result["human_effort"] = {
+        "gate_approvals": choices.get("approve", 0),
+        "gate_rejections": choices.get("reject", 0),
+    }
     return result
 
 

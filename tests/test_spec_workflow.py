@@ -1241,6 +1241,27 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertEqual(self.launch("trust").returncode, 0)
         self.assertEqual(self.launch("run", "start").returncode, 0)
 
+    def test_unfinished_step_refusal_names_the_run_and_step(self) -> None:
+        """#20 AC-013, FR-012: the marker's unit names the run and the step."""
+        self.assertEqual(self.launch("trust").returncode, 0)
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
+        marker = state / "in-progress"
+        marker.write_text(
+            "ballast-agent-ab12cd34-20261006T101010123456Z-plan-claude.scope\n"
+        )
+        self.assert_refused(
+            "an agent step is active or did not finish: run ab12cd34, step "
+            "20261006T101010123456Z-plan-claude; wait for it to end, or if no step "
+            "is running, run `ballast discard-runs`"
+        )
+        self.assert_refused("did not finish")
+        for content in ("ballast-agent-r1-step.scope\n", "garbage\n", ""):
+            with self.subTest(content=content):
+                marker.write_text(content)
+                self.assert_refused(
+                    "an agent step did not finish its protected-file check"
+                )
+
     def trusted_state(self) -> Path:
         self.assertEqual(self.launch("trust").returncode, 0)
         (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
@@ -3693,3 +3714,163 @@ class BranchSyncEndToEndTests(unittest.TestCase):
         status, _ = self.main("resume", self.run_id)
         self.assertEqual(status, 1)
         self.assertFalse(self.head_file.exists())
+
+
+artifacts_module = run_module.chat.artifacts
+PASS_THROUGH_BWRAP = """#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+command = args[args.index("--") + 1 :]
+os.execvp(command[0], command)
+"""
+
+
+class ChatArtifactTests(AutonomyCase):
+    """#20 F-002, FR-003, AC-008, AC-009: Chat routes in artifacts.py."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.root / AUTO_FEATURE).mkdir(parents=True)
+        self.record = autonomy.new_run(
+            run_id="chat42",
+            feature=AUTO_FEATURE,
+            issue=27,
+            workflow="ballast-chat",
+            mode="chat",
+            integration="claude",
+            start_head=self.git("rev-parse", "HEAD").strip(),
+            last_manifest="a" * 64,
+        )
+        autonomy.write_run(self.root, self.record)
+        self.feature = artifacts_module.Feature.from_operator_run(self.root, self.record)
+
+    def write(self, name: str, text: str) -> Path:
+        path = self.root / AUTO_FEATURE / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def fails(self, check: object, reason: str) -> None:
+        with self.assertRaisesRegex(artifacts_module.ContractError, reason):
+            check(self.feature)  # type: ignore[operator]
+
+    def test_feature_from_the_operator_record(self) -> None:
+        self.assertEqual(self.feature.relative, AUTO_FEATURE)
+        self.assertEqual(self.feature.run_id, "chat42")
+        self.assertIs(self.feature.chat, self.record)
+        self.assertIsNone(self.feature.run)
+        self.assertIsNone(self.feature.continued)
+        autonomous = dict(self.record, workflow="ballast-autonomous")
+        with self.assertRaises(artifacts_module.ContractError):
+            artifacts_module.Feature.from_operator_run(self.root, autonomous)
+
+    def test_intent_needs_the_registered_human_block(self) -> None:
+        self.write("spec.md", SPEC)
+        self.fails(artifacts_module.check_intent, "intent.md is missing")
+        digest = artifacts_module.spec_digest(SPEC)
+        sections = "\n\n".join(
+            f"## {name}\n\n- x" for name in ("Outcome", "Constraints", "Non-goals", "Success evidence")
+        )
+        provisional = (
+            f"# Feature Intent: Demo\n\n{sections}\n\n## Authority\n\n"
+            f"{artifacts_module.PROVISIONAL_START}\n"
+            "- **Status**: agent-provisional, not human-approved\n"
+            "- **Decision**: PD-0003\n"
+            f"- **Spec**: {AUTO_FEATURE}/spec.md\n"
+            f"- **Provisional spec digest**: {digest}\n"
+            f"{artifacts_module.PROVISIONAL_END}\n"
+        )
+        self.write("intent.md", provisional)
+        # Never the Autonomous route: a provisional block is not an approval.
+        self.fails(artifacts_module.check_intent, "no single workflow approval record")
+        forged = f"# Feature Intent: Demo\n\n{sections}\n\n## Authority\n\n" + "\n".join(
+            (
+                artifacts_module.APPROVAL_START,
+                "- **Approved by**: human user",
+                f"- **Spec**: {AUTO_FEATURE}/spec.md",
+                f"- **Approved spec digest**: {digest}",
+                artifacts_module.APPROVAL_END,
+            )
+        )
+        # An agent can write a well-formed human block, never its registration.
+        self.write("intent.md", forged + "\n")
+        self.fails(artifacts_module.check_intent, "did not register")
+        self.write("intent.md", provisional)
+        artifacts_module.record_intent(self.feature)
+        text = (self.root / AUTO_FEATURE / "intent.md").read_text()
+        self.assertNotIn(artifacts_module.PROVISIONAL_START, text)
+        self.assertIn("ballast run approve intent (chat42)", text)
+        artifacts_module.check_intent(self.feature)
+        self.write("spec.md", SPEC + "\nMore scope.\n")
+        self.fails(artifacts_module.check_intent, "approval is stale")
+
+    def test_decisions_count_only_current_human_resolutions(self) -> None:
+        self.write("spec.md", SPEC)
+        artifacts_module.record_intent(self.feature)
+        proposal = "# Ledger\n\n## DEC-0001 — Proposal\n\n- **Status**: proposed\n"
+        resolution = "\n## DEC-0001 — Resolution\n\n- **Decision**: keep\n"
+        self.write("decisions.md", proposal + resolution)
+        # An agent-written resolution resolves nothing in a Chat run.
+        self.fails(artifacts_module.check_decisions, "unresolved decisions: DEC-0001")
+        body = artifacts_module.latest_resolutions(proposal + resolution)["DEC-0001"]
+        autonomy.append_human_decision(
+            self.root,
+            "chat42",
+            "decision-resolution",
+            "resolve DEC-0001",
+            resolves=None,
+            extra={
+                "decision": "DEC-0001",
+                "digest": artifacts_module.resolution_digest(body),
+            },
+        )
+        artifacts_module.check_decisions(self.feature)
+        artifacts_module.check_decision_structure(self.feature)
+        self.write("decisions.md", proposal + resolution.replace("keep", "drop"))
+        self.fails(artifacts_module.check_decisions, "unresolved decisions: DEC-0001")
+        self.write("decisions.md", proposal + "## DEC-0002\n")
+        self.fails(artifacts_module.check_decision_structure, "malformed DEC headings")
+
+    def test_implementation_baseline_comes_from_operator_state(self) -> None:
+        self.write("spec.md", SPEC)
+        artifacts_module.record_intent(self.feature)
+        self.write("plan.md", PLAN)
+        self.write("tasks.md", DONE_TASKS)
+        self.fails(artifacts_module.check_implementation, "no implementation baseline")
+        # A workspace baseline an agent could write is never read.
+        state = self.root / ".specify/workflow-state/chat42"
+        state.mkdir(parents=True)
+        (state / "implementation-baseline.json").write_text(
+            json.dumps({"feature": AUTO_FEATURE, "tree": "a" * 40})
+        )
+        self.fails(artifacts_module.check_implementation, "no implementation baseline")
+        self.record["baseline"] = {
+            "tree": artifacts_module.worktree_tree(self.root),
+            "at": autonomy.now(),
+            "approval": "HD-0003",
+        }
+        self.fails(artifacts_module.check_implementation, "changed nothing outside")
+        (self.root / "src").mkdir()
+        (self.root / "src/demo.py").write_text("print('demo')\n")
+        artifacts_module.check_implementation(self.feature)
+
+    def test_project_checks_core_is_mode_neutral(self) -> None:
+        bwrap = self.bin / "bwrap"
+        bwrap.write_text(PASS_THROUGH_BWRAP)
+        bwrap.chmod(0o755)
+        (self.root / "ballast.toml").write_text(
+            '[checks]\ncommands = ["true", "exit 3"]\n[github]\nrepository = "acme/demo"\n'
+        )
+        # No limits, no frozen tree: a Chat record has neither.
+        result = artifacts_module.project_checks(self.root, AUTO_FEATURE)
+        self.assertFalse(result["unavailable"])
+        self.assertEqual([r["exit"] for r in result["results"]], [0, 3])
+        self.assertEqual({r["provenance"] for r in result["results"]}, {"runner"})
+        self.assertEqual(
+            result["tree"],
+            autonomy.tree_digest(self.root, (f"{AUTO_FEATURE}/reviews",)),
+        )
+        self.assertEqual(result["protected_changes"], [])
+        (self.root / "ballast.toml").write_text('[github]\nrepository = "acme/demo"\n')
+        unavailable = artifacts_module.project_checks(self.root, AUTO_FEATURE)
+        self.assertEqual((unavailable["unavailable"], unavailable["results"]), (True, []))

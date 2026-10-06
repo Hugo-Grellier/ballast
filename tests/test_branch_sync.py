@@ -2273,5 +2273,24 @@ class Sha256Tests(unittest.TestCase):
         self.assertIn("--object-format=sha256", init)
 
 
+class ChatRerunTests(SyncCase):
+    """#20 R5: a Chat step names its own rerun command; nothing else changes."""
+
+    def test_default_recovery_is_unchanged_and_chat_names_its_step(self) -> None:
+        self.s.advance_base({"base.txt": "b\n"})
+        self.s.write({"README.md": "edited\n"})
+        default = self.s.check()
+        self.assertBlocked(default, "dirty")
+        chat = self.s.check(rerun=f"ballast run step {RUN} plan")
+        lines = self.assertBlocked(chat, "dirty")
+        self.assertEqual(
+            default.recovery.replace(f"ballast run resume {RUN}", "X"),
+            chat.recovery.replace(f"ballast run step {RUN} plan", "X"),
+        )
+        self.assertIn(f"ballast run resume {RUN}", default.recovery)
+        self.assertNotIn("resume", chat.recovery)
+        self.assertTrue(lines[1][1].endswith(f"then ballast run step {RUN} plan"))
+
+
 if __name__ == "__main__":
     unittest.main()
