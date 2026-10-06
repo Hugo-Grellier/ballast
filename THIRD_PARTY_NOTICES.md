@@ -7,7 +7,7 @@ upstream notices apply to the copied Spec Kit templates and the upstream excerpt
 
 Source: https://github.com/github/spec-kit/tree/8147943512404afb9d99c6252cb9bf84369fd0b0
 
-Applies to `templates/spec-kit/templates/` and upstream excerpts in `tools/spec-kit/skills.patch`. The copies modify the acceptance-evidence instructions; the patches record those changes.
+Applies to `templates/spec-kit/templates/`, the upstream excerpts that `tools/setup` edits in the `speckit-tasks` skill (`TASKS_EDITS`), and the Spec Kit 1.0.11 skill renderings in `tests/fixtures/spec-kit/`. The copies and edits modify the acceptance-evidence instructions.
 
 ```text
 MIT License
