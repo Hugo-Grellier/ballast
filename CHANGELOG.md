@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.1](https://github.com/Hugo-Grellier/ballast/compare/v0.8.0...v0.8.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **agent:** give each confined step only its own CLI's credentials ([#89](https://github.com/Hugo-Grellier/ballast/issues/89)) ([a386c78](https://github.com/Hugo-Grellier/ballast/commit/a386c78ef12a0ce9930fcb00f7d845e4d9e0f44e))
+* **agent:** protect installed skills in headless steps and claim the in-progress marker exclusively ([#96](https://github.com/Hugo-Grellier/ballast/issues/96)) ([0ff3e13](https://github.com/Hugo-Grellier/ballast/commit/0ff3e131a5edd6ac8b6953e3cb25fd6f84235393))
+* **workflow:** let check steps run as long as the configured checks ([#99](https://github.com/Hugo-Grellier/ballast/issues/99)) ([51edd7d](https://github.com/Hugo-Grellier/ballast/commit/51edd7d480ac3f95e378b44dd5d4a3fbb6a62d1e))
+* **workflow:** require the reviews the engineering review requests ([#93](https://github.com/Hugo-Grellier/ballast/issues/93)) ([e6fce67](https://github.com/Hugo-Grellier/ballast/commit/e6fce67ce69e03903de41b67d09760ab1927a45e))
+
 ## [0.8.0](https://github.com/Hugo-Grellier/ballast/compare/v0.7.1...v0.8.0) (2026-10-06)
 
 
