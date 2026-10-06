@@ -2457,12 +2457,14 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
             and result["workflow"]["compliance"] == "compliant"
         ):
             result["workflow"]["compliance"] = "unavailable"
+        fallback_reviews = _fallback_reviews(events)
         cross = [
             event
             for event in independent
             if event["data"].get("author_provider")
             and event["data"].get("reviewer_provider")
             and event["data"]["author_provider"] != event["data"]["reviewer_provider"]
+            and not fallback_reviews
         ]
         routes = [
             event
@@ -2493,6 +2495,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
             "underpowered_signals": underpowered,
             "independent_reviews": len(independent),
             "cross_provider_reviews": len(cross),
+            "fallback_reviews": fallback_reviews,
             "review_provider_availability": [
                 {
                     "review_id": event["data"]["review_id"],
@@ -2530,6 +2533,23 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
         result["problems"].append(str(error))
         result["status"] = "invalid"
     return result
+
+
+def _fallback_reviews(events: list[dict[str, Any]]) -> int:
+    """Successful local fallback routes on a review stage (#23 contracts/ledger.md).
+
+    Any such route makes every review of the run not cross-provider: the
+    rule is run-wide and conservative, never claiming independence on the
+    fallback's basis.
+    """
+    return sum(
+        event["kind"] == "route"
+        and event["source"] == "runner"
+        and event["data"].get("route_source") == "fallback"
+        and event["data"].get("outcome") == "success"
+        and "ballast-review" in event["data"]["stage"]
+        for event in events
+    )
 
 
 def _chat_report(
@@ -2612,7 +2632,8 @@ def _chat_report(
                 "verdict": event["data"]["verdict"],
                 "reviewer_provider": event["data"].get("reviewer_provider"),
                 "cross_provider": event["data"].get("reviewer_provider")
-                != event["data"].get("author_provider"),
+                != event["data"].get("author_provider")
+                and not _fallback_reviews(events),
             }
             for event in reviews
         ],

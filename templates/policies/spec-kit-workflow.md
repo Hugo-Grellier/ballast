@@ -732,6 +732,67 @@ that it is the feature the branch carries, add `"feature": "specs/<N>-<slug>"`
 to the pin (and `"branch"` when it is missing), then rerun the command. Never
 take the value from a file in the checkout.
 
+## Local fallback
+
+A human-gated or Autonomous run can let a headless step fall back once to a
+zero-cost local model when its agent's quota is exhausted, its provider is
+unreachable or its CLI is missing. It is off unless the operator turns it on
+for the run:
+
+```sh
+ballast run start [--mode autonomous] --local-fallback MODEL -i ...
+ballast run resume RUN_ID --local-fallback MODEL|off
+```
+
+- **What it runs.** The same step, once, as `codex exec --oss --local-provider
+  ollama -m MODEL --json`, against Ollama's default endpoint `127.0.0.1:11434`;
+  there is no endpoint option. MODEL is a local Ollama model served with a
+  context of at least 16384 tokens, for example a variant created with
+  `PARAMETER num_ctx 16384` (Codex's own prompt is about 12k tokens). Ollama
+  must be 0.13.4 or newer, and the project needs Spec Kit's Codex integration
+  installed, so that Codex finds the step's skill under `.agents/skills/`.
+- **When.** Only after the step's first attempt failed on quota, provider
+  availability or a missing CLI, recognized from the CLI's own messages; any
+  other failure, and any failure on a draft-retry attempt, ends the step as
+  before. The fallback counts as an agent step and is never retried: a failed
+  fallback, or one whose draft the recorder refuses, ends the step.
+- **Refusals.** Before any prompt is sent the wrapper checks, and refuses with
+  one reason and a stderr line `local fallback refused: <reason>: <detail>`;
+  the step keeps the primary's exit code:
+  - `changed-state`: the first attempt changed the tree, the reviews, the
+    drafts, a git-ignored path or a ref, or that could not be checked (for
+    example more than 200,000 ignored entries);
+  - `privacy-exclusion`: the model is remote or a cloud tag, or an endpoint
+    override (`OLLAMA_HOST`, `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`) is set;
+  - `unknown-free-status`: the model is not installed, or has no size or
+    digest;
+  - `incompatible-capability`: Ollama is not answering or too old, the served
+    context is below 16384 or unknown, Codex lacks `--oss`, the step's Codex
+    skill is missing, Codex's sandbox does not start under the step's
+    confinement (an Autonomous step on a host where it cannot nest inside
+    bubblewrap always refuses), or the checks took over 10 s;
+  - `permission-mismatch`: a Codex configuration layer exists outside the
+    fallback's private Codex home (`/etc/codex/`, a project
+    `.codex/config.toml`), `~/.agents/skills` is not empty (empty it, or leave
+    the fallback off), or the argv or environment differs from the canonical
+    headless Codex step's.
+- **What it never does.** It is never available in Chat runs, never routes to a
+  paid or remote backend, never reads the user's Codex configuration (it runs
+  with a private, empty `CODEX_HOME`), never runs while the user's skills
+  directory holds anything, and never loosens a sandbox, adds a writable root or
+  enables network access. A review it completes never counts as cross-provider.
+- **Turning it off.** `ballast run resume RUN_ID --local-fallback off`, or
+  start without the flag. No environment variable or `ballast.toml` key turns
+  it on.
+- **Where it shows.** `ballast run status RUN_ID` prints a `Local fallback:`
+  line, an Autonomous `record.md` lists it under "Mode and risk", and each
+  step's `meta.json` carries `local_fallback: true` while it is on. The
+  setting lives in the run's operator directory (`fallback.json`), where no
+  agent can write.
+- **Evidence.** `./scripts/agent-metrics --run RUN_ID` reports every decision
+  as ledger `route` events (`failure_cause`, `fallback`, `fallback_reason`,
+  `route_source: fallback`) and the fallback's token usage.
+
 ## Chat runs
 
 Chat mode is the third per-run mode, beside human-gated and Autonomous. The
