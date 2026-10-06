@@ -1027,7 +1027,12 @@ class ConfinementTests(AutonomyCase):
         private = self.base / "private"
         private.mkdir(exist_ok=True)
         argv = autonomy.confined_argv(
-            linked, ["true"], private=private, home=self.base / "home", env={}
+            linked,
+            ["true"],
+            private=private,
+            home=self.base / "home",
+            env={},
+            integration=None,
         )
         joined = " ".join(argv)
         pointer = linked / ".git"
@@ -1051,7 +1056,12 @@ class ConfinementTests(AutonomyCase):
         private.mkdir(exist_ok=True)
         with self.assertRaises(autonomy.AutonomyError) as caught:
             autonomy.confined_argv(
-                linked, ["true"], private=private, home=self.base / "home", env={}
+                linked,
+                ["true"],
+                private=private,
+                home=self.base / "home",
+                env={},
+                integration=None,
             )
         self.assertEqual(caught.exception.category, "ineligible")
 
@@ -1295,6 +1305,75 @@ class ConfinementTests(AutonomyCase):
         with self.assertRaisesRegex(ValueError, "unknown integration"):
             self.argv(integration="gemini")
 
+    def confined(self, home: Path, env: dict, integration: str | None) -> list[str]:
+        private = self.base / f"private-{integration}"
+        private.mkdir(exist_ok=True)
+        return autonomy.confined_argv(
+            self.root,
+            ["true"],
+            private=private,
+            home=home,
+            env=env,
+            integration=integration,
+        )
+
+    def test_hiding_mounts_come_after_every_overlay(self) -> None:
+        """#81 review F1: bwrap applies mounts in order and the later one wins."""
+        home = self.credential_home()
+        other = home / ".cache/codex"
+        other.mkdir()
+        argv = self.confined(home, {"CODEX_HOME": str(other)}, "claude")
+        hide = argv.index(str(other)) - 1
+        self.assertEqual(argv[hide], "--tmpfs")
+        for index, arg in enumerate(argv):
+            if arg == "--tmp-overlay":
+                self.assertLess(index, hide)
+
+    def test_nested_agent_homes_are_refused(self) -> None:
+        """#81 review F1: no home of one CLI may sit inside the other's."""
+        home = self.credential_home()
+        for env in (
+            {"CODEX_HOME": str(home / ".claude/codex")},
+            {"CLAUDE_CONFIG_DIR": str(home / ".codex/claude")},
+        ):
+            for integration in ("claude", "codex", None):
+                with (
+                    self.subTest(env=env, integration=integration),
+                    self.assertRaisesRegex(autonomy.AutonomyError, "nested"),
+                ):
+                    self.confined(home, env, integration)
+
+    def test_a_symlinked_claude_state_is_hidden_through_its_target(self) -> None:
+        """#81 review F2: bwrap cannot mount over a link, so bind the target."""
+        home = self.credential_home()
+        target = home / "dotfiles/claude.json"
+        target.parent.mkdir()
+        (home / ".claude.json").replace(target)
+        (home / ".claude.json").symlink_to(target)
+        joined = " ".join(self.confined(home, {}, "codex"))
+        self.assertIn(f"--ro-bind /dev/null {target}", joined)
+        self.assertNotIn(f"/dev/null {home / '.claude.json'}", joined)
+        (home / ".claude.json").unlink()
+        (home / ".claude.json").symlink_to(home / "missing.json")
+        self.assertNotIn(".claude.json", " ".join(self.confined(home, {}, "codex")))
+
+    def test_credential_paths_inside_the_worktree_are_refused(self) -> None:
+        """#81 review F3: the later worktree bind would re-expose them."""
+        outside = self.credential_home()
+        inside = self.root / "home"
+        inside.mkdir()
+        for name, home, env in (
+            ("home", inside, {}),
+            ("codex home", outside, {"CODEX_HOME": str(self.root / "cx")}),
+            ("claude home", outside, {"CLAUDE_CONFIG_DIR": str(self.root / "cc")}),
+            ("gh config", outside, {"GH_CONFIG_DIR": str(self.root / "gh")}),
+        ):
+            with (
+                self.subTest(name),
+                self.assertRaisesRegex(autonomy.AutonomyError, "worktree"),
+            ):
+                self.confined(home, env, "claude")
+
     def test_secret_variables_removed_except_integration_key(self) -> None:
         env = {
             "GH_TOKEN": "t",
@@ -1344,7 +1423,7 @@ class ConfinementTests(AutonomyCase):
             patch.object(artifacts.subprocess, "run", return_value=ran) as run,
         ):
             artifacts.run_commands(self.root, FEATURE, ["true"], 1)
-        self.assertEqual([kwargs.get("integration") for kwargs in captured], [None])
+        self.assertEqual([kwargs["integration"] for kwargs in captured], [None])
         env = run.call_args.kwargs["env"]
         self.assertFalse(set(secrets) & set(env))
 
@@ -1361,7 +1440,12 @@ class ConfinementTests(AutonomyCase):
         private.mkdir()
         joined = " ".join(
             autonomy.confined_argv(
-                self.root, ["true"], private=private, env=env, home=self.base / "h"
+                self.root,
+                ["true"],
+                private=private,
+                env=env,
+                home=self.base / "h",
+                integration=None,
             )
         )
         for path in (gh, xdg):
@@ -1444,6 +1528,7 @@ class ConfinementTests(AutonomyCase):
             home=self.base / "home",
             env={},
             interactive_pty=True,
+            integration=None,
         )
         self.assertNotIn("--new-session", interactive)
         self.assertEqual(interactive[-2:], ["--", "true"])
@@ -1486,6 +1571,7 @@ class ConfinementTests(AutonomyCase):
             home=self.base / "home",
             env={},
             readonly_extra=(".claude", ".codex"),
+            integration=None,
         )
         joined = " ".join(argv)
         claude = self.root / ".claude"
@@ -1506,6 +1592,7 @@ class ConfinementTests(AutonomyCase):
                     private=private,
                     env={},
                     readonly_extra=(outside,),
+                    integration=None,
                 )
 
     def test_installed_workflow_skills_are_read_only(self) -> None:
@@ -2100,6 +2187,59 @@ class RealConfinementTests(AutonomyCase):
                 for name, text in seen.items():
                     self.assertEqual(f"SYNTHETIC-{name}" in text, name in visible)
 
+    def test_a_home_under_the_cache_is_hidden_and_a_symlinked_state_survives(
+        self,
+    ) -> None:
+        """#81 review F1, F2: ordering under real bwrap; no abort on a link."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
+        hidden = home / ".cache/codex/auth.json"
+        state = home / "dotfiles/claude.json"
+        for path, name in ((hidden, "codex"), (state, "state")):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"accessToken": f"SYNTHETIC-{name}"}))
+        (home / ".claude").mkdir()
+        (home / ".claude.json").symlink_to(state)
+        code = (
+            "import sys\n"
+            "for path in sys.argv[1:]:\n"
+            "    try:\n"
+            "        print(open(path).read())\n"
+            "    except OSError:\n"
+            "        print('')\n"
+        )
+        env = autonomy.confined_env(dict(os.environ), None)
+        env["PATH"] = self.real_path
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        for integration in ("claude", "codex"):
+            with self.subTest(integration=integration):
+                private = self.base / f"private-{integration}"
+                private.mkdir()
+                argv = autonomy.confined_argv(
+                    self.root,
+                    ["python3", "-I", "-S", "-c", code, str(hidden), str(state)],
+                    private=private,
+                    home=home,
+                    env={**env, "HOME": str(home), "CODEX_HOME": str(hidden.parent)},
+                    integration=integration,
+                )
+                result = subprocess.run(  # noqa: S603
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=env,
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    "SYNTHETIC-codex" in result.stdout, integration == "codex"
+                )
+                self.assertEqual(
+                    "SYNTHETIC-state" in result.stdout, integration == "claude"
+                )
+
     def test_operator_processes_bus_and_credentials_unreachable(self) -> None:
         code = (
             "import json, os, subprocess, sys\n"
@@ -2177,6 +2317,7 @@ class RealConfinementTests(AutonomyCase):
             private=private,
             feature=FEATURE,
             env=env,
+            integration=None,
         )
         result = subprocess.run(  # noqa: S603
             argv,

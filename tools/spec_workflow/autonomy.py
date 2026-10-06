@@ -2212,6 +2212,19 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
+def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
+    """Refuse a home of one CLI inside the other's: one mount would reveal it."""
+    claude, codex = (homes(home, env) for homes in AGENT_HOMES.values())
+    for path in claude:
+        for other in codex:
+            if path.is_relative_to(other) or other.is_relative_to(path):
+                message = (
+                    f"agent homes {path} and {other} are nested: give Claude "
+                    "and Codex separate home directories"
+                )
+                raise AutonomyError(message, "ineligible")
+
+
 def _agent_home_binds(
     home: Path, env: dict[str, str], private: Path, integration: str | None
 ) -> list[str]:
@@ -2222,12 +2235,11 @@ def _agent_home_binds(
     `~/.claude.json`, which can hold an API key.
     """
     args: list[str] = []
+    _refuse_nested_agent_homes(home, env)
     own = AGENT_HOMES[integration](home, env) if integration else []
-    for homes in AGENT_HOMES.values():
-        for path in homes(home, env):
-            if path not in own and path.is_dir():
-                args += ["--tmpfs", str(path)]
-    for path in [*own, home / ".cache"]:
+    # bwrap applies mounts in order and the later one wins: overlays first,
+    # the hiding tmpfs last, so a home inside ~/.cache stays hidden.
+    for path in [home / ".cache", *own]:
         if path.is_dir() and not path.is_symlink():
             args += ["--overlay-src", str(path), "--tmp-overlay", str(path)]
     login, copy = {
@@ -2238,6 +2250,10 @@ def _agent_home_binds(
         if os.path.lexists(path / login):
             agent = _agent_login(path / login, private / f"{copy}-{index}.json")
             args += ["--ro-bind", agent, str(path / login)]
+    for homes in AGENT_HOMES.values():
+        for path in homes(home, env):
+            if path not in own and path.is_dir():
+                args += ["--tmpfs", str(path)]
     return args + _claude_state_bind(home, private, integration)
 
 
@@ -2245,12 +2261,34 @@ def _claude_state_bind(home: Path, private: Path, integration: str | None) -> li
     """Give a Claude step a throwaway `~/.claude.json`; hide it from the rest."""
     settings = home / ".claude.json"
     if integration != "claude":
-        # exists(), not lexists(): bwrap cannot mount over a dangling link.
-        return ["--ro-bind", "/dev/null", str(settings)] if settings.exists() else []
+        # bwrap cannot mount over a link: bind the file it resolves to, and
+        # nothing for a dangling or non-regular target (it holds no content).
+        target = settings.resolve()
+        if os.path.lexists(settings) and target.is_file():
+            return ["--ro-bind", "/dev/null", str(target)]
+        return []
     if not settings.is_file() or settings.is_symlink():
         return []
     shutil.copyfile(settings, private / "claude.json")
     return ["--bind", str(private / "claude.json"), str(settings)]
+
+
+def _refuse_credentials_in_worktree(
+    root: Path, home: Path, env: dict[str, str]
+) -> None:
+    """Refuse a credential path inside the worktree: `--bind root root` exposes it."""
+    inside = Path(root).resolve()
+    paths = [home, home / ".netrc"]
+    for homes in AGENT_HOMES.values():
+        paths += homes(home, env)
+    paths += [Path(env[name]) for name in CREDENTIAL_LOCATIONS if env.get(name)]
+    for path in paths:
+        if path.resolve().is_relative_to(inside):
+            message = (
+                f"{path} is inside the worktree {inside}, which would expose "
+                "it to the step: move it outside the checkout"
+            )
+            raise AutonomyError(message, "ineligible")
 
 
 def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
@@ -2263,7 +2301,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     home: Path | None = None,
     interactive_pty: bool = False,
     readonly_extra: tuple[str, ...] = (),
-    integration: str | None = None,
+    integration: str | None,
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
@@ -2302,6 +2340,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         raise AutonomyError(message, "ineligible")
     env = dict(os.environ if env is None else env)
     home = home or Path.home()
+    _refuse_credentials_in_worktree(root, home, env)
     args = [
         bwrap,
         "--ro-bind",

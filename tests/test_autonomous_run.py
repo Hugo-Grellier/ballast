@@ -103,6 +103,9 @@ class WrapperCase(AutonomyCase):
             ("codex", FAKE_CLI),
         ):
             _write(self.bin / name, source)
+        # Never read the operator's real login through a custom home.
+        for name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+            os.environ.pop(name, None)
         os.environ.update(
             {
                 "FAKE_ARGV": str(self.base / "argv.json"),
