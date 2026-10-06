@@ -23,9 +23,11 @@ govern, and later steps do not read requirements from this file.
 - S-11: docs/policies/project/workflow.md#r2-boundaries
 - S-12: AGENTS.md (invariants; issue and spec workflow; risk)
 - S-13: specs/TECHNICAL-SPEC.md#91-v10-target
-- S-14: specs/55-setup-trust/autonomous/record.md (PD-0001, scope; HD-0001, the operator's block resolution that changed this brief)
-- S-15: the operator's answers to D-01, D-02 and D-03, written in this brief by the operator in commit f290079 during the block HD-0001 records
+- S-14: specs/55-setup-trust/autonomous/record.md (run 38380ec3: mode, risk R2, PD-0001 scope)
+- S-15: specs/55-setup-trust/discovery.md at commit f290079 (the operator's **Answer** lines to D-01, D-02 and D-03, written during the earlier run's block HD-0001)
+- S-16: docs/adr/0005-launcher-branch-synchronization.md#decision
 - unavailable: Issue #55 comments — the snapshot lists none
+- unavailable: the earlier run's record (HD-0001) — retired by commit 7bfe7a1 before this run started; readable only at commit add5742
 
 ## Need
 
@@ -59,7 +61,7 @@ govern, and later steps do not read requirements from this file.
 - Workflow tools stay standard-library-only and run under `python3 -I -S`; nothing the launcher executes comes from a checkout an agent can write. [S: AGENTS.md] [S: .specify/memory/constitution.md]
 - The trust comparison keeps one owner, the launcher; doctor recomputes nothing and reads the launcher's `status --json`. [S: docs/adr/0002-cli-standard-manifest.md] [S: tools/ballast]
 - The baseline lives in operator state (`$XDG_STATE_HOME/ballast/<key>/trusted.json`), never where an agent can write. [S: tools/spec_workflow/launcher.py]
-- The change is R2 (launcher trust model, agent authority); in this Autonomous run every pre-change decision is agent-provisional and the merge is the single human approval. [S: docs/policies/project/workflow.md#r2-boundaries] [S: specs/55-setup-trust/autonomous/record.md]
+- The change is R2 (launcher trust model, agent authority); in this Autonomous run every pre-change decision is agent-provisional and the merge is the single human approval. [S: docs/policies/project/workflow.md#r2-boundaries] [S: specs/55-setup-trust/autonomous/record.md#mode-and-risk]
 - An accepted architecture change needs a new ADR; a change that weakens a constitution invariant needs R2 approval and a recorded reason. [S: AGENTS.md] [S: .specify/memory/constitution.md#governance]
 
 ## Permissions and data authority
@@ -67,7 +69,7 @@ govern, and later steps do not read requirements from this file.
 - Today only the operator's `ballast trust` writes `trusted.json`; setup never records trust and preparation never reads or records one. [S: tools/spec_workflow/launcher.py] [S: docs/adr/0007-recoverable-installation.md#decision] [S: docs/adr/0011-worktree-preparation.md#decision]
 - The feature would give `tools/setup` (and `--prepare`) authority to write the baseline. [S: Issue #55 body]
 - `--prepare` runs on the first `ballast run`, `ledger` or `intake`, which an agent driving work may invoke, unlike `ballast trust`, which only the operator runs. [S: tools/ballast] [S: AGENTS.md]
-- The operator answered that preparation records a baseline under the same eligibility conditions as `ballast setup`; eligibility ties the committed `ballast.toml` and constitution to the default branch or the previous operator-recorded baseline, so an agent-started command records trust only for committed inputs a human already reviewed. [S: specs/55-setup-trust/autonomous/record.md]
+- The operator answered that preparation records a baseline under the same eligibility conditions as `ballast setup`; eligibility ties the committed `ballast.toml` and constitution to the default branch or the previous operator-recorded baseline, so an agent-started command records trust only for committed inputs a human already reviewed. [S: specs/55-setup-trust/discovery.md#d-03-the-preparation-path-records-a-baseline]
 - `ballast.toml` and the constitution are committed project files; a commit on a feature branch is not by itself evidence that a human reviewed it. [I]
 
 ## Success evidence
@@ -80,7 +82,7 @@ govern, and later steps do not read requirements from this file.
 
 ## Edge, failure and permission cases
 
-- An uncommitted `ballast.toml` change (for example a pin bump an agent wrote): never eligible. [S: Issue #55 body] [S: specs/55-setup-trust/autonomous/record.md]
+- An uncommitted `ballast.toml` change (for example a pin bump an agent wrote): never eligible. [S: Issue #55 body] [S: IAC-2] [S: specs/55-setup-trust/autonomous/record.md#pd-0001-basis]
 - A committed `ballast.toml` change on a feature branch that no human merged, such as widened `[agents.permissions]`. [S: Issue #55 body]
 - A protected input that setup did not write (an extra file under `.specify/`, or a linked worktree's `.git` pointer). [S: tools/spec_workflow/launcher.py] [S: IAC-2]
 - Saved run state from earlier runs, which lies outside the baseline. [S: tools/spec_workflow/launcher.py]
@@ -105,16 +107,18 @@ govern, and later steps do not read requirements from this file.
 - BL-INV-002 says the launcher refuses until the operator trusts the current inputs. [S: .specify/memory/constitution.md#core-principles]
 - The roadmap keeps "the rule that setup cannot silently trust itself" and says changing the trust boundary needs an approved R2 design. [S: docs/plans/2026-10-02-product-roadmap.md]
 - Doctor's trust check reads only `installed` and `refusal` from `status --json`. [S: tools/ballast]
-- Uncommitted `ballast.toml` changes are outside this feature. [S: specs/55-setup-trust/autonomous/record.md] [S: IAC-2]
-- The operator chose to let setup record the baseline: a new ADR supersedes the ADR-0007 clause and BL-INV-002 is amended (D-01, option A). [S: specs/55-setup-trust/autonomous/record.md]
-- The operator chose that a committed `ballast.toml` and constitution are eligible only when they equal those on the default branch's remote-tracking ref or those in the previous operator-recorded baseline (D-02, option B). [S: specs/55-setup-trust/autonomous/record.md]
-- The operator chose that the preparation path records a baseline under the D-02 conditions (D-03, option A). [S: specs/55-setup-trust/autonomous/record.md]
+- Uncommitted `ballast.toml` changes are outside this feature. [S: specs/55-setup-trust/autonomous/record.md#pd-0001-basis] [S: IAC-2]
+- The operator chose to let setup record the baseline: a new ADR supersedes the ADR-0007 clause and BL-INV-002 is amended (D-01, option A; operator answer at commit f290079). [S: specs/55-setup-trust/discovery.md#d-01-setup-may-record-the-trust-baseline]
+- The operator chose that a committed `ballast.toml` and constitution are eligible only when they equal those on the default branch or those in the previous operator-recorded baseline (D-02, option B; operator answer at commit f290079). [S: specs/55-setup-trust/discovery.md#d-02-which-committed-ballasttoml-and-constitution-are-eligible]
+- The operator chose that the preparation path records a baseline under the D-02 conditions (D-03, option A; operator answer at commit f290079). [S: specs/55-setup-trust/discovery.md#d-03-the-preparation-path-records-a-baseline]
+- Launcher branch synchronization already asks the pinned repository through the operator's own Git authority, never through checkout-controlled Git configuration. [S: docs/adr/0005-launcher-branch-synchronization.md#decision]
 - Run state lives under `.specify/workflows/runs` and `.specify/workflow-state`, which the trust comparison skips. [S: tools/spec_workflow/launcher.py]
 
 ## Inferred
 
 - The new ADR also supersedes ADR-0011's "preparation never records or reads a baseline", since preparation now reads the previous operator baseline and records one. [I]
 - "Unchanged from the commit setup read" by itself admits a `ballast.toml` that an agent committed in a plain session, which is why eligibility is tied to the default branch or the operator baseline. [I]
+- A local remote-tracking ref, `.git/config` and `origin` are agent-writable, so the D-02 default branch is observed only from the repository pinned in `ballast.toml` `[github] repository`, through the operator's Git authority on the ADR-0005 path, comparing blob IDs; offline, unauthenticated or unreadable means not eligible and `ballast trust` is needed. This only narrows the operator's D-02 answer and is listed for merge review. [I]
 - Setup records no baseline when any run state exists in the checkout, an operator-state run is unfinished, or the in-progress marker or `BALLAST_TAMPERED` exists; such checkouts keep needing `ballast trust`. [P: D-04]
 - The baseline's source is a provenance record in operator state beside `trusted.json`, bound to its digest and reported by the launcher's `status --json`; a missing or mismatched record reads as operator `trust`. [P: D-05]
 
@@ -134,7 +138,7 @@ None.
   - B — Keep setup unable to trust; reduce the repeat work only through clearer setup and doctor messages. Consequence: the Issue's main outcome (no separate `ballast trust`) is not delivered.
 - **Recommended default**: A, because the Issue asks for exactly this change and labels it R2.
 - **Answer**:
-- **Resolution**: Settled by the operator's answer A ("A for #55", commit f290079, written during the block HD-0001 records): the Issue conflicted with ADR-0007, BL-INV-002 and the roadmap rule, and the operator chose to supersede the ADR-0007 clause with a new ADR and amend BL-INV-002; the change stays R2 and is accepted only at merge. [S: specs/55-setup-trust/autonomous/record.md]
+- **Resolution**: Settled by the operator's answer A ("A for #55"), written as this decision's **Answer** in commit f290079 during the earlier run's block HD-0001 (record retired in 7bfe7a1, readable at add5742): the Issue conflicted with ADR-0007, BL-INV-002 and the roadmap rule, and the operator chose to supersede the ADR-0007 clause with a new ADR and amend BL-INV-002; the change stays R2 and is accepted only at merge. [S: specs/55-setup-trust/discovery.md]
 
 ### D-02: Which committed `ballast.toml` and constitution are eligible
 - **Status**: settled
@@ -147,7 +151,7 @@ None.
   - C — A, plus `[standard]` and `[agents.permissions]` unchanged from the default branch. Consequence: other `ballast.toml` keys committed by an agent are trusted.
 - **Recommended default**: B, because it is the only option that ties eligibility to a human review.
 - **Answer**:
-- **Resolution**: Settled by the operator's answer B (commit f290079, written during the block HD-0001 records): the committed `ballast.toml` and constitution must equal those on the default branch's remote-tracking ref or those in the previous operator-recorded baseline. [S: specs/55-setup-trust/autonomous/record.md] Refinement (2026-10-06, after clarify found the remote-tracking ref agent-writable): the default-branch configuration is observed outside `.git`: setup and preparation ask the repository pinned in `ballast.toml` `[github] repository` (never `.git/config` or `origin`) through the operator's own Git authority with `git ls-remote` plus a fetch into a throwaway repository, the same trusted path as #18's branch synchronization (ADR-0005), and compare blob IDs; offline, unauthenticated or unreadable means not eligible and `ballast trust` is needed. Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05) as the implementation of the operator's answer, listed for merge review. [S: operator answer 2026-10-06] [S: docs/adr/0005-launcher-branch-synchronization.md]
+- **Resolution**: Settled by the operator's answer B, written as this decision's **Answer** in commit f290079 during the earlier run's block HD-0001: the committed `ballast.toml` and constitution must equal those on the default branch (merged through a reviewed PR) or those in the previous operator-recorded baseline. [S: specs/55-setup-trust/discovery.md] How the default branch is observed is an agent inference that only narrows this answer (see `## Inferred`): from the pinned repository through the operator's Git authority on the ADR-0005 path, never from an agent-writable remote-tracking ref; anything unreadable means not eligible. [S: docs/adr/0005-launcher-branch-synchronization.md#decision]
 
 ### D-03: The preparation path records a baseline
 - **Status**: settled
@@ -159,7 +163,7 @@ None.
   - B — No; only `ballast setup` records. Consequence: each new worktree still needs `ballast setup` or `ballast trust` once.
 - **Recommended default**: A only together with D-02 option B; otherwise B.
 - **Answer**:
-- **Resolution**: Settled by the operator's answer A (commit f290079, written during the block HD-0001 records): preparation records a baseline under the D-02 conditions, from the verified copy's record. [S: specs/55-setup-trust/autonomous/record.md]
+- **Resolution**: Settled by the operator's answer A, written as this decision's **Answer** in commit f290079 during the earlier run's block HD-0001: preparation records a baseline under the D-02 conditions, from the verified copy's record. [S: specs/55-setup-trust/discovery.md]
 
 ### D-04: Which run state prevents recording
 - **Status**: assumed
@@ -189,7 +193,7 @@ None.
 - **Status**: settled
 - **Question**: Is an uncommitted `ballast.toml` change (for example an agent-written pin bump) ever eligible?
 - **Why it matters**: it is the Issue's open question for the scope gate.
-- **Sources**: [S: Issue #55 body] [S: IAC-2] [S: specs/55-setup-trust/autonomous/record.md]
+- **Sources**: [S: Issue #55 body] [S: IAC-2] [S: specs/55-setup-trust/autonomous/record.md#pd-0001-basis]
 - **Resolution**: Never eligible: the Issue's scope requires the committed inputs unchanged from the commit setup read and IAC-2 requires no baseline when `ballast.toml` differs; it keeps needing `ballast trust`. [S: Issue #55 body] [S: IAC-2]
 
 ### D-07: The launcher's comparison stays unchanged
@@ -201,8 +205,9 @@ None.
 
 ## Changes
 
-- D-01, D-02 and D-03 are settled from the operator's answers (commit f290079, block resolution HD-0001); the answers moved from **Answer** to **Resolution** because an autonomous brief has no answered status. [S: operator answers on Issue #55, 2026-10-06]
-- D-04 and D-05 are assumed with their conservative defaults; `## Known`, `## Inferred`, `## Permissions and data authority` and `## Undecided` follow. [I]
+- Rerun for the restarted run 38380ec3: the earlier run's record (HD-0001) was retired in 7bfe7a1, so D-01, D-02 and D-03 and the `## Known` items now cite the operator's **Answer** lines in this brief at commit f290079 instead of `autonomous/record.md`; the retired record is listed as unavailable. [I]
+- The D-02 refinement (observe the default branch from the pinned repository, ADR-0005 path) moved from D-02's **Resolution** to `## Inferred` as an agent inference that only narrows the operator's answer; the wording that attributed it to standing authority is removed. ADR-0005 is added as S-16. [I]
+- D-04 and D-05 stay assumed with their conservative defaults and are recorded again as clarification drafts for this run. [I]
 
 ## Question metrics
 
