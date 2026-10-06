@@ -67,9 +67,9 @@ To develop the standard itself, install from a reviewed checkout of this reposit
 
    Headless Claude agents run only the Bash commands these rules and the standard's base list name, so list the project's checks here; Codex runs any command inside its sandbox. Rules match the command text: `*` matches anything, and a command with a leading `VAR=value` never matches, so write checks without one. Autonomous steps, which bubblewrap confines, may also run `ls`, `cat`, `head`, `tail`, `wc` and `find` without `-exec` or `-delete`.
 
-3. From the project root, run `ballast setup`. It downloads the pinned version once into `$XDG_DATA_HOME/ballast/standard/<ref>/`, then runs its `tools/setup`. On the first run, add the ignore block it prints to the project's `.gitignore`; the block keeps `.specify/memory/constitution.md` tracked. Setup needs `git`, `uvx`, `patch`, and network access to GitHub; `ballast doctor` checks them.
+3. From the project root, run `ballast setup`. It downloads the pinned version once into `$XDG_DATA_HOME/ballast/standard/<ref>/` with a record of its content, checks the cached copy against that record before every setup, then runs its `tools/setup`. On the first run, add the ignore block it prints to the project's `.gitignore`; the block keeps `.specify/memory/constitution.md` tracked. Setup needs `git`, `uvx`, `patch`, and network access to GitHub; `ballast doctor` checks them.
 
-The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `ballast-feature` workflow and its tools under `.ballast/`, the `ballast-*` skills under `.agents/skills/` (linked from `.claude/skills/`), and the standard's policies under `docs/policies/`. Project-specific additions go in `docs/policies/project/`, which setup never touches. A rerun is a no-op until this repository or `ballast.toml` changes. A new Git worktree copies the installation from its primary checkout when both match. A reinstall keeps `.specify/workflows/runs/` and the project constitution.
+The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `ballast-feature` workflow and its tools under `.ballast/`, the `ballast-*` skills under `.agents/skills/` (linked from `.claude/skills/`), and the standard's policies under `docs/policies/`. Project-specific additions go in `docs/policies/project/`, which setup never touches. Setup builds the new installation beside the current one under `.ballast/setup/`, validates it, then switches it in; a failed or interrupted setup keeps the previous installation (see [Updating the pinned version](#updating-the-pinned-version)). A rerun at a current pin changes nothing and downloads nothing. A new Git worktree copies the installation from its primary checkout only when that installation still matches the record setup kept of it. Setup never touches `.specify/workflows/runs/`, the project constitution or `docs/policies/project/`.
 
 ### Running the workflow
 
@@ -81,7 +81,7 @@ ballast run start|resume ...
 ballast ledger snapshot|check|report ...
 ```
 
-Only `setup` downloads; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
+Only `setup` and `preview` download; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, including a rerun of setup. To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
 Before the first agent step of every `ballast run start`, `resume` or `continue`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
 
@@ -116,6 +116,32 @@ timeout_minutes = 30
 ```
 
 Keys that would widen eligibility, and `merge`, `release`, `deploy` or `mark ready` as authorized actions, are ignored with a warning. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
+
+### Updating the pinned version
+
+Pin changes stay manual and reviewed in Git. Update the `ballast` command first (see [Installing the Ballast CLI](#installing-the-ballast-cli)): verified downloads of the standard and `ballast preview` come with the CLI, not with the pinned version, so an older CLI does without them.
+
+```bash
+ballast preview vX.Y.Z      # what moving the pin would do; changes nothing
+# set ref = "vX.Y.Z" under [standard] in ballast.toml, review and commit it
+ballast setup               # the previous installation stays until the new one verifies
+ballast trust               # after reviewing the changed protected inputs it lists
+```
+
+Then run the project's checks. `ballast preview` (add `--json` for scripts) names the pinned, installed and target versions and the CLI version the target needs, lists each unfinished run with whether the target can resume it, the installed paths it would add, change or remove, any ignore-rule change, and the exact steps above. It builds the target in a disposable directory, so it may need network, and exits 1 when something must happen first, such as finishing or discarding a run the target cannot resume.
+
+When setup fails, it says which stage failed, that the previous installation was kept, and what to do next. At an unchanged pin nothing else is needed: the existing trust still holds and a paused run resumes. If setup was interrupted, every other command refuses until the next `ballast setup`, which first restores the previous installation or completes the new one and says which. A second `ballast setup` in the same checkout refuses while one runs.
+
+**Retry after a failed update.** With the new pin, the launcher and `ballast doctor` name the pinned and the installed versions. Fix the cause (`ballast doctor` checks network access and tools), then run `ballast setup` again.
+
+**Roll back to the previous pin.** Restore the previous `ref` in `ballast.toml` (for example `git checkout HEAD~1 -- ballast.toml`), review and commit it, then:
+
+```bash
+ballast setup               # reuses the previous installation and the cached version: no download
+ballast trust               # nothing is trusted for you
+```
+
+The constitution, `docs/policies/project/`, paused runs and their archives are untouched. Versions released before this feature (v0.5.0 and earlier) run their own, older setup: a failure there can still leave the checkout without a usable installation, and `ballast preview` says so. A version cached by an older CLI is downloaded again once.
 
 ## Dogfooding
 

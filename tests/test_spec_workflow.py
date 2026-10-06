@@ -12,17 +12,20 @@ import io
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import tomllib
 import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import Mock, patch
 
 import yaml
@@ -1238,6 +1241,157 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertEqual(self.launch("trust").returncode, 0)
         self.assertEqual(self.launch("run", "start").returncode, 0)
 
+    def trusted_state(self) -> Path:
+        self.assertEqual(self.launch("trust").returncode, 0)
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
+        return state
+
+    def hold(self, state: Path, mode: str) -> subprocess.Popen[str]:
+        holder = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-c", HOLD_LOCK, str(state / "checkout.lock"), mode],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline(), "held\n")
+        return holder
+
+    def test_unfinished_setup_is_refused(self) -> None:
+        # AC-005: every launcher command names `ballast setup` as the recovery.
+        state = self.trusted_state()
+        (state / "setup-attempt.json").write_text("{}\n")
+        unfinished = "setup did not finish in this checkout; run `ballast setup`"
+        for args in (
+            ("run", "resume", "r1"),
+            ("ledger", "check", "r1"),
+            ("intake", "--repo", "o/r"),
+            ("trust",),
+            ("discard-runs",),
+        ):
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(unfinished, result.stderr)
+        self.assertFalse(self.ran.exists())
+        self.assertTrue((self.root / ".specify/workflows/runs/r1").is_dir())
+        self.assertIn(unfinished, self.status()["refusal"])
+        # A switch killed after moving the workflow tools out still names setup.
+        (self.tools / "run.py").unlink()
+        result = self.launch("run", "resume", "r1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(unfinished, result.stderr)
+        self.assertIn(unfinished, self.status()["refusal"])
+
+    def test_running_setup_is_reported_as_running(self) -> None:
+        # F-005, F-006: the lock is checked before the journal, also for trust.
+        state = self.trusted_state()
+        (state / "setup-attempt.json").write_text("{}\n")
+        self.hold(state, "exclusive")
+        for args in (("run", "resume", "r1"), ("trust",), ("discard-runs",)):
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(
+                    "ballast setup is running in this checkout", result.stderr
+                )
+        self.assertFalse(self.ran.exists())
+
+    def test_workflow_tool_keeps_the_shared_lock(self) -> None:
+        # FR-014: a setup started while `run` works must see the checkout held.
+        state = self.trusted_state()
+        (self.tools / "run.py").write_text(
+            "import fcntl, os, sys\n"
+            f"fd = os.open({str(state / 'checkout.lock')!r}, os.O_RDWR)\n"
+            "try:\n    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "    held = 'free'\nexcept BlockingIOError:\n    held = 'held'\n"
+            f"open({str(self.ran)!r}, 'w').write(held)\n"
+        )
+        self.assertEqual(self.launch("trust").returncode, 0)
+        result = self.launch("run", "resume", "r1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ran.read_text(), "held")
+
+    def test_pinned_and_installed_versions_differ(self) -> None:
+        # AC-008, F-003: a valid record names both versions; a stale one is ignored.
+        (self.root / "ballast.toml").write_text('[standard]\nref = "vB"\n')
+        (self.root / ".ballast/.setup-version").write_text("fp A\n")
+        state = self.trusted_state()
+        record = {"schema": 1, "ref": "vA", "fingerprint": "fp A", "files": {}}
+        (state / "installation.json").write_text(json.dumps(record))
+        message = (
+            'pinned vB, installed vA: restore ref = "vA" in ballast.toml, '
+            "or fix the cause and rerun `ballast setup`"
+        )
+        self.assert_refused(message)
+        self.assertEqual(self.status()["refusal"], message)
+        (self.root / ".ballast/.setup-version").write_text("fp older\n")
+        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+
+
+def _ids(node: object) -> list[str]:
+    if isinstance(node, dict):
+        own = [node["id"]] if isinstance(node.get("id"), str) else []
+        return own + [i for value in node.values() for i in _ids(value)]
+    if isinstance(node, list):
+        return [i for value in node for i in _ids(value)]
+    return []
+
+
+class RunFormatTests(unittest.TestCase):
+    """A version declares the run format it writes and the ones it resumes."""
+
+    # What saved run state depends on, per format: the Spec Kit version and
+    # every shipped workflow's step IDs. Record a new entry only together with
+    # a new [runs] format (and a decision on [runs] resumes).
+    BASIS: ClassVar[dict[str, str]] = {
+        "ballast-run/1": (
+            "67ad04f92da7349fdb4ef1b0237349da9fcb9ecf1680df537efc1bd65c571421"
+        ),
+    }
+
+    def manifest(self) -> dict:
+        return tomllib.loads((ROOT / "tools/cli.toml").read_text())
+
+    def test_run_format_matches_the_manifest(self) -> None:
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import run  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        manifest = self.manifest()
+        self.assertEqual(run.RUN_FORMAT, manifest["runs"]["format"])
+        self.assertIn(run.RUN_FORMAT, manifest["runs"]["resumes"])
+        self.assertTrue(manifest["setup"]["recoverable"])
+
+    def test_format_changes_with_what_runs_depend_on(self) -> None:
+        version = re.search(
+            r'^VERSION = "([^"]+)"', (ROOT / "tools/setup").read_text(), re.MULTILINE
+        )
+        digest = hashlib.sha256(version.group(1).encode())
+        for path in sorted(
+            (ROOT / "templates/spec-kit/workflows").glob("*/workflow.yml")
+        ):
+            steps = "\0".join(_ids(yaml.safe_load(path.read_text())))
+            digest.update(path.parent.name.encode() + b"\0" + steps.encode() + b"\0")
+        self.assertEqual(
+            self.BASIS.get(self.manifest()["runs"]["format"]),
+            digest.hexdigest(),
+            "the Spec Kit version or a shipped workflow's step IDs changed: decide "
+            "whether saved runs still resume, then bump [runs] format (and "
+            "RUN_FORMAT in run.py) or record the new basis for the same format",
+        )
+
+
+HOLD_LOCK = """\
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX if sys.argv[2] == "exclusive" else fcntl.LOCK_SH)
+print("held", flush=True)
+time.sleep(120)
+"""
+
 
 class LauncherTests(unittest.TestCase):
     """The launcher validates resume input before touching run state."""
@@ -1726,6 +1880,41 @@ class RunHistoryTests(unittest.TestCase):
                 ),
                 0,
             )
+
+    def test_launcher_records_the_run_format_at_start(self) -> None:
+        # FR-016, AC-017: a later preview reads which format this run uses.
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import run  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        recorded: list[dict] = []
+
+        def launch(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            target = run.archive_dir(self.repo.root, "run43xxx") / "run-format.json"
+            recorded.append(json.loads(target.read_text()))
+            return SimpleNamespace(returncode=0)
+
+        with (
+            patch.object(run, "ROOT", self.repo.root),
+            patch.object(run.shutil, "which", return_value="/bin/specify"),
+            patch.object(
+                run.uuid, "uuid4", return_value=SimpleNamespace(hex="run43xxx")
+            ),
+            patch.object(
+                run, "subprocess", SimpleNamespace(run=Mock(side_effect=launch))
+            ),
+            patch.object(run, "_summary"),
+            patch.object(run, "_record"),
+            patch.object(run, "import_run"),
+        ):
+            self.assertEqual(
+                run.main(
+                    ["start", "-i", "feature_directory=specs/93-agent-run-ledger"]
+                ),
+                0,
+            )
+        self.assertEqual(recorded, [{"schema": 1, "format": run.RUN_FORMAT}])
 
     def test_launcher_import_failure_fails_successful_workflow(self) -> None:
         sys.path.insert(0, str(ROOT / "tools/spec_workflow"))

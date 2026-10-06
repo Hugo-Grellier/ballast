@@ -3,8 +3,18 @@
 
 Usage: tools/setup [--project DIR] [--check]
 
-`--check` reports whether this checkout holds the current installation
-(`current`, `stale`, `absent` or `incomplete: <path>`) and writes nothing.
+Setup never builds in place. It builds the complete installation in a stage
+under `.ballast/setup/`, validates it, then switches it in entry by entry,
+keeping each previous entry until the new installation verifies. A journal in
+operator state records the attempt, so after a failure or a killed process the
+next run rolls an unfinished switch back, or finishes one that had committed:
+the checkout always holds a complete previous or a complete new installation.
+The installation record next to it (`installation.json`) says what was
+installed, by content.
+
+`--check` reports `current`, `absent`, `interrupted: ...`, `stale`,
+`stale: pinned ..., installed ...`, `incomplete: <path>` or `modified: <path>`
+and writes nothing.
 
 The project commits `ballast.toml` and its own overrides only. Everything this
 script writes is rebuildable and must be ignored; see GITIGNORE below.
@@ -13,9 +23,12 @@ script writes is rebuildable and must be ignored; see GITIGNORE below.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -23,10 +36,22 @@ import tarfile
 import tempfile
 import tomllib
 import urllib.request
+from datetime import UTC, datetime
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from typing import NoReturn
 
 STANDARD = Path(__file__).resolve().parent.parent
 PATCHES = STANDARD / "tools/spec-kit"
+# The launcher of this same standard version owns operator state: its
+# location, the digest format, the checkout lock and the record reader.
+# `--check` runs as a read-only probe: never write bytecode next to it.
+sys.dont_write_bytecode = True
+_spec = spec_from_file_location(
+    "ballast_launcher", STANDARD / "tools/spec_workflow/launcher.py"
+)
+launcher = module_from_spec(_spec)
+_spec.loader.exec_module(launcher)
 VERSION = "1.0.11"
 SOURCES = {
     "core": ("github/spec-kit", "8147943512404afb9d99c6252cb9bf84369fd0b0"),
@@ -64,6 +89,7 @@ docs/policies/*.md
 # Representative paths for GITIGNORE: (path, must be ignored).
 IGNORE_PROBES = (
     (".ballast/spec_workflow/run.py", True),
+    (".ballast/setup/0123456789abcdef/stage/.specify/init-options.json", True),
     (".agents/skills/ballast-feature-intake/SKILL.md", True),
     (".claude/skills/ballast-feature-intake", True),
     ("docs/policies/model-routing.md", True),
@@ -81,22 +107,26 @@ IGNORE_PROBES = (
     (".specify/bugs/demo/assessment.md", False),
     (".specify/assessments/demo.md", False),
 )
-# Installed outputs a setup stamp promises; `--check` confirms they exist.
+# Installed outputs every installation holds; validation and `--check` require them.
 PROMISED = (
     ".ballast/spec_workflow/run.py",
     ".specify/workflows/ballast-feature/workflow.yml",
     ".specify/workflows/ballast-autonomous/workflow.yml",
     ".specify/workflows/ballast-continue/workflow.yml",
 )
-# Project-owned files that `specify init --force` would overwrite.
+# Project-owned files that `specify init --force` would overwrite in the stage.
 PRESERVED = (".specify/memory/constitution.md",)
+CONSTITUTION = ".specify/memory/constitution.md"
 WORKFLOW = "ballast-feature"
 # Shipped workflows (templates/spec-kit/workflows/<name>), each installed with
 # `specify workflow add --dev`: ballast-feature, ballast-autonomous and the
 # gate-only ballast-continue.
 WORKFLOWS = ("feature", "autonomous", "continue")
+# Installed entries: the unit of a switch. `.specify/workflows` is switched
+# child by child, so run state (`runs`) and the engine cache stay.
 INSTALLED = (
-    ".ballast",
+    ".ballast/spec_workflow",
+    ".ballast/.setup-version",
     ".specify/scripts",
     ".specify/integrations",
     ".specify/extensions",
@@ -110,19 +140,77 @@ INSTALLED = (
     ".specify/.gitignore",
     ".specify/memory/.constitution-template.json",
 )
-# Installed skill directories, by prefix.
+KEPT_CHILDREN = ("runs", ".cache")
+# Installed skill directories, by prefix, and installed policies.
 SKILLS = tuple(
     f"{integration}/skills/{prefix}-*"
     for integration in (".agents", ".claude")
     for prefix in ("ballast", "speckit")
 )
-# Local state a worktree must not copy from its primary checkout.
+POLICIES = "docs/policies/*.md"
+# Local state inside installed entries: never recorded, compared or copied.
 LOCAL_STATE = (
     ".specify/workflows/runs",
     ".specify/workflows/.cache",
     ".specify/extensions/.cache",
     ".specify/extensions/.backup",
 )
+# Spec Kit byproducts outside the entry set, dropped with the stage. Any other
+# stage output outside the entry set fails validation.
+DISCARDED = (".specify/.workflow-install.lock",)
+SEEDS = ("ballast.toml", ".gitignore", CONSTITUTION)
+# Directories every installed entry lives under; none may be a link.
+PARENTS = (
+    ".ballast",
+    ".ballast/setup",
+    ".specify",
+    ".specify/memory",
+    ".specify/workflows",
+    ".agents",
+    ".agents/skills",
+    ".claude",
+    ".claude/skills",
+    "docs",
+    "docs/policies",
+)
+WORK = ".ballast/setup"
+KEPT = f"{WORK}/kept"
+KEPT_RECORD = "kept-installation.json"
+HOLDER = "setup-holder.json"
+ATTEMPT = re.compile(r"\.ballast/setup/[0-9a-f]{16}")
+EXIT_FAILED, EXIT_REFUSED = 1, 2
+NETWORK = "check network access (`ballast doctor`), then rerun `ballast setup`"
+RETRY = "rerun `ballast setup`; if it fails again, restore the previous pin"
+
+
+class RefusedError(RuntimeError):
+    """Setup refused before writing to the checkout (exit 2)."""
+
+    def __init__(self, reason: str, action: str) -> None:
+        """Keep the reason and the operator's next action."""
+        super().__init__(f"{reason}. Next: {action}")
+
+
+class StageFailedError(Exception):
+    """One stage of an attempt failed; the previous installation was kept."""
+
+    def __init__(self, stage: str, cause: object, action: str = RETRY) -> None:
+        """Name the stage, its cause and the operator's next action."""
+        super().__init__(
+            f"{stage} failed: {str(cause).rstrip('.')}. The previous installation "
+            "was kept. "
+            f"Next: {action}"
+        )
+
+
+def refuse(reason: str, action: str) -> NoReturn:
+    """Refuse before writing to the checkout."""
+    raise RefusedError(reason, action)
+
+
+def fail(stage: str, cause: object, action: str = RETRY) -> NoReturn:
+    """Fail one stage of an attempt."""
+    raise StageFailedError(stage, cause, action)
 
 
 class Setup:
@@ -131,34 +219,52 @@ class Setup:
     def __init__(self, project: Path) -> None:
         """Read the project's optional ballast.toml."""
         self.root = project
-        self.stamp = project / ".ballast/.setup-version"
+        self.stamp = project / launcher.STAMP
         config = project / "ballast.toml"
         self.config_bytes = config.read_bytes() if config.is_file() else b""
         self.config = tomllib.loads(self.config_bytes.decode())
+        self.ref = launcher.pinned_ref(project)
+        self._fingerprint: str | None = None
 
     def fingerprint(self) -> str:
         """Digest of the standard and ballast.toml; any change reinstalls."""
-        digest = hashlib.sha256(self.config_bytes)
-        for base in (STANDARD / "tools", STANDARD / "templates"):
-            for path in sorted(base.rglob("*")):
-                if "__pycache__" in path.parts or path.is_dir():
-                    continue
-                content = (
-                    str(path.readlink()).encode()
-                    if path.is_symlink()
-                    else path.read_bytes()
-                )
-                name = str(path.relative_to(STANDARD)).encode()
-                digest.update(name + b"\0" + content + b"\0")
-        return f"{VERSION} {digest.hexdigest()}"
+        if self._fingerprint is None:
+            digest = hashlib.sha256(self.config_bytes)
+            for base in (STANDARD / "tools", STANDARD / "templates"):
+                for path in sorted(base.rglob("*")):
+                    if "__pycache__" in path.parts or path.is_dir():
+                        continue
+                    content = (
+                        str(path.readlink()).encode()
+                        if path.is_symlink()
+                        else path.read_bytes()
+                    )
+                    name = str(path.relative_to(STANDARD)).encode()
+                    digest.update(name + b"\0" + content + b"\0")
+            self._fingerprint = f"{VERSION} {digest.hexdigest()}"
+        return self._fingerprint
 
     def run(self, *args: str, cwd: Path | None = None) -> None:
         """Run a command whose executable and sources this script fixes."""
         subprocess.run(args, cwd=cwd or self.root, check=True)  # noqa: S603
 
     def specify(self, *args: str) -> None:
-        """Run the pinned Spec Kit CLI."""
-        self.run("uvx", "--from", f"specify-cli=={VERSION}", "specify", *args)
+        """Run the pinned Spec Kit CLI; a failure names the command."""
+        words = [a for a in args[:3] if not a.startswith("-") and "/" not in a]
+        try:
+            self.run("uvx", "--from", f"specify-cli=={VERSION}", "specify", *args)
+        except (subprocess.CalledProcessError, OSError) as error:
+            fail("spec-kit " + " ".join(words), error)
+
+    def patch(self, name: str, cwd: Path | None = None) -> None:
+        """Apply one of the standard's Spec Kit patches."""
+        try:
+            self.run(
+                *("patch", "-p1", "--batch", "--forward", "-i", str(PATCHES / name)),
+                cwd=cwd,
+            )
+        except (subprocess.CalledProcessError, OSError) as error:
+            fail(f"patch {name}", error)
 
     def check_ignored(self) -> None:
         """Refuse unless the project ignores exactly the installed paths."""
@@ -176,70 +282,514 @@ class Setup:
             )
         ]
         if wrong:
-            message = (
-                f"Installed paths are not ignored correctly ({', '.join(wrong)}). "
-                f"Add this block to {self.root / '.gitignore'}:\n\n{GITIGNORE}"
+            refuse(
+                f"installed paths are not ignored correctly ({', '.join(wrong)})",
+                f"Add this block to {self.root / '.gitignore'}:\n\n{GITIGNORE}",
             )
-            raise RuntimeError(message)
 
-    def installed(self, root: Path) -> list[Path]:
-        """Every path setup owns in a checkout, existing or not."""
-        policies = (STANDARD / "templates/policies").glob("*.md")
-        return [
-            *(path for pattern in SKILLS for path in root.glob(pattern)),
-            *(root / "docs/policies" / policy.name for policy in policies),
-            *(root / name for name in INSTALLED),
-        ]
+    def check_links(self, names: list[str] | tuple[str, ...]) -> None:
+        """Refuse a link anywhere between the checkout root and an entry."""
+        for name in names:
+            parts = Path(name).parts
+            for depth in range(1, len(parts) + (name in PARENTS)):
+                path = self.root.joinpath(*parts[:depth])
+                if path.is_symlink():
+                    refuse(
+                        f"{path.relative_to(self.root)} is a symbolic link; setup "
+                        "never moves files through a link",
+                        "replace the link with a directory, or remove it",
+                    )
 
-    def remove_installed(self) -> None:
-        """Delete the previous installation, keeping run state."""
-        for path in self.installed(self.root):
-            if path == self.root / ".specify/workflows" and path.is_dir():
-                # Keep run state so a reinstall never loses a paused run.
-                for child in path.iterdir():
-                    if child.name != "runs":
-                        _remove(child)
-            else:
-                _remove(path)
+    # --- what an installation is --------------------------------------------
 
-    def matching_primary(self) -> Path | None:
-        """Return the primary checkout when it holds this exact installation."""
-        common = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],  # noqa: S607
-            cwd=self.root,
+    def recorded(self, state: Path) -> dict | None:
+        """Return this checkout's valid installation record, if any."""
+        return launcher.read_record(self.root, state)
+
+    def live_entries(self, record: dict | None) -> list[str]:
+        """Entries installed here: by rule, plus those a valid record lists."""
+        listed = record.get("entries", []) if record else []
+        names = entries(self.root)
+        names += sorted(
+            n for n in set(listed) - set(names) if isinstance(n, str) and _safe(n)
+        )
+        held = tracked(self.root, names)
+        return [n for n in names if n not in held]
+
+    def current(self, state: Path) -> bool:
+        """Whether the live installation is this version's and matches its record."""
+        record = self.recorded(state)
+        return (
+            record is not None
+            and record["fingerprint"] == self.fingerprint()
+            and installed_digests(self.root, self.live_entries(record))
+            == record["files"]
+        )
+
+    def check(self) -> bool:
+        """Report whether this checkout holds the current installation."""
+        try:
+            state = launcher.state_dir(self.root)
+        except OSError as error:
+            sys.stdout.write(f"unverified: {error}\n")
+            return False
+        record = self.recorded(state)
+        if os.path.lexists(state / launcher.SETUP_ATTEMPT):
+            status = "interrupted: run `ballast setup`"
+        elif not self.stamp.is_file():
+            status = "absent"
+        elif record and self.ref and record["ref"] != self.ref:
+            status = (
+                f"stale: pinned {self.ref}, installed {record['ref']}; restore ref = "
+                f'"{record["ref"]}" in ballast.toml, or fix the cause and rerun '
+                "`ballast setup`"
+            )
+        elif self.stamp.read_text().strip() != self.fingerprint():
+            status = "stale"
+        else:
+            missing = [p for p in PROMISED if not (self.root / p).is_file()]
+            status = f"incomplete: {missing[0]}" if missing else "current"
+            if record and not missing:
+                live = installed_digests(self.root, self.live_entries(record))
+                changed = _first_difference(live, record["files"])
+                status = f"modified: {changed}" if changed else status
+        sys.stdout.write(status + "\n")
+        return status == "current"
+
+    # --- one attempt ------------------------------------------------------------
+
+    def main(self) -> None:
+        """Install unless this checkout already holds the same installation."""
+        try:
+            state = launcher.state_dir(self.root)
+        except OSError as error:
+            refuse(str(error), "set XDG_STATE_HOME elsewhere")
+        state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock = self.lock(state)
+        try:
+            self.recover(state)
+            if os.path.lexists(state / launcher.IN_PROGRESS):
+                refuse(
+                    "an agent step did not finish",
+                    "review the checkout, then run `ballast discard-runs`",
+                )
+            if self.current(state):
+                sys.stdout.write(
+                    f"nothing changed: {self.ref} is set up and verified\n"
+                )
+                return
+            self.check_links(PARENTS)
+            self.check_ignored()
+            self.attempt(state)
+        finally:
+            os.close(lock)
+
+    def lock(self, state: Path) -> int:
+        """Hold this checkout exclusively, or name what holds it."""
+        fd = launcher.checkout_lock(state, shared=False)
+        if fd is None:
+            probe = launcher.checkout_lock(state, shared=True)
+            if probe is not None:
+                os.close(probe)
+                # A setup that just finished frees the lock between the probes.
+                fd = launcher.checkout_lock(state, shared=False)
+        if fd is None:
+            if probe is not None:
+                refuse(
+                    "a `ballast run`, `ledger` or `intake` command is running in "
+                    "this checkout",
+                    "wait for it to end",
+                )
+            try:
+                holder = json.loads((state / HOLDER).read_text(encoding="utf-8"))
+                shown = (
+                    f"PID {holder['pid']}, started {holder['started']}, "
+                    f"ref {holder['ref']}"
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                shown = "holder unknown"
+            refuse(
+                f"another ballast setup ({shown}) holds this checkout",
+                "wait for it to finish",
+            )
+        _write_json(
+            state / HOLDER, {"pid": os.getpid(), "started": _now(), "ref": self.ref}
+        )
+        return fd
+
+    def attempt(self, state: Path) -> None:
+        """Stage, validate, switch, verify and commit one installation."""
+        previous = self.recorded(state)
+        names = self.live_entries(previous)
+        work = f"{WORK}/{secrets.token_hex(8)}"
+        journal = {
+            "schema": 1,
+            "attempt": work.rsplit("/", 1)[1],
+            "pid": os.getpid(),
+            "started": _now(),
+            "ref": self.ref,
+            "fingerprint": self.fingerprint(),
+            "phase": "staging",
+            "work": work,
+            "before": installed_digests(self.root, names),
+            "before_ref": previous["ref"] if previous else None,
+            "before_record": previous,
+        }
+        # Nothing under .ballast/setup survives an attempt but the kept copy.
+        self.discard_work(keep_kept=True)
+        _write_journal(state, journal)
+        try:
+            stage = self.root / work / "stage"
+            stage.mkdir(parents=True)
+            reused = self.build(stage, state)
+            record = self.validate(stage)
+            ignored = self.ignored(sorted(set(names) - set(record["entries"])))
+            plan = [{"path": n, "new": False} for n in ignored]
+            plan += [{"path": n, "new": True} for n in record["entries"]]
+            self.check_links([*PARENTS, *(item["path"] for item in plan)])
+            journal.update(phase="switching", entries=plan, record=record)
+            _write_journal(state, journal)
+        except BaseException as error:
+            self.discard_work(keep_kept=True)
+            _remove_file(state / launcher.SETUP_ATTEMPT)
+            if isinstance(error, (OSError, subprocess.SubprocessError)):
+                fail("stage", error)
+            raise
+        try:
+            self.switch(work, plan)
+            live = installed_digests(self.root, record["entries"])
+            changed = _first_difference(live, record["files"])
+            if changed:
+                cause = f"the live installation differs from the stage at {changed}"
+                fail("switch", cause)
+        except BaseException as error:
+            self.roll_back(state, journal)
+            if isinstance(error, OSError):
+                fail("switch", error)
+            raise
+        journal["phase"] = "committed"
+        _write_journal(state, journal)
+        self.finish(state, journal)
+        if reused:
+            sys.stdout.write(f"Reused the previous installation ({self.ref})\n")
+        sys.stdout.write(
+            f"Spec Kit {VERSION} and the standard are set up.\n"
+            "Review the changed protected inputs, then run `ballast trust` "
+            "before the next workflow run.\n"
+        )
+
+    def build(self, stage: Path, state: Path) -> bool:
+        """Fill the stage; True when it reused the previous installation."""
+        subprocess.run(  # noqa: S603
+            ["git", "init", "-q", str(stage)],  # noqa: S607
             check=True,
             capture_output=True,
-            text=True,
-        ).stdout.strip()
-        primary = Path(common).resolve().parent
-        stamp = primary / self.stamp.relative_to(self.root)
-        if (
-            primary == self.root.resolve()
-            or not stamp.is_file()
-            or stamp.read_text().strip() != self.fingerprint()
-        ):
-            return None
-        return primary
+        )
+        for seed in SEEDS:
+            if (self.root / seed).is_file():
+                (stage / seed).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(self.root / seed, stage / seed)
+        reused = self.copy_kept(stage, state)
+        if not reused and not self.copy_from_primary(stage):
+            builder = Setup(stage)
+            try:
+                with tempfile.TemporaryDirectory(prefix="ballast-setup-") as directory:
+                    builder.install_spec_kit(Path(directory))
+            except (RuntimeError, OSError) as error:
+                fail("spec-kit", error, NETWORK)
+            try:
+                builder.install_standard()
+            except (OSError, ValueError, RuntimeError) as error:
+                fail("install standard", error)
+        stamp = stage / launcher.STAMP
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(self.fingerprint() + "\n")
+        return reused
 
-    def copy_from_primary(self) -> bool:
-        """Copy a matching primary checkout's installation into this worktree."""
-        primary = self.matching_primary()
+    def copy_verified(self, source: Path, record: dict, stage: Path) -> str | None:
+        """Copy a recorded installation into the stage; the first differing path."""
+        names = [
+            n for n in record.get("entries", []) if isinstance(n, str) and _safe(n)
+        ]
+        ignore = shutil.ignore_patterns(
+            "__pycache__", *(Path(p).name for p in LOCAL_STATE)
+        )
+        changed: str | None = "the copy failed"  # until the copy verifies
+        try:
+            for name in names:
+                origin, target = source / name, stage / name
+                if not os.path.lexists(origin):
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if origin.is_symlink():
+                    target.symlink_to(origin.readlink())
+                elif origin.is_dir():
+                    shutil.copytree(origin, target, symlinks=True, ignore=ignore)
+                else:
+                    shutil.copy2(origin, target)
+            found = installed_digests(stage, names)
+            changed = _first_difference(found, record["files"])
+        finally:
+            if changed:
+                for name in names:
+                    _remove(stage / name)
+        return changed
+
+    def copy_kept(self, stage: Path, state: Path) -> bool:
+        """Reuse the installation the last switch replaced, when it is this one."""
+        try:
+            kept = json.loads((state / KEPT_RECORD).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if (
+            not isinstance(kept, dict)
+            or kept.get("fingerprint") != self.fingerprint()
+            or not isinstance(kept.get("files"), dict)
+        ):
+            return False
+        try:
+            return self.copy_verified(self.root / KEPT, kept, stage) is None
+        except OSError as error:
+            message = f"the kept installation is unreadable: {error}"
+            sys.stdout.write(f"full installation: {message}\n")
+            return False
+
+    def primary(self) -> Path | None:
+        """Return the primary checkout when this one is a linked worktree."""
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],  # noqa: S607
+            cwd=self.root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        primary = Path(result.stdout.strip()).resolve().parent
+        return None if primary == self.root.resolve() else primary
+
+    def copy_from_primary(self, stage: Path) -> bool:
+        """Copy the primary checkout's installation when it verifies (FR-013)."""
+        primary = self.primary()
         if primary is None:
             return False
-        ignore = shutil.ignore_patterns(*(Path(p).name for p in LOCAL_STATE))
-        for source in self.installed(primary):
-            if not os.path.lexists(source):
-                continue
-            target = self.root / source.relative_to(primary)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_symlink():
-                target.symlink_to(source.readlink())
-            elif source.is_dir():
-                shutil.copytree(source, target, symlinks=True, ignore=ignore)
+        reason, held = None, None
+        try:
+            state = launcher.state_dir(primary)
+            record = launcher.read_record(primary, state)
+            if record is None:
+                reason = "the primary checkout has no installation record"
+            elif record["fingerprint"] != self.fingerprint():
+                reason = (
+                    "the primary installation is for another version or configuration"
+                )
             else:
-                shutil.copy2(source, target)
+                held = launcher.checkout_lock(state, shared=True)
+                if held is None:
+                    reason = "the primary checkout is being set up"
+                else:
+                    changed = self.copy_verified(primary, record, stage)
+                    if changed:
+                        reason = (
+                            "the primary installation differs from its record at "
+                            f"{changed}"
+                        )
+        except OSError as error:
+            reason = f"the primary installation is unreadable: {error}"
+        finally:
+            if held is not None:
+                os.close(held)
+        if reason:
+            sys.stdout.write(f"full installation: {reason}\n")
+            return False
         sys.stdout.write("Copied the installation from the primary checkout\n")
         return True
+
+    def validate(self, stage: Path) -> dict:
+        """Refuse a stage that is not a complete, ignorable installation."""
+        missing = [p for p in PROMISED if not (stage / p).is_file()]
+        if missing:
+            fail("validate required outputs", f"{missing[0]} is missing")
+        names = entries(stage)
+        files = installed_digests(stage, names)
+        unexpected = _unexpected(stage, names)
+        if unexpected:
+            fail("validate stage paths", f"unexpected output {unexpected}")
+        held = sorted(tracked(self.root, names))
+        if held:
+            fail("validate stage paths", f"{held[0]} is tracked by git")
+        markers = {str(stage).encode(), str(stage.resolve()).encode()}
+        for name, digest in files.items():
+            path = stage / name
+            if not digest.startswith("link:") and any(
+                m in path.read_bytes() for m in markers
+            ):
+                cause = f"{name} contains the stage path {stage}"
+                fail("validate stage paths", cause)
+        not_ignored = sorted(set(files) - set(self.ignored(list(files))))
+        if not_ignored:
+            cause = f"{not_ignored[0]} is not ignored by {self.root / '.gitignore'}"
+            fail("validate ignore rules", cause, "fix .gitignore")
+        device = stage.stat().st_dev
+        for name in names:
+            parent = (self.root / name).parent
+            while not parent.exists():
+                parent = parent.parent
+            if parent.stat().st_dev != device:
+                cause = f"installed entries are on different filesystems: {name}"
+                fail(
+                    "validate filesystem", cause, "keep the checkout on one filesystem"
+                )
+        return {
+            "schema": 1,
+            "ref": self.ref,
+            "fingerprint": self.fingerprint(),
+            "spec_kit": VERSION,
+            "recorded": _now(),
+            "entries": names,
+            "files": files,
+        }
+
+    def ignored(self, names: list[str]) -> list[str]:
+        """Return the given paths that the checkout's ignore rules ignore."""
+        if not names:
+            return []
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-z", "--stdin"],  # noqa: S607
+            cwd=self.root,
+            input="\0".join(names) + "\0",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        found = set(result.stdout.split("\0"))
+        return [n for n in names if n in found]
+
+    def switch(self, work: str, plan: list[dict]) -> None:
+        """Move each live entry aside and the staged one in."""
+        for item in plan:
+            name = item["path"]
+            live = self.root / name
+            if os.path.lexists(live):
+                aside = self.root / work / "previous" / name
+                aside.parent.mkdir(parents=True, exist_ok=True)
+                _rename(live, aside)
+            if item["new"]:
+                live.parent.mkdir(parents=True, exist_ok=True)
+                _rename(self.root / work / "stage" / name, live)
+
+    def roll_back(self, state: Path, journal: dict) -> None:
+        """Restore every entry of an unfinished switch, keyed on membership."""
+        work = self.root / journal["work"]
+        for item in reversed(journal.get("entries", [])):
+            name = item["path"]
+            if not _safe(name):
+                continue
+            live, aside, staged = (
+                self.root / name,
+                work / "previous" / name,
+                work / "stage" / name,
+            )
+            if os.path.lexists(aside):
+                if os.path.lexists(live):
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    _rename(live, staged)
+                _rename(aside, live)
+            elif item["new"] and os.path.lexists(live) and not os.path.lexists(staged):
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                _rename(live, staged)
+        names = self.live_entries(self.recorded(state))
+        changed = _first_difference(
+            installed_digests(self.root, names), journal["before"]
+        )
+        self.discard_work(keep_kept=True)
+        _remove_file(state / launcher.SETUP_ATTEMPT)
+        if changed:
+            message = (
+                f"the restored installation differs from the previous one at {changed}"
+            )
+            fail(
+                "roll back", message, "inspect the checkout, then rerun `ballast setup`"
+            )
+
+    def finish(self, state: Path, journal: dict) -> None:
+        """Complete a committed switch: constitution, record, kept copy, cleanup."""
+        work = self.root / journal["work"]
+        constitution = self.root / CONSTITUTION
+        staged = work / "stage" / CONSTITUTION
+        if not os.path.lexists(constitution) and staged.is_file():
+            self.check_links([CONSTITUTION])
+            constitution.parent.mkdir(parents=True, exist_ok=True)
+            with contextlib.suppress(FileExistsError):
+                fd = os.open(
+                    constitution,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o644,
+                )
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(staged.read_bytes())
+        _write_json(state / launcher.INSTALLATION, journal["record"])
+        before = journal.get("before_record")
+        aside = work / "previous"
+        if os.path.lexists(aside):
+            _remove_file(state / KEPT_RECORD)
+            _remove_tree(self.root, KEPT)
+            _rename(aside, self.root / KEPT)
+        if before and os.path.lexists(self.root / KEPT):
+            _write_json(state / KEPT_RECORD, before)
+        self.discard_work(keep_kept=True, only=journal["work"])
+        _remove_file(state / launcher.SETUP_ATTEMPT)
+
+    def recover(self, state: Path) -> None:
+        """Resolve an attempt a killed process left, and say what is in place."""
+        path = state / launcher.SETUP_ATTEMPT
+        if not os.path.lexists(path):
+            return
+        try:
+            journal = json.loads(path.read_text(encoding="utf-8"))
+            valid = (
+                journal.get("schema") == 1
+                and isinstance(journal.get("work"), str)
+                and ATTEMPT.fullmatch(journal["work"])
+                and journal.get("phase") in {"staging", "switching", "committed"}
+                and isinstance(journal.get("before"), dict)
+            )
+        except (OSError, ValueError, AttributeError):
+            valid = False
+        if not valid:
+            refuse(f"{path} is unreadable", "inspect it, then remove it to retry")
+        self.check_links([*PARENTS, journal["work"]])
+        recovered = "recovered an interrupted setup: "
+        if journal["phase"] == "committed":
+            self.finish(state, journal)
+            line = f"the new installation ({journal['ref']}) is complete"
+        else:
+            if journal["phase"] == "switching":
+                self.roll_back(state, journal)
+            else:
+                self.discard_work(keep_kept=True)
+                _remove_file(path)
+            if journal["before"]:
+                shown = f" ({journal['before_ref']})" if journal["before_ref"] else ""
+                line = f"the previous installation{shown} is in place"
+            else:
+                line = "no installation was in place before it; none is now"
+        sys.stdout.write(recovered + line + "\n")
+
+    def discard_work(self, *, keep_kept: bool, only: str | None = None) -> None:
+        """Delete attempt work areas, never following a link."""
+        work = self.root / WORK
+        if work.is_symlink() or not work.is_dir():
+            return
+        for child in sorted(work.iterdir()):
+            name = f"{WORK}/{child.name}"
+            if (keep_kept and name == KEPT) or (only and name != only):
+                continue
+            _remove_tree(self.root, name)
+        with contextlib.suppress(OSError):
+            work.rmdir()  # only when empty: nothing is left to keep
+
+    # --- building the stage -------------------------------------------------
 
     def install_spec_kit(self, temporary: Path) -> None:
         """Install the pinned Spec Kit sources and apply the patches."""
@@ -250,7 +800,12 @@ class Setup:
                     "run `ballast doctor` for details"
                 )
                 raise RuntimeError(message)
-        sources = {name: _fetch_source(name, temporary) for name in SOURCES}
+        sources = {}
+        for name in SOURCES:
+            try:
+                sources[name] = _fetch_source(name, temporary)
+            except (OSError, ValueError, RuntimeError, tarfile.TarError) as error:
+                fail(f"fetch {name}", error, NETWORK)
         preserved = {
             path: (self.root / path).read_bytes()
             for path in PRESERVED
@@ -286,17 +841,10 @@ class Setup:
             "--dev",
         )
         self.specify("preset", "add", "--dev", str(sources["preset"]))
-        self.run(
-            "patch", "-p1", "--batch", "--forward", "-i", str(PATCHES / "skills.patch")
-        )
+        self.patch("skills.patch")
         self.complete_claude_extension_skills()
-        self.run(
-            "patch",
-            "-p1",
-            "--batch",
-            "--forward",
-            "-i",
-            str(PATCHES / "preset.patch"),
+        self.patch(
+            "preset.patch",
             cwd=self.root / ".specify/presets/explicit-task-dependencies",
         )
 
@@ -351,39 +899,68 @@ class Setup:
                 str(STANDARD / "templates/spec-kit/workflows" / workflow),
             )
 
-    def check(self) -> bool:
-        """Report whether this checkout holds the current installation."""
-        if not self.stamp.is_file():
-            state = "absent"
-        elif self.stamp.read_text().strip() != self.fingerprint():
-            state = "stale"
-        else:
-            missing = [p for p in PROMISED if not (self.root / p).is_file()]
-            state = f"incomplete: {missing[0]}" if missing else "current"
-        sys.stdout.write(state + "\n")
-        return state == "current"
 
-    def main(self) -> None:
-        """Install unless this checkout already holds the same installation."""
-        if (
-            self.stamp.is_file()
-            and self.stamp.read_text().strip() == self.fingerprint()
+def entries(root: Path) -> list[str]:
+    """List the installed entries present under a project root (plan review F-002).
+
+    The single definition of an installation: switch, record, verification,
+    worktree copy and no-op check all use it.
+    """
+    found = []
+    for name in INSTALLED:
+        path = root / name
+        if name == ".specify/workflows":
+            if path.is_dir() and not path.is_symlink():
+                found += [
+                    f"{name}/{child.name}"
+                    for child in sorted(path.iterdir())
+                    if child.name not in KEPT_CHILDREN
+                ]
+        elif os.path.lexists(path):
+            found.append(name)
+    for pattern in (*SKILLS, POLICIES):
+        found += sorted(str(p.relative_to(root)) for p in root.glob(pattern))
+    return found
+
+
+def tracked(root: Path, names: list[str]) -> set[str]:
+    """Return the entries that are, or hold, a tracked file: never installed."""
+    if not names:
+        return set()
+    result = subprocess.run(  # noqa: S603 - fixed git subcommand, names as data
+        ["git", "--literal-pathspecs", "ls-files", "-z", "--", *names],  # noqa: S607
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    files = [f for f in result.stdout.split("\0") if f]
+    return {n for n in names if any(f == n or f.startswith(n + "/") for f in files)}
+
+
+def _unexpected(stage: Path, names: list[str]) -> str | None:
+    """Return the first stage output outside the entries, seeds and discarded paths."""
+    covered = [stage / n for n in (".git", *names, *SEEDS, *DISCARDED, *LOCAL_STATE)]
+    for path in sorted(stage.rglob("*")):
+        if (path.is_dir() and not path.is_symlink()) or any(
+            path == c or path.is_relative_to(c) for c in covered
         ):
-            sys.stdout.write("The standard is already set up in this checkout\n")
-            return
-        self.check_ignored()
-        self.remove_installed()
-        if not self.copy_from_primary():
-            with tempfile.TemporaryDirectory(prefix="ballast-setup-") as directory:
-                self.install_spec_kit(Path(directory))
-            self.install_standard()
-        self.stamp.parent.mkdir(exist_ok=True)
-        self.stamp.write_text(self.fingerprint() + "\n")
-        sys.stdout.write(
-            f"Spec Kit {VERSION} and the standard are set up.\n"
-            "Review the installed changes, then run `ballast trust` "
-            "before the next workflow run.\n"
-        )
+            continue
+        return str(path.relative_to(stage))
+    return None
+
+
+def installed_digests(root: Path, names: list[str]) -> dict[str, str]:
+    """Digest of every file and link of the given entries, minus local state."""
+    found: dict[str, str] = {}
+    skip = [root / p for p in LOCAL_STATE]
+    for name in names:
+        path = root / name
+        if path.is_symlink():
+            found[name] = "link:" + str(path.readlink())
+        elif os.path.lexists(path):
+            found.update(launcher.digests(root, [path], skip))
+    return {k: v for k, v in found.items() if "__pycache__" not in Path(k).parts}
 
 
 def merge_permissions(settings: dict, config: dict) -> dict:
@@ -397,6 +974,60 @@ def merge_permissions(settings: dict, config: dict) -> dict:
             raise ValueError(message)
         permissions[key] = list(dict.fromkeys([*permissions[key], *rules]))
     return settings
+
+
+def _first_difference(found: dict[str, str], expected: dict[str, str]) -> str | None:
+    differing = [
+        n for n in found.keys() | expected.keys() if found.get(n) != expected.get(n)
+    ]
+    return min(differing) if differing else None
+
+
+def _safe(name: str) -> bool:
+    """Whether a name is a relative path inside the checkout, never through `..`."""
+    path = Path(name)
+    return bool(name) and not path.is_absolute() and ".." not in path.parts
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _rename(source: Path, target: Path) -> None:
+    source.rename(target)
+
+
+def _write_json(path: Path, data: dict) -> None:
+    """Replace a file atomically and durably."""
+    pending = path.with_name(path.name + ".tmp")
+    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(data, indent=1) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    pending.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _write_journal(state: Path, journal: dict) -> None:
+    _write_json(state / launcher.SETUP_ATTEMPT, journal)
+
+
+def _remove_file(path: Path) -> None:
+    path.unlink(missing_ok=True)
+
+
+def _remove_tree(root: Path, name: str) -> None:
+    """Delete root/name, never following a link (the launcher's helper)."""
+    path = root / name
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        launcher._remove_tree(root, name)  # noqa: SLF001 - same standard version
 
 
 def _remove(path: Path) -> None:
@@ -423,15 +1054,28 @@ def _fetch_source(name: str, temporary: Path) -> Path:
     return children[0]
 
 
-if __name__ == "__main__":
+def cli(argv: list[str]) -> int:
+    """Run setup or `--check`; exit 1 when a stage failed, 2 when refused."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--check", action="store_true", help="report, write nothing")
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     try:
         setup = Setup(arguments.project.resolve())
         if arguments.check:
-            sys.exit(0 if setup.check() else 1)
+            return 0 if setup.check() else EXIT_FAILED
         setup.main()
-    except (RuntimeError, ValueError) as error:
-        sys.exit(f"setup: {error}")
+    except RefusedError as refusal:
+        sys.stderr.write(f"setup: refusing: {refusal}\n")
+        return EXIT_REFUSED
+    except StageFailedError as failure:
+        sys.stderr.write(f"setup: {failure}\n")
+        return EXIT_FAILED
+    except (RuntimeError, ValueError, OSError) as error:
+        sys.stderr.write(f"setup: {error}\n")
+        return EXIT_FAILED
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(cli(sys.argv[1:]))

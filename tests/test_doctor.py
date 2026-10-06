@@ -688,6 +688,55 @@ class ProjectTests(DoctorCase):
         _, checks = self.checks()
         self.assertIn("delete BALLAST_TAMPERED", checks["trust"]["remedy"])
 
+    def record(self, ref: str, *, stamp: str = "fp") -> Path:
+        """Leave an installation record of `ref`, as setup would (#14)."""
+        key = hashlib.sha256(str(self.project.resolve()).encode()).hexdigest()[:16]
+        state = self.state / "ballast" / key
+        state.mkdir(parents=True)
+        record = {"schema": 1, "ref": ref, "fingerprint": "fp", "files": {}}
+        (state / "installation.json").write_text(json.dumps(record))
+        (self.project / ".ballast").mkdir(exist_ok=True)
+        (self.project / ".ballast/.setup-version").write_text(stamp + "\n")
+        return state
+
+    def test_pinned_and_installed_versions_are_named(self) -> None:
+        # AC-008: the pinned version failed to fetch or to set up.
+        self.pin("v0.2.0")
+        state = self.record(self.REF)
+        detail = (
+            'installed v0.1.0, pinned v0.2.0: restore ref = "v0.1.0" in '
+            "ballast.toml, or fix the cause and rerun `ballast setup`"
+        )
+        _, checks = self.checks()
+        self.assertEqual(
+            checks["standard-fetched"]["detail"],
+            f"standard v0.2.0 is not fetched; {detail}",
+        )
+        standard = self.standard("v0.2.0")
+        self.install(standard)
+        stamp = (self.project / ".ballast/.setup-version").read_text().strip()
+        record = json.loads((state / "installation.json").read_text())
+        record["fingerprint"] = stamp
+        (state / "installation.json").write_text(json.dumps(record))
+        _, checks = self.checks()
+        self.assertIn(
+            'stale: pinned v0.2.0, installed v0.1.0; restore ref = "v0.1.0"',
+            checks["setup-current"]["detail"],
+        )
+        self.assertIn("pinned v0.2.0, installed v0.1.0", checks["trust"]["detail"])
+        self.assertEqual(
+            checks["trust"]["remedy"],
+            "restore the previous pin in ballast.toml, or fix the cause and rerun "
+            "`ballast setup`",
+        )
+        (state / "setup-attempt.json").write_text("{}\n")
+        _, checks = self.checks()
+        self.assertEqual(
+            checks["setup-current"]["detail"],
+            "setup is interrupted: run `ballast setup`",
+        )
+        self.assertEqual(checks["trust"]["remedy"], "ballast setup")
+
     def install_stamp_again(self, standard: Path) -> None:
         shutil.rmtree(self.project / ".ballast")
         self.install(standard)
