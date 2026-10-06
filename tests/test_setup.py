@@ -323,6 +323,28 @@ class TasksSkillTests(unittest.TestCase):
             self.assertIn("Execution Wave DAG", text)
             self.assertNotIn("Tests are OPTIONAL", text)
 
+    def test_names_the_installed_python_scripts(self) -> None:
+        """#74: the skill names what Spec Kit renders for `--script py`."""
+        self.edit()
+        # Spec Kit's own `--script py` rendering of the setup and template steps.
+        rendered = [
+            line
+            for line in CLAUDE_TASKS.splitlines()
+            if line.startswith(("1. **Setup**", "4. **Generate tasks.md**"))
+        ]
+        self.assertEqual(len(rendered), 2)
+        self.assertIn("python3 .specify/scripts/python/setup_tasks.py", rendered[0])
+        for text in (self.skill(".agents"), self.skill(".claude")):
+            for line in rendered:
+                self.assertIn(f"\n{line}\n", text)
+            self.assertNotIn("scripts/bash", text)
+            self.assertNotIn(".specify/templates/tasks-template.md", text)
+            # Upstream improvements the preset body lacked.
+            self.assertIn("Load `.specify/memory/constitution.md`", text)
+            self.assertEqual(text.count("could not be read (include the parser"), 2)
+            self.assertNotIn("skip hook checking silently", text)
+            self.assertEqual(text.count("you MUST actually invoke the hook"), 2)
+
     def test_rerun_is_idempotent(self) -> None:
         self.edit()
         first = (self.skill(".agents"), self.skill(".claude"))
