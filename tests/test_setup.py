@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import errno
 import hashlib
 import io
 import json
 import os
 import posixpath
+import pty
 import re
 import shutil
 import signal
@@ -15,7 +17,7 @@ import subprocess
 import sys
 import time
 import unittest
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout, suppress
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -1129,6 +1131,84 @@ class ChatInstallTests(unittest.TestCase):
             merged = agent.chat_settings()["permissions"]
         self.assertIn("Edit(./secrets/**)", merged["deny"])
         self.assertIn("Edit(./**)", merged["allow"])
+
+
+class CheckoutGitConfigTests(unittest.TestCase):
+    """Checkout git config an agent can write never runs a program before trust."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name) / "project"
+        self.marker = Path(directory.name) / "ran"
+        program = Path(directory.name) / "program"
+        program.write_text(f"#!/bin/sh\ntouch {self.marker}\n")
+        program.chmod(0o755)
+        self.program = str(program)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)  # noqa: S603, S607
+        (self.root / "ballast.toml").write_text("")
+        subprocess.run(["git", "add", "ballast.toml"], cwd=self.root, check=True)  # noqa: S607
+
+    def configure(self, key: str, value: str) -> None:
+        subprocess.run(  # noqa: S603
+            ["git", "config", key, value],  # noqa: S607
+            cwd=self.root,
+            check=True,
+        )
+
+    def test_fsmonitor_never_runs(self) -> None:
+        self.configure("core.fsmonitor", self.program)
+        self.assertEqual(setup.tracked(self.root, ["ballast.toml"]), {"ballast.toml"})
+        builder = setup.Setup(self.root)
+        builder.ignored(["ballast.toml"])
+        builder.primary()
+        with suppress(RuntimeError):
+            builder.check_ignored()
+        self.assertFalse(self.marker.exists(), "core.fsmonitor ran a program")
+
+    def test_pager_never_runs_on_a_terminal(self) -> None:
+        self.configure("pager.check-ignore", self.program)
+        code = (
+            "import sys; from contextlib import suppress\n"
+            "from importlib.machinery import SourceFileLoader\n"
+            "from importlib.util import module_from_spec, spec_from_loader\n"
+            "from pathlib import Path\n"
+            "loader = SourceFileLoader('setup_tool', sys.argv[1])\n"
+            "tool = module_from_spec(spec_from_loader('setup_tool', loader))\n"
+            "loader.exec_module(tool)\n"
+            "with suppress(RuntimeError):\n"
+            "    tool.Setup(Path(sys.argv[2])).check_ignored()\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k not in {"GIT_PAGER", "PAGER"}}
+        main, terminal = pty.openpty()
+        try:
+            subprocess.run(  # noqa: S603
+                [sys.executable, "-c", code, str(ROOT / "tools/setup"), str(self.root)],
+                stdin=terminal,
+                stdout=terminal,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                check=False,
+                timeout=60,
+            )
+        finally:
+            os.close(terminal)
+            os.close(main)
+        self.assertFalse(self.marker.exists(), "pager.check-ignore ran a program")
+
+    def test_every_git_call_is_hardened(self) -> None:
+        source = (ROOT / "tools/setup").read_text()
+        for flag in ("--no-pager", "core.fsmonitor=false", "core.hooksPath=/dev/null"):
+            self.assertIn(flag, setup.GIT)
+        bare = [
+            node.lineno
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.List)
+            and node.elts
+            and isinstance(node.elts[0], ast.Constant)
+            and node.elts[0].value == "git"
+        ]
+        self.assertEqual(bare, [], "git calls must start with *GIT")
 
 
 if __name__ == "__main__":

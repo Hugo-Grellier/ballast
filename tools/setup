@@ -173,6 +173,16 @@ PARENTS = (
     "docs",
     "docs/policies",
 )
+# Every git call: repository config an agent can write must not run a program
+# (a pager, core.fsmonitor, hooks) as the operator before trust.
+GIT = (
+    "git",
+    "--no-pager",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+)
 WORK = ".ballast/setup"
 KEPT = f"{WORK}/kept"
 KEPT_RECORD = "kept-installation.json"
@@ -274,8 +284,10 @@ class Setup:
             if ignored
             != (
                 subprocess.run(  # noqa: S603
-                    ["git", "check-ignore", "-q", "--no-index", path],  # noqa: S607
+                    [*GIT, "check-ignore", "-q", "--no-index", path],
                     cwd=self.root,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
                     check=False,
                 ).returncode
                 == 0
@@ -481,7 +493,8 @@ class Setup:
     def build(self, stage: Path, state: Path) -> bool:
         """Fill the stage; True when it reused the previous installation."""
         subprocess.run(  # noqa: S603
-            ["git", "init", "-q", str(stage)],  # noqa: S607
+            [*GIT, "init", "-q", str(stage)],
+            stdin=subprocess.DEVNULL,
             check=True,
             capture_output=True,
         )
@@ -556,9 +569,10 @@ class Setup:
 
     def primary(self) -> Path | None:
         """Return the primary checkout when this one is a linked worktree."""
-        result = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],  # noqa: S607
+        result = subprocess.run(  # noqa: S603
+            [*GIT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
             cwd=self.root,
+            stdin=subprocess.DEVNULL,
             check=False,
             capture_output=True,
             text=True,
@@ -654,8 +668,8 @@ class Setup:
         """Return the given paths that the checkout's ignore rules ignore."""
         if not names:
             return []
-        result = subprocess.run(
-            ["git", "check-ignore", "--no-index", "-z", "--stdin"],  # noqa: S607
+        result = subprocess.run(  # noqa: S603
+            [*GIT, "check-ignore", "--no-index", "-z", "--stdin"],
             cwd=self.root,
             input="\0".join(names) + "\0",
             capture_output=True,
@@ -928,8 +942,9 @@ def tracked(root: Path, names: list[str]) -> set[str]:
     if not names:
         return set()
     result = subprocess.run(  # noqa: S603 - fixed git subcommand, names as data
-        ["git", "--literal-pathspecs", "ls-files", "-z", "--", *names],  # noqa: S607
+        [*GIT, "--literal-pathspecs", "ls-files", "-z", "--", *names],
         cwd=root,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         check=False,

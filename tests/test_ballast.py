@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
@@ -827,6 +828,41 @@ class CompatibilityTests(unittest.TestCase):
             self.ballast("trust").stderr,
             f"ballast: {launcher.parent} has no launcher{DOCTOR_HINT}\n",
         )
+
+
+class CheckoutGitConfigTests(unittest.TestCase):
+    """Checkout git config an agent can write never runs a program."""
+
+    def test_fsmonitor_never_runs(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            marker = Path(directory) / "ran"
+            program = Path(directory) / "program"
+            program.write_text(f"#!/bin/sh\ntouch {marker}\n")
+            program.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)  # noqa: S603, S607
+            (root / "ballast.toml").write_text("")
+            subprocess.run(["git", "add", "ballast.toml"], cwd=root, check=True)  # noqa: S607
+            subprocess.run(  # noqa: S603
+                ["git", "config", "core.fsmonitor", str(program)],  # noqa: S607
+                cwd=root,
+                check=True,
+            )
+            self.assertEqual(shim.git_output(root, "ls-files"), "ballast.toml\n")
+            self.assertFalse(marker.exists(), "core.fsmonitor ran a program")
+
+    def test_every_git_call_is_hardened(self) -> None:
+        for flag in ("--no-pager", "core.fsmonitor=false", "core.hooksPath=/dev/null"):
+            self.assertIn(flag, shim.GIT)
+        bare = [
+            node.lineno
+            for node in ast.walk(ast.parse(SHIM.read_text()))
+            if isinstance(node, ast.List)
+            and node.elts
+            and isinstance(node.elts[0], ast.Constant)
+            and node.elts[0].value == "git"
+        ]
+        self.assertEqual(bare, [], "git calls must start with *GIT")
 
 
 if __name__ == "__main__":
