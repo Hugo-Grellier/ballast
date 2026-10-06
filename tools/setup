@@ -180,10 +180,68 @@ ACCEPTANCE_EVIDENCE = (
     "spec did not ask for them. If no automated test seam is appropriate, "
     "record the manual evidence and reason.\n"
 )
+# The preset renders its bash setup line even for `--script py` (#74): Ballast
+# swaps in the lines Spec Kit renders for `--script py` (its Claude rendering),
+# and that rendering's hook and constitution guidance the preset lacks.
+BASH_SETUP = (
+    "1. **Setup**: Run `.specify/scripts/bash/check-prerequisites.sh --json` from "
+    "repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be "
+    "absolute."
+)
+PYTHON_SETUP = (
+    "1. **Setup**: Run `python3 .specify/scripts/python/setup_tasks.py --json` "
+    "from repo root and parse FEATURE_DIR, TASKS_TEMPLATE_CONTENT, "
+    "TASKS_TEMPLATE, and AVAILABLE_DOCS list. `FEATURE_DIR` and `TASKS_TEMPLATE` "
+    "must be absolute paths when provided. `AVAILABLE_DOCS` is a list of "
+    "document names/relative paths available under `FEATURE_DIR` (for example "
+    "`research.md` or `contracts/`)."
+)
+CORE_TEMPLATE = (
+    "4. **Generate tasks.md**: Use `.specify/templates/tasks-template.md` as "
+    "structure, fill with:\n"
+)
+RESOLVED_TEMPLATE = (
+    "4. **Generate tasks.md**: Use TASKS_TEMPLATE_CONTENT (from the JSON output "
+    "above) as the structure. For compatibility with older setup scripts that "
+    "omit TASKS_TEMPLATE_CONTENT, read TASKS_TEMPLATE instead. Fill with:\n"
+)
+OPTIONAL_DOCS = (
+    "(interface contracts), research.md (decisions), quickstart.md (test scenarios)\n"
+)
+CONSTITUTION_DOC = (
+    "   - **IF EXISTS**: Load `.specify/memory/constitution.md` for project "
+    "principles and governance constraints\n"
+)
+YAML_SILENT = "skip hook checking silently and continue normally\n"
+YAML_REPORTED = (
+    "do not skip silently: tell the user that `.specify/extensions.yml` could not "
+    "be read (include the parser error) and that no hooks were checked, "
+    "including any mandatory (`optional: false`) hooks registered there, then "
+    "continue normally\n"
+)
+INVOKE_HOOK = (
+    "After emitting the block above you MUST actually invoke the hook and wait "
+    "for it to finish before continuing. Run it the same way you would run the "
+    "command yourself in this agent/session (the invocation may differ from the "
+    "literal `{command}` id shown above, e.g. a skills-mode agent runs it as "
+    "`/skill:speckit-...` or `$speckit-...`). Emitting the block alone does not "
+    "run the hook.\n"
+)
+PRE_HOOK_END = (
+    "    Wait for the result of the hook command before proceeding to the "
+    "Outline.\n    ```\n"
+)
+POST_HOOK_END = "       EXECUTE_COMMAND: {command}\n       ```\n"
 TASKS_EDITS = (
     ("# Speckit Tasks Skill\n", "# Speckit Tasks Skill\n" + TASK_REQUIREMENTS),
     ("EXECUTE_COMMAND: {command}\n    \n", "EXECUTE_COMMAND: {command}\n\n"),
     (TESTS_OPTIONAL, ACCEPTANCE_EVIDENCE),
+    (BASH_SETUP, PYTHON_SETUP),
+    (CORE_TEMPLATE, RESOLVED_TEMPLATE),
+    (OPTIONAL_DOCS, OPTIONAL_DOCS + CONSTITUTION_DOC),
+    (YAML_SILENT, YAML_REPORTED),
+    (PRE_HOOK_END, PRE_HOOK_END + "    " + INVOKE_HOOK),
+    (POST_HOOK_END, POST_HOOK_END + "       " + INVOKE_HOOK),
 )
 EDIT_TASKS = "edit speckit-tasks skills"
 PRESET_SOURCE = "  source: preset:explicit-task-dependencies"
