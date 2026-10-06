@@ -18,12 +18,10 @@ As approved in [`spec.md`](spec.md) at the digest recorded under Authority. The 
 
 ## Authority
 
-<!-- workflow-provisional: begin -->
-- **Status**: agent-provisional, not human-approved
-- **Decision**: PD-0013
-- **Decided by**: claude/claude-opus-5-5 (author)
-- **Recorded**: 2026-10-05T23:11:12+00:00
-- **Source**: ballast-autonomous run (fcba2ba4)
+<!-- workflow-approval: begin -->
+- **Approved by**: human user
+- **Approved**: 2026-10-06T09:14:31+00:00
+- **Source**: ballast-feature approve-intent gate (9aa1e4df)
 - **Spec**: specs/21-autonomous-reviewed-pr/spec.md
-- **Provisional spec digest**: sha256:ce6e16c115429b1bd0a36d602e6317152cda825ddc9a595e2e27640808639fa8
-<!-- workflow-provisional: end -->
+- **Approved spec digest**: sha256:02b771b64edd92cc6365e71e92755cbc7392f7b9403a267d373c7d339b15f9e8
+<!-- workflow-approval: end -->
