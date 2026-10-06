@@ -791,6 +791,52 @@ class RecoverableSetupTests(ProjectCase):
         self.assertEqual((self.state() / "trusted.json").read_bytes(), trusted)
         self.assertIn("workflow inputs changed", self.refusal())
 
+    def test_damaged_kept_copy_is_not_reused(self) -> None:
+        # SEC2-002, SEC2-003: an altered, added, linked or unreadable kept file.
+        planted = self.base / "planted"
+        planted.write_text("planted\n")
+        digest = hashlib.sha256(b"planted\n").hexdigest()
+        policy = "docs/policies/workflow.md"
+        fresh = self.a_checkout
+
+        def plant(kept: Path, name: str) -> None:
+            (kept / name).write_text("planted\n")
+
+        def link(kept: Path) -> None:
+            (kept / policy).unlink()
+            (kept / policy).symlink_to(planted)
+
+        def fifo(kept: Path) -> None:
+            plant(kept, ".specify/scripts/planted.py")
+            (kept / policy).unlink()
+            os.mkfifo(kept / policy)
+
+        for case, damage in (
+            ("altered", lambda k: plant(k, ".specify/scripts/python/common.py")),
+            ("added", lambda k: plant(k, ".specify/scripts/planted.py")),
+            ("linked", link),
+            ("unreadable", fifo),
+        ):
+            with self.subTest(case=case):
+                self.pin("vB")
+                self.installed()
+                self.pin("vA")
+                damage(self.root / setup.KEPT)
+                code, out, err = self.setup()
+                self.assertEqual(code, 0, err)
+                self.assertNotIn("Reused the previous installation", out)
+                if case == "unreadable":
+                    self.assertIn(
+                        "full installation: the kept installation is unreadable: ", out
+                    )
+                checkout = self.snapshot()["checkout"]
+                installed = {
+                    n: d for n, d in checkout.items() if not n.startswith(setup.WORK)
+                }
+                self.assertEqual(installed, fresh)
+                self.assertNotIn(digest, installed.values())
+                self.assertNotIn(f"link:{planted}", installed.values())
+
     @property
     def a_checkout(self) -> dict[str, str]:
         root = self.new_project("fresh-a")

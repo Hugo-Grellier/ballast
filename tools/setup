@@ -513,21 +513,25 @@ class Setup:
         ignore = shutil.ignore_patterns(
             "__pycache__", *(Path(p).name for p in LOCAL_STATE)
         )
-        for name in names:
-            origin, target = source / name, stage / name
-            if not os.path.lexists(origin):
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if origin.is_symlink():
-                target.symlink_to(origin.readlink())
-            elif origin.is_dir():
-                shutil.copytree(origin, target, symlinks=True, ignore=ignore)
-            else:
-                shutil.copy2(origin, target)
-        changed = _first_difference(installed_digests(stage, names), record["files"])
-        if changed:
+        changed: str | None = "the copy failed"  # until the copy verifies
+        try:
             for name in names:
-                _remove(stage / name)
+                origin, target = source / name, stage / name
+                if not os.path.lexists(origin):
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if origin.is_symlink():
+                    target.symlink_to(origin.readlink())
+                elif origin.is_dir():
+                    shutil.copytree(origin, target, symlinks=True, ignore=ignore)
+                else:
+                    shutil.copy2(origin, target)
+            found = installed_digests(stage, names)
+            changed = _first_difference(found, record["files"])
+        finally:
+            if changed:
+                for name in names:
+                    _remove(stage / name)
         return changed
 
     def copy_kept(self, stage: Path, state: Path) -> bool:
@@ -542,7 +546,12 @@ class Setup:
             or not isinstance(kept.get("files"), dict)
         ):
             return False
-        return self.copy_verified(self.root / KEPT, kept, stage) is None
+        try:
+            return self.copy_verified(self.root / KEPT, kept, stage) is None
+        except OSError as error:
+            message = f"the kept installation is unreadable: {error}"
+            sys.stdout.write(f"full installation: {message}\n")
+            return False
 
     def primary(self) -> Path | None:
         """Return the primary checkout when this one is a linked worktree."""
