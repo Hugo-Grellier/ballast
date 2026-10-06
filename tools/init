@@ -163,7 +163,6 @@ INTEGRATIONS = (
 )
 SYMLINK = "symbolic link"
 NOT_REGULAR = "not a regular file"
-TOO_LARGE = "larger than 256 KiB"
 LINKED = "init never writes through a link"
 UNLINK = "replace the link with a directory or a file, or remove it"
 DEFECT = "report this defect"
@@ -358,7 +357,7 @@ def read_file(root: Path, name: str, limit: int = MAX_BYTES) -> bytes:
             if not stat.S_ISREG(opened.st_mode):
                 raise Skipped(NOT_REGULAR)
             if opened.st_size > limit:
-                raise Skipped(TOO_LARGE)
+                raise Skipped(too_large(limit))
             with open(reader, "rb", closefd=False) as handle:
                 data = handle.read(limit + 1)
         finally:
@@ -366,8 +365,13 @@ def read_file(root: Path, name: str, limit: int = MAX_BYTES) -> bytes:
     finally:
         os.close(fd)
     if len(data) > limit:
-        raise Skipped(TOO_LARGE)
+        raise Skipped(too_large(limit))
     return data
+
+
+def too_large(limit: int) -> str:
+    """Name the size limit a file exceeds."""
+    return f"larger than {limit // 1024} KiB"
 
 
 def linked_parent(root: Path, name: str) -> str | None:
@@ -429,13 +433,14 @@ def read_template(name: str) -> str:
 
 
 def fill(template: str, values: dict[str, str]) -> str:
-    """Replace each `{{name}}`; an unknown or unreplaced one is a defect."""
-    for name, value in values.items():
-        template = template.replace("{{" + name + "}}", value)
-    left = MUSTACHE.search(template)
-    if left:
-        failed(f"template placeholder {left[0]} has no value", DEFECT)
-    return template
+    """Replace each `{{name}}` in one pass; an unknown one is a defect.
+
+    One pass, so a value holding `{{...}}` (a description) stays verbatim.
+    """
+    unknown = [m[0] for m in MUSTACHE.finditer(template) if m[0][2:-2] not in values]
+    if unknown:
+        failed(f"template placeholder {unknown[0]} has no value", DEFECT)
+    return MUSTACHE.sub(lambda m: values[m[0][2:-2]], template)
 
 
 def _json_line(text: str, key: str) -> str:
@@ -1227,7 +1232,8 @@ class Init:
             self.written.append(IGNORE_FILE)
             return
         except Skipped as skipped:
-            refused(f".gitignore is unusable ({skipped})", UNLINK)
+            remedy = UNLINK if str(skipped) == SYMLINK else "shrink or replace it"
+            refused(f".gitignore is unusable ({skipped})", remedy)
         text = old.decode("utf-8", "replace")
         if setup.GITIGNORE in text:
             return
@@ -1382,6 +1388,12 @@ class Init:
             return Check("instructions", WARNING, f"{name} could not be read")
         if MARKER not in text:
             detail = f"{name} has no Ballast section; see the proposed patch"
+            if name not in self.proposals:
+                target = (self.root / name).resolve().relative_to(self.root.resolve())
+                detail = (
+                    f"{name} links to {target.as_posix()}, which has no Ballast "
+                    "section; add templates/init/agents-section.md there"
+                )
             return Check("instructions", WARNING, detail)
         severity = NOT_READY if name in self.written else WARNING
         broken = self.broken_link(name, text)
@@ -1448,13 +1460,17 @@ class Init:
     def verify_checks(self) -> Check:
         """Check each active check's program exists, without running it."""
         try:
-            config = tomllib.loads(read_file(self.root, CONFIG).decode("utf-8"))
+            text = read_file(self.root, CONFIG).decode("utf-8")
+            config = tomllib.loads(text)
         except (OSError, Skipped, ValueError) as error:
             return Check("checks", NOT_READY, f"cannot read ballast.toml: {error}")
         commands = _strings(config, "checks", "commands")
         if not commands:
-            detail = "no active [checks] commands; confirm the inferred ones"
-            return Check("checks", WARNING, f"{detail} in ballast.toml")
+            todo = "confirm the inferred ones"
+            if "# [checks]" not in text:
+                todo = "no check command was found; add the project's gate"
+            detail = f"no active [checks] commands; {todo} in ballast.toml"
+            return Check("checks", WARNING, detail)
         rules = _strings(config, "agents", "permissions", "extra_allow")
         programs = dict.fromkeys(
             (plain_command(c) or c.split() or [""])[0] for c in commands
@@ -1569,6 +1585,7 @@ class Init:
             f"ballast init: stopped at {self.stage}: {stop.cause}",
             f"Written: {', '.join(self.written) or 'none'}",
             f"Not written: {', '.join(missing) or 'none'}",
+            *(["Appended the Ballast ignore block to .gitignore"] * self.appended),
             *self.patch_lines(),
             f"Next: {stop.action}, then rerun `ballast init`",
         ]
@@ -1583,13 +1600,24 @@ def _strings(config: dict, *keys: str) -> list[str]:
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
 
 
+class Once(argparse.Action):
+    """Store an option given at most once."""
+
+    def __call__(self, parser, namespace, values, option_string=None) -> None:  # noqa: ANN001
+        """Refuse a second value instead of letting it override the first."""
+        if getattr(namespace, self.dest) is not None:
+            parser.error(f"{option_string} is given more than once")
+        setattr(namespace, self.dest, values)
+
+
 def cli(argv: list[str]) -> int:
     """Parse the arguments and adopt the repository."""
     parser = argparse.ArgumentParser(
-        prog="ballast init", description=__doc__.splitlines()[0]
+        prog="ballast init", description=__doc__.splitlines()[0], allow_abbrev=False
     )
-    parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--ref", required=True)
+    # The CLI checked one root and one ref: a second value never overrides them.
+    parser.add_argument("--project", type=Path, required=True, action=Once)
+    parser.add_argument("--ref", required=True, action=Once)
     parser.add_argument("--description")
     parser.add_argument("--stack")
     arguments = parser.parse_args(argv)

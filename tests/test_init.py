@@ -925,6 +925,97 @@ class ReportTests(InitCase):
                 setup_tests.FAKE.clear()
 
 
+class ReviewFindingTests(InitCase):
+    """Implementation review findings of Autonomous run 3ee0601b."""
+
+    def test_a_stop_after_an_append_reports_it(self) -> None:
+        # Architecture F-001 (AC-034): the tracked .gitignore change is named.
+        self.established(**{".gitignore": "node_modules/\n"})
+        setup_tests.FAKE["fail"] = "specify init"
+        code, report = self.init()
+        self.assertEqual(code, 1, report)
+        self.assertIn("stopped at install", report)
+        self.assertIn("Appended the Ballast ignore block to .gitignore", report)
+
+    def test_a_description_with_braces_is_kept_verbatim(self) -> None:
+        # Architecture F-002: a value is never substituted again.
+        text = "Renders {{gates}} and {{name}}"
+        code, report = self.init("--description", text, "--stack", "python")
+        self.assertEqual(code, 0, report)
+        constitution = (self.root / ".specify/memory/constitution.md").read_text()
+        self.assertIn(text, constitution)
+
+    def test_an_oversized_gitignore_names_its_limit(self) -> None:
+        # Documentation F-003: the 1 MiB .gitignore limit, not 256 KiB.
+        self.established(**{".gitignore": "#" * (4 * init.MAX_BYTES + 1)})
+        code, report = self.init()
+        self.assertNotEqual(code, 0, report)
+        self.assertIn(".gitignore is unusable (larger than 1024 KiB)", report)
+
+    def test_a_linked_agents_md_names_no_missing_patch(self) -> None:
+        # Engineering F-003: no patch is proposed for a linked AGENTS.md.
+        self.established(**{"AGENTS.md": "", "docs/agents.md": AGENTS})
+        (self.root / "AGENTS.md").symlink_to("docs/agents.md")
+        code, report = self.init()
+        self.assertEqual(code, 0, report)
+        status, detail = readiness(report)["instructions"]
+        self.assertEqual(status, "warning")
+        self.assertNotIn("proposed patch", detail)
+        self.assertIn("docs/agents.md", detail)
+
+    def test_an_abbreviated_or_repeated_option_is_refused(self) -> None:
+        # Engineering F-002: the root and ref are the ones the CLI checked.
+        other = self.base / "other"
+        other.mkdir()
+        for extra in (["--re", "vB"], ["--project", str(other)], ["--ref", "vB"]):
+            with self.subTest(extra=extra):
+                arguments = ["--project", str(self.root), "--ref", REF, *extra]
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    init.cli(arguments)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(list(other.iterdir()), [])
+
+    def test_a_linked_evidence_file_outside_the_root_is_never_read(self) -> None:
+        # Test F-003 (AC-017): the leaf itself is a link out of the root.
+        outside = self.base / "outside.toml"
+        outside.write_text(PYPROJECT)
+        self.established(**{"pyproject.toml": ""})
+        (self.root / "pyproject.toml").symlink_to(outside)
+        code, report = self.init()
+        self.assertEqual(code, 0, report)
+        self.assertIn("pyproject.toml (symbolic link)", report)
+        constitution = (self.root / ".specify/memory/constitution.md").read_text()
+        self.assertNotIn("Demo service", constitution)
+
+    def test_no_check_at_all_is_named_as_missing(self) -> None:
+        # End-to-end finding: nothing inferred, so nothing to confirm.
+        bare = '[project]\nname = "demo"\n'
+        self.established(
+            **{".github/workflows/ci.yml": "", "Makefile": "", "pyproject.toml": bare}
+        )
+        code, report = self.init()
+        self.assertEqual(code, 0, report)
+        status, detail = readiness(report)["checks"]
+        self.assertEqual(status, "warning")
+        self.assertNotIn("confirm the inferred", detail)
+        self.assertIn("no check command was found", detail)
+
+    def test_an_established_terminal_run_asks_nothing(self) -> None:
+        # Test F-002 (SC-002): evidence settles every choice; input() must not run.
+        self.established()
+        out = Terminal()
+        refuse = AssertionError("init prompted an established repository")
+        with (
+            fakes(),
+            redirect_stdout(out),
+            redirect_stderr(io.StringIO()),
+            patch.object(sys, "stdin", Terminal()),
+            patch("builtins.input", side_effect=refuse),
+        ):
+            code = init.cli(["--project", str(self.root), "--ref", REF])
+        self.assertEqual(code, 0, out.getvalue())
+
+
 # --- invariants -----------------------------------------------------------------
 
 
