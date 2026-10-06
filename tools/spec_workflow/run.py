@@ -416,7 +416,9 @@ def _archive_operator(run_id: str) -> None:
         record = autonomy.find_run(ROOT, run_id)
     except autonomy.AutonomyError:
         record = None
-    target = "operator" if record and record["workflow"] == autonomy.CHAT else "autonomous"
+    target = (
+        "operator" if record and record["workflow"] == autonomy.CHAT else "autonomous"
+    )
     try:
         with archive_lock(ROOT, run_id, exclusive=True):
             shutil.copytree(
@@ -848,7 +850,9 @@ def _chat_run(run_id: str) -> bool:
     return record is not None and record["workflow"] == autonomy.CHAT
 
 
-def _flags(options: list[str], allowed: set[str]) -> tuple[dict[str, str], list[str]] | str:
+def _flags(
+    options: list[str], allowed: set[str]
+) -> tuple[dict[str, str], list[str]] | str:
     """Take `--name VALUE` options out of a Chat command's arguments."""
     found: dict[str, str] = {}
     rest: list[str] = []
@@ -871,7 +875,7 @@ def _flags(options: list[str], allowed: set[str]) -> tuple[dict[str, str], list[
     return found, rest
 
 
-def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR0911 - one branch per command
+def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - one branch per command
     """Dispatch `step`, `status`, `approve`, `reject`, `resolve`, `checks`, `mode`."""
     if not options or not RUN_ID.fullmatch(options[0]):
         return _refuse(f"{command} needs a valid RUN_ID")
@@ -883,7 +887,9 @@ def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR09
         flags, rest = split
         if not rest or rest[0].startswith("-"):
             return _refuse("step needs a PHASE")
-        return _chat(chat.run_step, ROOT, run_id, rest[0], flags.get("--kind"), rest[1:])
+        return _chat(
+            chat.run_step, ROOT, run_id, rest[0], flags.get("--kind"), rest[1:]
+        )
     if command in {"status", "checks"}:
         if rest:
             return _refuse(f"{command} takes only a RUN_ID")
@@ -913,7 +919,7 @@ def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR09
     return _chat(chat.change_mode, ROOT, run_id, rest[0], flags.get("--reason"))
 
 
-def _publish_command(options: list[str]) -> int:
+def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity inherent to one guarded flow
     """`ballast run publish RUN_ID`: retry publication, never run an agent."""
     if len(options) != 1:
         return _refuse("publish needs exactly one RUN_ID")
@@ -1184,7 +1190,7 @@ def _point_feature(feature: str | None) -> int | None:
     return None
 
 
-def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - Preserve runner exit.
+def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Preserve runner exit.
     """Launch Spec Kit with the wrapper environment, or drive a Chat run."""
     if len(argv) < 1 or argv[0] not in COMMANDS:
         sys.stderr.write(__doc__ or "")

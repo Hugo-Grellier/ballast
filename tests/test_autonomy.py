@@ -1066,8 +1066,12 @@ class ConfinementTests(AutonomyCase):
         self.assertIn("--new-session", self.argv())
         private = self.base / "private"
         interactive = autonomy.confined_argv(
-            self.root, ["true"], private=private, home=self.base / "home",
-            env={}, interactive_pty=True,
+            self.root,
+            ["true"],
+            private=private,
+            home=self.base / "home",
+            env={},
+            interactive_pty=True,
         )
         self.assertNotIn("--new-session", interactive)
         self.assertEqual(interactive[-2:], ["--", "true"])
@@ -1099,7 +1103,11 @@ class ConfinementTests(AutonomyCase):
         private = self.base / "private"
         private.mkdir(exist_ok=True)
         argv = autonomy.confined_argv(
-            self.root, ["true"], private=private, home=self.base / "home", env={},
+            self.root,
+            ["true"],
+            private=private,
+            home=self.base / "home",
+            env={},
             readonly_extra=(".claude", ".codex"),
         )
         joined = " ".join(argv)
@@ -1111,17 +1119,21 @@ class ConfinementTests(AutonomyCase):
             joined.index(f"--ro-bind {claude}"), joined.index(f"--bind {self.root} ")
         )
         for outside in ("/etc", "../escape", ".claude/../../x", ""):
-            with self.subTest(outside=outside), self.assertRaisesRegex(
-                autonomy.AutonomyError, "inside the checkout"
+            with (
+                self.subTest(outside=outside),
+                self.assertRaisesRegex(autonomy.AutonomyError, "inside the checkout"),
             ):
                 autonomy.confined_argv(
-                    self.root, ["true"], private=private, env={},
+                    self.root,
+                    ["true"],
+                    private=private,
+                    env={},
                     readonly_extra=(outside,),
                 )
 
 
 def chat_record(case: AutonomyCase, run_id: str = "chat42", **changes: object) -> dict:
-    """A valid ballast-chat record for FEATURE."""
+    """Return a valid ballast-chat record for FEATURE."""
     record = autonomy.new_run(
         run_id=run_id,
         feature=FEATURE,
@@ -1164,9 +1176,20 @@ class ChatRecordTests(AutonomyCase):
     def test_malformed_chat_fields_are_refused(self) -> None:
         for field, value in (
             ("active_step", {"step": "x"}),
-            ("active_step", {"step": "../x", "phase": "plan", "unit": None, "started_at": autonomy.now()}),
+            (
+                "active_step",
+                {
+                    "step": "../x",
+                    "phase": "plan",
+                    "unit": None,
+                    "started_at": autonomy.now(),
+                },
+            ),
             ("active_step", "plan"),
-            ("baseline", {"tree": "nothex", "at": autonomy.now(), "approval": "HD-0001"}),
+            (
+                "baseline",
+                {"tree": "nothex", "at": autonomy.now(), "approval": "HD-0001"},
+            ),
             ("baseline", {"tree": "a" * 40, "at": autonomy.now()}),
             ("last_manifest", "short"),
             ("start_head", None),
@@ -1183,17 +1206,25 @@ class ChatRecordTests(AutonomyCase):
             "unit": "ballast-agent-chat42-20261006T000000000000Z-plan-claude.scope",
             "started_at": autonomy.now(),
         }
-        record["baseline"] = {"tree": "b" * 40, "at": autonomy.now(), "approval": "HD-0003"}
+        record["baseline"] = {
+            "tree": "b" * 40,
+            "at": autonomy.now(),
+            "approval": "HD-0003",
+        }
         autonomy.validate_run(record, "chat42")
 
     def test_switch_between_chat_and_human_gated_only(self) -> None:
         record = chat_record(self)
         with self.assertRaisesRegex(autonomy.AutonomyError, "reason"):
-            autonomy.change_mode(record, "human-gated", reason=None, decision_id="HD-0001")
+            autonomy.change_mode(
+                record, "human-gated", reason=None, decision_id="HD-0001"
+            )
         with self.assertRaisesRegex(autonomy.AutonomyError, "human decision"):
             autonomy.change_mode(record, "human-gated", reason="x", decision_id=None)
         self.assertEqual(len(record["mode_history"]), 1)
-        autonomy.change_mode(record, "human-gated", reason="headless implement", decision_id="HD-0001")
+        autonomy.change_mode(
+            record, "human-gated", reason="headless implement", decision_id="HD-0001"
+        )
         autonomy.change_mode(record, "chat", reason="back", decision_id="HD-0002")
         self.assertEqual(
             [(c["mode"], c["action"]) for c in record["mode_history"]],
@@ -1205,7 +1236,9 @@ class ChatRecordTests(AutonomyCase):
         autonomy.validate_run(record, "chat42")
         before = json.dumps(record)
         with self.assertRaisesRegex(autonomy.AutonomyError, "never raised"):
-            autonomy.change_mode(record, "autonomous", reason="x", decision_id="HD-0003")
+            autonomy.change_mode(
+                record, "autonomous", reason="x", decision_id="HD-0003"
+            )
         with self.assertRaisesRegex(autonomy.AutonomyError, "raising"):
             autonomy.change_mode(record, "chat", reason="x", decision_id="HD-0003")
         self.assertEqual(json.dumps(record), before)
@@ -1227,8 +1260,13 @@ class ChatRecordTests(AutonomyCase):
             forged.pop(key)
         forged["mode_history"][0]["mode"] = "human-gated"
         forged["mode_history"].append(
-            {**forged["mode_history"][0], "mode": "chat", "action": "switch",
-             "reason": "x", "decision_id": "HD-0001"}
+            {
+                **forged["mode_history"][0],
+                "mode": "chat",
+                "action": "switch",
+                "reason": "x",
+                "decision_id": "HD-0001",
+            }
         )
         with self.assertRaisesRegex(autonomy.AutonomyError, "only a Chat run switches"):
             autonomy.validate_run(forged, "chat42")
@@ -1238,15 +1276,24 @@ class ChatRecordTests(AutonomyCase):
         autonomy.set_status(record, "stopped")
         with self.assertRaisesRegex(autonomy.AutonomyError, "reason"):
             autonomy.change_mode(record, "chat", reason=None, decision_id="HD-0001")
-        autonomy.change_mode(record, "chat", reason="block-resolved", decision_id="HD-0001")
+        autonomy.change_mode(
+            record, "chat", reason="block-resolved", decision_id="HD-0001"
+        )
         self.assertEqual(record["mode_history"][-1]["action"], "lower")
         self.assertEqual(autonomy.effective_mode(record), "chat")
         with self.assertRaisesRegex(autonomy.AutonomyError, "never raised"):
-            autonomy.change_mode(record, "autonomous", reason="x", decision_id="HD-0002")
+            autonomy.change_mode(
+                record, "autonomous", reason="x", decision_id="HD-0002"
+            )
         forged = self.make_run()
         forged["mode_history"].append(
-            {**forged["mode_history"][0], "mode": "autonomous", "action": "switch",
-             "reason": "x", "decision_id": "HD-0001"}
+            {
+                **forged["mode_history"][0],
+                "mode": "autonomous",
+                "action": "switch",
+                "reason": "x",
+                "decision_id": "HD-0001",
+            }
         )
         with self.assertRaises(autonomy.AutonomyError):
             autonomy.validate_run(forged, "run42")
@@ -1256,26 +1303,53 @@ class ChatRecordTests(AutonomyCase):
             self.assertIn(kind, autonomy.HUMAN_DECISION_KINDS)
         autonomy.write_run(self.root, chat_record(self))
         approval = autonomy.append_human_decision(
-            self.root, "chat42", "gate-approval", "approve plan", resolves=None,
-            extra={"gate": "plan", "artifact": f"{FEATURE}/plan.md",
-                   "digest": "sha256:" + "0" * 64, "supersedes_provisional": ["PD-0005"]},
+            self.root,
+            "chat42",
+            "gate-approval",
+            "approve plan",
+            resolves=None,
+            extra={
+                "gate": "plan",
+                "artifact": f"{FEATURE}/plan.md",
+                "digest": "sha256:" + "0" * 64,
+                "supersedes_provisional": ["PD-0005"],
+            },
         )
         self.assertEqual((approval["id"], approval["gate"]), ("HD-0001", "plan"))
         autonomy.append_human_decision(
-            self.root, "chat42", "decision-resolution", "resolve DEC-0001",
-            resolves=None, extra={"decision": "DEC-0001", "digest": "sha256:" + "1" * 64},
+            self.root,
+            "chat42",
+            "decision-resolution",
+            "resolve DEC-0001",
+            resolves=None,
+            extra={"decision": "DEC-0001", "digest": "sha256:" + "1" * 64},
         )
         for kind, extra in (
-            ("gate-approval", {"gate": "merge", "artifact": "x", "digest": "d",
-                               "supersedes_provisional": []}),
-            ("gate-approval", {"gate": "plan", "artifact": "x", "digest": "d",
-                               "supersedes_provisional": ["HD-0001"]}),
+            (
+                "gate-approval",
+                {
+                    "gate": "merge",
+                    "artifact": "x",
+                    "digest": "d",
+                    "supersedes_provisional": [],
+                },
+            ),
+            (
+                "gate-approval",
+                {
+                    "gate": "plan",
+                    "artifact": "x",
+                    "digest": "d",
+                    "supersedes_provisional": ["HD-0001"],
+                },
+            ),
             ("gate-rejection", {"gate": "plan", "artifact": "x"}),
             ("decision-resolution", {"decision": "PD-0001", "digest": "d"}),
             ("mode-change", {"from": "chat", "to": "autonomous-ish"}),
         ):
-            with self.subTest(kind=kind, extra=extra), self.assertRaises(
-                autonomy.AutonomyError
+            with (
+                self.subTest(kind=kind, extra=extra),
+                self.assertRaises(autonomy.AutonomyError),
             ):
                 autonomy.append_human_decision(
                     self.root, "chat42", kind, "x", resolves=None, extra=extra

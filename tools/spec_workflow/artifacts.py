@@ -158,7 +158,7 @@ class Feature:
 
     @classmethod
     def from_operator_run(cls, root: Path, record: dict) -> Feature:
-        """The feature of a `ballast-chat` operator record (#20).
+        """Return the feature of a `ballast-chat` operator record (#20).
 
         Its human approvals, implementation baseline and decision resolutions
         come from operator state, never from agent-writable run state.
@@ -480,7 +480,7 @@ def record_baseline(feature: Feature) -> None:
 
 
 def _baseline_tree(feature: Feature) -> str:
-    """The implementation baseline tree: operator state for a Chat run (#20)."""
+    """Return the implementation baseline tree: operator state for a Chat run (#20)."""
     if feature.chat is not None:
         baseline = feature.chat.get("baseline") or {}
         tree = baseline.get("tree")
@@ -570,11 +570,11 @@ def check_decisions(feature: Feature) -> None:
 
 def latest_resolutions(text: str) -> dict[str, str]:
     """{DEC id: body of its last Resolution section} of decisions.md text."""
-    found: dict[str, str] = {}
-    for dec, kind, body in decision_sections(text):
-        if kind.lower() == "resolution":
-            found[dec] = body
-    return found
+    return {
+        dec: body
+        for dec, kind, body in decision_sections(text)
+        if kind.lower() == "resolution"
+    }
 
 
 def resolution_digest(body: str) -> str:
@@ -2655,7 +2655,12 @@ def project_checks(root: Path, feature: str) -> dict:
     config = autonomy.load_config(root)
     tree = autonomy.tree_digest(root, (f"{feature}/reviews",))
     if config.get("checks") is None:
-        return {"results": [], "unavailable": True, "tree": tree, "protected_changes": []}
+        return {
+            "results": [],
+            "unavailable": True,
+            "tree": tree,
+            "protected_changes": [],
+        }
     checks = autonomy.parse_checks(config)
     before = _protected_digests(root)
     results = run_commands(root, feature, checks["commands"], checks["timeout_minutes"])

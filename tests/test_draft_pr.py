@@ -545,7 +545,7 @@ class IdentityTests(CheckpointCase):
                 self.assertEqual(self.fake.calls, [])
 
     def chat_record(self) -> None:
-        """A Ballast-driven Chat run (#20): an operator record, no engine inputs."""
+        """Return a Ballast-driven Chat run (#20): operator record, no engine inputs."""
         import autonomy  # noqa: PLC0415
 
         (self.repo.root / ".specify/workflows/runs" / RUN / "inputs.json").unlink()

@@ -55,14 +55,17 @@ class ChatGovernanceTests(unittest.TestCase):
                 self.assertIn("ballast run step", text)  # continue
                 self.assertIn("never", text)
 
-    def test_policies_and_agents_describe_resume_switch_approvals_and_the_boundary(self) -> None:
+    def test_policies_and_agents_describe_resume_switch_approvals_and_the_boundary(
+        self,
+    ) -> None:
         for name in self.DOCUMENTS[:3]:
             with self.subTest(document=name):
                 text = self.text(name)
                 self.assertIn("ballast run mode", text)  # switch
                 self.assertIn("ballast run approve", text)  # approvals are human
                 self.assertRegex(
-                    text, r"`ballast run resume`\s+refuses\s+a\s+Chat\s+run|never `resume`"
+                    text,
+                    r"`ballast run resume`\s+refuses\s+a\s+Chat\s+run|never `resume`",
                 )
                 self.assertRegex(text, r"outside\s+`ballast run`")
                 self.assertRegex(text, r"none\s+of")

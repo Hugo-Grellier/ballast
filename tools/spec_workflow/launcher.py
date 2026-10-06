@@ -261,7 +261,7 @@ def _setup_refusal(root: Path, state: Path) -> str | None:
 
 
 def _unfinished(marker: Path) -> str:
-    """The unfinished-step refusal, naming the run and step when the marker does."""
+    """Return the unfinished-step refusal, naming the run and step if marked."""
     try:
         unit = marker.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):

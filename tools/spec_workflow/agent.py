@@ -432,7 +432,7 @@ def _review_exclusions(feature: str) -> tuple[str, ...]:
 
 
 def chat_settings() -> dict:
-    """An interactive Claude step's settings: every headless rule, plus Chat's.
+    """Return an interactive Claude step's settings: every headless rule, plus Chat's.
 
     The installed `claude-settings.json` already holds the project's
     `[agents.permissions]` rules (tools/setup merges them), so its allow and
@@ -446,7 +446,10 @@ def chat_settings() -> dict:
     for key in ("allow", "deny"):
         merged["permissions"][key] = list(
             dict.fromkeys(
-                [*headless["permissions"].get(key, []), *chat["permissions"].get(key, [])]
+                [
+                    *headless["permissions"].get(key, []),
+                    *chat["permissions"].get(key, []),
+                ]
             )
         )
     return merged
@@ -460,7 +463,7 @@ def interactive_argv(
     *,
     settings: str = ".ballast/spec_workflow/claude-chat-settings.json",
 ) -> list[str]:
-    """The interactive agent argv: deny without prompting, never a bypass.
+    """Return the interactive agent argv: deny without prompting, never a bypass.
 
     `settings` is the step's generated settings file (`chat_settings`),
     relative to the checkout root the agent runs in.
@@ -554,8 +557,11 @@ class _Escape:
         return bytes(forward), False
 
     def expired(self) -> bytes:
-        """A held Ctrl-] whose second press never came, to forward now."""
-        if self.held_at is not None and time.monotonic() - self.held_at > ESCAPE_SECONDS:
+        """Return a held Ctrl-] whose second press never came, to forward now."""
+        if (
+            self.held_at is not None
+            and time.monotonic() - self.held_at > ESCAPE_SECONDS
+        ):
             self.held_at = None
             return bytes([ESCAPE_BYTE])
         return b""
@@ -568,9 +574,10 @@ def _end_session(process: subprocess.Popen, unit: str) -> None:
             os.killpg(process.pid, number)
         try:
             process.wait(wait)
-            return
         except subprocess.TimeoutExpired:
             continue
+        else:
+            return
     stop_scope(unit)
 
 

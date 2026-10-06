@@ -318,7 +318,7 @@ def _branch_pin(root: Path, run_id: str) -> str | None:
 
 
 def _run_feature(root: Path, run_id: str) -> object:
-    """A run's feature directory: engine inputs, else operator record, else pin.
+    """Return a run's feature directory: engine inputs, else operator record, else pin.
 
     A Ballast-driven Chat run (#20) has no engine `inputs.json`; its feature
     comes from its operator run record, or from the pin branch_sync wrote at

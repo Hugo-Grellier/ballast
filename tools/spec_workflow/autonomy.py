@@ -45,7 +45,12 @@ VERSION = 1
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 FEATURE = re.compile(r"specs/([1-9][0-9]*)-[a-z0-9]+(?:-[a-z0-9]+)*")
 MODES = ("human-gated", "autonomous", "chat")
-WORKFLOWS = ("ballast-feature", "ballast-autonomous", "ballast-continue", "ballast-chat")
+WORKFLOWS = (
+    "ballast-feature",
+    "ballast-autonomous",
+    "ballast-continue",
+    "ballast-chat",
+)
 CHAT = "ballast-chat"
 INTEGRATIONS = ("claude", "codex")
 STATUSES = ("active", "stopped", "completed", "published", "continued")
@@ -432,8 +437,7 @@ def _validate_mode_history(history: object, workflow: object = None) -> None:
             )
         else:
             _require(
-                workflow == CHAT
-                and {previous, mode} == {"chat", "human-gated"},
+                workflow == CHAT and {previous, mode} == {"chat", "human-gated"},
                 "only a Chat run switches, between chat and human-gated",
             )
         if action == "switch" or mode == "chat":
@@ -505,7 +509,7 @@ def validate_run(record: object, run_id: str) -> dict:
 
 
 def _validate_chat(record: dict) -> None:
-    """The Chat fields of a `ballast-chat` record (#20 data model)."""
+    """Return the Chat fields of a `ballast-chat` record (#20 data model)."""
     _require(
         effective_mode(record) in {"chat", "human-gated"},
         "a Chat run is in chat or human-gated mode",
@@ -618,7 +622,9 @@ def change_mode(
         "decision_id": decision_id,
     }
     # Validated before it is kept: a refused change leaves the record as it was.
-    validate_run({**record, "mode_history": [*record["mode_history"], entry]}, record["run_id"])
+    validate_run(
+        {**record, "mode_history": [*record["mode_history"], entry]}, record["run_id"]
+    )
     record["mode_history"].append(entry)
     return record
 
@@ -730,7 +736,7 @@ def append_decision(root: Path, run_id: str, entry: dict) -> dict:
     return append_log(path, "PD", entry)
 
 
-def append_human_decision(
+def append_human_decision(  # noqa: PLR0913 - complexity inherent to one guarded flow
     root: Path,
     run_id: str,
     kind: str,
@@ -772,8 +778,10 @@ HUMAN_DECISION_FIELDS = {
         "gate": lambda v: v in CHAT_GATES,
         "artifact": _short_text,
         "digest": lambda v: _short_text(v, 100),
-        "supersedes_provisional": lambda v: isinstance(v, list)
-        and all(isinstance(i, str) and PD_ID.fullmatch(i) for i in v),
+        "supersedes_provisional": lambda v: (
+            isinstance(v, list)
+            and all(isinstance(i, str) and PD_ID.fullmatch(i) for i in v)
+        ),
     },
     "gate-rejection": {
         "gate": lambda v: v in CHAT_GATES,
@@ -1583,7 +1591,7 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
-def confined_argv(  # noqa: C901, PLR0913 - every input is explicit
+def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     root: Path,
     command: list[str],
     *,
@@ -2710,7 +2718,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911, PLR0912
     return {"ok": True, "category": None, "message": "published", "url": url}
 
 
-def _publish_chat(root: Path, run: dict) -> dict:  # noqa: C901, PLR0911 - one guarded publication
+def _publish_chat(root: Path, run: dict) -> dict:  # noqa: C901, PLR0911, PLR0912 - one guarded publication
     """Publish a Chat run (#20 D-6): the Autonomous commit, push and PR path.
 
     `chat.publish` has already checked that the final human approval and the
@@ -2829,8 +2837,10 @@ CHAT_BEGIN = "<!-- ballast:chat:begin -->"
 CHAT_END = "<!-- ballast:chat:end -->"
 
 
-def _adoptable_chat(prs: object, feature: str, repo: str) -> tuple[int, str, str] | None:
-    """The feature's one open Draft PR: the #17 checkpoint's or a Chat publication's."""
+def _adoptable_chat(  # noqa: PLR0911 - complexity inherent to one guarded flow
+    prs: object, feature: str, repo: str
+) -> tuple[int, str, str] | None:
+    """Return the feature's one open Draft PR: a #17 checkpoint or Chat publication."""
     found = _adoptable(prs, feature, repo)
     if found is not None:
         return found

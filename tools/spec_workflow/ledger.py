@@ -643,10 +643,13 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
             fail(f"unknown {key}")
     if event["kind"] == "run" and data["action"] == "ended" and "status" not in data:
         fail("run end needs status")
-    if event["kind"] == "run" and data.get("status") == "mode-changed":
-        # A Chat run's mode switch or continuation (#20): the run goes on.
-        if "mode" not in data or data["action"] != "ended":
-            fail("mode-changed needs mode and action ended")
+    # A Chat run's mode switch or continuation (#20): the run goes on.
+    if (
+        event["kind"] == "run"
+        and data.get("status") == "mode-changed"
+        and ("mode" not in data or data["action"] != "ended")
+    ):
+        fail("mode-changed needs mode and action ended")
     if event["kind"] == "pull_request":
         if data["outcome"] in {"created", "reused"}:
             if "pr_number" not in data or "pr_url" not in data:
@@ -1972,7 +1975,7 @@ def _snapshot_status(
     )
 
 
-def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share this read.
+def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions share this read.
     root: Path, run_id: str
 ) -> dict[str, Any]:
     """Derive separate evidence-backed dimensions from one archived run."""
@@ -2463,7 +2466,7 @@ def report(  # noqa: C901, PLR0912, PLR0915 - Five evidence dimensions share thi
     return result
 
 
-def _chat_report(  # noqa: C901 - one pass per evidence kind
+def _chat_report(
     root: Path, run_id: str, events: list[dict[str, Any]], result: dict[str, Any]
 ) -> dict[str, Any]:
     """Report a Chat run (#20) against its archived definition and phase graph.

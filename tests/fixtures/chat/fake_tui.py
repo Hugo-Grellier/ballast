@@ -16,8 +16,8 @@ list whose first item names the action:
 - ["swap_log_dir"]: replace this step's log directory with a symlink
 - ["exit", CODE]
 
-After every action it rewrites `report.json` there (or $FAKE_TUI_REPORT) with its argv, the names
-of its environment variables, whether fds 0-2 are TTYs, the name of its
+After every action it rewrites `report.json` there (or $FAKE_TUI_REPORT) with its
+argv, the names of its environment variables, whether fds 0-2 are TTYs, the name of its
 terminal, whether /dev/tty opens, the targets of its open descriptors, its
 session ID and the action results. It never reads anything else.
 
@@ -125,7 +125,7 @@ def _order(text: str) -> None:
             handle.write(text + "\n")
 
 
-def main() -> int:  # noqa: C901, PLR0912 - one branch per action
+def main() -> int:  # noqa: C901, D103, PLR0912 - one branch per action
     if sys.argv[1:2] == ["sandbox"]:
         return int(os.environ.get("FAKE_CODEX_NESTS", "0"))
     signal.signal(signal.SIGWINCH, _on_winch)
@@ -159,7 +159,9 @@ def main() -> int:  # noqa: C901, PLR0912 - one branch per action
                 done = subprocess.run(  # noqa: S603
                     args[0], capture_output=True, text=True, check=False, timeout=60
                 )
-                results.append(["run", args[0], done.returncode, done.stdout + done.stderr])
+                results.append(
+                    ["run", args[0], done.returncode, done.stdout + done.stderr]
+                )
             except (OSError, subprocess.TimeoutExpired) as error:
                 results.append(["run", args[0], None, str(error)])
         elif name == "sleep":

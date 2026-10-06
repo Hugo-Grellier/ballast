@@ -273,7 +273,14 @@ GATES: dict[str, dict[str, Any]] = {
     },
 }
 OUTCOMES = ("completed", "failed", "interrupted", "tampered")
-EVENT_KINDS = ("check", "project-checks", "review", "out-of-step-change", "refusal", "sync")
+EVENT_KINDS = (
+    "check",
+    "project-checks",
+    "review",
+    "out-of-step-change",
+    "refusal",
+    "sync",
+)
 # Pseudo-checks that are approvals or records, never artifact checks.
 RECORD_CHECKS = ("baseline", "project-checks", "scope")
 
@@ -348,7 +355,7 @@ class Run:
         autonomy.write_run(self.root, self.record)
 
     def feature(self) -> artifacts.Feature:
-        """The Chat feature: approvals and baseline from operator state."""
+        """Return the Chat feature: approvals and baseline from operator state."""
         return artifacts.Feature.from_operator_run(self.root, self.record)
 
     def events(self) -> list[dict]:
@@ -410,12 +417,12 @@ class Run:
         self._tree = None
 
     def file(self, name: str) -> Path:
-        """A feature artifact path."""
+        """Return a feature artifact path."""
         return self.root / self.feature_dir / name
 
 
 def create_files(directory: Path) -> None:
-    """The record's logs and manifest directory, mode 0600 in a 0700 directory."""
+    """Return the record's logs and manifest directory, mode 0600 in a 0700 one."""
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     (directory / "manifests").mkdir(exist_ok=True, mode=0o700)
     for name in ("steps.jsonl", "events.jsonl", "human-decisions.jsonl"):
@@ -424,7 +431,7 @@ def create_files(directory: Path) -> None:
 
 
 def load(root: Path, run_id: str) -> Run:
-    """The Chat run `run_id`; anything else is refused."""
+    """Return the Chat run `run_id`; anything else is refused."""
     if not autonomy.RUN_ID.fullmatch(run_id or ""):
         raise Refused(EXIT_REFUSED, "a valid RUN_ID is required")
     try:
@@ -447,7 +454,7 @@ class Lock:
         self.holder = holder
         self.fd: int | None = None
 
-    def __enter__(self) -> Lock:
+    def __enter__(self) -> Lock:  # noqa: PYI034 - Lock is final; no subclass
         """Take the lock, or refuse and name who holds it."""
         path = self.run.dir / "lock"
         flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
@@ -523,7 +530,7 @@ def store_manifest(directory: Path, mapping: dict[str, str]) -> str:
 
 
 def read_manifest(directory: Path, digest: str | None) -> dict[str, str]:
-    """A stored manifest; an unknown or missing one reads as empty."""
+    """Return a stored manifest; an unknown or missing one reads as empty."""
     if not digest or not autonomy.MANIFEST_DIGEST.fullmatch(digest):
         return {}
     path = directory / "manifests" / f"{digest}.json"
@@ -539,7 +546,9 @@ def read_manifest(directory: Path, digest: str | None) -> dict[str, str]:
 def changed_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
     """Paths added, removed or changed between two manifests, sorted."""
     return sorted(
-        name for name in before.keys() | after.keys() if before.get(name) != after.get(name)
+        name
+        for name in before.keys() | after.keys()
+        if before.get(name) != after.get(name)
     )
 
 
@@ -566,7 +575,9 @@ def out_of_step(run: Run) -> dict | None:
     previous = run.record.get("last_manifest")
     if current == previous:
         return None
-    paths = changed_paths(read_manifest(run.dir, previous), read_manifest(run.dir, current))
+    paths = changed_paths(
+        read_manifest(run.dir, previous), read_manifest(run.dir, current)
+    )
     run.changed()
     event = run.event(
         "out-of-step-change",
@@ -606,7 +617,10 @@ def _made_stale(run: Run, paths: list[str]) -> list[str]:
         if latest is None or latest["kind"] != "gate-approval":
             continue
         touches = _gate_paths(run, gate)
-        if any(touches(path) for path in paths) and gate_digest(run, gate) != latest["digest"]:
+        if (
+            any(touches(path) for path in paths)
+            and gate_digest(run, gate) != latest["digest"]
+        ):
             stale.append(latest["id"])
     if f"{run.feature_dir}/decisions.md" in paths:
         resolved = _resolution_digests(run)
@@ -623,7 +637,7 @@ def _made_stale(run: Run, paths: list[str]) -> list[str]:
 
 
 def gate_artifact(run: Run, gate: str) -> str:
-    """What a gate's approval is bound to, as shown to the operator."""
+    """Return what a gate's approval is bound to, as shown to the operator."""
     feature = run.feature_dir
     return {
         "scope": f"Issue #{run.issue} and {feature}",
@@ -637,7 +651,7 @@ def gate_artifact(run: Run, gate: str) -> str:
 
 
 def gate_digest(run: Run, gate: str) -> str | None:
-    """The digest a gate's approval is bound to now (data-model binding)."""
+    """Return the digest a gate's approval is bound to now (data-model binding)."""
     if gate == "scope":
         return "sha256:" + _sha(f"{run.issue}\n{run.feature_dir}".encode())
     if gate in {"implementation", "final"}:
@@ -654,13 +668,18 @@ def gate_digest(run: Run, gate: str) -> str | None:
 def _latest_gate_decision(humans: list[dict], gate: str) -> dict | None:
     found = None
     for entry in humans:
-        if entry["kind"] in {"gate-approval", "gate-rejection"} and entry["gate"] == gate:
+        if (
+            entry["kind"] in {"gate-approval", "gate-rejection"}
+            and entry["gate"] == gate
+        ):
             found = entry
     return found
 
 
-def approval_state(run: Run, gate: str, humans: list[dict] | None = None) -> tuple[str, dict | None]:
-    """(`current`, `stale`, `rejected` or `pending`, the deciding HD) of a gate.
+def approval_state(  # noqa: PLR0911 - complexity inherent to one guarded flow
+    run: Run, gate: str, humans: list[dict] | None = None
+) -> tuple[str, dict | None]:
+    """Return (`current`, `stale`, `rejected` or `pending`, the deciding HD) of a gate.
 
     The latest approval or rejection decides: a rejection keeps the gate
     closed until a later approval at a current digest. Intent is also current
@@ -731,7 +750,12 @@ def _check(run: Run, name: str) -> tuple[bool, str]:
         return _checks_result(run)
     try:
         CHECKS[name](run.feature())
-    except (artifacts.ContractError, autonomy.AutonomyError, OSError, ValueError) as error:
+    except (
+        artifacts.ContractError,
+        autonomy.AutonomyError,
+        OSError,
+        ValueError,
+    ) as error:
         return False, str(error)[:DETAIL_LIMIT]
     return True, "passed"
 
@@ -742,7 +766,10 @@ def _scope_check(run: Run) -> tuple[bool, str]:
     if match is None or int(match.group(1)) != run.issue:
         return False, f"{run.feature_dir} is not for Issue #{run.issue}"
     if pin.get("feature") not in {None, run.feature_dir}:
-        return False, f"the pinned feature is {pin.get('feature')}, not {run.feature_dir}"
+        return (
+            False,
+            f"the pinned feature is {pin.get('feature')}, not {run.feature_dir}",
+        )
     if run.record["status"] not in {"active", "completed"}:
         return False, f"run {run.id} is {run.record['status']}"
     return True, f"Issue #{run.issue} matches {run.feature_dir}"
@@ -802,7 +829,7 @@ def evaluate(
     return passed, detail, event["id"]
 
 
-def _requirement(
+def _requirement(  # noqa: PLR0913 - complexity inherent to one guarded flow
     run: Run,
     item: tuple[str, str | None],
     purpose: str,
@@ -863,7 +890,7 @@ def entry(
     record: bool = True,
     memo: dict | None = None,
 ) -> tuple[bool, str | None, str | None, str | None]:
-    """A phase's entry condition now; (passed, failing check, E-id, detail).
+    """Return a phase's entry condition now; (passed, failing check, E-id, detail).
 
     Requirements run in order and stop at the first failure; each one run
     is recorded (purpose `entry`) unless `record` is False.
@@ -881,7 +908,7 @@ def entry(
 def gate_precondition(
     run: Run, gate: str, *, record: bool = True, memo: dict | None = None
 ) -> tuple[bool, str | None, str | None, str | None]:
-    """A gate's precondition now; (passed, failing check, E-id, detail)."""
+    """Return a gate's precondition now; (passed, failing check, E-id, detail)."""
     humans = run.humans()
     for item in GATES[gate]["pre"]:
         passed, detail, event_id, name = _requirement(
@@ -893,14 +920,16 @@ def gate_precondition(
 
 
 def allowed_actions(run: Run) -> list[str]:
-    """The actions allowed now, in the contract's order; nothing is recorded."""
+    """Return the actions allowed now, in the contract's order; nothing is recorded."""
     memo: dict = {}
     actions = []
     for phase in PHASES:
         if phase == "review":
-            for kind in REVIEW_KINDS:
-                if entry(run, phase, kind, record=False, memo=memo)[0]:
-                    actions.append(f"ballast run step {run.id} review --kind {kind}")
+            actions.extend(
+                f"ballast run step {run.id} review --kind {kind}"
+                for kind in REVIEW_KINDS
+                if entry(run, phase, kind, record=False, memo=memo)[0]
+            )
         elif entry(run, phase, record=False, memo=memo)[0]:
             actions.append(f"ballast run step {run.id} {phase}")
     humans = run.humans()
@@ -919,7 +948,7 @@ def allowed_actions(run: Run) -> list[str]:
 
 
 def _reactivate(run: Run) -> None:
-    """A completed or published run goes back to active once final is stale."""
+    """Return a completed or published run goes back to active once final is stale."""
     if run.record["status"] in {"completed", "published"}:
         state, _ = approval_state(run, "final")
         if state != "current":
@@ -930,7 +959,9 @@ def _reactivate(run: Run) -> None:
 # --- Ledger and archive ---------------------------------------------------------
 
 
-def _ledger(run: Run, kind: str, data: dict[str, Any], event_id: str | None = None) -> None:
+def _ledger(
+    run: Run, kind: str, data: dict[str, Any], event_id: str | None = None
+) -> None:
     """Append one runner event to the shared ledger; a failure is reported only."""
     try:
         ledger.append(
@@ -942,7 +973,7 @@ def _ledger(run: Run, kind: str, data: dict[str, Any], event_id: str | None = No
 
 
 def _log_line(run: Run) -> int:
-    """The Chat run's own monotonic counter for a ledger step occurrence."""
+    """Return the Chat run's own monotonic counter for a ledger step occurrence."""
     try:
         events, _ = ledger.read(run.root, run.id)
     except (ledger.LedgerError, OSError, ValueError):
@@ -966,7 +997,16 @@ def _ledger_snapshot(run: Run) -> None:
 def _ledger_gate(run: Run, gate: str, choice: str) -> None:
     gate_id = GATES[gate]["gate_id"]
     line = _log_line(run)
-    _ledger(run, "step", {"action": "started", "step_id": gate_id, "step_type": "gate", "log_line": line})
+    _ledger(
+        run,
+        "step",
+        {
+            "action": "started",
+            "step_id": gate_id,
+            "step_type": "gate",
+            "log_line": line,
+        },
+    )
     _ledger(
         run,
         "step",
@@ -982,7 +1022,7 @@ def _ledger_gate(run: Run, gate: str, choice: str) -> None:
 
 
 def phase_graph() -> dict:
-    """The phase graph projection archived at start (`run/chat.json`)."""
+    """Return the phase graph projection archived at start (`run/chat.json`)."""
     return {
         "workflow_id": WORKFLOW_ID,
         "phases": {
@@ -995,7 +1035,11 @@ def phase_graph() -> dict:
             for name, spec in PHASES.items()
         },
         "review_kinds": {
-            kind: {"report": spec["report"], "skill": spec["skill"], "step_id": spec["step_id"]}
+            kind: {
+                "report": spec["report"],
+                "skill": spec["skill"],
+                "step_id": spec["step_id"],
+            }
             for kind, spec in REVIEW_KINDS.items()
         },
         "gates": {
@@ -1009,7 +1053,11 @@ def _archive_definition(run: Run) -> dict[str, Any]:
     """Archive the trusted ballast-feature definition and the phase graph."""
     source = run.root / ".specify/workflows" / WORKFLOW_ID / "workflow.yml"
     archive = ledger.archive_dir(run.root, run.id) / "run"
-    data: dict[str, Any] = {"action": "started", "workflow_id": WORKFLOW_ID, "mode": "chat"}
+    data: dict[str, Any] = {
+        "action": "started",
+        "workflow_id": WORKFLOW_ID,
+        "mode": "chat",
+    }
     with ledger.archive_lock(run.root, run.id, exclusive=True):
         archive.mkdir(parents=True, exist_ok=True)
         if source.is_file() and not source.is_symlink():
@@ -1034,13 +1082,15 @@ def archive(run: Run) -> None:
         with ledger.archive_lock(run.root, run.id, exclusive=True):
             shutil.copytree(run.dir, target / "operator", dirs_exist_ok=True)
             if logs.is_dir() and not logs.is_symlink() and not logs.parent.is_symlink():
-                shutil.copytree(logs, target / "state", dirs_exist_ok=True, symlinks=True)
+                shutil.copytree(
+                    logs, target / "state", dirs_exist_ok=True, symlinks=True
+                )
     except (OSError, ValueError, ledger.LedgerError) as error:
         _err(f"ballast: Chat archive failed: {error}")
 
 
 def checkpoint(run: Run) -> None:
-    """The Draft PR checkpoint (#17), last in the invocation; never assigns status."""
+    """Run the Draft PR checkpoint (#17), last in the invocation; assign no status."""
     try:
         line = draft_pr.format_line(draft_pr.checkpoint(run.root, run.id))
     except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
@@ -1076,7 +1126,9 @@ def synchronize(
             (e["event_id"] for e in reversed(events) if e["kind"] == "branch_sync"),
             None,
         )
-    run.event("sync", outcome=outcome.outcome, cause=outcome.cause, ledger_event=pointer)
+    run.event(
+        "sync", outcome=outcome.outcome, cause=outcome.cause, ledger_event=pointer
+    )
     return outcome
 
 
@@ -1148,7 +1200,9 @@ def _choose_integrations(root: Path, requested: str) -> tuple[str, str]:
     if reason is not None:
         raise _integration_refusal(root, requested, reason)
     other = _other(requested)
-    review = other if shutil.which(other) and _confinable(root, other) is None else requested
+    review = (
+        other if shutil.which(other) and _confinable(root, other) is None else requested
+    )
     return requested, review
 
 
@@ -1162,19 +1216,25 @@ def _active_chat_runs(root: Path) -> list[str]:
         except autonomy.AutonomyError:
             continue
         if record and record["workflow"] == autonomy.CHAT and record.get("active_step"):
-            found.append(f"run {record['run_id']}, step {record['active_step']['step']}")
+            found.append(
+                f"run {record['run_id']}, step {record['active_step']['step']}"
+            )
     return found
 
 
 def continued_by(root: Path, run_id: str) -> str | None:
-    """The Chat run that continues `run_id`, if one does."""
+    """Return the Chat run that continues `run_id`, if one does."""
     runs = launcher.state_dir(root) / "runs"
     for path in sorted(runs.iterdir()) if runs.is_dir() else []:
         try:
             record = autonomy.find_run(root, path.name)
         except autonomy.AutonomyError:
             continue
-        if record and record["workflow"] == autonomy.CHAT and record.get("continues") == run_id:
+        if (
+            record
+            and record["workflow"] == autonomy.CHAT
+            and record.get("continues") == run_id
+        ):
             return record["run_id"]
     return None
 
@@ -1226,12 +1286,14 @@ def _new_run(  # noqa: PLR0913 - one record, every field explicit
     return Run(root, record)
 
 
-def start(root: Path, options: list[str]) -> int:  # noqa: C901 - one guarded start
+def start(root: Path, options: list[str]) -> int:
     """`ballast run start --mode chat`: record, synchronize, summarize; no agent."""
     inputs = _start_inputs(options)
     feature = inputs.get("feature_directory", "")
     if not autonomy.FEATURE.fullmatch(feature):
-        raise Refused(EXIT_REFUSED, "start needs one -i feature_directory=specs/<issue>-<slug>")
+        raise Refused(
+            EXIT_REFUSED, "start needs one -i feature_directory=specs/<issue>-<slug>"
+        )
     model = _model(inputs.get("model"))
     active = _active_chat_runs(root)
     if active:
@@ -1240,7 +1302,9 @@ def start(root: Path, options: list[str]) -> int:  # noqa: C901 - one guarded st
     try:
         autonomy.write_feature_json(root, feature)
     except (autonomy.AutonomyError, OSError) as error:
-        raise Refused(EXIT_REFUSED, f"cannot point .specify/feature.json at {feature}: {error}") from error
+        raise Refused(
+            EXIT_REFUSED, f"cannot point .specify/feature.json at {feature}: {error}"
+        ) from error
     run = _new_run(
         root,
         feature=feature,
@@ -1278,7 +1342,8 @@ def _start_entry(run: Run, step: str) -> dict | None:
 
 def _closed(run: Run, step: str) -> bool:
     return any(
-        item.get("entry") == "close" and item.get("step") == step for item in run.steps()
+        item.get("entry") == "close" and item.get("step") == step
+        for item in run.steps()
     )
 
 
@@ -1343,7 +1408,7 @@ def _first_line(text: str) -> str:
     return (text.strip().splitlines() or [""])[0][:300]
 
 
-def _postconditions(  # noqa: PLR0913 - one close, every input explicit
+def _postconditions(  # noqa: PLR0913, PLR0917 - one close, every input explicit
     run: Run,
     phase: str,
     kind: str | None,
@@ -1434,7 +1499,13 @@ def _review_report(
     allowed = REVIEW_KINDS[kind]["verdicts"]
     if not verdicts or verdicts[-1] not in allowed:
         latest = verdicts[-1] if verdicts else "none"
-        return False, f"{report} latest verdict is {latest}; expected one of {', '.join(allowed)}"
+        return (
+            False,
+            (
+                f"{report} latest verdict is {latest}; "
+                f"expected one of {', '.join(allowed)}"
+            ),
+        )
     return True, f"verdict {verdicts[-1]}"
 
 
@@ -1482,7 +1553,11 @@ def _close(  # noqa: PLR0913 - one close entry, every field explicit
     review = None
     if phase == "review" and outcome == "completed":
         review = _review_event(run, str(kind), step, start)
-    step_id = REVIEW_KINDS[str(kind)]["step_id"] if phase == "review" else PHASES[phase]["step_id"]
+    step_id = (
+        REVIEW_KINDS[str(kind)]["step_id"]
+        if phase == "review"
+        else PHASES[phase]["step_id"]
+    )
     line = int(start.get("log_line") or _log_line(run))
     ok = outcome == "completed"
     data: dict[str, Any] = {
@@ -1566,15 +1641,23 @@ def _step_inputs(options: list[str]) -> dict[str, str]:
     inputs: dict[str, str] = {}
     for flag, pair in zip(options[::2], options[1::2], strict=True):
         name, equals, value = pair.partition("=")
-        if flag not in {"-i", "--input"} or not equals or name not in {"integration", "model"}:
-            raise Refused(EXIT_REFUSED, "step accepts only -i integration=... -i model=...")
+        if (
+            flag not in {"-i", "--input"}
+            or not equals
+            or name not in {"integration", "model"}
+        ):
+            raise Refused(
+                EXIT_REFUSED, "step accepts only -i integration=... -i model=..."
+            )
         if name in inputs:
             raise Refused(EXIT_REFUSED, f"input {name} given twice")
         inputs[name] = value
     return inputs
 
 
-def _refuse(run: Run, command: str, reason: str, code: int, **fields: object) -> Refused:
+def _refuse(
+    run: Run, command: str, reason: str, code: int, **fields: object
+) -> Refused:
     """Record a refusal for a run that exists, and return the exception to raise."""
     run.event("refusal", command=command, reason=reason[:DETAIL_LIMIT], **fields)
     return Refused(code, reason)
@@ -1585,7 +1668,9 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
 ) -> int:
     """`ballast run step RUN PHASE`: the step-runner lifecycle (contracts)."""
     if phase not in PHASES:
-        raise Refused(EXIT_REFUSED, f"unknown phase {phase!r}; phases: {', '.join(PHASES)}")
+        raise Refused(
+            EXIT_REFUSED, f"unknown phase {phase!r}; phases: {', '.join(PHASES)}"
+        )
     if phase == "review" and kind not in REVIEW_KINDS:
         raise Refused(EXIT_REFUSED, f"review needs --kind {'|'.join(REVIEW_KINDS)}")
     if phase != "review" and kind is not None:
@@ -1596,11 +1681,15 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
         late_close(run)
         out_of_step(run)
         if run.record["status"] == "published":
-            raise _refuse(run, "step", f"run {run.id} is published", EXIT_REFUSED, phase=phase)
+            raise _refuse(
+                run, "step", f"run {run.id} is published", EXIT_REFUSED, phase=phase
+            )
         interactive = run.mode == "chat"
         if interactive and not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise _refuse(run, "step", NO_TERMINAL, EXIT_REFUSED, phase=phase)
-        rerun = f"ballast run step {run.id} {phase}" + (f" --kind {kind}" if kind else "")
+        rerun = f"ballast run step {run.id} {phase}" + (
+            f" --kind {kind}" if kind else ""
+        )
         outcome = synchronize(run, rerun=rerun)
         if outcome.outcome == "blocked":
             raise _refuse(
@@ -1629,13 +1718,33 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
             else inputs.get("integration", run.record["integration"])
         )
         if integration not in autonomy.INTEGRATIONS:
-            raise _refuse(run, "step", "integration must be claude or codex", EXIT_REFUSED, phase=phase)
+            raise _refuse(
+                run,
+                "step",
+                "integration must be claude or codex",
+                EXIT_REFUSED,
+                phase=phase,
+            )
         model = _model(inputs.get("model")) or run.record.get("model")
         prompt = _prompt(run, phase, kind, integration)
-        if any(marker in token for token in (prompt, model or "") for marker in agent.FORBIDDEN):
-            raise _refuse(run, "step", "refusing a permission bypass marker in the step's input", EXIT_REFUSED, phase=phase)
+        if any(
+            marker in token
+            for token in (prompt, model or "")
+            for marker in agent.FORBIDDEN
+        ):
+            raise _refuse(
+                run,
+                "step",
+                "refusing a permission bypass marker in the step's input",
+                EXIT_REFUSED,
+                phase=phase,
+            )
         if interactive:
-            reason = None if shutil.which(integration) else f"{integration} CLI not found on PATH"
+            reason = (
+                None
+                if shutil.which(integration)
+                else f"{integration} CLI not found on PATH"
+            )
             reason = reason or _confinable(root, integration)
             if reason is not None:
                 refusal = _integration_refusal(root, integration, reason)
@@ -1648,7 +1757,9 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
             raise Refused(EXIT_REFUSED, f"invalid agent scope name {unit!r}")
         log_dir = root / ".specify/workflow-state" / run.id / "agents" / name
         log_dir.mkdir(parents=True, exist_ok=True)
-        settings = f".specify/workflow-state/{run.id}/agents/{name}/claude-settings.json"
+        settings = (
+            f".specify/workflow-state/{run.id}/agents/{name}/claude-settings.json"
+        )
         if interactive and integration == "claude":
             # Before the protected snapshot: the agent sees it read-only.
             _write_settings(log_dir)
@@ -1678,15 +1789,38 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
             "log_line": line,
         }
         run.step_entry(start_entry)
-        step_id = REVIEW_KINDS[str(kind)]["step_id"] if phase == "review" else PHASES[phase]["step_id"]
-        _ledger(run, "step", {"action": "started", "step_id": step_id, "step_type": "command", "log_line": line})
+        step_id = (
+            REVIEW_KINDS[str(kind)]["step_id"]
+            if phase == "review"
+            else PHASES[phase]["step_id"]
+        )
+        _ledger(
+            run,
+            "step",
+            {
+                "action": "started",
+                "step_id": step_id,
+                "step_type": "command",
+                "log_line": line,
+            },
+        )
         lock.describe(f"step {name}")
         if interactive:
             marker = launcher.state_dir(root) / launcher.IN_PROGRESS
             marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             marker.write_text(unit + "\n")
             result = _interactive(
-                run, name, unit, integration, prompt, model, phase, role, log_dir, started_at, settings
+                run,
+                name,
+                unit,
+                integration,
+                prompt,
+                model,
+                phase,
+                role,
+                log_dir,
+                started_at,
+                settings,
             )
         else:
             result = _headless(run, integration, prompt)
@@ -1694,15 +1828,17 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
         numbers = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
         previous = {number: signal.signal(number, signal.SIG_IGN) for number in numbers}
         try:
-            return _finish(run, name, phase, kind, start_entry, result, protected, log_dir)
+            return _finish(
+                run, name, phase, kind, start_entry, result, protected, log_dir
+            )
         finally:
             for number, handler in previous.items():
                 signal.signal(number, handler)
 
 
-def _interactive(  # noqa: PLR0913 - one session, every input explicit
+def _interactive(  # noqa: PLR0913, PLR0917 - one session, every input explicit
     run: Run,
-    name: str,
+    name: str,  # noqa: ARG001 - kept for the call-site signature
     unit: str,
     integration: str,
     prompt: str,
@@ -1760,7 +1896,7 @@ def _interactive(  # noqa: PLR0913 - one session, every input explicit
 
 
 def _write_settings(log_dir: Path) -> None:
-    """The step's Claude settings: every installed headless rule, plus Chat's."""
+    """Return the step's Claude settings: every installed headless rule, plus Chat's."""
     log_fd = os.open(log_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         with agent._open_log(log_fd, "claude-settings.json") as handle:  # noqa: SLF001
@@ -1784,7 +1920,8 @@ def _headless(run: Run, integration: str, prompt: str) -> dict:
         raise KeyboardInterrupt
 
     previous = {
-        number: signal.signal(number, interrupt) for number in (signal.SIGHUP, signal.SIGTERM)
+        number: signal.signal(number, interrupt)
+        for number in (signal.SIGHUP, signal.SIGTERM)
     }
     process = subprocess.Popen([str(program), *args], cwd=run.root, env=env)  # noqa: S603
     try:
@@ -1814,7 +1951,7 @@ def _headless(run: Run, integration: str, prompt: str) -> dict:
     }
 
 
-def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915 - steps 9 to 12, in order
+def _finish(  # noqa: C901, PLR0913, PLR0915, PLR0917 - steps 9 to 12, in order
     run: Run,
     name: str,
     phase: str,
@@ -1836,13 +1973,24 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915 - steps 9 to 12, in order
             return
         with meta_file:
             meta_file.write(
-                (json.dumps({**meta, "finished_at": _now(), **fields}, indent=2) + "\n").encode()
+                (
+                    json.dumps({**meta, "finished_at": _now(), **fields}, indent=2)
+                    + "\n"
+                ).encode()
             )
 
     if interactive and not result["scope_stopped"]:
-        run.record["active_step"] = {**run.record["active_step"], "scope_stopped": False}
+        run.record["active_step"] = {
+            **run.record["active_step"],
+            "scope_stopped": False,
+        }
         run.save()
-        write_meta(exit_code=result["exit_code"], protected_changes=[], stopped_descendants=result["stopped_descendants"], scope_stopped=False)
+        write_meta(
+            exit_code=result["exit_code"],
+            protected_changes=[],
+            stopped_descendants=result["stopped_descendants"],
+            scope_stopped=False,
+        )
         _out(f"Step {name}: interrupted")
         _err(
             "ballast: the step's agent processes could not be confirmed stopped; "
@@ -1854,7 +2002,9 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915 - steps 9 to 12, in order
     if interactive:
         after = agent._protected_state(root, log_dir)  # noqa: SLF001
         tampered = sorted(
-            path for path in protected.keys() | after.keys() if protected.get(path) != after.get(path)
+            path
+            for path in protected.keys() | after.keys()
+            if protected.get(path) != after.get(path)
         )
     elif result.get("headless_code") == agent.EXIT_TAMPERED:
         tampered = ["(see the agent wrapper's protected-file report)"]
@@ -1863,7 +2013,12 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915 - steps 9 to 12, in order
     if tampered:
         if interactive:
             agent._mark_tampered(root, tampered)  # noqa: SLF001
-        write_meta(exit_code=result["exit_code"], protected_changes=tampered, stopped_descendants=result["stopped_descendants"], scope_stopped=True)
+        write_meta(
+            exit_code=result["exit_code"],
+            protected_changes=tampered,
+            stopped_descendants=result["stopped_descendants"],
+            scope_stopped=True,
+        )
         _close(
             run,
             step=name,
@@ -1942,8 +2097,13 @@ def _mode_history(record: dict) -> str:
     parts = []
     for change in record["mode_history"]:
         extra = f" ({change['decision_id']})" if change.get("decision_id") else ""
-        reason = f": {autonomy.neutralize(change['reason'])}" if change.get("reason") else ""
-        parts.append(f"{change['action']} {change['mode']} at {change['at']} by {change['by']}{extra}{reason}")
+        reason = (
+            f": {autonomy.neutralize(change['reason'])}" if change.get("reason") else ""
+        )
+        parts.append(
+            f"{change['action']} {change['mode']} at {change['at']} "
+            f"by {change['by']}{extra}{reason}"
+        )
     return "; ".join(parts)
 
 
@@ -1964,7 +2124,7 @@ def _source_decisions(run: Run) -> list[dict]:
     return decisions
 
 
-def superseding(run: Run, humans: list[dict]) -> dict[str, str]:
+def superseding(run: Run, humans: list[dict]) -> dict[str, str]:  # noqa: ARG001 - kept for the call-site signature
     """{PD id: the HD that superseded it} for a continued Autonomous source."""
     found = {}
     for entry in humans:
@@ -1974,8 +2134,8 @@ def superseding(run: Run, humans: list[dict]) -> dict[str, str]:
     return found
 
 
-def summary(run: Run) -> str:  # noqa: C901, PLR0912 - seven fixed sections
-    """The handoff summary, built from the operator record only (FR-019)."""
+def summary(run: Run) -> str:  # noqa: C901, PLR0912, PLR0915 - seven fixed sections
+    """Return the handoff summary, built from the operator record only (FR-019)."""
     record = run.record
     humans = run.humans()
     events = run.events()
@@ -1994,10 +2154,14 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912 - seven fixed sections
     closes = [item for item in steps if item.get("entry") == "close"]
     for close in closes:
         begin = starts.get(close["step"], {})
-        phase = close["phase"] + (f" ({close['review_kind']})" if close.get("review_kind") else "")
+        phase = close["phase"] + (
+            f" ({close['review_kind']})" if close.get("review_kind") else ""
+        )
         lines.append(
-            f"  - {phase}: {begin.get('integration')}/{begin.get('model', 'unreported')} "
-            f"({begin.get('role')}), {begin.get('started_at')} to {close['ended_at']}: "
+            f"  - {phase}: {begin.get('integration')}/"
+            f"{begin.get('model', 'unreported')} "
+            f"({begin.get('role')}), {begin.get('started_at')} "
+            f"to {close['ended_at']}: "
             f"{close['outcome']}"
             + (" (closed late)" if close.get("late_close") else "")
         )
@@ -2006,31 +2170,44 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912 - seven fixed sections
     lines += ["", "Failed checks:"]
     latest: dict[str, dict] = {}
     for event in events:
-        if event["kind"] == "check" and not event["check"].endswith("-approval") and event["check"] not in RECORD_CHECKS:
+        if (
+            event["kind"] == "check"
+            and not event["check"].endswith("-approval")
+            and event["check"] not in RECORD_CHECKS
+        ):
             latest[event["check"]] = event
     failed = [event for event in latest.values() if not event["passed"]]
     lines += [
-        f"  - {event['check']} ({event['id']}): {_first_line(event['detail'])}" for event in failed
+        f"  - {event['check']} ({event['id']}): {_first_line(event['detail'])}"
+        for event in failed
     ] or ["  none"]
     lines += ["", "Gates:"]
     for gate in GATES:
         state, decision = approval_state(run, gate, humans)
         if state == "current":
-            text = "approved, current" + (f" ({decision['id']})" if decision else " (registered intent block)")
+            text = "approved, current" + (
+                f" ({decision['id']})" if decision else " (registered intent block)"
+            )
         elif state == "stale":
             change = next(
                 (
                     event["id"]
                     for event in reversed(events)
-                    if event["kind"] == "out-of-step-change" and decision and decision["id"] in event.get("stale", [])
+                    if event["kind"] == "out-of-step-change"
+                    and decision
+                    and decision["id"] in event.get("stale", [])
                 ),
                 None,
             )
             text = f"approved, stale ({decision['id'] if decision else 'none'}" + (
-                f"; made stale by {change})" if change else "; the artifact changed since)"
+                f"; made stale by {change})"
+                if change
+                else "; the artifact changed since)"
             )
         elif state == "rejected":
-            text = f"rejected ({decision['id']}: {autonomy.neutralize(decision['ref'])})"
+            text = (
+                f"rejected ({decision['id']}: {autonomy.neutralize(decision['ref'])})"
+            )
         else:
             text = "pending"
         lines.append(f"  - {gate}: {text}")
@@ -2040,7 +2217,9 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912 - seven fixed sections
     if path.is_file() and not path.is_symlink():
         text = path.read_text(encoding="utf-8", errors="replace")
         proposals = [
-            dec for dec, kind, _ in artifacts.decision_sections(text) if kind.lower() == "proposal"
+            dec
+            for dec, kind, _ in artifacts.decision_sections(text)
+            if kind.lower() == "proposal"
         ]
         resolved = artifacts.human_resolutions(run.feature(), text)
         open_lines += [
@@ -2050,7 +2229,11 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912 - seven fixed sections
         ]
     replaced = superseding(run, humans)
     for decision in autonomy.current_decisions(_source_decisions(run)):
-        state = f"superseded by {replaced[decision['id']]}" if decision["id"] in replaced else "not yet superseded"
+        state = (
+            f"superseded by {replaced[decision['id']]}"
+            if decision["id"] in replaced
+            else "not yet superseded"
+        )
         open_lines.append(
             f"  - {decision['id']} ({decision['point']}, agent-provisional, {state}): "
             f"{autonomy.neutralize(decision['summary'])}"
@@ -2064,11 +2247,13 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912 - seven fixed sections
     for index, event in enumerate(events):
         if last_close and event.get("step") == last_close:
             since = index + 1
-    changes = [event for event in events[since:] if event["kind"] == "out-of-step-change"]
+    changes = [
+        event for event in events[since:] if event["kind"] == "out-of-step-change"
+    ]
     lines += [
         f"  - {event['id']}: {len(event['paths']) + event.get('more', 0)} path(s): "
         + ", ".join(draft_pr.printable(p) for p in event["paths"][:10])
-        + (" ..." if len(event["paths"]) > 10 or event.get("more") else "")
+        + (" ..." if len(event["paths"]) > 10 or event.get("more") else "")  # noqa: PLR2004 - preview cap
         for event in changes
     ] or ["  none"]
     lines += ["", "Allowed next actions:"]
@@ -2102,17 +2287,28 @@ def _autonomous_status(root: Path, record: dict) -> str:
     except autonomy.AutonomyError:
         block = None
     lines = [
-        f"Autonomous run {record['run_id']} ({record['status']}) for #{record['issue']} "
-        f"({record['feature']})",
+        (
+            f"Autonomous run {record['run_id']} ({record['status']}) "
+            f"for #{record['issue']} "
+            f"({record['feature']})"
+        ),
         f"Mode: {autonomy.effective_mode(record)}; history: {_mode_history(record)}",
     ]
     if block:
-        lines.append(f"Block ({block['category']}): {autonomy.neutralize(block['condition'])}")
+        lines.append(
+            f"Block ({block['category']}): {autonomy.neutralize(block['condition'])}"
+        )
     lines += [
-        f"Provisional decisions: {len(autonomy.read_decisions(root, record['run_id']))}, "
-        "all agent-provisional",
-        "To continue it in Chat: ballast run continue "
-        f"{record['run_id']} --reason block-resolved|changes-requested --ref TEXT --mode chat",
+        (
+            "Provisional decisions: "
+            f"{len(autonomy.read_decisions(root, record['run_id']))}, "
+            "all agent-provisional"
+        ),
+        (
+            "To continue it in Chat: ballast run continue "
+            f"{record['run_id']} --reason block-resolved|changes-requested "
+            "--ref TEXT --mode chat"
+        ),
     ]
     return "\n".join(lines)
 
@@ -2122,7 +2318,10 @@ def _autonomous_status(root: Path, record: dict) -> str:
 
 def _terminal(command: str) -> None:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        message = f"{command} needs a terminal for its typed confirmation; nothing was recorded"
+        message = (
+            f"{command} needs a terminal for its typed confirmation; "
+            "nothing was recorded"
+        )
         raise Refused(EXIT_REFUSED, message)
 
 
@@ -2146,7 +2345,9 @@ def _require_no_step(run: Run, command: str) -> None:
         )
 
 
-def _gate_decision(root: Path, run_id: str, gate: str, choice: str, reason: str | None) -> int:  # noqa: C901, PLR0912, PLR0915 - one guarded decision
+def _gate_decision(  # noqa: C901, PLR0912 - complexity inherent to one guarded flow
+    root: Path, run_id: str, gate: str, choice: str, reason: str | None
+) -> int:
     command = "approve" if choice == "approve" else "reject"
     if gate not in GATES:
         raise Refused(EXIT_REFUSED, f"unknown gate {gate!r}; gates: {', '.join(GATES)}")
@@ -2172,26 +2373,48 @@ def _gate_decision(root: Path, run_id: str, gate: str, choice: str, reason: str 
             )
         digest = gate_digest(run, gate)
         if digest is None:
-            raise _refuse(run, command, f"{gate_artifact(run, gate)} is missing", EXIT_BLOCKED, gate=gate)
+            raise _refuse(
+                run,
+                command,
+                f"{gate_artifact(run, gate)} is missing",
+                EXIT_BLOCKED,
+                gate=gate,
+            )
         humans = run.humans()
         point = GATES[gate]["point"]
         replaced = superseding(run, humans)
-        supersedes = [
-            entry["id"]
-            for entry in autonomy.current(_source_decisions(run), point)
-            if entry["id"] not in replaced
-        ] if choice == "approve" else []
+        supersedes = (
+            [
+                entry["id"]
+                for entry in autonomy.current(_source_decisions(run), point)
+                if entry["id"] not in replaced
+            ]
+            if choice == "approve"
+            else []
+        )
         _out(f"Gate: {gate}")
         _out(f"Artifact: {gate_artifact(run, gate)}")
         _out(f"Digest: {digest}")
         if supersedes:
-            _out(f"Supersedes agent-provisional decisions: {', '.join(supersedes)} (they stay labeled agent-provisional)")
+            _out(
+                f"Supersedes agent-provisional decisions: {', '.join(supersedes)} "
+                "(they stay labeled agent-provisional)"
+            )
         if not _confirm(f"{command} {gate}"):
-            _out(f"Not {'approved' if choice == 'approve' else 'rejected'}; nothing was recorded.")
+            _out(
+                f"Not {'approved' if choice == 'approve' else 'rejected'}; "
+                "nothing was recorded."
+            )
             return EXIT_REFUSED
         run.changed()
         if gate_digest(run, gate) != digest:
-            raise _refuse(run, command, f"{gate_artifact(run, gate)} changed while you confirmed", EXIT_REFUSED, gate=gate)
+            raise _refuse(
+                run,
+                command,
+                f"{gate_artifact(run, gate)} changed while you confirmed",
+                EXIT_REFUSED,
+                gate=gate,
+            )
         for item in GATES[gate]["pre"]:
             _requirement(run, item, "gate", humans, record=True)
         if choice == "approve" and gate == "intent":
@@ -2231,7 +2454,9 @@ def _gate_decision(root: Path, run_id: str, gate: str, choice: str, reason: str 
     return EXIT_OK
 
 
-def _requirement_event(run: Run, name: str | None, detail: str | None, gate: str) -> tuple[bool, str, str, str]:
+def _requirement_event(
+    run: Run, name: str | None, detail: str | None, gate: str
+) -> tuple[bool, str, str, str]:
     event = run.event(
         "check",
         check=str(name),
@@ -2267,13 +2492,29 @@ def resolve(root: Path, run_id: str, decision: str) -> int:
         out_of_step(run)
         _require_no_step(run, "resolve")
         path = run.file("decisions.md")
-        text = path.read_text(encoding="utf-8") if path.is_file() and not path.is_symlink() else ""
+        text = (
+            path.read_text(encoding="utf-8")
+            if path.is_file() and not path.is_symlink()
+            else ""
+        )
         sections = artifacts.decision_sections(text)
-        if not any(dec == decision and kind.lower() == "proposal" for dec, kind, _ in sections):
-            raise _refuse(run, "resolve", f"decisions.md has no {decision} — Proposal", EXIT_REFUSED)
+        if not any(
+            dec == decision and kind.lower() == "proposal" for dec, kind, _ in sections
+        ):
+            raise _refuse(
+                run,
+                "resolve",
+                f"decisions.md has no {decision} — Proposal",
+                EXIT_REFUSED,
+            )
         body = artifacts.latest_resolutions(text).get(decision)
         if body is None:
-            raise _refuse(run, "resolve", f"decisions.md has no {decision} — Resolution", EXIT_REFUSED)
+            raise _refuse(
+                run,
+                "resolve",
+                f"decisions.md has no {decision} — Resolution",
+                EXIT_REFUSED,
+            )
         digest = artifacts.resolution_digest(body)
         _out(f"{decision} — Resolution:")
         _out(body.strip())
@@ -2281,10 +2522,22 @@ def resolve(root: Path, run_id: str, decision: str) -> int:
         if not _confirm(f"resolve {decision}"):
             _out("Not resolved; nothing was recorded.")
             return EXIT_REFUSED
-        current = artifacts.latest_resolutions(path.read_text(encoding="utf-8")).get(decision)
+        current = artifacts.latest_resolutions(path.read_text(encoding="utf-8")).get(
+            decision
+        )
         if current is None or artifacts.resolution_digest(current) != digest:
-            raise _refuse(run, "resolve", f"the resolution of {decision} changed while you confirmed", EXIT_REFUSED)
-        entry = run.human("decision-resolution", f"resolve {decision}", decision=decision, digest=digest)
+            raise _refuse(
+                run,
+                "resolve",
+                f"the resolution of {decision} changed while you confirmed",
+                EXIT_REFUSED,
+            )
+        entry = run.human(
+            "decision-resolution",
+            f"resolve {decision}",
+            decision=decision,
+            digest=digest,
+        )
         archive(run)
         _out(f"Recorded {entry['id']}: {decision} resolved at {digest}")
     return EXIT_OK
@@ -2318,7 +2571,11 @@ def checks(root: Path, run_id: str) -> int:
         if "tree" in snapshot:
             bound["snapshot"] = snapshot["tree"]
         if result["unavailable"]:
-            _ledger(run, "verification", {"check_id": "project-checks", "status": "unavailable", **bound})
+            _ledger(
+                run,
+                "verification",
+                {"check_id": "project-checks", "status": "unavailable", **bound},
+            )
             _out(f"No [checks] table: checks unavailable ({event['id']})")
         for index, item in enumerate(result["results"], start=1):
             passed = item["exit"] == 0
@@ -2334,7 +2591,8 @@ def checks(root: Path, run_id: str) -> int:
             )
             _out(
                 f"Check {draft_pr.printable(item['command'])}: exit {item['exit']} in "
-                f"{item['seconds']:.1f}s" + (" (timed out)" if item["timed_out"] else "")
+                f"{item['seconds']:.1f}s"
+                + (" (timed out)" if item["timed_out"] else "")
             )
         archive(run)
         if result["protected_changes"]:
@@ -2385,7 +2643,9 @@ def change_mode(root: Path, run_id: str, target: str, reason: str | None) -> int
         _require_no_step(run, "mode")
         current = run.mode
         if current == target:
-            raise _refuse(run, "mode", f"run {run.id} is already in {target} mode", EXIT_REFUSED)
+            raise _refuse(
+                run, "mode", f"run {run.id} is already in {target} mode", EXIT_REFUSED
+            )
         decision = autonomy.append_human_decision(
             root,
             run.id,
@@ -2394,13 +2654,23 @@ def change_mode(root: Path, run_id: str, target: str, reason: str | None) -> int
             resolves=None,
             extra={"from": current, "to": target},
         )
-        autonomy.change_mode(run.record, target, reason=reason, decision_id=decision["id"])
+        autonomy.change_mode(
+            run.record, target, reason=reason, decision_id=decision["id"]
+        )
         run.save()
-        _ledger(run, "run", {"action": "ended", "status": "mode-changed", "mode": target})
+        _ledger(
+            run, "run", {"action": "ended", "status": "mode-changed", "mode": target}
+        )
         archive(run)
-        _out(f"Recorded {decision['id']}: run {run.id} switched from {current} to {target}.")
+        _out(
+            f"Recorded {decision['id']}: run {run.id} switched from {current} "
+            f"to {target}."
+        )
         if target == "human-gated":
-            _out("Steps now run headless through the agent wrapper; gates still need `ballast run approve`.")
+            _out(
+                "Steps now run headless through the agent wrapper; "
+                "gates still need `ballast run approve`."
+            )
     return EXIT_OK
 
 
@@ -2417,36 +2687,67 @@ def _link_engine_run(root: Path, run_id: str, target: str, reason: str) -> int:
     """Continue a paused `ballast-feature` engine run as a linked Chat run."""
     state = _engine_state(root, run_id)
     if state.get("workflow_id") != WORKFLOW_ID:
-        raise Refused(EXIT_REFUSED, f"run {run_id} is not a Chat run or a ballast-feature run")
+        raise Refused(
+            EXIT_REFUSED, f"run {run_id} is not a Chat run or a ballast-feature run"
+        )
     if target != "chat":
-        raise Refused(EXIT_REFUSED, f"run {run_id} is a ballast-feature run; it can only continue in chat")
-    if state.get("status") not in {"paused", "failed", "interrupted", "cancelled", "aborted"}:
-        raise Refused(EXIT_REFUSED, f"run {run_id} is {state.get('status')}; only a paused or stopped run continues in Chat")
+        raise Refused(
+            EXIT_REFUSED,
+            f"run {run_id} is a ballast-feature run; it can only continue in chat",
+        )
+    if state.get("status") not in {
+        "paused",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "aborted",
+    }:
+        raise Refused(
+            EXIT_REFUSED,
+            f"run {run_id} is {state.get('status')}; "
+            "only a paused or stopped run continues in Chat",
+        )
     existing = continued_by(root, run_id)
     if existing:
-        raise Refused(EXIT_REFUSED, f"run {run_id} already continues as Chat run {existing}")
+        raise Refused(
+            EXIT_REFUSED, f"run {run_id} already continues as Chat run {existing}"
+        )
     pin = branch_sync.read_pin(root, run_id)
     if "branch" not in pin or "feature" not in pin:
-        raise Refused(EXIT_REFUSED, f"run {run_id} has no branch pin; start a Chat run instead")
+        raise Refused(
+            EXIT_REFUSED, f"run {run_id} has no branch pin; start a Chat run instead"
+        )
     feature = pin["feature"]
     integrations = [name for name in autonomy.INTEGRATIONS if shutil.which(name)]
     if not integrations:
         raise Refused(EXIT_REFUSED, "no agent CLI (claude or codex) found on PATH")
     integration, review = _choose_integrations(root, "auto")
-    run = _new_run(root, feature=feature, integration=integration, review=review, continues=run_id, reason=reason)
+    run = _new_run(
+        root,
+        feature=feature,
+        integration=integration,
+        review=review,
+        continues=run_id,
+        reason=reason,
+    )
     decision = run.human("mode-change", reason, **{"from": "human-gated", "to": "chat"})
     run.record["mode_history"][0]["decision_id"] = decision["id"]
     run.save()
     branch_sync._write_json(  # noqa: SLF001 - the continuation inherits the pin
         branch_sync._pin_path(root, run.id),  # noqa: SLF001
-        {key: value for key, value in pin.items() if key in {"branch", "base", "base_commit", "feature"}},
+        {
+            key: value
+            for key, value in pin.items()
+            if key in {"branch", "base", "base_commit", "feature"}
+        },
     )
     data = _archive_definition(run)
     _ledger(run, "run", data, "runner:run")
     _ledger(run, "run", {"action": "ended", "status": "mode-changed", "mode": "chat"})
     _out(
-        f"Recorded {decision['id']}: ballast-feature run {run_id} continues as Chat run "
-        f"{run.id}. Its engine state is untouched; plan and tasks approvals are asked again."
+        f"Recorded {decision['id']}: ballast-feature run {run_id} continues as "
+        f"Chat run {run.id}. Its engine state is untouched; "
+        "plan and tasks approvals are asked again."
     )
     _out(summary(run))
     archive(run)
@@ -2454,7 +2755,7 @@ def _link_engine_run(root: Path, run_id: str, target: str, reason: str) -> int:
 
 
 def continue_run(root: Path, source: dict, decision: dict) -> int:
-    """Steps 4 to 6 of `continue --mode chat`: the linked Chat run (AC-022).
+    """Run steps 4 to 6 of `continue --mode chat`: the linked Chat run (AC-022).
 
     `run.py` has already recorded the human decision, lowered the source to
     chat, set it to `continued` and re-rendered its committed record.
@@ -2476,8 +2777,10 @@ def continue_run(root: Path, source: dict, decision: dict) -> int:
         source_run=source["run_id"],
     )
     _out(
-        f"Recorded {decision['id']} ({decision['kind']}); run {source['run_id']} is lowered "
-        f"to chat and continues as Chat run {run.id}. Every gate asks for your approval; "
+        f"Recorded {decision['id']} ({decision['kind']}); "
+        f"run {source['run_id']} is lowered "
+        f"to chat and continues as Chat run {run.id}. "
+        "Every gate asks for your approval; "
         "its provisional decisions stay agent-provisional."
     )
     if outcome.outcome == "blocked":
@@ -2503,16 +2806,21 @@ LOGS_LOCAL = (
 
 
 def _agent_value(value: object) -> str:
-    """An agent-derived value for the PR: neutralized, never an approval claim."""
+    """Return an agent-derived value for the PR: neutralized, no approval claim."""
     text = autonomy.neutralize(str(value))
-    if autonomy.HUMAN_APPROVAL.search(text) or autonomy.WORKFLOW_MARKER.search(str(value)):
-        message = f"an agent-derived value claims an approval or carries a marker: {text[:60]}"
+    if autonomy.HUMAN_APPROVAL.search(text) or autonomy.WORKFLOW_MARKER.search(
+        str(value)
+    ):
+        message = (
+            "an agent-derived value claims an approval or carries a marker: "
+            f"{text[:60]}"
+        )
         raise autonomy.AutonomyError(message, "postcondition")
     return text
 
 
 def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  # noqa: C901, PLR0912, PLR0915 - fixed sections
-    """The Chat section of the Draft PR, rendered from operator records only."""
+    """Return the Chat section of the Draft PR, rendered from operator records only."""
     run = Run(root, record)
     humans = run.humans()
     events = run.events()
@@ -2530,10 +2838,16 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
         CHAT_BEGIN,
         f"## Chat run {run.id}",
         "",
-        f"Mode: {run.mode} (driven by the operator; every gate below was approved by "
-        f"the operator through `ballast run approve`). History: {_mode_history(record)}.",
-        f"Feature: {run.feature_dir}{SEP}Issue #{run.issue}{SEP}branch "
-        f"{_agent_value(pin.get('branch', 'not pinned'))}{SEP}run {run.id}{source}",
+        (
+            f"Mode: {run.mode} (driven by the operator; every gate below was "
+            "approved by "
+            "the operator through `ballast run approve`). "
+            f"History: {_mode_history(record)}."
+        ),
+        (
+            f"Feature: {run.feature_dir}{SEP}Issue #{run.issue}{SEP}branch "
+            f"{_agent_value(pin.get('branch', 'not pinned'))}{SEP}run {run.id}{source}"
+        ),
         "",
         "### Steps",
         "",
@@ -2544,19 +2858,28 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
         failed = [item for item in closes if item["outcome"] != "completed"]
         lines.append(f"{len(closes)} steps recorded; {len(failed)} did not complete.")
         if failed:
-            lines.append(f"Latest failure: {failed[-1]['phase']} {failed[-1]['outcome']}.")
+            lines.append(
+                f"Latest failure: {failed[-1]['phase']} {failed[-1]['outcome']}."
+            )
     else:
         lines += [
-            "| Phase | Agent (provider/model, role) | Started | Ended | Outcome | Postcondition |",
+            (
+                "| Phase | Agent (provider/model, role) | Started | Ended | "
+                "Outcome | Postcondition |"
+            ),
             "| --- | --- | --- | --- | --- | --- |",
         ]
         for close in closes:
             begin = starts.get(close["step"], {})
-            phase = close["phase"] + (f" ({close['review_kind']})" if close.get("review_kind") else "")
+            phase = close["phase"] + (
+                f" ({close['review_kind']})" if close.get("review_kind") else ""
+            )
             lines.append(
                 f"| {phase} | {_agent_value(begin.get('integration'))}/"
-                f"{_agent_value(begin.get('model', 'unreported'))}, {begin.get('role')} | "
-                f"{begin.get('started_at')} | {close['ended_at']} | {close['outcome']} | "
+                f"{_agent_value(begin.get('model', 'unreported'))}, "
+                f"{begin.get('role')} | "
+                f"{begin.get('started_at')} | {close['ended_at']} | "
+                f"{close['outcome']} | "
                 f"{', '.join(close.get('postcondition', [])) or 'none'} |"
             )
         if not closes:
@@ -2579,26 +2902,43 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
             f"| {entry['gate']} | {_agent_value(entry['artifact'])} | "
             f"`{entry['digest'][:19]}` | {decision} | {entry['at']} |"
         )
-    lines += ["", "### Decisions", "", "| DEC | Status | Human resolution |", "| --- | --- | --- |"]
+    lines += [
+        "",
+        "### Decisions",
+        "",
+        "| DEC | Status | Human resolution |",
+        "| --- | --- | --- |",
+    ]
     path = run.file("decisions.md")
     if path.is_file() and not path.is_symlink():
         text = path.read_text(encoding="utf-8", errors="replace")
         resolved = artifacts.human_resolutions(run.feature(), text)
         by_decision = {
-            entry["decision"]: entry["id"] for entry in humans if entry["kind"] == "decision-resolution"
+            entry["decision"]: entry["id"]
+            for entry in humans
+            if entry["kind"] == "decision-resolution"
         }
         for dec in dict.fromkeys(
-            dec for dec, kind, _ in artifacts.decision_sections(text) if kind.lower() == "proposal"
+            dec
+            for dec, kind, _ in artifacts.decision_sections(text)
+            if kind.lower() == "proposal"
         ):
             status_text = "resolved" if dec in resolved else "open"
-            lines.append(f"| {_agent_value(dec)} | {status_text} | {by_decision.get(dec, 'none') if dec in resolved else 'none'} |")
+            lines.append(
+                f"| {_agent_value(dec)} | {status_text} | "
+                f"{by_decision.get(dec, 'none') if dec in resolved else 'none'} |"
+            )
     carried = autonomy.current_decisions(_source_decisions(run))
     replaced = superseding(run, humans)
     if carried:
         lines += ["", f"Carried decisions from run {record['continues']}:"]
         lines += [
             f"- {entry['id']} ({entry['point']}, agent-provisional): "
-            + (f"superseded by {replaced[entry['id']]}" if entry["id"] in replaced else "still provisional")
+            + (
+                f"superseded by {replaced[entry['id']]}"
+                if entry["id"] in replaced
+                else "still provisional"
+            )
             for entry in carried
         ]
     lines += [
@@ -2627,11 +2967,17 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
         lines.append("No [checks] table: checks unavailable")
     elif short:
         failed_checks = [r for r in latest["results"] if r["exit"] != 0]
-        lines.append(f"{len(latest['results'])} check commands; {len(failed_checks)} failed.")
+        lines.append(
+            f"{len(latest['results'])} check commands; {len(failed_checks)} failed."
+        )
     else:
-        lines += ["| Command | Exit | Seconds | Provenance |", "| --- | --- | --- | --- |"]
         lines += [
-            f"| `{str(r['command']).replace('`', chr(39))}` | {r['exit']} | {r['seconds']:.1f} | {r['provenance']} |"
+            "| Command | Exit | Seconds | Provenance |",
+            "| --- | --- | --- | --- |",
+        ]
+        lines += [
+            f"| `{str(r['command']).replace('`', chr(39))}` | {r['exit']} | "
+            f"{r['seconds']:.1f} | {r['provenance']} |"
             for r in latest["results"]
         ]
     lines += ["", "### Changes made outside agent steps", ""]
@@ -2639,7 +2985,10 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
     paths = sorted({p for event in changes for p in event["paths"]})
     if paths:
         shown = ", ".join(f"`{_agent_value(p)}`" for p in paths[:50])
-        lines.append(f"{len(changes)} recorded; paths: {shown}" + (" ..." if len(paths) > 50 else ""))
+        lines.append(
+            f"{len(changes)} recorded; paths: {shown}"
+            + (" ..." if len(paths) > 50 else "")  # noqa: PLR2004 - preview cap
+        )
     else:
         lines.append("None.")
     lines += ["", LOGS_LOCAL, CHAT_END]
@@ -2658,7 +3007,12 @@ def publish(root: Path, run_id: str) -> int:
         _require_no_step(run, "publish")
         state, _ = approval_state(run, "final")
         if state != "current":
-            raise _refuse(run, "publish", f"the final approval is {state}; approve final first", EXIT_REFUSED)
+            raise _refuse(
+                run,
+                "publish",
+                f"the final approval is {state}; approve final first",
+                EXIT_REFUSED,
+            )
         passed, detail = _check(run, "project-checks")
         if not passed:
             raise _refuse(run, "publish", detail, EXIT_REFUSED)
@@ -2666,7 +3020,9 @@ def publish(root: Path, run_id: str) -> int:
         if not result["ok"]:
             _err(f"ballast: publish failed ({result['category']}): {result['message']}")
             archive(run)
-            return EXIT_REFUSED if result["category"] == "postcondition" else EXIT_BLOCKED
+            return (
+                EXIT_REFUSED if result["category"] == "postcondition" else EXIT_BLOCKED
+            )
         run.record = autonomy.read_run(root, run.id)
         if run.record["status"] == "completed":
             autonomy.set_status(run.record, "published")
