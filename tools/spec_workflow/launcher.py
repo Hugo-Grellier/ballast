@@ -223,6 +223,38 @@ def read_record(root: Path, state: Path) -> dict | None:
     return record if valid else None
 
 
+def claim_in_progress(state: Path, unit: str) -> None:
+    """Create the in-progress marker exclusively; refuse while another holds it.
+
+    Two runs (Chat or headless) in one checkout must not overwrite each
+    other's marker: the first to finish would clear the other's (SEC-009, #66).
+    """
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    try:
+        fd = os.open(state / IN_PROGRESS, flags, 0o600)
+    except FileExistsError:
+        try:
+            other = (state / IN_PROGRESS).read_text(encoding="utf-8").strip()
+        except OSError:
+            other = ""
+        found = STEP_SCOPE.fullmatch(other)
+        who = (
+            f"run {found['run']}, step {found['step']}" if found else "an unknown step"
+        )
+        message = (
+            f"another agent step is in progress ({who}); wait for it, or run "
+            "`ballast discard-runs` if it died"
+        )
+        raise StepInProgressError(message) from None
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(unit + "\n")
+
+
+class StepInProgressError(OSError):
+    """Another agent step holds the checkout's in-progress marker."""
+
+
 def checkout_lock(state: Path, *, shared: bool) -> int | None:
     """Take the checkout lock without waiting; None while another holds it.
 

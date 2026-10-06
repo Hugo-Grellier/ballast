@@ -1826,6 +1826,13 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
         settings = (
             f".specify/workflow-state/{run.id}/agents/{name}/claude-settings.json"
         )
+        if interactive:
+            try:
+                launcher.claim_in_progress(launcher.state_dir(root), unit)
+            except launcher.StepInProgressError as error:
+                raise _refuse(
+                    run, "step", str(error), EXIT_REFUSED, phase=phase
+                ) from None
         if interactive and integration == "claude":
             # Before the protected snapshot: the agent sees it read-only.
             _write_settings(log_dir)
@@ -1872,9 +1879,6 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
         )
         lock.describe(f"step {name}")
         if interactive:
-            marker = launcher.state_dir(root) / launcher.IN_PROGRESS
-            marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            marker.write_text(unit + "\n")
             result = _interactive(
                 run,
                 name,

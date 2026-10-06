@@ -56,9 +56,12 @@ sys.pycache_prefix = os.devnull
 import artifacts  # noqa: E402
 import autonomy  # noqa: E402
 from launcher import (  # noqa: E402
+    EXIT_REFUSED,
     IN_PROGRESS,
     SCOPE,
     TAMPER_MARKER,
+    StepInProgressError,
+    claim_in_progress,
     digests,
     input_bases,
     scope_available,
@@ -257,7 +260,26 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
     # The log files are written through handles (see _open_log); the directory
     # itself stays checked, so a swap for a link is caught.
     skip += [own_log / name for name in LOG_FILES]
-    return digests(root, input_bases(root), skip)
+    found = digests(root, input_bases(root), skip)
+    found.update(_installed_skills(root))
+    return found
+
+
+def _installed_skills(root: Path) -> dict[str, str]:
+    """Hash the installed workflow skills and their `.claude/skills` links.
+
+    A human-gated run has no bwrap to keep them read-only, and a skill an
+    agent rewrites steers every later step (SEC-001, #66).
+    """
+    found: dict[str, str] = {}
+    for parent in (root / ".agents/skills", root / ".claude/skills"):
+        for pattern in ("ballast-*", "speckit-*"):
+            for path in sorted(parent.glob(pattern)):
+                if path.is_symlink():
+                    found[str(path.relative_to(root))] = "link:" + str(path.readlink())
+                else:
+                    found.update(digests(root, [path], []))
+    return found
 
 
 def _become_subreaper() -> None:
@@ -1074,20 +1096,24 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         "argv": [Path(argv[0]).name, *argv[1:]],
         "started_at": datetime.now(UTC).isoformat(),
     }
+    unit = f"ballast-agent-{key}-{log_dir.name}.scope"
+    if not SCOPE.fullmatch(unit):
+        message = f"invalid agent scope name {unit!r}"
+        raise ValueError(message)
+    try:
+        # Outside every agent's write authority: if the agent kills this
+        # wrapper before the check below, the trusted launcher still refuses
+        # to continue.
+        claim_in_progress(state_dir(root), unit)
+    except StepInProgressError as error:
+        sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
+        return EXIT_REFUSED, {}
     protected = _protected_state(root, log_dir)
     log_fd = os.open(log_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     logs = {name: _open_log(log_fd, name) for name in LOG_FILES}
     meta_file = logs["meta.json"]
     os.close(log_fd)
-    # Outside every agent's write authority: if the agent kills this wrapper
-    # before the check below, the trusted launcher still refuses to continue.
     in_progress = state_dir(root) / IN_PROGRESS
-    in_progress.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    unit = f"ballast-agent-{key}-{log_dir.name}.scope"
-    if not SCOPE.fullmatch(unit):
-        message = f"invalid agent scope name {unit!r}"
-        raise ValueError(message)
-    in_progress.write_text(unit + "\n")
     argv = [
         systemd_run,
         "--user",
