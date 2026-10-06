@@ -2516,6 +2516,29 @@ class HeadlessForgeryTests(ChatCase):
         self.assertFalse(record.run["active_step"]["scope_stopped"])
         self.assertIn("scope_stopped", record.run["active_step"])
 
+    def test_headless_login_failure_is_a_credential_block(self) -> None:
+        """#65 SEC-003: Chat maps the wrapper's exit 6 like headless runs do."""
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        result = self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
+        self.assertEqual(result.code, 0, result.text)
+        failed = {
+            "exit_code": agent.EXIT_AUTH,
+            "interrupted": False,
+            "scope_stopped": True,
+            "stopped_descendants": 0,
+            "argv": ["claude", "-p"],
+            "error": None,
+            "headless_code": agent.EXIT_AUTH,
+        }
+        with patch.object(chat, "_headless", lambda *_: dict(failed)):
+            step = self.call(chat.run_step, self.root, run_id, "specify", None, [])
+        self.assertEqual(step.code, chat.EXIT_BLOCKED, step.text)
+        self.assertIn(f"Blocked (credential): {agent.AUTH_REASON}", step.text)
+        self.assertNotIn("exited with status", step.text)
+        close = self.record(run_id).steps[-1]
+        self.assertEqual((close["outcome"], close["block"]), ("failed", "credential"))
+
     def test_headless_step_keeps_todays_argv(self) -> None:
         run_id = self.start()
         self.approve_in_process(run_id, "scope")

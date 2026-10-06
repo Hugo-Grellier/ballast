@@ -1589,10 +1589,12 @@ def _close(  # noqa: PLR0913 - one close entry, every field explicit
     tree_after: str,
     late: bool = False,
     protected_compared: bool = True,
+    block: str | None = None,
 ) -> None:
     """Write the close entry, clear the active step, then the ledger events."""
     run.step_entry(
         {
+            **({"block": block} if block else {}),
             "step": step,
             "entry": "close",
             "phase": phase,
@@ -2015,7 +2017,7 @@ def _headless(run: Run, integration: str, prompt: str) -> dict:
     }
 
 
-def _finish(  # noqa: C901, PLR0913, PLR0915, PLR0917 - steps 9 to 12, in order
+def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917 - steps 9 to 12, in order
     run: Run,
     name: str,
     phase: str,
@@ -2110,6 +2112,7 @@ def _finish(  # noqa: C901, PLR0913, PLR0915, PLR0917 - steps 9 to 12, in order
     post, failures, violations = _postconditions(
         run, phase, kind, name, start["tree_before"], tree_after
     )
+    credential = result.get("headless_code") == agent.EXIT_AUTH
     if result["interrupted"]:
         outcome = "interrupted"
     elif failures or result["exit_code"] != 0:
@@ -2135,11 +2138,15 @@ def _finish(  # noqa: C901, PLR0913, PLR0915, PLR0917 - steps 9 to 12, in order
         violations=violations,
         post=post,
         tree_after=tree_after,
+        # The wrapper's own classification, never agent text (#65 SEC-003).
+        block="credential" if credential else None,
     )
     archive(run)
     checkpoint(run)
     _out(f"Step {name}: {outcome}")
-    if failures:
+    if credential:  # the cause of any failed check, so it comes first
+        _out(f"Blocked (credential): {agent.AUTH_REASON}.")
+    elif failures:
         check, event_id, detail = failures[0]
         _out(f"Failed check: {check} ({event_id}): {_first_line(detail)}")
     elif outcome == "failed":

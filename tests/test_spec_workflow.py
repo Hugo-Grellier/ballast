@@ -482,6 +482,7 @@ if os.environ.get("FAKE_LATE_WRITE"):
     )
 print(os.environ.get("FAKE_STDOUT", "done"))
 print("progress", file=sys.stderr)
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 """
 
 
@@ -627,6 +628,63 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 3)
         self.assertIn("BLOCKED_INTENT", result.stderr)
+
+    def test_login_failure_is_reported_as_an_authentication_block(self) -> None:
+        """#65: the CLI's own login error becomes a distinct, explained exit."""
+        for message in (
+            (
+                "Failed to authenticate: OAuth session expired and could not be "
+                "refreshed"
+            ),
+            "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+        ):
+            with self.subTest(message=message):
+                result = self.run_wrapper(
+                    "claude",
+                    "-p",
+                    "/speckit-implement",
+                    FAKE_STDOUT=message,
+                    FAKE_EXIT="1",
+                )
+                self.assertEqual(result.returncode, 6)
+                self.assertIn("claude /login", result.stderr)
+
+    def test_failed_attempt_leaves_no_login_copy(self) -> None:
+        """#65 SEC-002: the private login copy is removed when the step raises."""
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        seen: list[Path] = []
+
+        def fail(_root: Path, *, private: Path, **_: object) -> None:
+            (private / "credentials-0.json").write_text('{"accessToken": "a"}')
+            seen.append(private)
+            message = "Popen failed"
+            raise OSError(message)
+
+        with (
+            patch.object(agent, "_attempt_in", fail),
+            self.assertRaisesRegex(OSError, "Popen failed"),
+        ):
+            agent._attempt(self.root, integration="claude")  # noqa: SLF001
+        self.assertEqual(len(seen), 1)
+        self.assertFalse(seen[0].exists())
+
+    def test_login_text_from_a_successful_step_is_not_an_auth_failure(self) -> None:
+        result = self.run_wrapper(
+            "claude",
+            "-p",
+            "/speckit-implement",
+            FAKE_STDOUT="Failed to authenticate",
+            FAKE_EXIT="0",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        failed = self.run_wrapper(
+            "claude", "-p", "/speckit-implement", FAKE_STDOUT="boom", FAKE_EXIT="1"
+        )
+        self.assertEqual(failed.returncode, 1)
 
     def test_tampering_with_run_state_fails_the_step(self) -> None:
         run = self.root / ".specify/workflows/runs/run42"

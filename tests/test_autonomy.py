@@ -956,6 +956,90 @@ class ConfinementTests(AutonomyCase):
         )
         self.assertEqual(argv[-2:], ["--", "true"])
 
+    def test_agent_gets_the_claude_login_without_refresh_tokens(self) -> None:
+        """#65: a confined refresh would rotate away the operator's login."""
+        home = self.base / "home"
+        for config, env in (
+            (home / ".claude", {}),
+            (self.base / "config", {"CLAUDE_CONFIG_DIR": str(self.base / "config")}),
+        ):
+            with self.subTest(config=config):
+                config.mkdir(parents=True, exist_ok=True)
+                login = config / ".credentials.json"
+                login.write_text(
+                    json.dumps(
+                        {
+                            "claudeAiOauth": {
+                                "accessToken": "access",
+                                "refreshToken": "refresh",
+                                "expiresAt": 1,
+                            },
+                            "mcpOAuth": {
+                                "s": {"accessToken": "m", "refreshToken": "r"}
+                            },
+                        }
+                    )
+                )
+                private = self.base / "private"
+                private.mkdir(exist_ok=True)
+                argv = autonomy.confined_argv(
+                    self.root, ["true"], private=private, home=home, env=env
+                )
+                joined = " ".join(argv)
+                copy = private / "credentials-0.json"
+                bind = f"--ro-bind {copy} {login}"
+                self.assertIn(bind, joined)
+                self.assertGreater(
+                    joined.index(bind), joined.index(f"--tmp-overlay {config}")
+                )
+                self.assertNotIn("refresh", copy.read_text())
+                self.assertEqual(
+                    json.loads(copy.read_text())["claudeAiOauth"]["accessToken"],
+                    "access",
+                )
+                self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
+                self.assertIn("refresh", login.read_text())
+
+    def test_every_claude_home_gets_a_login_without_refresh_tokens(self) -> None:
+        """#65 SEC-001: CLAUDE_CONFIG_DIR does not leave ~/.claude's login readable."""
+        home = self.base / "home"
+        config = self.base / "config"
+        logins = [config / ".credentials.json", home / ".claude/.credentials.json"]
+        for login in logins:
+            login.parent.mkdir(parents=True)
+            login.write_text(
+                json.dumps({"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}})
+            )
+        private = self.base / "private"
+        private.mkdir()
+        argv = autonomy.confined_argv(
+            self.root,
+            ["true"],
+            private=private,
+            home=home,
+            env={"CLAUDE_CONFIG_DIR": str(config)},
+        )
+        joined = " ".join(argv)
+        for index, login in enumerate(logins):
+            copy = private / f"credentials-{index}.json"
+            self.assertIn(f"--tmp-overlay {login.parent}", joined)
+            self.assertIn(f"--ro-bind {copy} {login}", joined)
+            self.assertEqual(
+                json.loads(copy.read_text()), {"claudeAiOauth": {"accessToken": "a"}}
+            )
+        self.assertEqual(
+            autonomy.claude_homes(home, {"CLAUDE_CONFIG_DIR": str(home / ".claude")}),
+            [home / ".claude"],
+        )
+
+    def test_unreadable_claude_login_is_hidden(self) -> None:
+        home = self.base / "home"
+        (home / ".claude").mkdir(parents=True)
+        login = home / ".claude/.credentials.json"
+        login.write_text("not json, maybe a refresh token")
+        joined = " ".join(self.argv(home))
+        self.assertIn(f"--ro-bind /dev/null {login}", joined)
+
     def test_secret_variables_removed_except_integration_key(self) -> None:
         env = {
             "GH_TOKEN": "t",
@@ -1450,6 +1534,81 @@ class RealConfinementTests(AutonomyCase):
         probe = claude / ".ballast-persist-probe"
         self.assertEqual(self.write(probe), 0)
         self.assertFalse(probe.exists())
+
+    def test_agent_reads_its_login_but_cannot_change_or_refresh_it(self) -> None:
+        """#65: no refresh token inside, and the operator's login is untouched."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        # /var/tmp, unlike /tmp, stays visible inside the sandbox.
+        home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
+        (home / ".claude").mkdir(parents=True)
+        login = home / ".claude/.credentials.json"
+        original = '{"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}'
+        login.write_text(original)
+        private = self.base / "private"
+        private.mkdir()
+        code = (
+            "import json, os, sys\n"
+            "path = sys.argv[1]\n"
+            "seen = json.load(open(path))\n"
+            "try:\n"
+            "    open(path + '.tmp', 'w').write('{}'); os.rename(path + '.tmp', path)\n"
+            "    renamed = True\n"
+            "except OSError:\n"
+            "    renamed = False\n"
+            "print(json.dumps([seen, renamed]))\n"
+        )
+        env = autonomy.confined_env(dict(os.environ), None)
+        env["PATH"] = self.real_path
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        argv = autonomy.confined_argv(
+            self.root,
+            ["python3", "-I", "-S", "-c", code, str(login)],
+            private=private,
+            home=home,
+            env={**env, "HOME": str(home)},
+        )
+        result = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, check=False, env=env, timeout=60
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        seen, renamed = json.loads(result.stdout)
+        self.assertEqual(seen, {"claudeAiOauth": {"accessToken": "a"}})
+        self.assertFalse(renamed)
+        self.assertEqual(login.read_text(), original)
+
+    def test_no_claude_home_shows_a_refresh_token(self) -> None:
+        """#65 SEC-001: both the selected and the default home, under real bwrap."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        base = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp")))
+        home, config = base / "home", base / "config"
+        logins = [config / ".credentials.json", home / ".claude/.credentials.json"]
+        for name, login in zip(("env", "default"), logins, strict=True):
+            login.parent.mkdir(parents=True)
+            login.write_text(
+                json.dumps(
+                    {"claudeAiOauth": {"accessToken": f"A-{name}", "refreshToken": "R"}}
+                )
+            )
+        private = self.base / "private"
+        private.mkdir()
+        env = autonomy.confined_env(dict(os.environ), None)
+        env["PATH"] = self.real_path
+        argv = autonomy.confined_argv(
+            self.root,
+            ["cat", *map(str, logins)],
+            private=private,
+            home=home,
+            env={**env, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(config)},
+        )
+        result = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, check=False, env=env, timeout=60
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("A-env", result.stdout)
+        self.assertIn("A-default", result.stdout)
+        self.assertNotIn("refreshToken", result.stdout)
 
     def test_operator_processes_bus_and_credentials_unreachable(self) -> None:
         code = (
