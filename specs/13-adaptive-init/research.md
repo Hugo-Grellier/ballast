@@ -43,7 +43,7 @@ Code evidence: `tools/ballast` (`main`, `command_standard`, `ensure_standard`, `
   - `.github/workflows/*.yml` and `*.yaml`, at most 20 files: `run:` steps by a line scanner (no YAML library; R7);
   - `AGENTS.md`, `CLAUDE.md`: existence, link target and whether a Ballast section is present (R10);
   - `ARCHITECTURE.md`, `docs/architecture.md`, `docs/ARCHITECTURE.md`, `docs/adr/`, `docs/decisions/`: existence only, cited in `AGENTS.md`;
-  - `docs/policies/project/*.md`: names only;
+  - `docs/policies/project/testing.md`: existence only, so an existing addendum is kept (implementation review: the other project policy names are not read);
   - the `origin` URL from `git remote get-url origin` with the config-safe prefix (R13).
   Each file is opened through directory descriptors with `O_NOFOLLOW` on every component (the same walk as setup's `_open_dir`), must be a regular file, and is read only up to 256 KiB (`fstat` first); a link, a non-regular file, an oversized file, undecodable UTF-8 or a parse error skips that file with a reported reason (AC-017, AC-025). Stacks: `python` (`pyproject.toml`, `requirements.txt`, `uv.lock` or `poetry.lock`), `node` (`package.json`), `rust` (`Cargo.toml`), `go` (`go.mod`); none recognised falls back to `neutral`, marked inferred (AC-024). Nothing read is executed, shell-interpolated or passed to a subprocess.
 - **Rationale**: D-11, FR-005, the security policy's untrusted-content rules; a fixed list is testable and can grow per release.
