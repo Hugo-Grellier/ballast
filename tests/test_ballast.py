@@ -142,9 +142,27 @@ class ShimTests(unittest.TestCase):
         planted = self.project / ".ballast/spec_workflow/launcher.py"
         planted.parent.mkdir(parents=True)
         planted.write_text("print('planted')\n")
+        (planted.parent / "run.py").write_text("print('planted')\n")
         self.pin("v0.1.0")
         result = self.shim("run", "start")
         self.assertEqual(result.stdout, "launcher run start\n", result.stderr)
+        # #15 AC-007: a version that cannot prepare refuses an uninstalled
+        # checkout before its launcher, naming setup.
+        shutil.rmtree(self.project / ".ballast")
+        for command in ("run", "ledger", "intake"):
+            result = self.shim(command, "x")
+            self.assertEqual(
+                (result.returncode, result.stdout, result.stderr),
+                (
+                    2,
+                    "",
+                    (
+                        "ballast: refusing: nothing is installed in this checkout; run "
+                        "`ballast setup`\n"
+                    ),
+                ),
+            )
+        self.assertFalse((self.project / ".ballast").exists())
 
 
 class NotFetchedTests(ShimTests):
@@ -799,8 +817,9 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 2)
         self.assertEqual(
             refused.stderr,
-            "ballast: refusing: no trusted baseline; review the checkout, "
-            "then run `trust`\n",
+            "ballast: refusing: no trusted baseline for this checkout; review its "
+            "protected inputs (ballast.toml, .ballast/spec_workflow), then run "
+            "`ballast trust`\n",
         )
         trusted = self.ballast("trust")
         self.assertEqual(trusted.returncode, 0, trusted.stderr)
@@ -863,6 +882,252 @@ class CheckoutGitConfigTests(unittest.TestCase):
             and node.elts[0].value == "git"
         ]
         self.assertEqual(bare, [], "git calls must start with *GIT")
+
+
+# --- Preparing a new worktree (#15) ------------------------------------------
+
+sys.path.insert(0, str(ROOT / "tests"))
+import test_setup as setup_tests  # noqa: E402
+
+sys.path.pop(0)
+NOT_INSTALLED = (
+    "ballast: refusing: nothing is installed in this checkout; run `ballast setup`, "
+    "or `ballast run`, `ledger` or `intake` to prepare it from a verified "
+    "installation on this machine\n"
+)
+OLD_REFUSAL = (
+    "ballast: refusing: nothing is installed in this checkout; run `ballast setup`\n"
+)
+NO_BASELINE = (
+    "ballast: refusing: no trusted baseline for this checkout; review its protected "
+    "inputs (ballast.toml, .ballast/spec_workflow, .specify, .git), then run "
+    "`ballast trust`\n"
+)
+
+
+class PrepareTriggerTests(unittest.TestCase):
+    """The first run, ledger or intake in a new worktree prepares it (#15)."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory(dir=outside_temp())
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name)
+        self.data = self.base / "data"
+        self.standard = self.data / "ballast/standard/vA"
+        for part in ("tools", "templates"):
+            shutil.copytree(
+                ROOT / part,
+                self.standard / part,
+                symlinks=True,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
+        self.record_cache()
+        state = operator_state(self)
+        environment = patch.dict(
+            os.environ, {"XDG_STATE_HOME": str(state), "XDG_DATA_HOME": str(self.data)}
+        )
+        environment.start()
+        self.addCleanup(environment.stop)
+        # Only git and python on PATH: no uvx, and any request fails fast.
+        tools = self.base / "bin"
+        tools.mkdir()
+        for name in ("git", "python3"):
+            (tools / name).symlink_to(shutil.which(name))
+        proxy = "http://127.0.0.1:9"
+        self.env = {
+            **os.environ,
+            "PATH": str(tools),
+            "http_proxy": proxy,
+            "https_proxy": proxy,
+        }
+        self.env.pop("BALLAST_STANDARD_DIR", None)
+        self.primary = self.base / "project"
+        self.primary.mkdir()
+        setup_tests.git(self.primary, "init", "-q")
+        files = {
+            ".gitignore": setup_tests.setup.GITIGNORE,
+            "ballast.toml": setup_tests.PIN.format("vA"),
+            ".specify/memory/constitution.md": "project constitution\n",
+            "docs/policies/project/security.md": "project rule\n",
+        }
+        for name, text in files.items():
+            (self.primary / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.primary / name).write_text(text)
+        out = io.StringIO()
+        with setup_tests.fakes(), redirect_stdout(out):
+            code = setup_tests.setup.cli(["--project", str(self.primary)])
+        self.assertEqual(code, 0, out.getvalue())
+        setup_tests.git(self.primary, "add", "-A")
+        setup_tests.git(self.primary, "commit", "-q", "-m", "project")
+        self.count = 0
+
+    def record_cache(self) -> None:
+        record = shim.cache_record(self.standard, "vA")
+        (self.standard / shim.CACHE_RECORD).write_text(json.dumps(record))
+
+    def worktree(self) -> Path:
+        self.count += 1
+        path = self.base / f"worktree-{self.count}"
+        setup_tests.git(self.primary, "worktree", "add", "-q", "--detach", str(path))
+        return path
+
+    def ballast(self, root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603
+            [str(SHIM), *args],
+            cwd=root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def state(self, root: Path) -> Path:
+        return shim.operator_state(root)
+
+    def everything(self, root: Path) -> dict[str, dict[str, str]]:
+        return {
+            "checkout": setup_tests.tree(root, (".git",)),
+            "state": setup_tests.tree(self.state(root)),
+            "data": setup_tests.tree(self.data),
+        }
+
+    def test_run_prepares_then_reaches_preflight(self) -> None:
+        # AC-001, AC-002, SC-001: one command, no setup, no download.
+        prepared = setup_tests.PREPARED.format(ref="vA", source=self.primary)
+        cached = setup_tests.tree(self.data)
+        for args in (("run", "start"), ("ledger", "report", "--all"), ("intake",)):
+            with self.subTest(command=args[0]):
+                worktree = self.worktree()
+                result = self.ballast(worktree, *args)
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr),
+                    (2, prepared, NO_BASELINE),
+                )
+                self.assertFalse((self.state(worktree) / "trusted.json").exists())
+                record = json.loads(
+                    (self.state(worktree) / "installation.json").read_text()
+                )
+                primary = json.loads(
+                    (self.state(self.primary) / "installation.json").read_text()
+                )
+                self.assertEqual(record["files"], primary["files"])
+                self.assertEqual(setup_tests.tree(self.data), cached)
+
+    def test_doctor_trust_then_run(self) -> None:
+        # AC-004: doctor sees a current installation; trust, then the run passes.
+        worktree = self.worktree()
+        self.assertEqual(
+            self.ballast(worktree, "ledger", "report", "--all").returncode, 2
+        )
+        record = (self.state(worktree) / "installation.json").read_text()
+        context = shim.context_for(worktree)
+        self.assertEqual(
+            shim._setup_current(context, {"setup-check"}),  # noqa: SLF001
+            ("passing", "setup is current"),
+        )
+        status, detail, remedy = shim._trust(context, {"launcher-status"})  # noqa: SLF001
+        self.assertEqual((status, remedy), ("missing", shim.TRUST))
+        self.assertIn("launcher will refuse: no trusted baseline", detail)
+        trusted = self.ballast(worktree, "trust")
+        self.assertEqual(trusted.returncode, 0, trusted.stderr)
+        report = self.ballast(worktree, "ledger", "report", "--all")
+        self.assertEqual(report.returncode, 0, report.stderr)
+        self.assertNotIn("Prepared", report.stdout)
+        self.assertFalse((self.state(worktree) / "setup-attempt.json").exists())
+        self.assertEqual(
+            (self.state(worktree) / "installation.json").read_text(), record
+        )
+
+    def test_non_preparing_commands(self) -> None:
+        # AC-005: trust and discard-runs refuse; status and doctor only read.
+        worktree = self.worktree()
+        before = self.everything(worktree)
+        for command in ("trust", "discard-runs"):
+            result = self.ballast(worktree, command)
+            self.assertEqual(
+                (result.returncode, result.stdout, result.stderr),
+                (2, "", NOT_INSTALLED),
+            )
+        status = self.ballast(worktree, "status", "--json")
+        self.assertEqual(
+            json.loads(status.stdout), {"installed": False, "refusal": None}
+        )
+        context = shim.context_for(worktree)
+        self.assertEqual(
+            shim._trust(context, {"launcher-status"})[2],  # noqa: SLF001
+            "ballast setup, or the first `ballast run`, `ledger` or `intake`, which "
+            "prepares it from a verified installation on this machine",
+        )
+        self.assertEqual(self.everything(worktree), before)
+        self.assertFalse(self.state(worktree).exists())
+
+    def test_version_without_declaration(self) -> None:
+        # AC-007: no `[setup] prepare` → today's refusal naming setup.
+        manifest = self.standard / "tools/cli.toml"
+        manifest.write_text(manifest.read_text().replace("prepare = true\n", ""))
+        self.record_cache()
+        worktree = self.worktree()
+        before = self.everything(worktree)
+        result = self.ballast(worktree, "run", "start")
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (
+                2,
+                "",
+                (
+                    "ballast: refusing: nothing is installed in this checkout; run "
+                    "`ballast setup`\n"
+                ),
+            ),
+        )
+        self.assertEqual(self.everything(worktree), before)
+        # Review ENG-002: trust and discard-runs get the same CLI refusal.
+        for command in ("trust", "discard-runs"):
+            result = self.ballast(worktree, command)
+            self.assertEqual(
+                (result.returncode, result.stderr),
+                (2, OLD_REFUSAL),
+            )
+        self.assertEqual(self.everything(worktree), before)
+        # An installed checkout with only a journal left reaches the launcher.
+        installed = self.worktree()
+        with setup_tests.fakes(), redirect_stdout(io.StringIO()):
+            setup_tests.setup.cli(["--project", str(installed)])
+        (self.state(installed) / "setup-attempt.json").write_text("{}\n")
+        result = self.ballast(installed, "run", "start")
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (
+                2,
+                "",
+                (
+                    "ballast: refusing: setup did not finish in this checkout; run "
+                    "`ballast setup` to recover\n"
+                ),
+            ),
+        )
+
+    def test_damaged_standard_refuses(self) -> None:
+        # AC-013
+        policy = self.standard / "templates/policies/workflow.md"
+        policy.write_text(policy.read_text() + "altered\n")
+        worktree = self.worktree()
+        before = self.everything(worktree)
+        result = self.ballast(worktree, "run", "start")
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (
+                2,
+                "",
+                (
+                    "ballast: refusing: the cached standard vA is damaged at "
+                    "templates/policies/workflow.md; run `ballast setup` to fetch it "
+                    "again\n"
+                ),
+            ),
+        )
+        self.assertEqual(self.everything(worktree), before)
+        self.assertFalse(self.state(worktree).exists())
 
 
 if __name__ == "__main__":

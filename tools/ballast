@@ -21,7 +21,9 @@ Each version is extracted once into $XDG_DATA_HOME/ballast/standard/<ref>/,
 under a per-version lock, and published together with a record of its content;
 `setup` and `preview` verify a cached copy against that record and fetch a
 damaged one again. Only `setup` and `preview` download; every other command
-runs the launcher of an already fetched version. `preview` runs the target
+runs the launcher of an already fetched version. The first `run`, `ledger` or
+`intake` in a new worktree prepares its installation from a verified
+installation on this machine, without downloading. `preview` runs the target
 version's own setup in a disposable project and changes nothing else. The
 repository is fixed here, so a project can choose a version but never a
 source. Set BALLAST_STANDARD_DIR to a local checkout of this repository to
@@ -78,6 +80,8 @@ USAGE = (
     " | intake ..."
     " | doctor [--json]"
     " | self-install [--dir DIR] [--force] | --version"
+    "\nThe first run, ledger or intake in a new worktree prepares its installation"
+    " from a verified installation on this machine, without downloading."
 )
 DOCTOR_HINT = "; run `ballast doctor` for details"
 # The README's install line, with the version as a placeholder. A test keeps
@@ -1020,11 +1024,13 @@ def _trust(context: Context, probes: set[str]) -> Outcome:
         detail = f"launcher status {SLOW if result is None else 'was unreadable'}"
         return "inconclusive", detail, TRUST
     if not installed:
-        return (
-            "missing",
-            "the workflow is not installed in this checkout",
-            "ballast setup",
-        )
+        remedy = "ballast setup"
+        if declarations(context.standard).prepare:
+            remedy += (
+                ", or the first `ballast run`, `ledger` or `intake`, which prepares "
+                "it from a verified installation on this machine"
+            )
+        return "missing", "the workflow is not installed in this checkout", remedy
     if refusal is None:
         return "passing", "the launcher accepts this checkout"
     remedy = TRUST
@@ -1198,18 +1204,29 @@ class PreviewError(Exception):
     """A build or read the preview needs failed; nothing is reported."""
 
 
-def declarations(standard: Path) -> tuple[bool, list[str]]:
-    """Read `[setup] recoverable` and `[runs] resumes` of a version, as data."""
+class Declarations(NamedTuple):
+    """What a version's tools/cli.toml declares about setup and runs."""
+
+    recoverable: bool
+    resumes: list[str]
+    prepare: bool
+
+
+def declarations(standard: Path) -> Declarations:
+    """Read `[setup] recoverable`, `[setup] prepare` and `[runs] resumes`, as data."""
     try:
         data = tomllib.loads((standard / "tools/cli.toml").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False, []
+        return Declarations(recoverable=False, resumes=[], prepare=False)
     setup, runs = data.get("setup"), data.get("runs")
-    recoverable = isinstance(setup, dict) and setup.get("recoverable") is True
     resumes = runs.get("resumes") if isinstance(runs, dict) else None
     if not isinstance(resumes, list):
         resumes = []
-    return recoverable, [r for r in resumes if isinstance(r, str)]
+    return Declarations(
+        recoverable=isinstance(setup, dict) and setup.get("recoverable") is True,
+        resumes=[r for r in resumes if isinstance(r, str)],
+        prepare=isinstance(setup, dict) and setup.get("prepare") is True,
+    )
 
 
 def ignore_block(standard: Path) -> tuple[str | None, list[tuple[str, bool]]]:
@@ -1404,9 +1421,9 @@ def compare(root: Path, ref: str, target: Path, work: Path) -> dict:
     """
     pin = pinned_ref(root)
     block, probes = ignore_block(target)
-    target_recoverable, resumes = declarations(target)
+    target_recoverable, resumes, _ = declarations(target)
     pinned = trusted_standard_dir(root, pin)
-    both = target_recoverable and pinned.is_dir() and declarations(pinned)[0]
+    both = target_recoverable and pinned.is_dir() and declarations(pinned).recoverable
     after_walk, after_record = disposable_build(
         root, target, ref, work / "after", block
     )
@@ -1644,6 +1661,66 @@ def command_standard(root: Path, command: str) -> Path:
     return standard
 
 
+# --- preparing a new worktree (#15) -----------------------------------------
+
+# The commands whose first use in a checkout with no installation prepares it.
+PREPARING = ("run", "ledger", "intake")
+RUN_TOOL = ".ballast/spec_workflow/run.py"
+
+
+def needs_installation(root: Path) -> bool:
+    """Nothing is installed (the launcher's test), or a setup journal remains."""
+    return not (root / RUN_TOOL).is_file() or os.path.lexists(
+        operator_state(root) / "setup-attempt.json"
+    )
+
+
+def before_launcher(root: Path, standard: Path, command: str) -> int:
+    """Prepare or refuse an uninstalled checkout before its launcher runs.
+
+    `run`, `ledger` and `intake` prepare it; `trust` and `discard-runs` reach
+    the launcher only when the version can prepare, because an older
+    launcher answers with usage text that does not name setup (AC-007).
+    """
+    if command in PREPARING and needs_installation(root):
+        return prepare(root, standard)
+    if command in {"trust", "discard-runs"} and not (root / RUN_TOOL).is_file():
+        return 0 if declarations(standard).prepare else refuse_uninstalled()
+    return 0
+
+
+def refuse_uninstalled() -> int:
+    """Refuse a checkout with nothing installed, naming setup."""
+    sys.stderr.write(
+        "ballast: refusing: nothing is installed in this checkout; run "
+        "`ballast setup`\n"
+    )
+    return EXIT_REFUSED
+
+
+def prepare(root: Path, standard: Path) -> int:
+    """Run the pinned version's `tools/setup --prepare`; its exit status.
+
+    A version that cannot prepare refuses an uninstalled checkout here, and
+    leaves a journal-only checkout to the launcher's unfinished-setup refusal.
+    The cached version is verified first and never fetched again here.
+    """
+    if not declarations(standard).prepare:
+        return 0 if (root / RUN_TOOL).is_file() else refuse_uninstalled()
+    if not os.environ.get("BALLAST_STANDARD_DIR"):
+        damaged = damage(standard)
+        if damaged is not None:
+            sys.stderr.write(
+                f"ballast: refusing: the cached standard {standard.name} is damaged "
+                f"at {damaged}; run `ballast setup` to fetch it again\n"
+            )
+            return EXIT_REFUSED
+    tool = standard / "tools/setup"
+    command = [PYTHON, "-IS", str(tool), "--project", str(root), "--prepare"]
+    code = subprocess.run(command, cwd=root, check=False).returncode  # noqa: S603
+    return code if code >= 0 else 1  # killed by a signal
+
+
 def main(argv: list[str]) -> int:
     """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
     if not argv:
@@ -1664,6 +1741,9 @@ def main(argv: list[str]) -> int:
         os.execv(  # noqa: S606
             PYTHON, [PYTHON, "-IS", str(tool), "--project", str(root), *argv[1:]]
         )
+    prepared = before_launcher(root, standard, argv[0])
+    if prepared != 0:
+        return prepared
     launcher = standard / "tools/spec_workflow/launcher.py"
     if not launcher.is_file():
         fail(f"{standard} has no launcher{DOCTOR_HINT}")

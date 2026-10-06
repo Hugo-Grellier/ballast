@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install Spec Kit and this standard into a project's git-ignored paths.
 
-Usage: tools/setup [--project DIR] [--check]
+Usage: tools/setup [--project DIR] [--check | --prepare]
 
 Setup never builds in place. It builds the complete installation in a stage
 under `.ballast/setup/`, validates it, then switches it in entry by entry,
@@ -16,6 +16,13 @@ installed, by content.
 `stale: pinned ..., installed ...`, `incomplete: <path>` or `modified: <path>`
 and writes nothing.
 
+`--prepare` is the same attempt without a download, run by the first
+`ballast run`, `ledger` or `intake` in a checkout with no installation: it
+copies the first installation recorded on this machine for this repository
+(this checkout's kept copy, then each worktree's live and kept ones) whose
+pin and fingerprint equal this checkout's and whose copy matches its record,
+file modes included. It never records or reads a trust baseline.
+
 The project commits `ballast.toml` and its own overrides only. Everything this
 script writes is rebuildable and must be ignored; see GITIGNORE below.
 """
@@ -24,22 +31,28 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import urllib.request
 from datetime import UTC, datetime
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 STANDARD = Path(__file__).resolve().parent.parent
 PATCHES = STANDARD / "tools/spec-kit"
@@ -191,6 +204,11 @@ ATTEMPT = re.compile(r"\.ballast/setup/[0-9a-f]{16}")
 EXIT_FAILED, EXIT_REFUSED = 1, 2
 NETWORK = "check network access (`ballast doctor`), then rerun `ballast setup`"
 RETRY = "rerun `ballast setup`; if it fails again, restore the previous pin"
+# What wrote a journal or holds the lock: `ballast setup`, or a preparation by
+# the first `run`, `ledger` or `intake` in a new worktree (#15).
+SETUP, PREPARE = "setup", "prepare"
+# How long a preparation retries a lock another preparation holds for a moment.
+LOCK_RETRY_SECONDS = 2.0
 
 
 class RefusedError(RuntimeError):
@@ -234,6 +252,8 @@ class Setup:
         self.config_bytes = config.read_bytes() if config.is_file() else b""
         self.config = tomllib.loads(self.config_bytes.decode())
         self.ref = launcher.pinned_ref(project)
+        self.mode = SETUP
+        self.source_record: dict | None = None  # what a preparation copied
         self._fingerprint: str | None = None
 
     def fingerprint(self) -> str:
@@ -345,6 +365,12 @@ class Setup:
         except OSError as error:
             sys.stdout.write(f"unverified: {error}\n")
             return False
+        status = self.status(state)
+        sys.stdout.write(status + "\n")
+        return status == "current"
+
+    def status(self, state: Path) -> str:
+        """Return `--check`'s word for this checkout's installation."""
         record = self.recorded(state)
         if os.path.lexists(state / launcher.SETUP_ATTEMPT):
             status = "interrupted: run `ballast setup`"
@@ -365,8 +391,7 @@ class Setup:
                 live = installed_digests(self.root, self.live_entries(record))
                 changed = _first_difference(live, record["files"])
                 status = f"modified: {changed}" if changed else status
-        sys.stdout.write(status + "\n")
-        return status == "current"
+        return status
 
     # --- one attempt ------------------------------------------------------------
 
@@ -392,9 +417,107 @@ class Setup:
                 return
             self.check_links(PARENTS)
             self.check_ignored()
-            self.attempt(state)
+            reused = self.attempt(state, self.build)
         finally:
             os.close(lock)
+        if reused:
+            sys.stdout.write(f"Reused the previous installation ({self.ref})\n")
+        sys.stdout.write(
+            f"Spec Kit {VERSION} and the standard are set up.\n"
+            "Review the changed protected inputs, then run `ballast trust` "
+            "before the next workflow run.\n"
+        )
+
+    def prepare(self) -> None:
+        """Install a new worktree from a verified local installation (#15).
+
+        Acts only on a checkout with no installation or an interrupted
+        preparation; never downloads and never falls back to a full setup.
+        """
+        self.mode = PREPARE
+        try:
+            state = launcher.state_dir(self.root)
+        except OSError as error:
+            refuse(str(error), "set XDG_STATE_HOME elsewhere")
+        if self.ref is None:
+            refuse(
+                "ballast.toml has no valid [standard] ref",
+                "fix ballast.toml, then rerun the command",
+            )
+        state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        nothing = (
+            f"nothing to prepare: this checkout is already installed for {self.ref}\n"
+        )
+        lock = self.hold(state)
+        if lock is None:
+            # Another command prepared it and may be running (plan review F-001).
+            sys.stdout.write(nothing)
+            return
+        try:
+            if _journal_mode(state) not in {None, PREPARE}:
+                refuse(
+                    "setup did not finish in this checkout",
+                    "run `ballast setup` to recover",
+                )
+            if self.recover(state):
+                return  # a committed preparation was finished: complete
+            if os.path.lexists(state / launcher.IN_PROGRESS):
+                refuse(
+                    "an agent step did not finish",
+                    "review the checkout, then run `ballast discard-runs`",
+                )
+            if self.current(state):
+                # Another preparation finished first (plan review F-001).
+                sys.stdout.write(nothing)
+                return
+            if os.path.lexists(self.stamp) or self.live_entries(None):
+                refuse(
+                    "this checkout already holds an installation "
+                    f"({self.status(state)})",
+                    "run `ballast setup`",
+                )
+            self.check_links(PARENTS)
+            self.check_ignored()
+            source = self.attempt(state, self.fill_from_candidates)
+        finally:
+            os.close(lock)
+        sys.stdout.write(
+            f"Prepared the {self.ref} installation from {printable(source)} (verified, "
+            "nothing downloaded).\n"
+            "Review this worktree's protected inputs, then run `ballast trust`.\n"
+        )
+
+    def settled(self, state: Path) -> bool:
+        """Whether the installation is current, read under the shared lock.
+
+        Shared, so a `run`, `ledger` or `intake` that already holds the
+        checkout does not turn a finished preparation into a refusal.
+        """
+        fd = launcher.checkout_lock(state, shared=True)
+        if fd is None:
+            return False
+        try:
+            unfinished = os.path.lexists(state / launcher.SETUP_ATTEMPT)
+            return not unfinished and self.current(state)
+        finally:
+            os.close(fd)
+
+    def hold(self, state: Path) -> int | None:
+        """Hold this checkout to prepare it; None when it is already installed.
+
+        Another preparation checks `settled` under the shared lock for a
+        moment, which `lock` would take for a running command: retry briefly
+        before refusing, so two first commands never both refuse (AC-020).
+        """
+        deadline = time.monotonic() + LOCK_RETRY_SECONDS
+        while not self.settled(state):
+            try:
+                return self.lock(state)
+            except RefusedError:
+                if time.monotonic() > deadline:
+                    raise
+            time.sleep(0.02)
+        return None
 
     def lock(self, state: Path) -> int:
         """Hold this checkout exclusively, or name what holds it."""
@@ -412,25 +535,30 @@ class Setup:
                     "this checkout",
                     "wait for it to end",
                 )
+            command = "setup"
             try:
                 holder = json.loads((state / HOLDER).read_text(encoding="utf-8"))
                 shown = (
                     f"PID {holder['pid']}, started {holder['started']}, "
                     f"ref {holder['ref']}"
                 )
-            except (OSError, ValueError, KeyError, TypeError):
+                if holder.get("mode") == PREPARE:
+                    command = "preparation"
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 shown = "holder unknown"
             refuse(
-                f"another ballast setup ({shown}) holds this checkout",
-                "wait for it to finish",
+                f"another ballast {command} ({shown}) holds this checkout",
+                "wait for it to finish, then rerun the command",
             )
-        _write_json(
-            state / HOLDER, {"pid": os.getpid(), "started": _now(), "ref": self.ref}
-        )
+        holder = {"pid": os.getpid(), "started": _now(), "ref": self.ref}
+        _write_json(state / HOLDER, {**holder, "mode": self.mode})
         return fd
 
-    def attempt(self, state: Path) -> None:
-        """Stage, validate, switch, verify and commit one installation."""
+    def attempt(self, state: Path, fill: Callable[[Path, Path], object]) -> object:
+        """Stage, validate, switch, verify and commit one installation.
+
+        `fill(stage, state)` builds the stage; its result is returned.
+        """
         previous = self.recorded(state)
         names = self.live_entries(previous)
         work = f"{WORK}/{secrets.token_hex(8)}"
@@ -439,6 +567,8 @@ class Setup:
             "attempt": work.rsplit("/", 1)[1],
             "pid": os.getpid(),
             "started": _now(),
+            "mode": self.mode,
+            "source": None,
             "ref": self.ref,
             "fingerprint": self.fingerprint(),
             "phase": "staging",
@@ -453,8 +583,11 @@ class Setup:
         try:
             stage = self.root / work / "stage"
             stage.mkdir(parents=True)
-            reused = self.build(stage, state)
+            result = fill(stage, state)
             record = self.validate(stage)
+            if self.mode == PREPARE:
+                journal["source"] = str(result)
+                self.check_unchanged(record, stage)
             ignored = self.ignored(sorted(set(names) - set(record["entries"])))
             plan = [{"path": n, "new": False} for n in ignored]
             plan += [{"path": n, "new": True} for n in record["entries"]]
@@ -482,13 +615,7 @@ class Setup:
         journal["phase"] = "committed"
         _write_journal(state, journal)
         self.finish(state, journal)
-        if reused:
-            sys.stdout.write(f"Reused the previous installation ({self.ref})\n")
-        sys.stdout.write(
-            f"Spec Kit {VERSION} and the standard are set up.\n"
-            "Review the changed protected inputs, then run `ballast trust` "
-            "before the next workflow run.\n"
-        )
+        return result
 
     def build(self, stage: Path, state: Path) -> bool:
         """Fill the stage; True when it reused the previous installation."""
@@ -519,34 +646,39 @@ class Setup:
         stamp.write_text(self.fingerprint() + "\n")
         return reused
 
-    def copy_verified(self, source: Path, record: dict, stage: Path) -> str | None:
-        """Copy a recorded installation into the stage; the first differing path."""
+    def copy_verified(
+        self, source: Path, record: dict, stage: Path
+    ) -> tuple[str, str] | None:
+        """Copy a recorded installation into the stage; what differs, and where.
+
+        The copy must hash equal to the record (`content`) and, when the
+        record lists executable files, carry exactly those execute bits
+        (`file modes`).
+        """
         names = [
             n for n in record.get("entries", []) if isinstance(n, str) and _safe(n)
         ]
-        ignore = shutil.ignore_patterns(
-            "__pycache__", *(Path(p).name for p in LOCAL_STATE)
-        )
-        changed: str | None = "the copy failed"  # until the copy verifies
+        differs: tuple[str, str] | None = ("copy", "")  # until the copy verifies
         try:
             for name in names:
-                origin, target = source / name, stage / name
-                if not os.path.lexists(origin):
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if origin.is_symlink():
-                    target.symlink_to(origin.readlink())
-                elif origin.is_dir():
-                    shutil.copytree(origin, target, symlinks=True, ignore=ignore)
-                else:
-                    shutil.copy2(origin, target)
+                _copy_entry(source, stage, name)
             found = installed_digests(stage, names)
             changed = _first_difference(found, record["files"])
+            listed = record.get("executable")
+            modes = None
+            if not changed and isinstance(listed, list):
+                modes = _first_difference(
+                    dict.fromkeys(executables(stage, found), "x"),
+                    dict.fromkeys((n for n in listed if isinstance(n, str)), "x"),
+                )
+            differs = ("content", changed) if changed else None
+            if modes:
+                differs = ("file modes", modes)
         finally:
-            if changed:
+            if differs:
                 for name in names:
-                    _remove(stage / name)
-        return changed
+                    _remove_entry(stage, name)
+        return differs
 
     def copy_kept(self, stage: Path, state: Path) -> bool:
         """Reuse the installation the last switch replaced, when it is this one."""
@@ -583,31 +715,40 @@ class Setup:
         return None if primary == self.root.resolve() else primary
 
     def copy_from_primary(self, stage: Path) -> bool:
-        """Copy the primary checkout's installation when it verifies (FR-013)."""
+        """Copy the primary checkout's installation when it verifies (FR-013).
+
+        The record is read only under the primary's shared lock, so no setup
+        there can replace the installation between the read and the copy.
+        """
         primary = self.primary()
         if primary is None:
             return False
         reason, held = None, None
         try:
             state = launcher.state_dir(primary)
-            record = launcher.read_record(primary, state)
-            if record is None:
+            if state.is_dir():
+                held = launcher.checkout_lock(state, shared=True)
+            record = None if held is None else launcher.read_record(primary, state)
+            if held is None and state.is_dir():
+                reason = "the primary checkout is being set up"
+            elif record is None:
                 reason = "the primary checkout has no installation record"
             elif record["fingerprint"] != self.fingerprint():
                 reason = (
                     "the primary installation is for another version or configuration"
                 )
             else:
-                held = launcher.checkout_lock(state, shared=True)
-                if held is None:
-                    reason = "the primary checkout is being set up"
-                else:
-                    changed = self.copy_verified(primary, record, stage)
-                    if changed:
-                        reason = (
-                            "the primary installation differs from its record at "
-                            f"{changed}"
-                        )
+                differs = self.copy_verified(primary, record, stage)
+                if differs:
+                    what = (
+                        " differs"
+                        if differs[0] == "content"
+                        else "'s file modes differ"
+                    )
+                    reason = (
+                        f"the primary installation{what} from its record at "
+                        f"{differs[1]}"
+                    )
         except OSError as error:
             reason = f"the primary installation is unreadable: {error}"
         finally:
@@ -618,6 +759,137 @@ class Setup:
             return False
         sys.stdout.write("Copied the installation from the primary checkout\n")
         return True
+
+    # --- preparing a new worktree (#15) ----------------------------------------
+
+    def candidates(self) -> Iterator[tuple[str, Path, str | None]]:
+        """Yield `(kind, checkout, rejection)` for every recorded installation.
+
+        Order: this checkout's kept copy, then the primary's live and kept
+        installations, then each linked worktree's, as `git worktree list`
+        orders them. A checkout with no installation record or kept copy holds
+        no candidate; one Git lists but whose path is gone is rejected.
+        """
+        if (self.root / KEPT).is_dir():
+            yield "kept", self.root, None
+        result = subprocess.run(  # noqa: S603 - fixed git subcommand, data as arguments
+            [*GIT, "worktree", "list", "--porcelain", "-z"],
+            cwd=self.root,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        here = self.root.resolve()
+        for path, prunable in _worktrees(result.stdout):
+            checkout = Path(path)
+            if checkout == here or (checkout.exists() and checkout.resolve() == here):
+                continue
+            if prunable or not checkout.is_dir():
+                yield "live", checkout, "its path no longer exists"
+                continue
+            try:
+                recorded = launcher.state_dir(checkout) / launcher.INSTALLATION
+            except OSError as error:
+                yield "live", checkout, f"it is unreadable: {error}"
+                continue
+            if os.path.lexists(recorded):
+                yield "live", checkout, None
+            if (checkout / KEPT).is_dir():
+                yield "kept", checkout, None
+
+    def copy_candidate(self, kind: str, checkout: Path, stage: Path) -> str | None:
+        """Copy one candidate into the stage when it verifies; else why not.
+
+        Another checkout is read only under its shared lock, opened only when
+        its lock file exists, and never written; no `trusted.json` is opened.
+        """
+        held = None
+        try:
+            state = launcher.state_dir(checkout)
+            if checkout != self.root:
+                held, reason = _share(state)
+                if reason:
+                    return reason
+            if kind == "kept":
+                source, record = checkout / KEPT, _kept_record(state)
+            else:
+                source, record = checkout, launcher.read_record(checkout, state)
+            reason = self.mismatch(record)
+            if reason:
+                return reason
+            prefix = f"{KEPT}/" if kind == "kept" else ""
+            linked = _linked_parent(
+                checkout,
+                [prefix + n for n in record.get("entries", []) if isinstance(n, str)],
+            )
+            if linked:
+                return (
+                    f"it reaches its installation through a symbolic link at {linked}"
+                )
+            differs = self.copy_verified(source, record, stage)
+            self.source_record = record
+        except OSError as error:
+            return f"it is unreadable: {error}"
+        finally:
+            if held is not None:
+                os.close(held)
+        if differs:
+            verb = "differs" if differs[0] == "content" else "differ"
+            return f"its {differs[0]} {verb} from its record at {differs[1]}"
+        return None
+
+    def mismatch(self, record: dict | None) -> str | None:
+        """Why a candidate's record is not this checkout's installation."""
+        if record is None:
+            return "it has no installation record"
+        if record.get("ref") != self.ref:
+            return f"it is for {record.get('ref')}, not {self.ref}"
+        if record.get("fingerprint") != self.fingerprint():
+            return "it was built for another configuration"
+        if not isinstance(record.get("executable"), list):
+            return "its record predates file-mode checks"
+        return None
+
+    def fill_from_candidates(self, stage: Path, state: Path) -> Path:
+        """Fill the stage from the first verified candidate; its path."""
+        candidates = list(self.candidates())
+        for kind, checkout, rejected in candidates:
+            source = checkout / KEPT if kind == "kept" else checkout
+            reason = rejected or self.copy_candidate(kind, checkout, stage)
+            if reason is None:
+                break
+            sys.stdout.write(printable(f"skipped {source}: {reason}") + "\n")
+        else:
+            refuse(
+                f"no verified installation of {self.ref} with this ballast.toml on "
+                f"this machine ({len(candidates)} checked)",
+                "run `ballast setup` once here (it may download); later worktrees "
+                "at this pin are then prepared from it",
+            )
+        # Nothing was installed here, so a baseline in this checkout's state
+        # predates it: its path was reused (research R8). Never read it.
+        trusted = state / launcher.TRUSTED
+        if os.path.lexists(trusted):
+            _remove_file(trusted)
+            sys.stdout.write(
+                "removed a trust baseline recorded before this installation\n"
+            )
+        return source
+
+    def check_unchanged(self, record: dict, stage: Path) -> None:
+        """Fail unless the stage is still the copy that verified (SEC-003)."""
+        source = self.source_record or {}
+        changed = _first_difference(record["files"], source.get("files", {}))
+        if not changed and record["executable"] != source.get("executable"):
+            changed = "its executable files"
+        if changed:
+            cause = f"the stage changed after it was verified at {changed}"
+            fail("validate stage", cause, "rerun the command")
+        loose = _loose_mode(stage, record["entries"])
+        if loose:
+            cause = f"{loose} is group- or world-writable or set-id"
+            fail("validate stage modes", cause, "rerun the command")
 
     def validate(self, stage: Path) -> dict:
         """Refuse a stage that is not a complete, ignorable installation."""
@@ -662,6 +934,7 @@ class Setup:
             "recorded": _now(),
             "entries": names,
             "files": files,
+            "executable": executables(stage, files),
         }
 
     def ignored(self, names: list[str]) -> list[str]:
@@ -727,11 +1000,15 @@ class Setup:
             )
 
     def finish(self, state: Path, journal: dict) -> None:
-        """Complete a committed switch: constitution, record, kept copy, cleanup."""
+        """Complete a committed switch: constitution, record, kept copy, cleanup.
+
+        A preparation never creates the project's constitution (#15, R8).
+        """
         work = self.root / journal["work"]
         constitution = self.root / CONSTITUTION
         staged = work / "stage" / CONSTITUTION
-        if not os.path.lexists(constitution) and staged.is_file():
+        preparing = journal.get("mode") == PREPARE
+        if not preparing and not os.path.lexists(constitution) and staged.is_file():
             self.check_links([CONSTITUTION])
             constitution.parent.mkdir(parents=True, exist_ok=True)
             with contextlib.suppress(FileExistsError):
@@ -754,11 +1031,17 @@ class Setup:
         self.discard_work(keep_kept=True, only=journal["work"])
         _remove_file(state / launcher.SETUP_ATTEMPT)
 
-    def recover(self, state: Path) -> None:
-        """Resolve an attempt a killed process left, and say what is in place."""
+    def recover(self, state: Path) -> bool:
+        """Resolve an attempt a killed process left, and say what is in place.
+
+        True when it finished a committed preparation at the current
+        fingerprint: that checkout is complete. A committed preparation at
+        another fingerprint (the pin or ballast.toml changed since) is rolled
+        back instead: nothing preceded it (#15, R7).
+        """
         path = state / launcher.SETUP_ATTEMPT
         if not os.path.lexists(path):
-            return
+            return False
         try:
             journal = json.loads(path.read_text(encoding="utf-8"))
             valid = (
@@ -773,22 +1056,38 @@ class Setup:
         if not valid:
             refuse(f"{path} is unreadable", "inspect it, then remove it to retry")
         self.check_links([*PARENTS, journal["work"]])
-        recovered = "recovered an interrupted setup: "
-        if journal["phase"] == "committed":
+        preparing = journal.get("mode") == PREPARE
+        recovered = (
+            "recovered an interrupted preparation: "
+            if preparing
+            else "recovered an interrupted setup: "
+        )
+        stale = preparing and journal.get("fingerprint") != self.fingerprint()
+        complete = journal["phase"] == "committed" and not stale
+        if complete:
             self.finish(state, journal)
             line = f"the new installation ({journal['ref']}) is complete"
         else:
-            if journal["phase"] == "switching":
+            if journal["phase"] == "switching" or journal["phase"] == "committed":
                 self.roll_back(state, journal)
             else:
                 self.discard_work(keep_kept=True)
                 _remove_file(path)
-            if journal["before"]:
+            if journal["phase"] == "committed":
+                # finish() may have written the record before it was killed.
+                _remove_file(state / launcher.INSTALLATION)
+                line = (
+                    f"the installation it prepared ({journal['ref']}) no longer "
+                    "matches this checkout's pin and ballast.toml and was removed; "
+                    "none is in place now"
+                )
+            elif journal["before"]:
                 shown = f" ({journal['before_ref']})" if journal["before_ref"] else ""
                 line = f"the previous installation{shown} is in place"
             else:
                 line = "no installation was in place before it; none is now"
         sys.stdout.write(recovered + line + "\n")
+        return complete and preparing
 
     def discard_work(self, *, keep_kept: bool, only: str | None = None) -> None:
         """Delete attempt work areas, never following a link."""
@@ -802,6 +1101,7 @@ class Setup:
             _remove_tree(self.root, name)
         with contextlib.suppress(OSError):
             work.rmdir()  # only when empty: nothing is left to keep
+            work.parent.rmdir()  # `.ballast`, when the attempt created it
 
     # --- building the stage -------------------------------------------------
 
@@ -991,6 +1291,221 @@ def merge_permissions(settings: dict, config: dict) -> dict:
     return settings
 
 
+def printable(text: object) -> str:
+    """Show checkout text with control characters replaced by `?` (SEC2-004)."""
+    return "".join(c if c.isprintable() else "?" for c in str(text))
+
+
+def executables(root: Path, files: dict[str, str]) -> list[str]:
+    """List the recorded regular files under root with any execute bit, sorted."""
+    return sorted(
+        name
+        for name, digest in files.items()
+        if not digest.startswith("link:") and os.lstat(root / name).st_mode & 0o111
+    )
+
+
+def _worktrees(porcelain: str) -> list[tuple[str, bool]]:
+    """Parse `git worktree list --porcelain -z`: (path, prunable), bare skipped."""
+    found: list[list] = []
+    for field in porcelain.split("\0"):
+        if field.startswith("worktree "):
+            found.append([field.removeprefix("worktree "), False, False])
+        elif found and (field == "prunable" or field.startswith("prunable ")):
+            found[-1][1] = True
+        elif found and field == "bare":
+            found[-1][2] = True
+    return [(path, prunable) for path, prunable, bare in found if not bare]
+
+
+def _read_json(path: Path) -> object:
+    """Return the JSON at path, or None when it is missing or not JSON."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _kept_record(state: Path) -> dict | None:
+    """Return a checkout's kept record when it is well formed."""
+    record = _read_json(state / KEPT_RECORD)
+    valid = (
+        isinstance(record, dict)
+        and isinstance(record.get("files"), dict)
+        and isinstance(record.get("entries"), list)
+    )
+    return record if valid else None
+
+
+def _loose_mode(stage: Path, names: list[str]) -> str | None:
+    """Return the first staged file or directory a copy never makes (SEC2-002)."""
+    for name in names:
+        top = stage / name
+        paths = (
+            [top] if top.is_symlink() or not top.is_dir() else [top, *top.rglob("*")]
+        )
+        for path in sorted(paths):
+            found = os.lstat(path)
+            if not stat.S_ISLNK(found.st_mode) and found.st_mode & 0o7022:
+                return str(path.relative_to(stage))
+    return None
+
+
+def _open_dir(root: Path, parts: tuple[str, ...], *, create: bool) -> int:
+    """Open root/parts as a directory, never through a link below root."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for part in parts:
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(part, 0o755, dir_fd=fd)
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _copy_entry(source: Path, stage: Path, name: str) -> None:
+    """Copy source/name to stage/name, never through a link on either side.
+
+    The stage lies in a checkout an agent can write (security review
+    SEC-001): every directory is opened with O_NOFOLLOW and every file is
+    created with O_EXCL, so nothing is written or read outside the two trees.
+    """
+    *parents, leaf = Path(name).parts
+    try:
+        origin = _open_dir(source, tuple(parents), create=False)
+    except FileNotFoundError:
+        return  # the record's digests decide whether it should exist
+    try:
+        target = _open_dir(stage, tuple(parents), create=True)
+        try:
+            _copy_node(origin, target, leaf, name)
+        finally:
+            os.close(target)
+    finally:
+        os.close(origin)
+
+
+def _copy_node(origin: int, target: int, leaf: str, name: str) -> None:
+    """Copy one link, file or directory between two open directories."""
+    try:
+        found = os.stat(leaf, dir_fd=origin, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    mode = found.st_mode & 0o755  # no set-id bits, no group or world write
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    if stat.S_ISLNK(found.st_mode):
+        os.symlink(os.readlink(leaf, dir_fd=origin), leaf, dir_fd=target)
+    elif stat.S_ISDIR(found.st_mode):
+        os.mkdir(leaf, 0o700, dir_fd=target)
+        inner = os.open(leaf, flags | os.O_DIRECTORY, dir_fd=origin)
+        try:
+            outer = os.open(leaf, flags | os.O_DIRECTORY, dir_fd=target)
+            try:
+                for child in sorted(os.listdir(inner)):  # noqa: PTH208 - a directory fd
+                    path = f"{name}/{child}"
+                    if child != "__pycache__" and path not in LOCAL_STATE:
+                        _copy_node(inner, outer, child, path)
+                os.fchmod(outer, mode)
+            finally:
+                os.close(outer)
+        finally:
+            os.close(inner)
+    elif stat.S_ISREG(found.st_mode):
+        # O_NONBLOCK: a FIFO swapped in after the stat never blocks (SEC2-003).
+        reader = os.open(leaf, flags | os.O_NONBLOCK, dir_fd=origin)
+        try:
+            if not stat.S_ISREG(os.fstat(reader).st_mode):
+                message = f"{name} is not a regular file, directory or link"
+                raise OSError(message)
+            create = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+            writer = os.open(leaf, create, 0o600, dir_fd=target)
+            try:
+                with (
+                    open(reader, "rb", closefd=False) as src,
+                    open(writer, "wb", closefd=False) as dst,
+                ):
+                    shutil.copyfileobj(src, dst)
+                os.fchmod(writer, mode)
+            finally:
+                os.close(writer)
+        finally:
+            os.close(reader)
+    else:
+        message = f"{name} is not a regular file, directory or link"
+        raise OSError(message)
+
+
+def _remove_entry(root: Path, name: str) -> None:
+    """Delete root/name, never following a link on its path or at its end.
+
+    Best effort: a component that became a link is left for discard_work,
+    which removes the whole work area the same way.
+    """
+    *parents, leaf = Path(name).parts
+    try:
+        fd = _open_dir(root, tuple(parents), create=False)
+    except OSError:
+        return
+    try:
+        found = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(found.st_mode):
+            shutil.rmtree(leaf, dir_fd=fd)
+        else:
+            os.unlink(leaf, dir_fd=fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _linked_parent(root: Path, names: list[str]) -> str | None:
+    """Return the first directory between root and one of names that is a link."""
+    for name in filter(_safe, names):
+        parts = Path(name).parts
+        for depth in range(1, len(parts)):
+            if root.joinpath(*parts[:depth]).is_symlink():
+                return "/".join(parts[:depth])
+    return None
+
+
+def _share(state: Path) -> tuple[int | None, str | None]:
+    """Hold another checkout's lock shared, or say why its copy is unusable.
+
+    The lock file must already exist: nothing is created in another
+    checkout's operator state (plan review F-004).
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        fd = os.open(state / launcher.CHECKOUT_LOCK, flags)
+    except FileNotFoundError:
+        return None, "it has no checkout lock"
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None, "it is being set up"
+    if os.path.lexists(state / launcher.SETUP_ATTEMPT):
+        os.close(fd)
+        return None, "its setup did not finish"
+    return fd, None
+
+
+def _journal_mode(state: Path) -> str | None:
+    """Which command wrote the setup journal; None without a readable one.
+
+    A journal written before #15 has no mode and is setup's; an unreadable one
+    is left to `recover`, which refuses it.
+    """
+    journal = _read_json(state / launcher.SETUP_ATTEMPT)
+    return journal.get("mode", SETUP) if isinstance(journal, dict) else None
+
+
 def _first_difference(found: dict[str, str], expected: dict[str, str]) -> str | None:
     differing = [
         n for n in found.keys() | expected.keys() if found.get(n) != expected.get(n)
@@ -1045,13 +1560,6 @@ def _remove_tree(root: Path, name: str) -> None:
         launcher._remove_tree(root, name)  # noqa: SLF001 - same standard version
 
 
-def _remove(path: Path) -> None:
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    else:
-        path.unlink(missing_ok=True)
-
-
 def _fetch_source(name: str, temporary: Path) -> Path:
     repository, commit = SOURCES[name]
     archive = temporary / f"{name}.tar.gz"
@@ -1070,16 +1578,25 @@ def _fetch_source(name: str, temporary: Path) -> Path:
 
 
 def cli(argv: list[str]) -> int:
-    """Run setup or `--check`; exit 1 when a stage failed, 2 when refused."""
+    """Run setup, `--check` or `--prepare`; exit 1 on a failed stage, 2 on refusal."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", type=Path, default=Path.cwd())
-    parser.add_argument("--check", action="store_true", help="report, write nothing")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--check", action="store_true", help="report, write nothing")
+    modes.add_argument(
+        "--prepare",
+        action="store_true",
+        help="install a new worktree from a verified local installation, offline",
+    )
     arguments = parser.parse_args(argv)
     try:
         setup = Setup(arguments.project.resolve())
         if arguments.check:
             return 0 if setup.check() else EXIT_FAILED
-        setup.main()
+        if arguments.prepare:
+            setup.prepare()
+        else:
+            setup.main()
     except RefusedError as refusal:
         sys.stderr.write(f"setup: refusing: {refusal}\n")
         return EXIT_REFUSED

@@ -663,7 +663,19 @@ class ProjectTests(DoctorCase):
         self.assertEqual(checks["setup-current"]["detail"], "setup is absent")
         self.assert_gap(checks["setup-current"])
         self.assertEqual(checks["setup-current"]["remedy"], "ballast setup")
+        # #15 plan review F-005: a version that prepares also names the first
+        # run, ledger or intake; one that cannot names setup alone.
+        self.assertEqual(
+            checks["trust"]["remedy"],
+            "ballast setup, or the first `ballast run`, `ledger` or `intake`, which "
+            "prepares it from a verified installation on this machine",
+        )
+        manifest = standard / "tools/cli.toml"
+        declared = manifest.read_text()
+        manifest.write_text(declared.replace("prepare = true\n", ""))
+        _, checks = self.checks()
         self.assertEqual(checks["trust"]["remedy"], "ballast setup")
+        manifest.write_text(declared)
         self.install(standard)
         (self.project / ".ballast/.setup-version").write_text("stale\n")
         _, checks = self.checks()
