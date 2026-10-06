@@ -7,11 +7,14 @@ bounded wait are injected.
 
 from __future__ import annotations
 
+import ast
 import copy
 import io
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
@@ -581,6 +584,140 @@ class PacketLineTests(DemoCase):
         self.assertEqual(links, ["https://github.com/o/r/actions/runs/11/artifacts/22"])
 
 
+class TemplateLogicTests(unittest.TestCase):
+    """Test review F-002: the template's routing and validation logic."""
+
+    def setUp(self) -> None:
+        data = yaml.safe_load(TEMPLATE.read_text(encoding="utf-8"))
+        (job_spec,) = data["jobs"].values()
+        self.steps = {step.get("name"): step for step in job_spec["steps"]}
+
+    def routed(self, status: str) -> list[str]:
+        """Return the classification steps whose `if:` holds for an exit status."""
+        names = (demo.STEP_TIMED_OUT, demo.STEP_FAILED, demo.STEP_MISSING)
+        found = []
+        for name in names:
+            condition = " ".join(self.steps[name]["if"].split())
+            self.assertRegex(condition, r"^[a-z.' !=0-9&|]+$")
+            python = (
+                condition.replace("steps.demo.outputs.exit", "status")
+                .replace("&&", "and")
+                .replace("||", "or")
+            )
+            if eval(python, {"__builtins__": {}}, {"status": status}):  # noqa: S307
+                found.append(name)
+        return found
+
+    def test_exit_status_routes_to_one_classification_step(self) -> None:
+        cases = {
+            "0": [demo.STEP_MISSING],
+            "124": [demo.STEP_TIMED_OUT],
+            "137": [demo.STEP_TIMED_OUT],
+            "1": [demo.STEP_FAILED],
+            "2": [demo.STEP_FAILED],
+            "143": [demo.STEP_FAILED],
+        }
+        for status, expected in cases.items():
+            with self.subTest(status=status):
+                self.assertEqual(self.routed(status), expected)
+
+    def validate(self, **values: str) -> int:
+        commit = "a" * 40
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "REQUEST": "0123456789abcdef",
+            "SCENARIO": "login-journey",
+            "COMMIT": commit,
+            "GITHUB_SHA": commit,
+            "DEMO_COMMAND": "npm run demo",
+            "VIDEO": "demo-output/login.webm",
+            "TIMEOUT": "15",
+            "RETENTION": "14",
+            **values,
+        }
+        script = self.steps[demo.STEP_VALIDATE]["run"]
+        result = subprocess.run(  # noqa: S603
+            ["/bin/bash", "-c", script],
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode
+
+    def test_validation_accepts_a_request_and_refuses_hostile_inputs(self) -> None:
+        self.assertEqual(self.validate(), 0)
+        hostile = {
+            "REQUEST": ("0123", "0123456789abcdeg", "$(id)0123456789ab"),
+            "SCENARIO": ("", "a b", "a;b", "x" * 65),
+            "COMMIT": ("HEAD", "a" * 39, "a" * 41),
+            "GITHUB_SHA": ("b" * 40,),
+            "TIMEOUT": ("0", "61", "015", "1m", ""),
+            "RETENTION": ("0", "91", "x"),
+            "VIDEO": ("", "/etc/passwd", "../x.webm", "a/../../x.webm", "a/.."),
+            "DEMO_COMMAND": ("", "echo a\necho b"),
+        }
+        for key, values in hostile.items():
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(self.validate(**{key: value}), 1)
+
+    def video_check(self, workspace: Path, video: str) -> int:
+        script = self.steps[demo.STEP_MISSING]["run"]
+        result = subprocess.run(  # noqa: S603
+            ["/bin/bash", "-c", script],
+            env={
+                "PATH": "/usr/bin:/bin",
+                "VIDEO": video,
+                "GITHUB_WORKSPACE": str(workspace),
+            },
+            cwd=workspace,
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode
+
+    def test_video_must_be_a_file_inside_the_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            workspace = base / "work"
+            (workspace / "out").mkdir(parents=True)
+            (workspace / "out/login.webm").write_bytes(b"v")
+            (base / "secret").write_bytes(b"s")
+            (workspace / "out/link.webm").symlink_to(base / "secret")
+            self.assertEqual(self.video_check(workspace, "out/login.webm"), 0)
+            for video in ("out/none.webm", "out", "out/link.webm"):
+                with self.subTest(video=video):
+                    self.assertEqual(self.video_check(workspace, video), 1)
+
+
+class StandardLibraryTests(unittest.TestCase):
+    """FR-020 (test review F-003, analyze C3): demo.py stays stdlib-only."""
+
+    def test_standard_library_and_sibling_imports_only(self) -> None:
+        tools = ROOT / "tools/spec_workflow"
+        tree = ast.parse((tools / "demo.py").read_text(encoding="utf-8"))
+        names = {
+            alias.name.split(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module.split(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        siblings = {path.stem for path in tools.glob("*.py")}
+        self.assertLessEqual(names - siblings - {"__future__"}, sys.stdlib_module_names)
+        code = f"import sys; sys.path.insert(0, {str(tools)!r}); import demo"
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, "-I", "-S", "-c", code],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class TemplateTests(unittest.TestCase):
     """T020 (Q7) [AC-008, AC-017, SC-005]: the copy-once capture workflow."""
 
@@ -664,6 +801,27 @@ class WorkflowIdentityTests(DemoCase):
                 )
                 self.assertNoDispatch()
 
+    def test_never_dispatches_on_the_repository_default_branch(self) -> None:
+        """Engineering F-003, security F-001: the guard uses the fetched default.
+
+        The default branch changes to the feature branch after the checkpoint
+        read it, so the run's base still says `main`.
+        """
+        serve = self.fake.serve
+
+        def flip(argv: list[str], stdin: str | None) -> draft_pr.Result:
+            if self.fake.stage(argv) == "pull":
+                self.fake.repo["default_branch"] = "feat-x"
+            return serve(argv, stdin)
+
+        self.fake.serve = flip
+        status, out = self.main("login-journey", "--no-wait")
+        self.assertEqual(status, 1)
+        self.assertTrue(
+            out.startswith("Demo capture: failed-retryable (internal-error)"), out
+        )
+        self.assertNoDispatch()
+
     def test_run_at_another_commit_is_commit_mismatch(self) -> None:
         """T022 (Q22) [AC-010, SC-002]."""
         self.capture()
@@ -714,6 +872,34 @@ class FailureTests(DemoCase):
         self.fake.jobs = {11: jobs}
         self.fake.artifacts = {11: arts}
         return self.line()
+
+    def test_failed_reads_while_collecting_fail_the_packet_step(self) -> None:
+        """Test review F-001 (analyze C1): packet-demo-section.md read failures."""
+        self.configure(scenario())
+        self.capture()
+        before, _ = self.packet()
+        self.assertEqual(before.packet.state, "published")
+        cases = (
+            ("runs", "success", []),
+            ("jobs", "failure", [job(demo.STEP_FAILED)]),
+            ("artifacts", "success", []),
+        )
+        for stage, conclusion, jobs in cases:
+            with self.subTest(stage=stage):
+                entry = workflow_run(REQUEST, head=self.head, conclusion=conclusion)
+                self.fake.run_pages = [[entry]]
+                self.fake.jobs = {11: jobs}
+                self.fake.artifacts = {11: [artifact(REQUEST)]}
+                self.fake.failures = {stage: draft_pr.Result(1, "", "(HTTP 500)")}
+                outcome, _ = self.packet()
+                self.assertNotEqual(self.fake.gh_calls(stage), [])
+                self.assertEqual(
+                    (outcome.packet.state, outcome.packet.reason),
+                    ("failed-retryable", "github-error"),
+                )
+                self.assertEqual(
+                    (outcome.state, outcome.reason), (before.state, before.reason)
+                )
 
     def test_failure_causes_from_step_names(self) -> None:
         """T027 (Q9) [AC-011]."""

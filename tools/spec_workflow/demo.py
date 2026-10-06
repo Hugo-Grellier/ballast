@@ -690,8 +690,11 @@ class _Request:
             self.stop("refused", "pr-not-open")
         return pull.head
 
-    def check_workflow(self, work: draft_pr._Checkpoint, head: str) -> None:
-        """Installed, active, and the same blob at head as on the default branch."""
+    def check_workflow(self, work: draft_pr._Checkpoint, head: str) -> str:
+        """Installed, active, and the same blob at head as on the default branch.
+
+        Return the repository's default branch, as read now.
+        """
         default = _get(work, f"repos/{self.repo}").get("default_branch")
         if not isinstance(default, str) or not default:
             raise ReadError(GITHUB_ERROR)
@@ -711,6 +714,7 @@ class _Request:
             self.stop("refused", "workflow-not-installed")
         if blobs[0] != blobs[1]:
             self.stop("refused", "workflow-differs")
+        return default
 
     def dispatch(
         self,
@@ -718,11 +722,12 @@ class _Request:
         config: DemoConfig,
         item: DemoScenario,
         head: str,
+        default: str,
     ) -> str:
         """Dispatch the workflow on the feature branch; return the request ID."""
         request_id = secrets.token_hex(8)
         branch = work.run.published
-        if not branch or branch == work.run.base:
+        if not branch or branch in {work.run.base, default}:
             # Never the default branch: PR-head code must not run under its ref.
             self.stop("failed-retryable", "internal-error")
         body = {
@@ -773,8 +778,8 @@ class _Request:
         work, number = self.settle()
         try:
             head = self.head(work, number)
-            self.check_workflow(work, head)
-            request_id = self.dispatch(work, config, item, head)
+            default = self.check_workflow(work, head)
+            request_id = self.dispatch(work, config, item, head, default)
         except ReadError as error:
             self.stop("failed-retryable", error.cause)
         data = event_data(item, head, request_id, number)
