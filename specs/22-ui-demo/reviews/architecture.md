@@ -28,6 +28,6 @@ The fast gate's results (the run record lists a failed `ruff`/`unittest` at fix-
 <!-- ballast-findings: begin -->
 ## Findings (recorded from the review draft)
 
-- F-001 (info, architecture-issue, open): Plan-review F-007 is still unaddressed: ADR-0012's no-new-reach argument does not name PRs based on the feature branch, which restore its caches. The argument holds because they run code from the same branch lineage, but the ADR should say so.
+- F-001 (info, architecture-issue, resolved): Plan-review F-007 is still unaddressed: ADR-0012's no-new-reach argument does not name PRs based on the feature branch, which restore its caches. The argument holds because they run code from the same branch lineage, but the ADR should say so. Fixed in 1b0cc91: ADR-0012 names PRs based on the feature branch in its no-new-reach argument.
 - F-002 (low, architecture-issue, open): demo.py depends on five private draft_pr members (_Checkpoint, _classify, _json, _status, _now) under noqa SLF001, and draft_pr, demo and packet import each other in a cycle that works only through call-time use and postponed annotations. The seam ADR-0012 relies on is not a named interface, so a later draft_pr refactor could break demo silently; expose it publicly or document the contract.
 <!-- ballast-findings: end -->

@@ -26,17 +26,22 @@
         "id": "F-001",
         "severity": "info",
         "label": "implementation-bug",
-        "disposition": "open",
-        "reason": "The policy says a refusal or GitHub failure dispatches and records nothing, which holds. An unexpected local error after a successful dispatch, such as a failed ledger append, also prints failed-retryable (internal-error) and exits 1 although a run was dispatched. That run is never linked or shown as captured. Name this case or give it a distinct reason.",
-        "evidence": ["tools/spec_workflow/run.py", "templates/policies/spec-kit-workflow.md"]
+        "disposition": "resolved",
+        "reason": "The policy says a refusal or GitHub failure dispatches and records nothing, which holds. An unexpected local error after a successful dispatch, such as a failed ledger append, also prints failed-retryable (internal-error) and exits 1 although a run was dispatched. That run is never linked or shown as captured. Name this case or give it a distinct reason. Fixed in 1b0cc91: the policy names a local error after a successful dispatch.",
+        "evidence": [
+          "tools/spec_workflow/run.py",
+          "templates/policies/spec-kit-workflow.md"
+        ]
       },
       {
         "id": "F-002",
         "severity": "info",
         "label": "spec-ambiguity",
-        "disposition": "open",
-        "reason": "The README's copy-once section does not say ballast-demo.yml must be on the default branch before feature branches are cut. The policy section and the template header say it, and the README links the template, so this is a discoverability nit only.",
-        "evidence": ["README.md"]
+        "disposition": "resolved",
+        "reason": "The README's copy-once section does not say ballast-demo.yml must be on the default branch before feature branches are cut. The policy section and the template header say it, and the README links the template, so this is a discoverability nit only. Fixed in 1b0cc91: the README entry says to commit the workflow on the default branch before cutting feature branches.",
+        "evidence": [
+          "README.md"
+        ]
       }
     ],
     "required_kinds": []

@@ -39,6 +39,6 @@ Same-provider review: independence is reduced.
 <!-- ballast-findings: begin -->
 ## Findings (recorded from the review draft)
 
-- F-001 (info, implementation-bug, open): The policy says a refusal or GitHub failure dispatches and records nothing, which holds. An unexpected local error after a successful dispatch, such as a failed ledger append, also prints failed-retryable (internal-error) and exits 1 although a run was dispatched. That run is never linked or shown as captured. Name this case or give it a distinct reason.
-- F-002 (info, spec-ambiguity, open): The README's copy-once section does not say ballast-demo.yml must be on the default branch before feature branches are cut. The policy section and the template header say it, and the README links the template, so this is a discoverability nit only.
+- F-001 (info, implementation-bug, resolved): The policy says a refusal or GitHub failure dispatches and records nothing, which holds. An unexpected local error after a successful dispatch, such as a failed ledger append, also prints failed-retryable (internal-error) and exits 1 although a run was dispatched. That run is never linked or shown as captured. Name this case or give it a distinct reason. Fixed in 1b0cc91: the policy names a local error after a successful dispatch.
+- F-002 (info, spec-ambiguity, resolved): The README's copy-once section does not say ballast-demo.yml must be on the default branch before feature branches are cut. The policy section and the template header say it, and the README links the template, so this is a discoverability nit only. Fixed in 1b0cc91: the README entry says to commit the workflow on the default branch before cutting feature branches.
 <!-- ballast-findings: end -->

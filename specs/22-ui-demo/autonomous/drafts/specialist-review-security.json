@@ -27,17 +27,22 @@
         "id": "F-001",
         "severity": "low",
         "label": "implementation-bug",
-        "disposition": "open",
-        "reason": "demo._Request.dispatch refuses a branch equal to the run's base, not the repository default branch that check_workflow already read. They differ only for a PR whose base is not the default branch, and the published branch is the runner's own feature branch, so this is defense in depth: compare against the fetched default branch as well.",
-        "evidence": ["tools/spec_workflow/demo.py"]
+        "disposition": "resolved",
+        "reason": "demo._Request.dispatch refuses a branch equal to the run's base, not the repository default branch that check_workflow already read. They differ only for a PR whose base is not the default branch, and the published branch is the runner's own feature branch, so this is defense in depth: compare against the fetched default branch as well. Fixed in 78759c2: dispatch refuses the default branch check_workflow read; test_never_dispatches_on_the_repository_default_branch.",
+        "evidence": [
+          "tools/spec_workflow/demo.py"
+        ]
       },
       {
         "id": "F-002",
         "severity": "info",
         "label": "spec-ambiguity",
-        "disposition": "open",
-        "reason": "The outcome steps run in the same job as PR-head code, which can write GITHUB_OUTPUT/GITHUB_ENV or leave a background process, so captured versus failed is reported by untrusted code. Acceptable because a video is never evidence or approval (FR-014); worth one sentence in the policy's Demo capture section.",
-        "evidence": ["templates/github/workflows/ballast-demo.yml", "templates/policies/spec-kit-workflow.md"]
+        "disposition": "resolved",
+        "reason": "The outcome steps run in the same job as PR-head code, which can write GITHUB_OUTPUT/GITHUB_ENV or leave a background process, so captured versus failed is reported by untrusted code. Acceptable because a video is never evidence or approval (FR-014); worth one sentence in the policy's Demo capture section. Fixed in 1b0cc91: the policy's Demo capture section says the outcome is reported by the job that runs the PR's code.",
+        "evidence": [
+          "templates/github/workflows/ballast-demo.yml",
+          "templates/policies/spec-kit-workflow.md"
+        ]
       }
     ],
     "required_kinds": []
