@@ -128,18 +128,22 @@ STACK_GATES = {
     "go": "go test ./...",
 }
 SCRIPTS = ("test", "lint", "check", "typecheck", "format:check")
+SCRIPT_ARGS = [[name] for name in SCRIPTS]
 # Recognised verifiers (R7): a program and the first arguments that qualify
-# it, None for any; `verifier` adds python -m, uv run, uvx, prettier and make.
+# it, None for any. `verifier` adds `python -m` MODULES, `prettier --check`,
+# `make` with a CHECK_TARGETS target, `<pm> test` and `<pm> run` with a SCRIPTS
+# name, and `uv run`/`uvx` only when the program they start is itself direct.
 VERIFIERS: dict[str, frozenset[str] | None] = {
     **dict.fromkeys(
         ("pytest", "ruff", "mypy", "pyright", "tox", "nox", "eslint", "tsc"), None
     ),
     "golangci-lint": None,
-    **dict.fromkeys(("npm", "pnpm", "yarn", "bun"), frozenset({"run", "test"})),
     "npx": frozenset({"eslint", "tsc", "prettier", "vitest", "jest"}),
     "cargo": frozenset({"test", "clippy", "fmt"}),
     "go": frozenset({"test", "vet"}),
 }
+PACKAGE_MANAGERS = frozenset({"npm", "pnpm", "yarn", "bun"})
+CHECK_TARGETS = frozenset({"test", "check", "lint"})
 MODULES = frozenset({"pytest", "unittest", "mypy"})
 # A CI `run:` key, alone or as a sequence item.
 RUN = re.compile(r"^(?P<indent>\s*(?:-\s+)?)run:(?:\s+(?P<value>.*))?$")
@@ -250,22 +254,41 @@ def plain_command(line: str) -> list[str] | None:
     return words or None
 
 
-def verifier(words: list[str]) -> bool:
-    """Whether a command's program is a recognised verifier (R7)."""
+def verifier(words: list[str]) -> str | None:
+    """Classify a CI command (R7): "direct", "inferred" or None (not a check).
+
+    Inferred (written commented) is anything of a checking shape that is not a
+    known verifier: `uv run`/`uvx`/`npx` of another program, another `make`
+    target or `<pm> run` script, and pytest loading a plugin (`-p`) (SEC-001).
+    """
     program, rest = words[0], words[1:]
     first = rest[0] if rest else ""
+    if program in {"python", "python3"}:
+        module = rest[1] if first == "-m" and len(rest) > 1 else ""
+        if module not in MODULES:
+            return None
+        return verifier(rest[1:]) if module in VERIFIERS else "direct"
+    if (program == "uv" and first == "run") or program == "uvx":
+        inner = rest[1:] if program == "uv" else rest
+        return "direct" if inner and verifier(inner) == "direct" else "inferred"
+    # program: (a checking shape, a known verifier)
+    shapes = {
+        "make": (bool(rest), len(rest) == 1 and first in CHECK_TARGETS),
+        "prettier": ("--check" in rest, True),
+        **dict.fromkeys(
+            PACKAGE_MANAGERS,
+            (first in {"run", "test"}, first == "test" or rest[1:2] in SCRIPT_ARGS),
+        ),
+    }
     if program in VERIFIERS:
         allowed = VERIFIERS[program]
-        return allowed is None or first in allowed
-    if program in {"python", "python3"}:
-        return first == "-m" and rest[1:2] != [] and rest[1] in MODULES
-    special = {
-        "uv": first == "run" and len(rest) > 1,
-        "uvx": bool(rest),
-        "prettier": "--check" in rest,
-        "make": len(rest) == 1 and not first.startswith("-"),
-    }
-    return special.get(program, False)
+        known = allowed is None or first in allowed
+        plugin = program == "pytest" and any(w.startswith("-p") for w in rest)
+        shapes[program] = (known or program == "npx", known and not plugin)
+    shape, known = shapes.get(program, (False, False))
+    if not shape:
+        return None
+    return "direct" if known else "inferred"
 
 
 def ci_lines(text: str) -> list[tuple[str, int]]:
@@ -553,8 +576,9 @@ class Init:
             pin = launcher.pinned_ref(self.root)
             if pin is None:
                 refused(
-                    "ballast.toml has no valid [standard] ref",
-                    'set [standard] ref = "vX.Y.Z" in ballast.toml',
+                    "ballast.toml is unreadable (a link, not a regular file or "
+                    "larger than 256 KiB) or has no valid [standard] ref",
+                    'make it a regular file with [standard] ref = "vX.Y.Z"',
                 )
             if pin != self.ref:
                 refused(
@@ -735,8 +759,8 @@ class Init:
             text = self.read(name, "ci")
             for line, number in ci_lines(text or ""):
                 words = plain_command(line)
-                if words and verifier(words):
-                    found.append(Value("check", line, f"{name}:{number}", "direct"))
+                if words and (kind := verifier(words)):
+                    found.append(Value("check", line, f"{name}:{number}", kind))
         found += self.script_checks(manifests, locks)
         found += self.make_checks()
         found += self.manifest_checks(manifests, locks)
@@ -1220,7 +1244,10 @@ class Init:
         for source, lines in edits.items():
             self.propose_rule_edits(source, lines)
         if failing:
-            self.write_patch()
+            try:
+                self.write_patch()
+            except OSError:  # keep the ignore cause; print the patch instead
+                self.patch_state = "unwritable"
             failed("; ".join(causes), "apply the proposed patch or change the rule")
 
     def add_block(self) -> None:
@@ -1487,7 +1514,9 @@ class Init:
     def found(self, program: str) -> bool:
         """Whether a check's program exists: on PATH, or as a path in the root."""
         if "/" in program:
-            return (self.root / program).exists()
+            root = self.root.resolve()
+            resolved = (root / program).resolve()
+            return resolved.is_relative_to(root) and resolved.exists()
         return bool(program) and shutil.which(program) is not None
 
     # --- report ---------------------------------------------------------------
@@ -1501,7 +1530,12 @@ class Init:
         if self.patch_state == "written":
             return [f"Proposed patch: {PATCH} ({reasons})"]
         return [
-            f"Proposed patch ({reasons}); not written because {PATCH} is not ignored:",
+            f"Proposed patch ({reasons}); not written because {PATCH} "
+            + (
+                "is not ignored:"
+                if self.patch_state == "printed"
+                else "cannot be written:"
+            ),
             *self.patch_text.splitlines(),
         ]
 

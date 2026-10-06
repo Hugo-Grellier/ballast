@@ -8,4 +8,4 @@ Run these before a change is accepted, and record the exact commands and results
 
 {{gates}}
 
-Commands marked `inferred` were not found in CI or a named manifest script: confirm each one, then move it to `[checks] commands` in `ballast.toml`.
+Commands marked `inferred` are not active checks: a manifest or `Makefile` only suggests them, or CI runs something other than a known verifier. Confirm each one, then move it to `[checks] commands` in `ballast.toml`.

@@ -63,6 +63,7 @@ import queue
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -118,6 +119,7 @@ MINIMUM_PYTHON = (3, 11)
 PROBE_SECONDS = 3
 NETWORK_SECONDS = 5
 EXIT_REFUSED = 2
+CONFIG_LIMIT = 256 * 1024
 
 
 def fail(message: str) -> None:
@@ -125,10 +127,28 @@ def fail(message: str) -> None:
     sys.exit(f"ballast: {message}")
 
 
+def read_config(root: Path) -> str:
+    """Read ballast.toml: never through a link, a regular file, at most 256 KiB."""
+    path = root / "ballast.toml"
+    data, reason = b"", "a symbolic link" if path.is_symlink() else None
+    if reason is None:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            if stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                data = handle.read(CONFIG_LIMIT + 1)
+            else:
+                reason = "not a regular file"
+    if len(data) > CONFIG_LIMIT:
+        reason = "larger than 256 KiB"
+    if reason is not None:
+        raise OSError(reason)
+    return data.decode("utf-8")
+
+
 def read_pin(root: Path) -> tuple[str | None, str | None]:
     """Return `(ref, None)` from the project's ballast.toml, or `(None, error)`."""
     try:
-        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+        config = tomllib.loads(read_config(root))
     except (OSError, ValueError) as error:
         return None, f"cannot read ballast.toml: {error}"
     standard = config.get("standard", {})
@@ -910,7 +930,7 @@ def _checks_allowed(root: Path) -> Outcome:
     its own work.
     """
     try:
-        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+        config = tomllib.loads(read_config(root))
     except (OSError, ValueError) as error:
         return "inconclusive", f"cannot read ballast.toml: {error}", CHECKS_REMEDY
     checks = config.get("checks")
@@ -1332,9 +1352,7 @@ def disposable_build(
     state.mkdir(parents=True)
     git_output(work, "init", "-q", str(project))
     pin = pinned_ref(root)
-    (project / "ballast.toml").write_text(
-        with_ref((root / "ballast.toml").read_text(encoding="utf-8"), pin, ref)
-    )
+    (project / "ballast.toml").write_text(with_ref(read_config(root), pin, ref))
     gitignore = root / ".gitignore"
     ignore = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
     if block and block not in ignore:
@@ -1510,7 +1528,7 @@ def update_report(root: Path, ref: str, target: Path, work: Path) -> dict:
     changed = sorted({*paths["added"], *paths["changed"], *paths["removed"]})
     protected = ["ballast.toml", *(p for p in changed if p.startswith(PROTECTED))]
     try:
-        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+        config = tomllib.loads(read_config(root))
         commands = config.get("checks", {}).get("commands") or []
     except (OSError, ValueError, AttributeError):
         commands = []

@@ -38,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -52,6 +53,7 @@ TRUSTED = "trusted.json"
 SETUP_ATTEMPT = "setup-attempt.json"
 INSTALLATION = "installation.json"
 CHECKOUT_LOCK = "checkout.lock"
+CONFIG_LIMIT = 256 * 1024
 STAMP = ".ballast/.setup-version"
 UNFINISHED = "setup did not finish in this checkout; run `ballast setup` to recover"
 SETUP_RUNNING = "ballast setup is running in this checkout; wait for it to finish"
@@ -237,10 +239,28 @@ def checkout_lock(state: Path, *, shared: bool) -> int | None:
     return fd
 
 
+def read_config(root: Path) -> str:
+    """Read ballast.toml: never through a link, a regular file, at most 256 KiB."""
+    path = root / "ballast.toml"
+    data, reason = b"", "a symbolic link" if path.is_symlink() else None
+    if reason is None:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            if stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                data = handle.read(CONFIG_LIMIT + 1)
+            else:
+                reason = "not a regular file"
+    if len(data) > CONFIG_LIMIT:
+        reason = "larger than 256 KiB"
+    if reason is not None:
+        raise OSError(reason)
+    return data.decode("utf-8")
+
+
 def pinned_ref(root: Path) -> str | None:
     """Return the checkout's `[standard] ref`, or None unless it is a valid ref."""
     try:
-        config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
+        config = tomllib.loads(read_config(root))
     except (OSError, ValueError):
         return None
     standard = config.get("standard")

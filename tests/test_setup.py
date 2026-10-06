@@ -1068,6 +1068,21 @@ class RecoverableSetupTests(ProjectCase):
             self.assertNotIn("\x1b", out + err)
         self.assertIsNone(setup.launcher.pinned_ref(self.root))
 
+    def test_a_linked_or_oversized_pin_is_not_read(self) -> None:
+        # SEC-002: the launcher's pin read never follows a link and is bounded.
+        outside = self.root.parent / f"{self.root.name}-outside.toml"
+        outside.write_text(PIN.format("v0.1.0"))
+        self.addCleanup(outside.unlink)
+        pin = self.root / "ballast.toml"
+        pin.unlink(missing_ok=True)
+        pin.symlink_to(outside)
+        self.assertIsNone(setup.launcher.pinned_ref(self.root))
+        pin.unlink()
+        pin.write_text(PIN.format("v0.1.0") + "#" + "x" * 256 * 1024 + "\n")
+        self.assertIsNone(setup.launcher.pinned_ref(self.root))
+        pin.write_text(PIN.format("v0.1.0"))
+        self.assertEqual(setup.launcher.pinned_ref(self.root), "v0.1.0")
+
     @property
     def a_checkout(self) -> dict[str, str]:
         root = self.new_project("fresh-a")

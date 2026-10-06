@@ -1259,6 +1259,21 @@ class InitBootstrapTests(unittest.TestCase):
             err,
         )
 
+    def test_a_linked_or_oversized_pin_is_refused_unread(self) -> None:
+        """SEC-002: the pin read never follows a link and is bounded."""
+        pin = self.project / "ballast.toml"
+        outside = self.project.parent / "outside.toml"
+        outside.write_text('[standard]\nref = "v0.1.0"\n')
+        pin.symlink_to(outside)
+        code, argv, err = self.init()
+        self.assertEqual((code, argv), (2, None))
+        self.assertIn("cannot read ballast.toml: a symbolic link", err)
+        pin.unlink()
+        pin.write_text('[standard]\nref = "v0.1.0"\n#' + "x" * 256 * 1024 + "\n")
+        code, argv, err = self.init()
+        self.assertEqual((code, argv), (2, None))
+        self.assertIn("cannot read ballast.toml: larger than 256 KiB", err)
+
     def test_a_version_without_init_is_refused(self) -> None:
         manifest = self.standard / "tools/cli.toml"
         text = manifest.read_text()

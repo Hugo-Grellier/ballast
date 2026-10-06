@@ -427,6 +427,16 @@ class IgnoreConflictTests(InitCase):
             (self.root / "docs/.gitignore").read_text(), "# keep\n!policies/*.md\n"
         )
 
+    def test_an_unwritable_patch_keeps_the_ignore_cause(self) -> None:
+        # SEC-006: a regular file at .ballast/init cannot mask the failing rule.
+        self.established(
+            **{"docs/.gitignore": "!policies/*.md\n", ".ballast/init": "file\n"}
+        )
+        code, report = self.init()
+        self.assertEqual(code, 1, report)
+        self.assertIn("stopped at ignore: installed paths are not ignored", report)
+        self.assertIn("+# !policies/*.md", report)
+
     def test_a_rule_outside_the_repository_files_is_named_without_a_patch(self) -> None:
         self.established()
         write(self.root, {".git/info/exclude": "docs/policies/project/\n"})
@@ -635,6 +645,39 @@ class EvidenceTests(InitCase):
         self.assertEqual(commands, ["pytest", "ruff check", "pnpm run test"])
         self.assertIn('check "make check" (Makefile:1)', report)
 
+    def test_only_known_verifiers_in_ci_become_active_checks(self) -> None:
+        """SEC-001: a wrapper runs only a known verifier; the rest is commented."""
+        known = [
+            "uv run pytest",
+            "uvx ruff check",
+            "npx eslint .",
+            "make test",
+            "npm run lint",
+            "python -m unittest",
+        ]
+        unknown = [
+            "make deploy",
+            "uv run python -c \"__import__('os').system('id')\"",
+            "uvx twine upload dist/*",
+            "uv run --with evil pytest",
+            "npm run publish",
+            "npx playwright install",
+            "pytest -p attacker_plugin",
+            "python -m pytest -p attacker_plugin",
+        ]
+        steps = "".join(f"      - run: {line}\n" for line in [*known, *unknown])
+        ci = "on: push\njobs:\n  t:\n    steps:\n" + steps + "      - run: npm ci\n"
+        self.established(**{".github/workflows/ci.yml": ci, "Makefile": ""})
+        code, report = self.init()
+        self.assertEqual(code, 0, report)
+        commands = self.config()["checks"]["commands"]
+        self.assertEqual(commands[: len(known)], known)
+        self.assertFalse(set(commands) & set(unknown), commands)
+        entries = "\n".join(self.entries())
+        for line in unknown:
+            self.assertIn(f"  # {init.toml_string(line)},  # inferred from", entries)
+        self.assertNotIn("npm ci", entries)
+
     def test_an_unknown_stack_is_neutral_and_inferred(self) -> None:
         git(self.root, "init", "-q")
         write(self.root, {"src/main.zig": "pub fn main() void {}\n"})
@@ -699,6 +742,16 @@ class GeneratedContentTests(InitCase):
         found = set(init.PLACEHOLDER.findall(template))
         self.assertTrue(found)
         self.assertEqual(found - set(tool.agents_values()), set())
+
+    def test_a_check_path_outside_the_root_is_not_found(self) -> None:
+        # SEC-003: a slash-containing program resolves inside the root only.
+        write(self.root, {"scripts/check": "#!/bin/sh\n"})
+        (self.base / "outside").write_text("")
+        (self.root / "linked").symlink_to(self.base / "outside")
+        tool = init.Init(self.root, REF, None, None)
+        self.assertTrue(tool.found("scripts/check"))
+        self.assertFalse(tool.found("../outside"))
+        self.assertFalse(tool.found("./linked"))
 
     def test_github_origin(self) -> None:
         for url, repository in (
@@ -811,8 +864,9 @@ class RerunTests(InitCase):
         write(self.root, {"ballast.toml": pin})
         before = setup_tests.tree(self.root, (".git",))
         code, report = self.init()
-        self.assertEqual(code, 1, report)
-        self.assertIn("stopped at plan: ballast.toml is unusable (larger", report)
+        # SEC-002: the launcher's bounded pin read refuses it at check.
+        self.assertEqual(code, 2, report)
+        self.assertIn("stopped at check: ballast.toml is unreadable", report)
         self.assertEqual(setup_tests.tree(self.root, (".git",)), before)
 
     def test_a_partial_adoption_is_completed(self) -> None:
