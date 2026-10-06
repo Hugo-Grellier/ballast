@@ -189,10 +189,13 @@ steps:
     type: shell
     run: python3 -I -S .ballast/spec_workflow/artifacts.py implementation --run {{ context.run_id }}
 
+  # Shell steps default to 300 s; run-checks bounds each command itself
+  # ([checks] timeout_minutes, at most 240), so `timeout: 86400` is only a backstop.
   # The [checks] commands as feedback for the fix loop: a failure is
   # recorded for the reviews and the fix step, not a block (#21).
   - id: checks-implementation
     type: shell
+    timeout: 86400
     run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
 
   - id: review-implementation
@@ -225,6 +228,7 @@ steps:
 
   - id: checks-fix-1
     type: shell
+    timeout: 86400
     run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
 
   - id: review-fix-1
@@ -253,6 +257,7 @@ steps:
 
   - id: checks-fix-2
     type: shell
+    timeout: 86400
     run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
 
   - id: review-fix-2
@@ -281,6 +286,7 @@ steps:
 
   - id: checks-fix-3
     type: shell
+    timeout: 86400
     run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }} --feedback
 
   - id: review-fix-3
@@ -335,6 +341,7 @@ steps:
 
   - id: run-checks
     type: shell
+    timeout: 86400
     run: python3 -I -S .ballast/spec_workflow/artifacts.py run-checks --run {{ context.run_id }}
 
   - id: decide-final
