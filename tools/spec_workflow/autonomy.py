@@ -134,6 +134,7 @@ BLOCK_CATEGORIES = (
     "forge",
     "interrupted",
     "upstream-sync",
+    "credential",
 )
 REVIEW_KINDS = (
     "plan",
@@ -1194,6 +1195,8 @@ RECOVERY = {
     "forge": "Fix forge access, then retry publication.",
     "interrupted": "Review the checkout, then resume, or continue human-gated.",
     "upstream-sync": "Remove the cause shown, then start the run again.",
+    "credential": "Sign the agent CLI in again outside the sandbox (run `claude` "
+    "once, or `claude /login`), then continue human-gated.",
 }
 # Limits that a fix by hand, then a resume, can recover from.
 LIMIT_RECOVERY = {
@@ -1927,6 +1930,41 @@ def agent_homes(home: Path, env: dict[str, str]) -> list[Path]:
     return [claude, codex, home / ".cache"]
 
 
+def _without_refresh_tokens(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _without_refresh_tokens(item)
+            for key, item in value.items()
+            if key != "refreshToken"
+        }
+    if isinstance(value, list):
+        return [_without_refresh_tokens(item) for item in value]
+    return value
+
+
+def _agent_login(login: Path, private: Path) -> str:
+    """Copy the Claude login for the agent, without its refresh tokens.
+
+    Refresh tokens are single-use: a refresh inside the throwaway overlay
+    rotates the operator's token, then loses the new one at step end, and the
+    overlay also hides the operator's own refreshes from a running step (#65).
+    The agent keeps the access token; when it expires the step fails with an
+    authentication block and the operator signs in outside the sandbox. A
+    login this cannot parse is hidden.
+    """
+    if login.is_symlink() or not login.is_file():
+        return "/dev/null"
+    try:
+        data = json.loads(login.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "/dev/null"
+    copy = private / "credentials.json"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    with os.fdopen(os.open(copy, flags, 0o600), "w", encoding="utf-8") as handle:
+        json.dump(_without_refresh_tokens(data), handle)
+    return str(copy)
+
+
 def _installed_skill_binds(root: Path) -> list[str]:
     """Bind the installed workflow skills read-only (#20 SEC-001).
 
@@ -2043,11 +2081,12 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
-    `private` is a wrapper-owned temporary directory for the per-step copy of
-    `~/.claude.json`. Agent homes and caches get throwaway overlays,
-    credential paths are hidden, and the agent cannot reach the operator's
-    processes, user bus or runtime sockets. Pass the operator's environment,
-    not `confined_env()`'s: it names the credential locations to hide.
+    `private` is a wrapper-owned temporary directory for the per-step copies
+    of `~/.claude.json` and the Claude login (without refresh tokens). Agent
+    homes and caches get throwaway overlays, credential paths are hidden, and
+    the agent cannot reach the operator's processes, user bus or runtime
+    sockets. Pass the operator's environment, not `confined_env()`'s: it names
+    the credential locations to hide.
 
     `readonly_extra` names checkout paths (such as `.claude`) bound read-only
     when they exist. `interactive_pty=True` omits `--new-session`, and only a
@@ -2108,6 +2147,9 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     for path in agent_homes(home, env):
         if path.is_dir() and not path.is_symlink():
             args += ["--overlay-src", str(path), "--tmp-overlay", str(path)]
+    login = agent_homes(home, env)[0] / ".credentials.json"
+    if os.path.lexists(login):
+        args += ["--ro-bind", _agent_login(login, private), str(login)]
     settings = home / ".claude.json"
     if settings.is_file() and not settings.is_symlink():
         copy = private / "claude.json"

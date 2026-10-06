@@ -8,6 +8,7 @@ EXECUTABLE at `bin/claude` / `bin/codex` (symlinks to this file), which:
 - add the bounded permission model (never a permission or sandbox bypass);
 - tee stdout/stderr to the terminal and to ignored run state;
 - fail the step when the agent reports `RECONCILE_STATUS: BLOCKED_*`;
+- exit EXIT_AUTH, with the remedy, when the Claude CLI cannot authenticate;
 - fail the step when the agent changed run state, workflow machinery, their
   bytecode, or the checkout's virtual environment;
 - stop every process the agent left behind before that check (Linux child
@@ -68,6 +69,14 @@ from launcher import (  # noqa: E402
 NOFOLLOW_WRITE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
 
 HERE = Path(__file__).resolve().parent
+# The Claude CLI's own login errors (#65): its token expired or was refused.
+AUTH_FAILURE = re.compile(
+    rb"^(?:Failed to authenticate|Not logged in|Invalid API key)\b", re.MULTILINE
+)
+AUTH_REASON = (
+    "the claude CLI could not authenticate: its login expired or was refused. "
+    "Sign in again outside the sandbox (run `claude` once, or `claude /login`)"
+)
 SETTINGS = HERE / "claude-settings.json"
 # The Chat-only additions to the headless rules (#20 contracts/step-runner.md).
 CHAT_SETTINGS = HERE / "claude-chat-settings.json"
@@ -95,6 +104,7 @@ FORBIDDEN = (
 EXIT_BLOCKED = 3
 EXIT_TAMPERED = 4
 EXIT_LIMIT = 5
+EXIT_AUTH = 6
 EXIT_USAGE = 2
 EXIT_INTERRUPTED = 130
 PR_SET_CHILD_SUBREAPER = 36
@@ -1060,6 +1070,7 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
         *argv,
     ]
     stdout: list[bytes] = []
+    stderr: list[bytes] = []
     process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
         argv,
         stdout=subprocess.PIPE,
@@ -1076,7 +1087,7 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
         ),
         threading.Thread(
             target=_tee,
-            args=(process.stderr, sys.stderr.buffer, logs["stderr.log"], []),
+            args=(process.stderr, sys.stderr.buffer, logs["stderr.log"], stderr),
             daemon=True,
         ),
     ]
@@ -1114,6 +1125,14 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
         # An unreapable survivor may hold a pipe open forever; do not wait on it.
         thread.join(None if contained else 1.0)
 
+    reason = "wall-time limit exhausted during the step" if limit_hit else None
+    if (
+        integration == "claude"
+        and exit_code not in {0, EXIT_LIMIT, EXIT_INTERRUPTED}
+        and AUTH_FAILURE.search(b"".join(stdout + stderr))
+    ):
+        sys.stderr.write(f"spec workflow agent wrapper: {AUTH_REASON}\n")
+        exit_code, reason = EXIT_AUTH, AUTH_REASON
     blocked = BLOCKING.findall(b"".join(stdout).decode("utf-8", "replace"))
     if exit_code == 0 and blocked:
         sys.stderr.write(
@@ -1152,7 +1171,6 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
     if record is not None:
         drafts = _created_drafts(root, record, log_dir.name)
         meta["drafts"] = drafts
-        reason = "wall-time limit exhausted during the step" if limit_hit else None
         entry = {
             **step_record,
             "drafts": drafts,

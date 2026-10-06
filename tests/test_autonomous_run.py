@@ -822,6 +822,21 @@ class RunBlockTests(RunCase):
                 if category == "tamper":
                     self.assertEqual(block["command"], "ballast discard-runs")
 
+    def test_agent_login_failure_is_a_credential_block(self) -> None:
+        """#65: an agent CLI that cannot authenticate is no failed contract."""
+        reason = "the claude CLI could not authenticate"
+        self.engine.update(status="failed", code=1, step="implement")
+        self.engine["scenario"] = lambda r: self.agent_step(r, 6, reason=reason)
+        run_id = self.started()
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(block["category"], "credential")
+        self.assertIn(reason, block["condition"])
+        self.assertIn("claude /login", block["recovery"])
+        self.assertEqual(
+            block["command"],
+            f"ballast run continue {run_id} --reason block-resolved --ref TEXT",
+        )
+
     def test_tamper_keeps_its_category_despite_the_kept_marker(self) -> None:
         """The wrapper keeps the in-progress marker after tampering on purpose."""
 

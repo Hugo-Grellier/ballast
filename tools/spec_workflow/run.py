@@ -143,7 +143,13 @@ CONTINUE = "ballast-continue"
 AUTONOMOUS_INPUTS = {"idea", "feature_directory", "integration", "issue"}
 REASONS = {"block-resolved": "block-resolution", "changes-requested": "merge-feedback"}
 # Wrapper exit codes (agent.py) and the block category each maps to.
-WRAPPER_CATEGORIES = {3: "decision", 4: "tamper", 5: "limit", 130: "interrupted"}
+WRAPPER_CATEGORIES = {
+    3: "decision",
+    4: "tamper",
+    5: "limit",
+    6: "credential",
+    130: "interrupted",
+}
 FALLBACK_OPTIONS = [
     {
         "option": "Resolve the open decision in the feature artifacts",
