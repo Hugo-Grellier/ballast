@@ -1675,6 +1675,29 @@ def needs_installation(root: Path) -> bool:
     )
 
 
+def before_launcher(root: Path, standard: Path, command: str) -> int:
+    """Prepare or refuse an uninstalled checkout before its launcher runs.
+
+    `run`, `ledger` and `intake` prepare it; `trust` and `discard-runs` reach
+    the launcher only when the version can prepare, because an older
+    launcher answers with usage text that does not name setup (AC-007).
+    """
+    if command in PREPARING and needs_installation(root):
+        return prepare(root, standard)
+    if command in {"trust", "discard-runs"} and not (root / RUN_TOOL).is_file():
+        return 0 if declarations(standard).prepare else refuse_uninstalled()
+    return 0
+
+
+def refuse_uninstalled() -> int:
+    """Refuse a checkout with nothing installed, naming setup."""
+    sys.stderr.write(
+        "ballast: refusing: nothing is installed in this checkout; run "
+        "`ballast setup`\n"
+    )
+    return EXIT_REFUSED
+
+
 def prepare(root: Path, standard: Path) -> int:
     """Run the pinned version's `tools/setup --prepare`; its exit status.
 
@@ -1683,13 +1706,7 @@ def prepare(root: Path, standard: Path) -> int:
     The cached version is verified first and never fetched again here.
     """
     if not declarations(standard).prepare:
-        if (root / RUN_TOOL).is_file():
-            return 0
-        sys.stderr.write(
-            "ballast: refusing: nothing is installed in this checkout; run "
-            "`ballast setup`\n"
-        )
-        return EXIT_REFUSED
+        return 0 if (root / RUN_TOOL).is_file() else refuse_uninstalled()
     if not os.environ.get("BALLAST_STANDARD_DIR"):
         damaged = damage(standard)
         if damaged is not None:
@@ -1700,7 +1717,8 @@ def prepare(root: Path, standard: Path) -> int:
             return EXIT_REFUSED
     tool = standard / "tools/setup"
     command = [PYTHON, "-IS", str(tool), "--project", str(root), "--prepare"]
-    return subprocess.run(command, cwd=root, check=False).returncode  # noqa: S603
+    code = subprocess.run(command, cwd=root, check=False).returncode  # noqa: S603
+    return code if code >= 0 else 1  # killed by a signal
 
 
 def main(argv: list[str]) -> int:
@@ -1723,10 +1741,9 @@ def main(argv: list[str]) -> int:
         os.execv(  # noqa: S606
             PYTHON, [PYTHON, "-IS", str(tool), "--project", str(root), *argv[1:]]
         )
-    if argv[0] in PREPARING and needs_installation(root):
-        prepared = prepare(root, standard)
-        if prepared != 0:
-            return prepared
+    prepared = before_launcher(root, standard, argv[0])
+    if prepared != 0:
+        return prepared
     launcher = standard / "tools/spec_workflow/launcher.py"
     if not launcher.is_file():
         fail(f"{standard} has no launcher{DOCTOR_HINT}")

@@ -895,6 +895,9 @@ NOT_INSTALLED = (
     "or `ballast run`, `ledger` or `intake` to prepare it from a verified "
     "installation on this machine\n"
 )
+OLD_REFUSAL = (
+    "ballast: refusing: nothing is installed in this checkout; run `ballast setup`\n"
+)
 NO_BASELINE = (
     "ballast: refusing: no trusted baseline for this checkout; review its protected "
     "inputs (ballast.toml, .ballast/spec_workflow, .specify, .git), then run "
@@ -1077,6 +1080,14 @@ class PrepareTriggerTests(unittest.TestCase):
                 ),
             ),
         )
+        self.assertEqual(self.everything(worktree), before)
+        # Review ENG-002: trust and discard-runs get the same CLI refusal.
+        for command in ("trust", "discard-runs"):
+            result = self.ballast(worktree, command)
+            self.assertEqual(
+                (result.returncode, result.stderr),
+                (2, OLD_REFUSAL),
+            )
         self.assertEqual(self.everything(worktree), before)
         # An installed checkout with only a journal left reaches the launcher.
         installed = self.worktree()

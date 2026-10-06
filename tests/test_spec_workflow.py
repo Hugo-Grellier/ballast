@@ -1272,6 +1272,20 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertFalse(self.ran.exists())
         self.assertTrue((self.root / ".specify/workflows/runs/r1").is_dir())
 
+    def test_unfinished_step_is_discarded_on_an_uninstalled_checkout(self) -> None:
+        # #15 review ENG-001: setup and preparation refuse while the marker
+        # exists, so discard-runs must still clear it with nothing installed.
+        (self.tools / "run.py").unlink()
+        key = hashlib.sha256(str(self.root.resolve()).encode()).hexdigest()[:16]
+        state = Path(self.env["XDG_STATE_HOME"]) / "ballast" / key
+        state.mkdir(parents=True)
+        (state / "in-progress").write_text("ballast-agent-r1-step.scope\n")
+        result = self.launch("discard-runs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((state / "in-progress").exists())
+        self.assertFalse((self.root / ".specify/workflows/runs").exists())
+        self.assertEqual(self.launch("trust").returncode, 2)
+
     def test_tamper_marker_and_unfinished_step_are_refused(self) -> None:
         self.assertEqual(self.launch("trust").returncode, 0)
         (self.root / "BALLAST_TAMPERED").write_text("x\n")

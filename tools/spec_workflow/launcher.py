@@ -385,6 +385,14 @@ def _trust(root: Path, state: Path) -> int:
     return 0
 
 
+def _marked(root: Path) -> bool:
+    """Whether an agent step's in-progress marker is left in operator state."""
+    try:
+        return os.path.lexists(state_dir(root) / IN_PROGRESS)
+    except OSError:
+        return False
+
+
 def _hold(root: Path) -> str | None:
     """Hold the checkout lock shared until exit, or say why not.
 
@@ -423,16 +431,18 @@ def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
     if not argv or argv[0] not in {*COMMANDS, "intake", "trust", "discard-runs"}:
         sys.stderr.write(__doc__ or "")
         return EXIT_REFUSED
-    # Before the lock: an uninstalled checkout gets no state file (#15).
-    recording = argv[0] in {"trust", "discard-runs"}
-    if recording and not installed:
+    # Before the lock: an uninstalled checkout gets no state file (#15),
+    # except that an unfinished agent step can always be discarded: setup
+    # and preparation refuse until it is.
+    stranded = argv[0] == "discard-runs" and not installed and _marked(root)
+    if argv[0] in {"trust", "discard-runs"} and not installed and not stranded:
         sys.stderr.write(f"ballast: refusing: {NOT_INSTALLED}\n")
         return EXIT_REFUSED
     held = _hold(root)
     if held:
         sys.stderr.write(f"ballast: refusing: {held}\n")
         return EXIT_REFUSED
-    if not installed:
+    if not installed and not stranded:
         sys.stderr.write(f"ballast: refusing: {NOT_INSTALLED}\n")
         return EXIT_REFUSED
     if argv[0] in {"trust", "discard-runs"}:
