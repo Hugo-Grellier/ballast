@@ -1867,7 +1867,7 @@ def _text_field(value: object, name: str, limit: int) -> str:
     if autonomy.WORKFLOW_MARKER.search(value):
         message = f"{name} contains a workflow marker"
         raise DraftError(message)
-    return value
+    return autonomy.printable(value)
 
 
 def _string_list(value: object, name: str, limit: int = 20) -> list[str]:
@@ -2556,6 +2556,7 @@ def _write_fix_input(feature: Feature, stored: list[dict], failed: list[dict]) -
         findings += [
             {
                 "decision": entry["id"],
+                "kind": review["kind"],
                 "id": finding["id"],
                 "severity": finding["severity"],
                 "label": finding["label"],
@@ -2589,6 +2590,39 @@ def _write_fix_input(feature: Feature, stored: list[dict], failed: list[dict]) -
     autonomy.replace_file(
         feature.root, relative, json.dumps(data, indent=2, sort_keys=True) + "\n"
     )
+
+
+def _check_recheck(feature: Feature, reviews: list[dict]) -> None:
+    """Refuse a recheck that omits a finding the fix input listed (SEC2-003).
+
+    Each listed finding of a kind rechecked here must appear again, by ID,
+    with a disposition; a missing one is the reviewer's to correct.
+    """
+    if autonomy.fix_state(_require_run(feature))["state"] != "review-pending":
+        return
+    path = feature.root / FIX_INPUT_DIR / f"{Path(feature.relative).name}.json"
+    if not path.is_file() or path.is_symlink():
+        return
+    try:
+        listed = json.loads(path.read_text(encoding="utf-8")).get("findings") or []
+    except (ValueError, AttributeError) as error:
+        message = f"the fix input {path.name} is not valid JSON"
+        raise ContractError(message) from error
+    found = {(r["kind"], f["id"]) for r in reviews for f in r["findings"]}
+    kinds = {r["kind"] for r in reviews}
+    missing = sorted(
+        f"{f.get('kind')} {f.get('id')}"
+        for f in listed
+        if isinstance(f, dict)
+        and f.get("kind") in kinds
+        and (f.get("kind"), f.get("id")) not in found
+    )
+    if missing:
+        message = (
+            "the recheck omits findings the fix cycle had to fix; list each with "
+            f"its disposition: {', '.join(missing)}"
+        )
+        raise DraftError(message)
 
 
 def _supersede(feature: Feature, point: str, entries: list[dict]) -> None:
@@ -2692,6 +2726,8 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
     reviews = [entry["review"] for entry in entries if "review" in entry]
     for review in reviews:
         _check_narrative(feature, review)
+    if recheck:
+        _check_recheck(feature, reviews)
     for review in reviews:
         _render_findings(feature, review)
     rule, reasons = review_rule(feature, point, reviews)
@@ -2822,6 +2858,14 @@ def record_fix(feature: Feature) -> None:
             "postcondition",
             "record-fix needs the fix step that ran just before it",
         )
+    if last.get("reviews_before") != autonomy.reviews_digest(
+        feature.root, feature.relative
+    ):
+        _block(
+            feature,
+            "postcondition",
+            "the fix step changed reviews/; only reviewer steps write the reports",
+        )
     check_implementation(feature)
     run["fix"] = {"cycles": fix["cycles"] + 1, "state": "review-pending"}
     autonomy.write_run(feature.root, run)
@@ -2905,6 +2949,7 @@ def check_step_drafts(  # noqa: C901 - the recorder's checks, in its order
     reviews = [entry["review"] for entry in entries if "review" in entry]
     for review in reviews:
         _check_narrative(feature, review)
+    _check_recheck(feature, reviews)
     rule, _ = review_rule(feature, points[0], reviews)
     if rule in {"block", "limit"}:
         return

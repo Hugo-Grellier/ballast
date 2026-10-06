@@ -1565,6 +1565,36 @@ class ContinueRefusalTests(RunCase):
         self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
         self.assertEqual(len(self.launched), 1)
 
+    def test_pre_implementation_fixed_limit_names_the_restart(self) -> None:
+        """SEC2-002: before implementation only a new run lifts a fixed limit."""
+        self.engine.update(status="failed", code=1, step="decide-tasks")
+        self.engine["scenario"] = lambda r: RunBlockTests.agent_step(
+            self,  # type: ignore[arg-type]
+            r,
+            EXIT_LIMIT,
+            reason="agent-step limit reached",
+            limit="agent-steps",
+        )
+        _, out, _ = self.start()
+        run_id = self.launched[0][1]
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual((block["category"], block["limit"]), ("limit", "agent-steps"))
+        self.assertEqual(block["command"], autonomy.RESTART_COMMAND)
+        self.assertIn(f"Next: {autonomy.RESTART_COMMAND}", out)
+        self.assertNotIn("continue human-gated", block["recovery"])
+        for argv in (
+            ("resume", run_id),
+            ("continue", run_id, "--reason", "block-resolved", "--ref", "x"),
+        ):
+            with self.subTest(command=argv[0]):
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2)
+                self.assertIn(autonomy.RESTART_COMMAND, err)
+                self.assertNotIn("ballast run continue", err)
+                self.assertNotIn("ballast run resume", err)
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+        self.assertEqual(len(self.launched), 1)
+
 
 class HumanGatedUnchangedTests(WrapperCase):
     """#21 T042 [AC-032, FR-025]: human-gated steps get no gate and no retry."""

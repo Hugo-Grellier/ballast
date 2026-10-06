@@ -59,7 +59,7 @@ recorded at start, and only active time counts against the wall time.
 gate-only ballast-continue; before implementation it points to `resume`.
 `checkpoint` refreshes an Autonomous run's Draft PR checkpoint and acceptance
 packet, in any status, without an agent. One invocation at a time holds a
-run's lock (start, resume, publish, checkpoint).
+run's lock (start, resume, continue, publish, checkpoint).
 
 Branch sync: before the first agent step of every `start`, `resume` and
 `continue`, the check in branch_sync.py (imported here before any agent
@@ -962,6 +962,9 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: C901, 
                 if limit not in autonomy.LIMIT_KINDS:
                     limit = "wall-time" if "wall-time" in condition else "agent-steps"
                 condition = autonomy.limit_condition(limit, condition)
+            restart = category == "limit" and _restart_only(
+                run_id, {"category": category, "limit": limit}
+            )
             return autonomy.make_block(
                 category,
                 condition,
@@ -969,6 +972,8 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: C901, 
                 step_id=step_id,
                 evidence=[f".specify/workflow-state/{run_id}/agents/"],
                 limit=limit,
+                recovery=autonomy.RESTART_RECOVERY if restart else None,
+                command=autonomy.RESTART_COMMAND if restart else None,
             )
         if code == EXIT_REFUSED and "confinement" in str(last.get("reason")):
             return autonomy.make_block(
@@ -1003,7 +1008,8 @@ def _print_block(block: dict) -> None:
         f"Recovery: {block['recovery']}",
         f"Next: {block['command']}",
     ]
-    sys.stdout.write("\n".join(lines) + "\n")
+    # SEC2-004: block text may come from an agent's draft.
+    sys.stdout.write(autonomy.printable("\n".join(lines)) + "\n")
 
 
 def _stop(run_id: str, block: dict, inputs: dict[str, str] | None = None) -> int:
@@ -1237,7 +1243,23 @@ def _checkpoint_command(options: list[str]) -> int:
     return 0 if outcome.state == "reused" else EXIT_BLOCKED
 
 
-def _continue_refusal(source: dict, reason: str) -> str | None:
+def _baseline_exists(run_id: str) -> bool:
+    """Whether the run reached implementation (its baseline was recorded)."""
+    path = ROOT / ".specify/workflow-state" / run_id / "implementation-baseline.json"
+    return path.is_file()
+
+
+def _restart_only(run_id: str, block: dict | None) -> bool:
+    """Return whether only a new run recovers: a fixed limit before implementation."""
+    return (
+        block is not None
+        and block["category"] == "limit"
+        and block.get("limit") in autonomy.FIXED_LIMITS
+        and not _baseline_exists(run_id)
+    )
+
+
+def _continue_refusal(source: dict, reason: str) -> str | None:  # noqa: PLR0911
     """Return why a source run cannot be continued, or None."""
     run_id = source["run_id"]
     if source["status"] not in {"stopped", "completed", "published"}:
@@ -1255,10 +1277,13 @@ def _continue_refusal(source: dict, reason: str) -> str | None:
             f"run {run_id} stopped before its first agent step; there is nothing "
             "to continue. Remove the cause, then start again."
         )
-    baseline = (
-        ROOT / ".specify/workflow-state" / run_id / "implementation-baseline.json"
-    )
-    if not baseline.is_file():
+    if _restart_only(run_id, block):
+        return (
+            f"run {run_id} reached its fixed limit before implementation; nothing "
+            "exists to continue and a resume never raises a limit. Start a new run "
+            f"with a larger limit: {autonomy.RESTART_COMMAND}"
+        )
+    if not _baseline_exists(run_id):
         # #21 R10: ballast-continue only gates an existing implementation.
         return (
             f"run {run_id} stopped before implementation; resume it in "
@@ -1269,7 +1294,7 @@ def _continue_refusal(source: dict, reason: str) -> str | None:
     return None
 
 
-def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: C901, PLR0911, PLR0912
+def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: PLR0911
     """`ballast run continue`: record the human decision, lower, run gates.
 
     `--mode chat` continues in a linked Chat run (#20) instead of the
@@ -1299,7 +1324,18 @@ def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: 
     source = _source_run(options[0])
     if isinstance(source, str):
         return _refuse(source)
-    run_id = source["run_id"]
+    try:
+        with _invocation_lock(source["run_id"]):  # SEC2-001: like resume
+            return _continue_locked(source["run_id"], flags, specify)
+    except LockHeld as held:
+        return _refuse(str(held))
+
+
+def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) -> int:  # noqa: PLR0911
+    """Lower and continue under the source run's lock, from a fresh read."""
+    source = _source_run(run_id)
+    if isinstance(source, str):
+        return _refuse(source)
     refusal = _continue_refusal(source, flags["--reason"])
     if refusal is not None:
         return _refuse(refusal)
@@ -1485,7 +1521,7 @@ def _engine_exists(run_id: str) -> bool:
     ).is_file()
 
 
-def _resume_refusal(  # noqa: C901, PLR0911 - one refusal per eligibility row
+def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibility row
     record: dict, block: dict | None
 ) -> str | None:
     """Why an Autonomous run cannot be resumed, naming the command that applies."""
@@ -1531,6 +1567,12 @@ def _resume_refusal(  # noqa: C901, PLR0911 - one refusal per eligibility row
         )
     if category == "limit" and not autonomy.resumable(category, block.get("limit")):
         limit = autonomy.LIMIT_LABELS.get(block.get("limit") or "", "limit")
+        if _restart_only(run_id, block):
+            return (
+                f"run {run_id} reached its {limit} before implementation, and a "
+                "resume never raises a limit; start a new run with a larger limit: "
+                f"{autonomy.RESTART_COMMAND}"
+            )
         return (
             f"run {run_id} reached its {limit}, and a resume never raises a limit; "
             f"continue human-gated: ballast run continue {run_id} --reason "
@@ -1632,7 +1674,7 @@ def _resume_autonomous(options: list[str], specify: str) -> int:
         return _refuse(str(held))
 
 
-def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:
+def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:  # noqa: PLR0911
     """Resume under the run's lock: sync, decide, reposition, run."""
     try:
         record = autonomy.read_run(ROOT, run_id)
@@ -1673,6 +1715,19 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:
         finally:
             _archive_operator(run_id)
         return EXIT_INTERRUPTED if outcome.interrupted else code
+    try:
+        # SEC2-001: a lowering or block change during the sync wins.
+        fresh = autonomy.read_run(ROOT, run_id)
+        moved = autonomy.read_block(ROOT, run_id) != block or any(
+            fresh.get(key) != record.get(key) for key in ("status", "mode_history")
+        )
+    except autonomy.AutonomyError as error:
+        return _refuse(f"run {run_id}: {error}")
+    if moved:
+        return _refuse(
+            f"run {run_id} changed during branch synchronization; check it, then "
+            "run the command that applies"
+        )
     try:
         reentry, changed = _reentry(run_id, record, block)
         autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))

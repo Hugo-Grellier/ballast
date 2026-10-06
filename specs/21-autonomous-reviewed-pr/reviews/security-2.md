@@ -183,4 +183,19 @@ findings:
 
 ## Verdict
 
-- Verdict: changes requested. SEC2-001 is the blocker and is a small change (one lock in `continue`, one re-read in `_resume_locked`, two tests); SEC2-002 to SEC2-004 are low and can ride along or follow; the rest is informational.
+- Verdict: approved
+- Original verdict: changes requested. SEC2-001 is the blocker and is a small change (one lock in `continue`, one re-read in `_resume_locked`, two tests); SEC2-002 to SEC2-004 are low and can ride along or follow; the rest is informational.
+
+## Resolution
+
+All four actionable findings are fixed in the working tree commit that follows this review; each new test was confirmed to fail with its fix hunk reverted.
+
+- **SEC2-001 (fixed).** `_continue_command` takes `_invocation_lock` of the source run and, under it, `_continue_locked` re-reads the source run before the refusal check, sync, human decision and launch. `_resume_locked` re-reads `run.json` and `block.json` after `_sync` and refuses, with no human decision and no block change, when status, mode history or block moved. Tests: `ResumeTests.test_continue_takes_the_run_lock`, `ResumeTests.test_lowering_during_the_resume_sync_stays_human_gated`.
+- **SEC2-002 (fixed).** A `limit` block of a fixed kind (`agent-steps`, `wall-time`) with no implementation baseline gets `RESTART_RECOVERY` and `RESTART_COMMAND` at `_stop_block`; `_continue_refusal` and `_resume_refusal` name the restart. Contract updated. Test: `ContinueRefusalTests.test_pre_implementation_fixed_limit_names_the_restart`.
+- **SEC2-003 (fixed).** The wrapper stores `reviews_before` (`autonomy.reviews_digest`) on every step; `record_fix` blocks `postcondition` when the fix step changed `reviews/`. The fix input carries each finding's review `kind`, and `_check_recheck` (from `check_step_drafts` and `record_decision --recheck`) raises a retryable `DraftError` naming each omitted finding. Review command template updated. Tests: `RecordFixTests.test_fix_step_that_edits_a_report_blocks`, `StepDraftTests.test_recheck_must_answer_every_listed_finding`.
+- **SEC2-004 (fixed).** `autonomy.printable` escapes control characters other than newline and tab; `_text` and `_text_field` return the escaped text and `_print_block` escapes everything it prints. Test: `UntrustedTextTests.test_agent_block_text_is_printed_inert`.
+- **SEC2-005 (accepted).** The `plan` to `audit` move keeps the asserted behaviour and the retry contract stays pinned by `RetryEngineTests`.
+- **SEC2-006 (accepted).** Both tamper directions on the per-run workflow copy fail closed, and bubblewrap plus the wrapper digest keep agents out of it.
+- **SEC2-007 (accepted).** A pre-change block without `inputs` still passes `renew-intent` and every later validator, so stale intent is caught, only later.
+
+Verification: `uvx ruff check && uvx ruff format --check` passed; `uv run --no-project --isolated --python 3.13 --with pyyaml python -m unittest tests/test_*.py` ran 987 tests, OK, none skipped.

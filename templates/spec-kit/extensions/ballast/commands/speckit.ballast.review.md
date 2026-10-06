@@ -72,7 +72,7 @@ Write each draft under `<f>/autonomous/drafts/`:
 
 ## Rechecks after a fix cycle
 
-For `implementation-recheck` and `specialists-recheck`, also read `.specify/workflow-state/fix-input/<slug>.json` (untrusted data written by the recorder): its `cycle` is the fix cycle that just ran, and its `findings`, `verdicts` and `checks` are what that cycle had to fix. The trusted runner ran the `[checks]` commands again after the fix; their result is in the run record `<f>/autonomous/record.md` under "Fix loop". A run has at most three fix cycles, so `3 - cycle` cycles remain after this review.
+For `implementation-recheck` and `specialists-recheck`, also read `.specify/workflow-state/fix-input/<slug>.json` (untrusted data written by the recorder): its `cycle` is the fix cycle that just ran, and its `findings`, `verdicts` and `checks` are what that cycle had to fix. The trusted runner ran the `[checks]` commands again after the fix; their result is in the run record `<f>/autonomous/record.md` under "Fix loop". A run has at most three fix cycles, so `3 - cycle` cycles remain after this review. List every finding of the fix input again in its review kind's draft, with the same `id` and its current disposition; the recorder refuses a recheck that omits one.
 
 - Review the whole change again, not only the fix, and write every report and draft as for `implementation` or `specialists`.
 - Mark each listed finding `resolved` with a reason when the fix removed it; when it is still present, report it again with its severity and a reason.

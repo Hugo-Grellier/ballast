@@ -1011,6 +1011,7 @@ def _attempt(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear age
             "role": _role(prompt),
             "set_aside": _set_aside(root, record, log_dir.name),
             "tree_before": autonomy.tree_digest(root, _review_exclusions(feature)),
+            "reviews_before": autonomy.reviews_digest(root, feature),
         }
         if integration == "claude":
             argv += [

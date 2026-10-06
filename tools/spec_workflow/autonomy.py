@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
 
-from launcher import state_dir  # noqa: E402
+from launcher import digests, state_dir  # noqa: E402
 
 VERSION = 1
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -1202,6 +1202,11 @@ LIMIT_RECOVERY = {
     "retries": "Read the refused draft and the validator's message in the agent "
     "logs, then resume, or continue human-gated.",
 }
+# A fixed limit before implementation (SEC2-002): nothing to continue yet.
+RESTART_RECOVERY = (
+    "Review the evidence so far, then start a new run with a larger limit; "
+    "resume never raises a limit and nothing exists yet to continue."
+)
 SYNC_RESUME_RECOVERY = "Remove the cause shown, then resume again."
 # The class each category belongs to (FR-023); derived, never stored.
 BLOCK_CLASSES = {
@@ -1220,11 +1225,16 @@ BLOCK_CLASSES = {
 }
 
 
+def printable(text: str) -> str:
+    """Agent text for the terminal: control characters but newline and tab escaped."""
+    return "".join(c if c.isprintable() or c in "\n\t" else repr(c)[1:-1] for c in text)
+
+
 def _text(value: object, name: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         message = f"{name} must be 1-{limit} characters"
         raise AutonomyError(message)
-    return value
+    return printable(value)
 
 
 def _guard_wording(name: str, value: str) -> None:
@@ -1726,6 +1736,17 @@ def tree_digest(root: Path, exclude: tuple[str, ...] = ()) -> str:
             env=env,
         )
         return git(root, "write-tree", env=env).stdout.strip()
+
+
+def reviews_digest(root: Path, feature: str) -> str:
+    """Digest of `<feature>/reviews/`, which only reviewer steps write (SEC2-003)."""
+    base = root / feature / "reviews"
+    found = (
+        {"(link)": str(base.readlink())}
+        if base.is_symlink()
+        else digests(root, [base], [])
+    )
+    return hashlib.sha256(json.dumps(found, sort_keys=True).encode()).hexdigest()
 
 
 def checked_digest(root: Path, feature: str) -> str:

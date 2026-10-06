@@ -25,10 +25,12 @@ For a run without an operator run record (human-gated), nothing changes.
 
 ## `ballast run continue`
 
-Unchanged, plus one refusal checked after the existing `upstream-sync` refusal (FR-011, AC-011):
+Unchanged, plus these refusals, checked after the existing `upstream-sync` refusal (FR-011, AC-011):
 
 | Situation | Result |
 | --- | --- |
+| invocation lock of the source run held (SEC2-001) | refused: "run RUN_ID has an active invocation" |
+| `limit` block `agent-steps` or `wall-time` and no implementation baseline (SEC2-002) | refused, naming the restart: `ballast run start --mode autonomous ...`; `resume` refuses the same way and the block's `Next:` names it |
 | source run has no implementation baseline | refused: "run RUN_ID stopped before implementation; resume it in Autonomous: ballast run resume RUN_ID" |
 
 ## `ballast run checkpoint`

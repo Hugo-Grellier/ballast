@@ -114,6 +114,7 @@ class RecorderCase(AutonomyCase):
                 "role": role,
                 "set_aside": [],
                 "tree_before": tree_before,
+                "reviews_before": autonomy.reviews_digest(self.root, FEATURE),
                 "drafts": listed,
                 "exit_code": 0,
                 "at": autonomy.now(),
@@ -1570,6 +1571,15 @@ class RecordFixTests(FixLoopCase):
         self.failed(self.check("record-fix"), "pending tasks")
         self.assertEqual(self.fix_state()["cycles"], 0)
 
+    def test_fix_step_that_edits_a_report_blocks(self) -> None:
+        """SEC2-003: only reviewer steps write reviews/; the fix step never does."""
+        self.pending()
+        self.fix_step()
+        (self.feature / "reviews/engineering.md").write_text("# Review\n\nAll fine.\n")
+        self.failed(self.check("record-fix"), "reviews/")
+        self.assertEqual(self.block()["category"], "postcondition")
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "fix-pending"})
+
     def test_plain_review_refuses_a_pending_fix_state(self) -> None:
         self.set_fix(1, "review-pending")
         self.step(self.reviews(), role="reviewer")
@@ -1737,6 +1747,23 @@ class StepDraftTests(FixLoopCase):
                 for path in (self.feature / "autonomous/drafts").glob("*"):
                     path.unlink()
                 (self.feature / "reviews/engineering.md").write_text("# Review\n")
+
+    def test_recheck_must_answer_every_listed_finding(self) -> None:
+        """SEC2-003: a recheck omitting a fix-input finding is retried, not recorded."""
+        RecordFixTests.pending(self)  # type: ignore[arg-type]
+        self.fix_step()
+        self.ok(self.check("record-fix"))
+        prompt = "/speckit-ballast-review implementation-recheck"
+        with self.assertRaisesRegex(artifacts.DraftError, "engineering F-001"):
+            self.check_drafts(self.reviews(), prompt)
+        self.failed(
+            self.check(
+                "record-decision", "--point", "implementation-review", "--recheck"
+            ),
+            "engineering F-001",
+        )
+        self.assertEqual(self.fix_state(), {"cycles": 1, "state": "review-pending"})
+        self.assertNotIn("frozen_tree", autonomy.read_run(self.root, "run42"))
 
     def test_state_refusals_are_not_retried(self) -> None:
         """AC-019: the recorder decides; the wrapper does not retry them."""

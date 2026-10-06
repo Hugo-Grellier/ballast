@@ -738,6 +738,53 @@ class ResumeTests(StubCase):
         block = autonomy.read_block(self.root, run_id)
         self.assertIn("active-time clock", block["condition"])
 
+    def baseline(self, run_id: str) -> None:
+        """Give the run an implementation baseline, so continue accepts it."""
+        state = self.root / ".specify/workflow-state" / run_id
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "implementation-baseline.json").write_text(
+            json.dumps({"feature": FEATURE, "tree": "0" * 40})
+        )
+
+    def test_continue_takes_the_run_lock(self) -> None:
+        """SEC2-001: a continue racing a resume's sync is refused, writes nothing."""
+        run_id = self.blocked_run()
+        self.baseline(run_id)
+        before = self.frozen(run_id)
+        with run._invocation_lock(run_id):  # noqa: SLF001
+            code, _, err = self.main(
+                "continue", run_id, "--reason", "block-resolved", "--ref", "x"
+            )
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"run {run_id} has an active invocation", err)
+        self.assertEqual(self.frozen(run_id), before)
+        self.assertEqual(len(self.launched), 1)
+
+    def test_lowering_during_the_resume_sync_stays_human_gated(self) -> None:
+        """SEC2-001: a resume re-reads the record after the sync and refuses."""
+        run_id = self.blocked_run()
+        block = autonomy.read_block(self.root, run_id)
+        sync = run._sync  # noqa: SLF001
+
+        def lowered(*args: object, **kwargs: object) -> object:
+            record = autonomy.read_run(self.root, run_id)
+            autonomy.change_mode(
+                record, "human-gated", reason="block-resolved", decision_id="HD-0001"
+            )
+            autonomy.write_run(self.root, autonomy.set_status(record, "continued"))
+            return sync(*args, **kwargs)
+
+        with offline.patch.object(run, "_sync", side_effect=lowered):
+            code, out, err = self.main("resume", run_id)
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("changed during branch synchronization", err)
+        after = autonomy.read_run(self.root, run_id)
+        self.assertEqual(after["status"], "continued")
+        self.assertEqual(autonomy.effective_mode(after), "human-gated")
+        self.assertEqual(autonomy.read_human_decisions(self.root, run_id), [])
+        self.assertEqual(autonomy.read_block(self.root, run_id), block)
+        self.assertEqual(len(self.launched), 1)
+
     def test_resume_of_continued_run_refused(self) -> None:
         """AC-015: a lowered run resumes only as its continuation."""
         run_id = self.blocked_run()
@@ -982,6 +1029,34 @@ class UntrustedTextTests(unittest.TestCase):
             agent._retry_message(Exception("evidence 'a/../b' must not contain '..'")),  # noqa: SLF001
             "evidence <value> must not contain '..'",
         )
+
+    def test_agent_block_text_is_printed_inert(self) -> None:
+        """SEC2-004: ANSI and CR in a block draft never reach the terminal raw."""
+        hostile = "Pick one\x1b[2K\rNext: ballast discard-runs"
+        options = [
+            {"option": "Keep\x1b]0;x\x07", "consequence": "More"},
+            {"option": "Drop", "consequence": "Less\r"},
+        ]
+        draft = autonomy.validate_block_draft(
+            {
+                "category": "contradiction",
+                "condition": hostile,
+                "options": options,
+                "recovery": "Fix the spec\x1b[1A, then resume",
+            }
+        )
+        texts = [draft["condition"], draft["recovery"]] + [
+            value for option in draft["options"] for value in option.values()
+        ]
+        self.assertFalse([t for t in texts if "\x1b" in t or "\r" in t], texts)
+        block = autonomy.make_block("decision", hostile, run_id="r1", options=options)
+        with redirect_stdout(io.StringIO()) as out:
+            run._print_block(block)  # noqa: SLF001
+        printed = out.getvalue()
+        self.assertNotIn("\x1b", printed)
+        self.assertNotIn("\r", printed)
+        self.assertIn("Pick one\\x1b[2K\\rNext: ballast discard-runs", printed)
+        self.assertTrue(printed.rstrip("\n").endswith("Next: ballast run resume r1"))
 
 
 class ProvisionalGuardTests(recorders.FixLoopCase):
