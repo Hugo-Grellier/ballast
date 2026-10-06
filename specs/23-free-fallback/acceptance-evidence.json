@@ -23,7 +23,8 @@
       "tests.test_fallback.InvocationTests.test_fallback_argv_literal_tokens",
       "tests.test_fallback.InvocationTests.test_fallback_env",
       "tests.test_fallback.WrapperFallbackTests.test_fallback_runs_under_same_confinement",
-      "tests.test_fallback.WrapperFallbackTests.test_user_codex_config_not_read"
+      "tests.test_fallback.WrapperFallbackTests.test_user_codex_config_not_read",
+      "tests.test_fallback.ConfinementCompositionTests.test_fallback_step_shows_the_private_home_and_hides_claude"
     ],
     "AC-005": [
       "tests.test_fallback.ProbeTests.test_model_missing_refuses_unknown_free_status",
@@ -35,7 +36,8 @@
       "tests.test_fallback.SettingTests.test_setting_has_no_endpoint",
       "tests.test_fallback.SettingTests.test_validate_model",
       "tests.test_fallback.PermissionTests.test_endpoint_override_env_refused",
-      "tests.test_fallback.ProbeTests.test_proxy_does_not_redirect"
+      "tests.test_fallback.ProbeTests.test_proxy_does_not_redirect",
+      "tests.test_fallback.InvocationTests.test_fallback_env"
     ],
     "AC-007": [
       "tests.test_fallback.ProbeTests.test_server_down_refuses_capability",

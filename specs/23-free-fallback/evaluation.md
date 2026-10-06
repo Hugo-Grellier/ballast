@@ -30,7 +30,7 @@ From research R1:
 
 ## Workflow pilot
 
-Quickstart steps 3 to 5 run through `ballast run` by the workflow after implementation; their results are appended here.
+Quickstart steps 3 to 5 need `ballast run`, which does not run from the feature worktree. The operator-side equivalent ran the real wrapper in a scratch human-gated run with a stand-in primary that prints the quota message, the real probes, the real Codex 0.155.1 and Ollama 0.35.1 with `qwen3:4b-16k`: every refusal reason that can be produced on this host refused with nothing sent, the setting off changed nothing, and a real fallback step completed in 210 s to 546 s with `route` and `usage` events in the ledger. The details, the Autonomous step that was not run live and the start-up egress finding (Codex contacts `github.com` and `chatgpt.com` itself; the fallback environment now blackholes it) are in [reviews/live-check.md](reviews/live-check.md). The operator's `ballast run start --local-fallback` pilot (quickstart steps 3 to 5, and `--mode autonomous` for the expected `incompatible-capability` refusal) remains for the operator to run before merge.
 
 ## Pilot
 
