@@ -4,7 +4,7 @@
 - Agent/model: claude/claude-fable-5-1, fresh context, no authoring context; a different model from the author and from the first pass ([implementation-security.md](implementation-security.md), claude-opus-5-5). Read-only: no code edits, no `ballast trust`/`run`/`setup` in this worktree; three scratch experiments (git-level, `git worktree list -z`, and the preparation under a pty through the test harness) and the `Prepare*` test classes of `tests.test_setup`/`tests.test_ballast` (26 tests, OK).
 - Base: `origin/main...HEAD` (`tools/setup` `--prepare`, `tools/ballast` first-command preparation, `tools/spec_workflow/launcher.py` refusals, `tools/cli.toml`, tests, README, ADR-0011)
 - Artifacts: [spec.md](../spec.md), [plan.md](../plan.md), [research.md](../research.md), [data-model.md](../data-model.md), [contracts/](../contracts/), [decisions.md](../decisions.md) DEC-0001/0002, first-pass [security](implementation-security.md) and [engineering](implementation-engineering.md) reviews, ADR-0007, ADR-0008, ADR-0011, feature 14 spec, `docs/policies/security.md`, the security review skill, CLAUDE.md
-- Verdict: changes requested (one high finding, SEC2-001; three low; two info)
+- Verdict: approved (after the fixes below; at review: changes requested, one high finding SEC2-001, three low, two info)
 
 ## What was examined
 
@@ -62,6 +62,13 @@
 
 ## Resolution
 
-Pending: SEC2-001 blocks approval; SEC2-002 to SEC2-004 are recommended before merge and small; SEC2-005 and SEC2-006 are documentation notes.
+After rebasing onto `origin/main` at `0d5ff50` (#67 Chat mode, #68 hardened checkout git). Each new test was run and failed before its fix, then passed.
 
-- Verdict: changes requested
+- SEC2-001: fixed by #68's single `GIT` prefix (`--no-pager`, `core.fsmonitor=false`, `core.hooksPath=/dev/null`) and `capture_output` in `check_ignored`; #15's own fsmonitor-only `GIT` was removed in the rebase, and every git call #15 added (`candidates`' `git worktree list`) uses `*GIT` with stdin from `/dev/null` (enforced by `CheckoutGitConfigTests.test_every_git_call_is_hardened`). `CheckoutGitConfigTests` covered only `check_ignored` called directly, so `PrepareTests.test_pager_never_runs_on_a_terminal` (`6b61f68`) runs a whole `--prepare` with fd 1 on a pty and `pager.<command>` set for `check-ignore`, `ls-files`, `worktree` and `rev-parse`; it failed with #15's former `GIT` and uncaptured `check_ignored`, and passes. The guarantee in [contracts/prepare.md](../contracts/prepare.md) and ADR-0011 now reads no pager, `core.fsmonitor` disabled, hooks at `/dev/null`, stdin closed and never a terminal on stdout, and the contract lists the configuration keys reviewed.
+- SEC2-002: fixed in `6b61f68`: after `check_unchanged` confirms the stage's content, a preparation refuses a stage whose files or directories have any of `0o7022` set (`validate stage modes`). The check is in prepare mode only, because `ballast setup`'s build creates files under the operator's umask. Test `PrepareTests.test_stage_modes_changed_after_copy_are_refused`.
+- SEC2-003: fixed in `6b61f68`: `_copy_node` opens a source file with `O_NONBLOCK` and requires `S_ISREG` from `fstat` once it is open; directories already open with `O_DIRECTORY`, which fails on a FIFO without blocking. Test `PrepareTests.test_fifo_swapped_in_during_the_copy_is_rejected` swaps a FIFO in between the `stat` and the `open`; before the fix it blocked until its 10 s watchdog opened the FIFO.
+- SEC2-004: fixed in `6b61f68`: `printable()` (the same rule as `tools/ballast`) escapes the `skipped` line, which carries both the candidate path and the differing name from `copy_candidate`, and the source path in `Prepared ... from`. Test `PrepareTests.test_printed_names_are_escaped`.
+- SEC2-005: accepted; the behavior is safe as implemented, and [contracts/cli-and-launcher.md](../contracts/cli-and-launcher.md) now notes that the stranded `discard-runs` path opens `checkout.lock` in the existing state directory.
+- SEC2-006: accepted; with SEC2-001 fixed, no git configuration vector on the preparation path depends on the agent sandbox holding, so R4's sentence is left for the merge review.
+
+- Verdict: approved
