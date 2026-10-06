@@ -389,15 +389,14 @@ elif point == "rename":
         if len(calls) == count:
             die()
     s._rename = renamed
-elif point == "copytree":
-    copytree = s.shutil.copytree
-    def copied(*args, **kwargs):
-        result = copytree(*args, **kwargs)
-        calls.append(args[0])
+elif point == "copy":
+    copy = s._copy_entry
+    def copied(*args):
+        copy(*args)
+        calls.append(args[2])
         if len(calls) == count:
             die()
-        return result
-    s.shutil.copytree = copied
+    s._copy_entry = copied
 elif point == "validate":
     s.Setup.validate = die
 elif point == "sleep":
@@ -1520,6 +1519,67 @@ class PrepareTests(WorktreeCase):
         )
         self.assert_uninstalled(worktree)
 
+    def test_stage_link_is_never_followed(self) -> None:
+        # Security review SEC-001: a link planted in the stage while it is
+        # filled must not let the copy write or delete outside it.
+        outside = self.base / "outside"
+        (outside / "scripts").mkdir(parents=True)
+        (outside / "scripts/victim.txt").write_text("keep\n")
+        (outside / "integration.json").write_text("keep\n")
+        before = tree(outside)
+        copy = setup.Setup.copy_candidate
+
+        def planted(
+            this: setup.Setup, kind: str, checkout: Path, stage: Path
+        ) -> str | None:
+            if not os.path.lexists(stage / ".specify"):
+                (stage / ".specify").symlink_to(outside)
+            return copy(this, kind, checkout, stage)
+
+        worktree = self.worktree()
+        with patch.object(setup.Setup, "copy_candidate", planted):
+            code, out, err = self.prepare(worktree)
+        self.assertEqual(code, 2, err)
+        self.assertTrue(out.startswith(f"skipped {self.root}: it is unreadable: "), out)
+        self.assertEqual(tree(outside), before)
+        self.assert_uninstalled(worktree)
+
+    def test_stage_changed_after_verification_is_refused(self) -> None:
+        # Security review SEC-003: only the verified copy is switched in.
+        copy = setup.Setup.copy_candidate
+
+        def tampered(
+            this: setup.Setup, kind: str, checkout: Path, stage: Path
+        ) -> str | None:
+            reason = copy(this, kind, checkout, stage)
+            (stage / "docs/policies/extra.md").write_text("planted\n")
+            return reason
+
+        worktree = self.worktree()
+        with patch.object(setup.Setup, "copy_candidate", tampered):
+            code, _, err = self.prepare(worktree)
+        self.assertEqual(code, 1, err)
+        self.assertIn(
+            "setup: validate stage failed: the stage changed after it was verified "
+            "at docs/policies/extra.md",
+            err,
+        )
+        self.assert_uninstalled(worktree)
+
+    def test_git_configuration_never_runs_a_program(self) -> None:
+        # Security review SEC-002: repository configuration (shared with
+        # every worktree, or reached through a redirected .git pointer) must
+        # not run a program as the operator before the trust preflight.
+        worktree = self.worktree()
+        ran = self.base / "fsmonitor-ran"
+        hook = self.base / "fsmonitor"
+        hook.write_text(f"#!/bin/sh\ntouch {ran}\nexit 1\n")
+        hook.chmod(0o755)
+        git(self.root, "config", "core.fsmonitor", str(hook))
+        self.prepared(worktree, self.root)
+        self.assertEqual(self.check(worktree).stdout, "current\n")
+        self.assertFalse(ran.exists())
+
     def test_unfinished_or_busy_source_is_rejected(self) -> None:
         # AC-011, plan review F-004
         journal = self.state() / "setup-attempt.json"
@@ -1581,7 +1641,7 @@ class PrepareTests(WorktreeCase):
         out = self.prepared(reused, self.root)
         self.assertTrue(
             out.startswith(
-                "removed a trust baseline left by an earlier checkout at this path\n"
+                "removed a trust baseline recorded before this installation\n"
             ),
             out,
         )
@@ -1605,7 +1665,7 @@ class PrepareTests(WorktreeCase):
         self.prepared(reference, self.root)
         expected = tree(reference, (".git",))
         for point, count in (
-            ("copytree", 2),
+            ("copy", 3),
             ("validate", 0),
             ("switching", 0),
             ("rename", 3),

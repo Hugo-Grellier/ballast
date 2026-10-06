@@ -38,6 +38,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -252,6 +253,7 @@ class Setup:
         self.config = tomllib.loads(self.config_bytes.decode())
         self.ref = launcher.pinned_ref(project)
         self.mode = SETUP
+        self.source_record: dict | None = None  # what a preparation copied
         self._fingerprint: str | None = None
 
     def fingerprint(self) -> str:
@@ -582,9 +584,10 @@ class Setup:
             stage = self.root / work / "stage"
             stage.mkdir(parents=True)
             result = fill(stage, state)
+            record = self.validate(stage)
             if self.mode == PREPARE:
                 journal["source"] = str(result)
-            record = self.validate(stage)
+                self.check_unchanged(record)
             ignored = self.ignored(sorted(set(names) - set(record["entries"])))
             plan = [{"path": n, "new": False} for n in ignored]
             plan += [{"path": n, "new": True} for n in record["entries"]]
@@ -655,22 +658,10 @@ class Setup:
         names = [
             n for n in record.get("entries", []) if isinstance(n, str) and _safe(n)
         ]
-        ignore = shutil.ignore_patterns(
-            "__pycache__", *(Path(p).name for p in LOCAL_STATE)
-        )
         differs: tuple[str, str] | None = ("copy", "")  # until the copy verifies
         try:
             for name in names:
-                origin, target = source / name, stage / name
-                if not os.path.lexists(origin):
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if origin.is_symlink():
-                    target.symlink_to(origin.readlink())
-                elif origin.is_dir():
-                    shutil.copytree(origin, target, symlinks=True, ignore=ignore)
-                else:
-                    shutil.copy2(origin, target)
+                _copy_entry(source, stage, name)
             found = installed_digests(stage, names)
             changed = _first_difference(found, record["files"])
             listed = record.get("executable")
@@ -686,7 +677,7 @@ class Setup:
         finally:
             if differs:
                 for name in names:
-                    _remove(stage / name)
+                    _remove_entry(stage, name)
         return differs
 
     def copy_kept(self, stage: Path, state: Path) -> bool:
@@ -781,9 +772,10 @@ class Setup:
         """
         if (self.root / KEPT).is_dir():
             yield "kept", self.root, None
-        result = subprocess.run(
-            ["git", "worktree", "list", "--porcelain", "-z"],  # noqa: S607
+        result = subprocess.run(  # noqa: S603 - fixed git subcommand, data as arguments
+            [*GIT, "worktree", "list", "--porcelain", "-z"],
             cwd=self.root,
+            stdin=subprocess.DEVNULL,
             check=False,
             capture_output=True,
             text=True,
@@ -836,6 +828,7 @@ class Setup:
                     f"it reaches its installation through a symbolic link at {linked}"
                 )
             differs = self.copy_verified(source, record, stage)
+            self.source_record = record
         except OSError as error:
             return f"it is unreadable: {error}"
         finally:
@@ -880,9 +873,19 @@ class Setup:
         if os.path.lexists(trusted):
             _remove_file(trusted)
             sys.stdout.write(
-                "removed a trust baseline left by an earlier checkout at this path\n"
+                "removed a trust baseline recorded before this installation\n"
             )
         return source
+
+    def check_unchanged(self, record: dict) -> None:
+        """Fail unless the stage is still the copy that verified (SEC-003)."""
+        source = self.source_record or {}
+        changed = _first_difference(record["files"], source.get("files", {}))
+        if not changed and record["executable"] != source.get("executable"):
+            changed = "its executable files"
+        if changed:
+            cause = f"the stage changed after it was verified at {changed}"
+            fail("validate stage", cause, "rerun the command")
 
     def validate(self, stage: Path) -> dict:
         """Refuse a stage that is not a complete, ignorable installation."""
@@ -1325,6 +1328,115 @@ def _kept_record(state: Path) -> dict | None:
     return record if valid else None
 
 
+def _open_dir(root: Path, parts: tuple[str, ...], *, create: bool) -> int:
+    """Open root/parts as a directory, never through a link below root."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for part in parts:
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(part, 0o755, dir_fd=fd)
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _copy_entry(source: Path, stage: Path, name: str) -> None:
+    """Copy source/name to stage/name, never through a link on either side.
+
+    The stage lies in a checkout an agent can write (security review
+    SEC-001): every directory is opened with O_NOFOLLOW and every file is
+    created with O_EXCL, so nothing is written or read outside the two trees.
+    """
+    *parents, leaf = Path(name).parts
+    try:
+        origin = _open_dir(source, tuple(parents), create=False)
+    except FileNotFoundError:
+        return  # the record's digests decide whether it should exist
+    try:
+        target = _open_dir(stage, tuple(parents), create=True)
+        try:
+            _copy_node(origin, target, leaf, name)
+        finally:
+            os.close(target)
+    finally:
+        os.close(origin)
+
+
+def _copy_node(origin: int, target: int, leaf: str, name: str) -> None:
+    """Copy one link, file or directory between two open directories."""
+    try:
+        found = os.stat(leaf, dir_fd=origin, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    mode = found.st_mode & 0o755  # no set-id bits, no group or world write
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    if stat.S_ISLNK(found.st_mode):
+        os.symlink(os.readlink(leaf, dir_fd=origin), leaf, dir_fd=target)
+    elif stat.S_ISDIR(found.st_mode):
+        os.mkdir(leaf, 0o700, dir_fd=target)
+        inner = os.open(leaf, flags | os.O_DIRECTORY, dir_fd=origin)
+        try:
+            outer = os.open(leaf, flags | os.O_DIRECTORY, dir_fd=target)
+            try:
+                for child in sorted(os.listdir(inner)):  # noqa: PTH208 - a directory fd
+                    path = f"{name}/{child}"
+                    if child != "__pycache__" and path not in LOCAL_STATE:
+                        _copy_node(inner, outer, child, path)
+                os.fchmod(outer, mode)
+            finally:
+                os.close(outer)
+        finally:
+            os.close(inner)
+    elif stat.S_ISREG(found.st_mode):
+        reader = os.open(leaf, flags, dir_fd=origin)
+        try:
+            create = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+            writer = os.open(leaf, create, 0o600, dir_fd=target)
+            try:
+                with (
+                    open(reader, "rb", closefd=False) as src,
+                    open(writer, "wb", closefd=False) as dst,
+                ):
+                    shutil.copyfileobj(src, dst)
+                os.fchmod(writer, mode)
+            finally:
+                os.close(writer)
+        finally:
+            os.close(reader)
+    else:
+        message = f"{name} is not a regular file, directory or link"
+        raise OSError(message)
+
+
+def _remove_entry(root: Path, name: str) -> None:
+    """Delete root/name, never following a link on its path or at its end.
+
+    Best effort: a component that became a link is left for discard_work,
+    which removes the whole work area the same way.
+    """
+    *parents, leaf = Path(name).parts
+    try:
+        fd = _open_dir(root, tuple(parents), create=False)
+    except OSError:
+        return
+    try:
+        found = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(found.st_mode):
+            shutil.rmtree(leaf, dir_fd=fd)
+        else:
+            os.unlink(leaf, dir_fd=fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _linked_parent(root: Path, names: list[str]) -> str | None:
     """Return the first directory between root and one of names that is a link."""
     for name in filter(_safe, names):
@@ -1419,13 +1531,6 @@ def _remove_tree(root: Path, name: str) -> None:
         path.unlink()
     elif path.is_dir():
         launcher._remove_tree(root, name)  # noqa: SLF001 - same standard version
-
-
-def _remove(path: Path) -> None:
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    else:
-        path.unlink(missing_ok=True)
 
 
 def _fetch_source(name: str, temporary: Path) -> Path:
