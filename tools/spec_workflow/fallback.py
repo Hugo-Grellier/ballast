@@ -55,6 +55,27 @@ OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
 MIN_OLLAMA_VERSION = (0, 13, 4)
 MIN_SERVED_CONTEXT = 16384
 ENDPOINT_VARIABLES = ("CODEX_OSS_BASE_URL", "CODEX_OSS_PORT", "OLLAMA_HOST")
+# Codex reaches github.com and chatgpt.com at start-up even with a local
+# provider and an empty home (live check, SEC-001). The operator's proxy
+# variables are removed (a proxy would carry the prompt off the machine) and
+# every proxy-aware request is sent to a closed local port instead; only
+# loopback, where Ollama listens, bypasses it. Not a network boundary (a
+# process can ignore the variables); tool processes have no network in Codex's
+# sandbox, and no content is sent to these hosts by the model request itself.
+PROXY_VARIABLES = frozenset(
+    {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY"}
+)
+BLACKHOLE_PROXY = "http://127.0.0.1:9"
+BLACKHOLE = {
+    name: value
+    for upper, value in (
+        ("HTTP_PROXY", BLACKHOLE_PROXY),
+        ("HTTPS_PROXY", BLACKHOLE_PROXY),
+        ("ALL_PROXY", BLACKHOLE_PROXY),
+        ("NO_PROXY", "127.0.0.1,localhost,::1"),
+    )
+    for name in (upper, upper.lower())
+}
 PROBE_SECONDS = 10.0
 REQUEST_SECONDS = 5.0
 RESPONSE_LIMIT = 1024 * 1024
@@ -410,10 +431,15 @@ def fallback_argv(codex: str, prompt: str, model: str) -> list[str]:
 
 
 def fallback_env(env: dict[str, str], codex_home: Path) -> dict[str, str]:
-    """No secret, no endpoint override, and the wrapper's private Codex home."""
-    kept = autonomy.confined_env(env, None)
+    """No secret, endpoint override or proxy, and the wrapper's private Codex home."""
+    kept = {
+        name: value
+        for name, value in autonomy.confined_env(env, None).items()
+        if name.upper() not in PROXY_VARIABLES
+    }
     for name in ENDPOINT_VARIABLES:
         kept.pop(name, None)
+    kept |= BLACKHOLE
     kept["CODEX_HOME"] = str(codex_home)
     return kept
 
@@ -439,7 +465,12 @@ def permission_mismatch(  # noqa: PLR0913 - the comparison's every input
         return True
     if any(name in env for name in ENDPOINT_VARIABLES):
         return True
-    return set(autonomy.confined_env(env, None)) != set(env)
+    if any(env.get(name) != value for name, value in BLACKHOLE.items()):
+        return True
+    names = set(env) - set(BLACKHOLE)
+    if any(name.upper() in PROXY_VARIABLES for name in names):
+        return True
+    return set(autonomy.confined_env(env, None)) - set(BLACKHOLE) != names
 
 
 # --- Probes ----------------------------------------------------------------------

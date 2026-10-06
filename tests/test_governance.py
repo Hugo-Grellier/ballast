@@ -338,7 +338,9 @@ class LocalFallbackDocumentTests(unittest.TestCase):
             "never available in Chat runs",
             "never loosens a sandbox",
             "ballast run status RUN_ID",
-            "./scripts/agent-metrics --run RUN_ID",
+            "ballast ledger report --run RUN_ID",
+            "closed local port",
+            "not a network boundary",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, section)

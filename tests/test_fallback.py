@@ -684,11 +684,25 @@ class InvocationTests(unittest.TestCase):
             "CODEX_OSS_BASE_URL": "http://x",
             "CODEX_OSS_PORT": "1",
             "CODEX_HOME": "/home/x/.codex",
+            "HTTPS_PROXY": "http://proxy.example:3128",
+            "http_proxy": "http://proxy.example:3128",
+            "ALL_PROXY": "socks5://proxy.example:1080",
         }
         env = fallback.fallback_env(parent, Path("/private/home"))
+        # Codex itself reaches github.com and chatgpt.com at start-up (live
+        # check): every proxy-aware request is sent to a closed local port.
         self.assertEqual(
-            env, {"PATH": "/usr/bin", "HOME": "/home/x", "CODEX_HOME": "/private/home"}
+            env,
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/home/x",
+                "CODEX_HOME": "/private/home",
+                **fallback.BLACKHOLE,
+            },
         )
+        for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+            self.assertEqual(env[name], "http://127.0.0.1:9")
+        self.assertEqual(env["NO_PROXY"], "127.0.0.1,localhost,::1")
         argv = fallback.fallback_argv("codex", "$speckit-plan", MODEL)
         self.assertFalse(
             fallback.permission_mismatch(
@@ -779,12 +793,20 @@ class PermissionTests(unittest.TestCase):
             {"GH_TOKEN": "t"},
             {"SSH_AUTH_SOCK": "/s"},
             {"CODEX_HOME": "/home/x/.codex"},
+            {"HTTPS_PROXY": "http://proxy.example:3128"},
+            {"all_proxy": "socks5://proxy.example:1080"},
+            {"FTP_PROXY": "http://127.0.0.1:9"},
+            {"No_Proxy": "*"},
         ):
             with self.subTest(extra=sorted(extra)):
                 self.assertTrue(self.mismatch(self.argv, {**self.env, **extra}))
         without = dict(self.env)
         del without["CODEX_HOME"]
         self.assertTrue(self.mismatch(self.argv, without))
+        for name in fallback.BLACKHOLE:
+            with self.subTest(removed=name):
+                bare = {k: v for k, v in self.env.items() if k != name}
+                self.assertTrue(self.mismatch(self.argv, bare))
 
     def test_endpoint_override_env_refused(self) -> None:
         for name in fallback.ENDPOINT_VARIABLES:
@@ -1069,6 +1091,37 @@ class ModuleTests(unittest.TestCase):
             text = (TOOLS / name).read_text().replace(fallback.MODEL_HINT, "")
             with self.subTest(file=name):
                 self.assertIsNone(families.search(text))
+
+
+class ConfinementCompositionTests(FallbackCase):
+    """#89 per-CLI credentials: the fallback's Codex step gets only Codex's homes."""
+
+    def test_fallback_step_shows_the_private_home_and_hides_claude(self) -> None:
+        if autonomy.trusted_program("bwrap", self.root)[0] is None:
+            _write(self.bin / "bwrap", "#!/bin/sh\n")
+        claude = self.home / ".claude"
+        claude.mkdir()
+        (claude / ".credentials.json").write_text('{"claudeAiOauth": {"a": 1}}')
+        (self.home / ".claude.json").write_text('{"apiKey": "secret"}')
+        private_home = self.base / "codex-private"
+        private_home.mkdir()
+        private = self.base / "private"
+        private.mkdir()
+        argv = autonomy.confined_argv(
+            self.root,
+            ["codex", "exec"],
+            private=private,
+            home=self.home,
+            env={"CODEX_HOME": str(private_home)},
+            integration="codex",
+        )
+        joined = " ".join(argv)
+        self.assertIn(f"--tmp-overlay {private_home}", joined)
+        self.assertIn(f"--tmpfs {claude}", joined)
+        self.assertNotIn(".credentials.json", joined.replace(f"--tmpfs {claude}", ""))
+        self.assertIn(f"--ro-bind /dev/null {self.home / '.claude.json'}", joined)
+        self.assertFalse(any(private.glob("credentials*")))
+        self.assertEqual(list(private_home.iterdir()), [])
 
 
 # --- The wrapper -----------------------------------------------------------------

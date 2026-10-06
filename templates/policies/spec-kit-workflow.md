@@ -762,8 +762,15 @@ ballast run resume RUN_ID --local-fallback MODEL|off
   - `changed-state`: the first attempt changed the tree, the reviews, the
     drafts, a git-ignored path or a ref, or that could not be checked (for
     example more than 200,000 ignored entries);
-  - `privacy-exclusion`: the model is remote or a cloud tag, or an endpoint
-    override (`OLLAMA_HOST`, `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`) is set;
+  - `privacy-exclusion`: the model is remote or a cloud tag (or an endpoint
+    override survives in the fallback's environment, which the wrapper cannot
+    produce: it removes `OLLAMA_HOST`, `CODEX_OSS_BASE_URL` and
+    `CODEX_OSS_PORT`, and every proxy variable, from the fallback's
+    environment, so Codex reaches only `127.0.0.1:11434` directly). Codex
+    itself contacts `github.com` and `chatgpt.com` at start-up even with a
+    local model, so the fallback's environment points every proxy-aware request
+    at a closed local port (`127.0.0.1:9`) and exempts only loopback; this
+    reduces egress, it is not a network boundary;
   - `unknown-free-status`: the model is not installed, or has no size or
     digest;
   - `incompatible-capability`: Ollama is not answering or too old, the served
@@ -789,7 +796,7 @@ ballast run resume RUN_ID --local-fallback MODEL|off
   step's `meta.json` carries `local_fallback: true` while it is on. The
   setting lives in the run's operator directory (`fallback.json`), where no
   agent can write.
-- **Evidence.** `./scripts/agent-metrics --run RUN_ID` reports every decision
+- **Evidence.** `ballast ledger report --run RUN_ID` reports every decision
   as ledger `route` events (`failure_cause`, `fallback`, `fallback_reason`,
   `route_source: fallback`) and the fallback's token usage.
 
