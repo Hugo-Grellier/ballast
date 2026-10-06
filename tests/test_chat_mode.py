@@ -1368,6 +1368,8 @@ class StepEntryTests(ChatCase):
         self.assertTrue(
             hook["command"].endswith('.ballast/spec_workflow/chat_hook.py"')
         )
+        # SEC-003: the trusted interpreter by absolute path, never PATH's.
+        self.assertTrue(hook["command"].startswith(f"{sys.executable} -I -S "))
         self.assertIn(
             "Edit(./.agents/skills/ballast-*/**)", settings["permissions"]["deny"]
         )
@@ -2491,6 +2493,29 @@ class ForgeryTests(ChatCase):
 class HeadlessForgeryTests(ChatCase):
     """T041 [F-001, AC-008, FR-006]: human-gated steps through agent.py."""
 
+    def test_unconfirmed_headless_stop_leaves_the_step_open(self) -> None:
+        """#20 SEC-007: a headless wrapper killed before its check closes nothing."""
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        result = self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
+        self.assertEqual(result.code, 0, result.text)
+        killed = {
+            "exit_code": None,
+            "interrupted": True,
+            "scope_stopped": False,
+            "stopped_descendants": 0,
+            "argv": ["claude", "-p"],
+            "error": None,
+            "headless_code": -9,
+        }
+        with patch.object(chat, "_headless", lambda *_: dict(killed)):
+            step = self.call(chat.run_step, self.root, run_id, "specify", None, [])
+        self.assertEqual(step.code, chat.EXIT_TAMPERED, step.text)
+        record = self.record(run_id)
+        self.assertNotIn("close", [entry["entry"] for entry in record.steps])
+        self.assertFalse(record.run["active_step"]["scope_stopped"])
+        self.assertIn("scope_stopped", record.run["active_step"])
+
     def test_headless_step_keeps_todays_argv(self) -> None:
         run_id = self.start()
         self.approve_in_process(run_id, "scope")
@@ -3343,8 +3368,9 @@ class PublishTests(ChatCase):
         skeleton = [line.format(run=run_id) for line in CONTRACT_SKELETON]
         self.assertEqual([line for line in lines if line in skeleton], skeleton)
         self.assertIn(
-            "Mode: chat (driven by the operator; every gate below was approved by "
-            "the operator through `ballast run approve`).",
+            "Mode: chat (driven by the operator; every gate decision below was "
+            "made by the operator through `ballast run approve` or `reject`, and "
+            "publishing needs every gate's latest approval current).",
             body,
         )
         self.assertIn(

@@ -250,6 +250,16 @@ specs/20-chat-mode/
 - **F-1**: A narrower recovery than `discard-runs` for one dead Chat step (D-7), if the pilot shows a need.
 - **F-2**: Autonomous resume (#21) and the richer review packet (#19) will consume Chat records as they do Autonomous ones.
 - **F-4**: Detect agent writes to git-ignored paths that later agents read (for example `AGENTS.local.md`), which no tree manifest lists ([DEC-0003](decisions.md); security review SEC-002, SEC-008).
+- **F-5**: Low findings that the implementation reviews left open (`reviews/security.md`, `engineering.md`, `test.md`), to be filed as one hardening Issue:
+  - SEC-001 for headless steps: add the installed skills to `agent._protected_state`.
+  - SEC-006: drain the terminal before the flush, and filter OSC 52.
+  - SEC-002: fail closed past the 500-path cap.
+  - SEC-008: earlier step logs are readable by later agents.
+  - SEC-009: create the `in-progress` marker exclusively, across runs.
+  - SEC-010: `.claude/settings.json` written by a headless step.
+  - ENG-005: the shared commit, push and PR tail.
+  - ENG-007, ENG-008, ENG-010, ENG-012, ENG-013.
+  - TST-005 to TST-012.
 - **F-3**: A provider-native transcript (Claude `--session-id` JSONL) as an optional second local log, bound out of bwrap's overlay.
 
 ## Complexity Tracking

@@ -34,6 +34,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -458,6 +459,13 @@ def chat_settings() -> dict:
                 ]
             )
         )
+    # The hook runs this trusted interpreter by absolute path: a `python3`
+    # shadowed on PATH, or one that cannot start, would not block (SEC-003).
+    for group in merged.get("hooks", {}).get("PreToolUse", []):
+        for hook in group["hooks"]:
+            hook["command"] = hook["command"].replace(
+                "python3 ", f"{shlex.quote(sys.executable)} ", 1
+            )
     return merged
 
 

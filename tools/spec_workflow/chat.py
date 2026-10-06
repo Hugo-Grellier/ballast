@@ -2043,7 +2043,7 @@ def _finish(  # noqa: C901, PLR0913, PLR0915, PLR0917 - steps 9 to 12, in order
                 ).encode()
             )
 
-    if interactive and not result["scope_stopped"]:
+    if not result["scope_stopped"]:  # SEC-007: headless too
         run.record["active_step"] = {
             **run.record["active_step"],
             "scope_stopped": False,
@@ -2892,9 +2892,10 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
         f"## Chat run {run.id}",
         "",
         (
-            f"Mode: {run.mode} (driven by the operator; every gate below was "
-            "approved by "
-            "the operator through `ballast run approve`). "
+            f"Mode: {run.mode} (driven by the operator; every gate decision "
+            "below was made by the operator through `ballast run approve` or "
+            "`reject`, and publishing needs every gate's latest approval "
+            "current). "
             f"History: {_mode_history(record)}."
         ),
         (

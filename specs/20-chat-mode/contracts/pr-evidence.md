@@ -24,7 +24,7 @@ A failed precondition is recorded as a `refusal` and exits 2. A forge or permiss
 <!-- ballast:chat:begin -->
 ## Chat run <run>
 
-Mode: chat (driven by the operator; every gate below was approved by the operator through `ballast run approve`). History: <mode_history lines>.
+Mode: chat (driven by the operator; every gate decision below was made by the operator through `ballast run approve` or `reject`, and publishing needs every gate's latest approval current). History: <mode_history lines>.
 Feature: specs/<N>-<slug> · Issue #N · branch <branch> · run <run>[ · continues <source> (<mode>)]
 
 ### Steps
@@ -54,7 +54,7 @@ Conversation logs and agent logs stay on the operator's machine and are not part
 
 - The section is rendered from `run.json`, `steps.jsonl`, `events.jsonl` and `human-decisions.jsonl`. The only agent-derived values are paths, IDs and the verdict enum, all passed through `autonomy.neutralize`.
 - Each `gate-approval` row ends with the approval's state: `(current)`, `(stale)` or `(superseded)` by a later decision for the same gate (review finding ENG-003).
-- The text "approved by the operator" is allowed only in the fixed header line and in rows rendered from `gate-approval` human decisions. The Autonomous `HUMAN_APPROVAL` guard stays in force for Autonomous bodies. For a Chat body, the guard is applied to every agent-derived value instead.
+- The text "approved by the operator" is allowed only in rows rendered from `gate-approval` human decisions. The Autonomous `HUMAN_APPROVAL` guard stays in force for Autonomous bodies. For a Chat body, the guard is applied to every agent-derived value instead.
 - Carried Autonomous decisions are always labeled `agent-provisional`, even after a human approval supersedes them; the superseding HD is shown next to them (FR-022).
 - The body never contains or links to a conversation log, an agent log or `speckit-runs` content (FR-017).
 - When the section would exceed `autonomy.MAX_BODY`, the steps and checks tables fall back to counts plus the latest failure, as the Autonomous renderer does.

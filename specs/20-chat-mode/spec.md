@@ -194,6 +194,7 @@ The operator may move a run between Chat and the human-gated mode, for example t
 - A step is a workflow phase. Free-form conversation happens inside a step, and its result is checked as that phase's output. An operator who wants unscoped agent help picks the phase the help serves. A free-form step type is not part of this feature.
 - The operator's own edits between steps are operator authority. They are recorded and re-checked, but not refused, except for protected inputs, which fail closed as today.
 - A Chat agent gets no extra permissions through interactive prompts. This is the safe default for an R2 boundary. Widening it would need its own decision.
+- In a Codex step, the operator's own `/approvals` command can widen that session up to Ballast's bwrap bound. This is an operator action, not a prompt from the agent, and Claude steps have no such path ([DEC-0001](decisions.md)).
 - Chat supports the agent integrations the headless runner can confine. An integration that cannot run inside Ballast's confinement is refused for Chat, as it is for a headless step.
 - Chat keeps a local conversation log for each step, stored like a headless step's stdout and stderr logs in git-ignored run state and never published. Not keeping one, or keeping it for a shorter time, is a later change that loses no committed data.
 - Chat runs have no wall-time or attempt limit, because the operator is present. Limits stay an Autonomous feature.
