@@ -482,7 +482,7 @@ class Setup:
         finally:
             os.close(lock)
         sys.stdout.write(
-            f"Prepared the {self.ref} installation from {source} (verified, "
+            f"Prepared the {self.ref} installation from {printable(source)} (verified, "
             "nothing downloaded).\n"
             "Review this worktree's protected inputs, then run `ballast trust`.\n"
         )
@@ -587,7 +587,7 @@ class Setup:
             record = self.validate(stage)
             if self.mode == PREPARE:
                 journal["source"] = str(result)
-                self.check_unchanged(record)
+                self.check_unchanged(record, stage)
             ignored = self.ignored(sorted(set(names) - set(record["entries"])))
             plan = [{"path": n, "new": False} for n in ignored]
             plan += [{"path": n, "new": True} for n in record["entries"]]
@@ -859,7 +859,7 @@ class Setup:
             reason = rejected or self.copy_candidate(kind, checkout, stage)
             if reason is None:
                 break
-            sys.stdout.write(f"skipped {source}: {reason}\n")
+            sys.stdout.write(printable(f"skipped {source}: {reason}") + "\n")
         else:
             refuse(
                 f"no verified installation of {self.ref} with this ballast.toml on "
@@ -877,7 +877,7 @@ class Setup:
             )
         return source
 
-    def check_unchanged(self, record: dict) -> None:
+    def check_unchanged(self, record: dict, stage: Path) -> None:
         """Fail unless the stage is still the copy that verified (SEC-003)."""
         source = self.source_record or {}
         changed = _first_difference(record["files"], source.get("files", {}))
@@ -886,6 +886,10 @@ class Setup:
         if changed:
             cause = f"the stage changed after it was verified at {changed}"
             fail("validate stage", cause, "rerun the command")
+        loose = _loose_mode(stage, record["entries"])
+        if loose:
+            cause = f"{loose} is group- or world-writable or set-id"
+            fail("validate stage modes", cause, "rerun the command")
 
     def validate(self, stage: Path) -> dict:
         """Refuse a stage that is not a complete, ignorable installation."""
@@ -1287,6 +1291,11 @@ def merge_permissions(settings: dict, config: dict) -> dict:
     return settings
 
 
+def printable(text: object) -> str:
+    """Show checkout text with control characters replaced by `?` (SEC2-004)."""
+    return "".join(c if c.isprintable() else "?" for c in str(text))
+
+
 def executables(root: Path, files: dict[str, str]) -> list[str]:
     """List the recorded regular files under root with any execute bit, sorted."""
     return sorted(
@@ -1326,6 +1335,20 @@ def _kept_record(state: Path) -> dict | None:
         and isinstance(record.get("entries"), list)
     )
     return record if valid else None
+
+
+def _loose_mode(stage: Path, names: list[str]) -> str | None:
+    """Return the first staged file or directory a copy never makes (SEC2-002)."""
+    for name in names:
+        top = stage / name
+        paths = (
+            [top] if top.is_symlink() or not top.is_dir() else [top, *top.rglob("*")]
+        )
+        for path in sorted(paths):
+            found = os.lstat(path)
+            if not stat.S_ISLNK(found.st_mode) and found.st_mode & 0o7022:
+                return str(path.relative_to(stage))
+    return None
 
 
 def _open_dir(root: Path, parts: tuple[str, ...], *, create: bool) -> int:
@@ -1394,8 +1417,12 @@ def _copy_node(origin: int, target: int, leaf: str, name: str) -> None:
         finally:
             os.close(inner)
     elif stat.S_ISREG(found.st_mode):
-        reader = os.open(leaf, flags, dir_fd=origin)
+        # O_NONBLOCK: a FIFO swapped in after the stat never blocks (SEC2-003).
+        reader = os.open(leaf, flags | os.O_NONBLOCK, dir_fd=origin)
         try:
+            if not stat.S_ISREG(os.fstat(reader).st_mode):
+                message = f"{name} is not a regular file, directory or link"
+                raise OSError(message)
             create = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
             writer = os.open(leaf, create, 0o600, dir_fd=target)
             try:

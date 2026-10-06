@@ -16,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout, suppress
@@ -1579,6 +1580,112 @@ class PrepareTests(WorktreeCase):
         self.prepared(worktree, self.root)
         self.assertEqual(self.check(worktree).stdout, "current\n")
         self.assertFalse(ran.exists())
+
+    def test_pager_never_runs_on_a_terminal(self) -> None:
+        # Security review SEC2-001: git starts a configured pager only when
+        # its stdout is a terminal, as it is when the operator types the
+        # command; without the pty this test proves nothing.
+        worktree = self.worktree()
+        ran = self.base / "pager-ran"
+        program = self.base / "pager"
+        program.write_text(f"#!/bin/sh\ntouch {ran}\ncat >/dev/null\n")
+        program.chmod(0o755)
+        for command in ("check-ignore", "ls-files", "worktree", "rev-parse"):
+            git(self.root, "config", f"pager.{command}", str(program))
+        main, terminal = pty.openpty()
+        saved = os.dup(1)
+        try:
+            with patch.dict(os.environ):
+                os.environ.pop("GIT_PAGER", None)
+                os.environ.pop("PAGER", None)
+                os.dup2(terminal, 1)
+                self.prepared(worktree, self.root)
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+            os.close(terminal)
+            os.close(main)
+        self.assertFalse(ran.exists(), "a configured pager ran before trust")
+
+    def test_stage_modes_changed_after_copy_are_refused(self) -> None:
+        # Security review SEC2-002: a staged file made group- or world-writable
+        # or set-id after the copy is never switched in.
+        copy = setup.Setup.copy_candidate
+
+        def loosened(
+            this: setup.Setup, kind: str, checkout: Path, stage: Path
+        ) -> str | None:
+            reason = copy(this, kind, checkout, stage)
+            (stage / "docs/policies/workflow.md").chmod(0o666)
+            return reason
+
+        worktree = self.worktree()
+        with patch.object(setup.Setup, "copy_candidate", loosened):
+            code, _, err = self.prepare(worktree)
+        self.assertEqual(code, 1, err)
+        self.assertIn(
+            "setup: validate stage modes failed: docs/policies/workflow.md is "
+            "group- or world-writable or set-id",
+            err,
+        )
+        self.assert_uninstalled(worktree)
+
+    def test_fifo_swapped_in_during_the_copy_is_rejected(self) -> None:
+        # Security review SEC2-003: a FIFO swapped in after the type check
+        # must not block the copy forever.
+        source = self.root / "docs/policies/workflow.md"
+        real = os.stat
+        swapped: list[bool] = []
+
+        def racing(path: object, *args: object, **kwargs: object) -> object:
+            found = real(path, *args, **kwargs)
+            if path == "workflow.md" and kwargs.get("dir_fd") and not swapped:
+                swapped.append(True)
+                source.unlink()
+                os.mkfifo(source)
+            return found
+
+        def unblock() -> None:
+            # Only reached when the copy blocks: end it so the test fails.
+            with suppress(OSError):
+                os.close(os.open(source, os.O_WRONLY | os.O_NONBLOCK))
+
+        worktree = self.worktree()
+        watchdog = threading.Timer(10, unblock)
+        watchdog.start()
+        out = io.StringIO()
+        try:
+            with (
+                patch.object(setup.os, "stat", racing),
+                redirect_stdout(out),
+                redirect_stderr(io.StringIO()),
+            ):
+                code = setup.cli(["--project", str(worktree), "--prepare"])
+        finally:
+            watchdog.cancel()
+        self.assertEqual(swapped, [True])
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            out.getvalue(),
+            f"skipped {self.root}: it is unreadable: docs/policies/workflow.md is "
+            "not a regular file, directory or link\n",
+        )
+        self.assert_uninstalled(worktree)
+
+    def test_printed_names_are_escaped(self) -> None:
+        # Security review SEC2-004: a name an agent chose never writes control
+        # characters to the operator's terminal.
+        planted = self.root / ".specify/scripts/x\n\x1b[2K\rPrepared.py"
+        planted.write_text("planted\n")
+        worktree = self.worktree()
+        code, out, _ = self.prepare(worktree)
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            out,
+            f"skipped {self.root}: its content differs from its record at "
+            ".specify/scripts/x??[2K?Prepared.py\n",
+        )
+        self.assert_uninstalled(worktree)
 
     def test_unfinished_or_busy_source_is_rejected(self) -> None:
         # AC-011, plan review F-004
