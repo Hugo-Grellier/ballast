@@ -834,6 +834,7 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
                     # before it is reaped: give it a moment to exit by itself.
                     with suppress(subprocess.TimeoutExpired):
                         process.wait(HANGUP_GRACE_SECONDS)
+                    interrupted = ending["signal"] is not None
                     break
                 _write_all(stdout_fd, data)
                 stdout_log.write(data)
