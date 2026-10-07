@@ -678,6 +678,35 @@ def probe(  # noqa: PLR0913 - the step's every input
         return Refused(CAPABILITY, "eligibility check failed")
 
 
+def model_changed(setting: Setting) -> bool:
+    """Whether the served digest is not the one pinned at opt-in (or unknown)."""
+    return setting.digest is None or served_digest(setting.model) != setting.digest
+
+
+def recheck(setting: Setting, *, root: Path, codex_home: Path) -> Refused | None:
+    """Re-verify, just before launch, what the probes checked earlier (TOCTOU).
+
+    The model digest, the Codex configuration layers, the user skills
+    directory and the emptiness of the private `CODEX_HOME`. The model is
+    still addressed by name (Codex takes no digest reference), so a change
+    after this call is caught by `model_changed` when the step ends.
+    """
+    if model_changed(setting):
+        return Refused(CAPABILITY, "model changed since opt-in")
+    try:
+        if not _layers_absent(root):
+            return Refused(
+                PERMISSION, "codex configuration layer outside the private home"
+            )
+        if not _skills_empty(Path.home()):
+            return Refused(PERMISSION, "user skills directory is not empty")
+        if next(codex_home.iterdir(), None) is not None:
+            return Refused(PERMISSION, "codex home is not empty")
+    except OSError:
+        return Refused(CAPABILITY, "eligibility check failed")
+    return None
+
+
 def _checks(  # noqa: C901, PLR0911, PLR0912, PLR0913 - the ordered checks of R5
     setting: Setting,
     *,

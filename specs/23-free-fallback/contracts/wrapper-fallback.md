@@ -63,6 +63,10 @@ else:
 | `incompatible-capability` | server not answering, or older than Ollama 0.13.4 or of unknown version; served context below 16384 or unknown (`num_ctx`, DEC-0004); codex missing or without `--oss`/`--local-provider`; the project's Codex skill for the step's Spec Kit command missing; Codex sandbox not starting under the step's confinement; the model's served digest differs from the one recorded at opt-in (`model changed since opt-in`) or none was recorded (`model not pinned at opt-in`; SEC2-002); the checks exceeding their 10 s budget |
 | `permission-mismatch` | argv or env not exactly the one the wrapper builds (any added, removed or changed token); a Codex configuration layer outside the private `CODEX_HOME` exists (any entry under the project's `.codex`, SEC2-003) or could not be established; the user skills directory `~/.agents/skills` is non-empty, a symlink or unreadable (plan-review F-003) |
 
+## Check then use
+
+`recheck(setting, root=, codex_home=)` runs immediately before the fallback process starts and refuses (nothing sent) on a digest change, a Codex configuration layer, a non-empty `~/.agents/skills` or a non-empty private `CODEX_HOME`. After the process ends, `model_changed(setting)` fails the step (`the local model changed during the step`, exit 1, result untrusted). The model stays addressed by name because Codex accepts no digest reference.
+
 ## Review provenance
 
 `artifacts.py`: for a step entry with `route: "fallback"`, the review entry's `cross_provider` is `false`, and the draft's `agent.provider` and `agent.model` are the entry's `provider` and `model`, not the agent-reported model. `draft_pr.py` and `packet.py` read these fields as they do today, so no PR text claims cross-provider review on the fallback's basis (AC-016).

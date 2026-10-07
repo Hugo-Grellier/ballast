@@ -1375,7 +1375,7 @@ def _fallback_step(  # noqa: C901, PLR0913 - one decision, one attempt
     if outcome == "success" and exit_code != 0:
         outcome = (
             "incomplete"
-            if result["limit_hit"] or exit_code == EXIT_INTERRUPTED
+            if result.get("limit_hit") or exit_code == EXIT_INTERRUPTED
             else "mechanical-failure"
         )
     records = [
@@ -1559,6 +1559,18 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         ]
         stdout: list[bytes] = []
         stderr: list[bytes] = []
+        if route is not None:
+            # The last look before the model runs: close the probes' TOCTOU.
+            refused = fallback.recheck(
+                route["setting"], root=root, codex_home=Path(route["codex_home"])
+            )
+            if refused is not None:
+                sys.stderr.write(
+                    "spec workflow agent wrapper: local fallback not started: "
+                    f"{refused.reason}: {refused.detail}\n"
+                )
+                in_progress.unlink(missing_ok=True)
+                return 1, {}
         process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
             argv,
             # `codex exec` reads a prompt addition from an open stdin (pilot).
@@ -1660,6 +1672,18 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             usage = fallback.usage_file(
                 events, exited=not limit_hit and exit_code != EXIT_INTERRUPTED
             )
+    if (
+        route is not None
+        and exit_code == 0
+        and fallback.model_changed(route["setting"])
+    ):
+        sys.stderr.write(
+            "spec workflow agent wrapper: the local model changed during the step; "
+            "its result is untrusted, failing this step\n"
+        )
+        shown = ""
+        exit_code = 1
+        reason = "model changed during the step"
     blocked = BLOCKING.findall(shown)
     if exit_code == 0 and blocked:
         sys.stderr.write(

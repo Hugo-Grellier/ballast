@@ -167,9 +167,14 @@ class StubOllama:
                 stub.requests.append((self.command, self.path, body))
                 if stub.delay:
                     time.sleep(stub.delay)
+                tags = (
+                    stub.tags_script.pop(0)
+                    if stub.tags_script and self.path == "/api/tags"
+                    else stub.tags
+                )
                 data = {
                     "/api/version": stub.version,
-                    "/api/tags": stub.tags,
+                    "/api/tags": tags,
                     "/api/show": stub.show,
                 }.get(self.path)
                 if data is None:
@@ -207,6 +212,8 @@ class StubOllama:
             "capabilities": ["completion", "tools", "thinking"],
         }
         self.delay = 0.0
+        # One /api/tags answer per request, before `tags` applies again.
+        self.tags_script: list[dict] = []
 
     def close(self) -> None:
         self.server.shutdown()
@@ -907,6 +914,43 @@ class ProbeTests(ProbeCase):
             refused,
             fallback.Refused("incompatible-capability", "model not pinned at opt-in"),
         )
+
+    def test_recheck_closes_check_then_use(self) -> None:
+        """Re-verified just before launch: digest, layers, skills, CODEX_HOME."""
+        home = self.base / "recheck-home"
+        home.mkdir()
+        with patch.object(Path, "home", return_value=home):
+            args = (fallback.Setting(MODEL, digest=DIGEST),)
+            kw = {"root": self.root, "codex_home": self.codex_home}
+            self.assertIsNone(fallback.recheck(*args, **kw))
+            self.assertFalse(fallback.model_changed(*args))
+            cases = []
+            self.stub.tags["models"][0]["digest"] = "b" * 64
+            cases.append(("model changed since opt-in", None))
+            self.assertEqual(
+                fallback.recheck(*args, **kw),
+                fallback.Refused("incompatible-capability", cases[0][0]),
+            )
+            self.assertTrue(fallback.model_changed(*args))
+            self.stub.reset()
+            (self.codex_home / "config.toml").write_text("x")
+            self.assertEqual(
+                fallback.recheck(*args, **kw).detail, "codex home is not empty"
+            )
+            (self.codex_home / "config.toml").unlink()
+            (self.root / ".codex").mkdir()
+            (self.root / ".codex/hooks.json").write_text("{}")
+            self.assertEqual(
+                fallback.recheck(*args, **kw).detail,
+                "codex configuration layer outside the private home",
+            )
+            (self.root / ".codex/hooks.json").unlink()
+            (self.root / ".codex").rmdir()
+            (home / ".agents/skills/x").mkdir(parents=True)
+            self.assertEqual(
+                fallback.recheck(*args, **kw).detail,
+                "user skills directory is not empty",
+            )
 
     def test_cloud_model_refuses_privacy(self) -> None:
         cloud = "gemma4:cloud"
@@ -1609,6 +1653,25 @@ class RefusalTests(FallbackCase):
             self.quota(), "incompatible-capability", "model changed since opt-in"
         )
         self.assertEqual(self.codex_runs(), [])
+
+    def test_model_swapped_after_the_probes_refuses_before_launch(self) -> None:
+        self.enable()
+        good = self.stub.tags
+        bad = {"models": [{**good["models"][0], "digest": "b" * 64}]}
+        self.stub.tags_script = [good, bad]  # the probe sees it, the recheck not
+        result = self.quota()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("model changed since opt-in", result.stderr)
+        self.assertEqual(self.codex_runs(), [])
+
+    def test_model_swapped_during_the_run_fails_the_step(self) -> None:
+        self.enable()
+        good = self.stub.tags
+        bad = {"models": [{**good["models"][0], "digest": "b" * 64}]}
+        self.stub.tags_script = [good, good, bad]
+        result = self.quota()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("local model changed during the step", result.stderr)
 
     def test_probe_refusal_returns_primary_code(self) -> None:
         self.enable()
