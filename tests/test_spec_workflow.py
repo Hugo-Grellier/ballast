@@ -452,7 +452,7 @@ if os.environ.get("FAKE_TAMPER"):
 if os.environ.get("FAKE_RELINK"):
     import shutil
     path, _, target = os.environ["FAKE_RELINK"].partition("=")
-    shutil.rmtree(path)
+    os.unlink(path) if os.path.islink(path) else shutil.rmtree(path)
     os.symlink(target, path)
 if os.environ.get("FAKE_MKDIR"):
     os.makedirs(os.environ["FAKE_MKDIR"])
@@ -852,6 +852,23 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn(".claude/settings.json->", result.stderr)
+
+    def test_retargeting_a_link_inside_linked_codex_fails_the_step(self) -> None:
+        """Review of #66: a nested link is recorded by target, not only content."""
+        config = self.root / "cfg/codex"
+        config.mkdir(parents=True)
+        for name in ("a.toml", "b.toml"):
+            (config / name).write_text("model = 'x'\n")
+        (config / "config.toml").symlink_to("a.toml")
+        (self.root / ".codex").symlink_to("cfg/codex")
+        result = self.run_wrapper(
+            "codex",
+            "exec",
+            "$speckit-plan",
+            FAKE_RELINK=f"{config / 'config.toml'}={config / 'b.toml'}",
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".codex->config.toml", result.stderr)
 
     def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
         """Review of #96: nothing ran, so the marker must not strand the run."""

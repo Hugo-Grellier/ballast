@@ -295,6 +295,8 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
             if file.is_file():
                 key = f"{name}->{file.relative_to(target)}"
                 found[key] = hashlib.sha256(file.read_bytes()).hexdigest()
+                if file.is_symlink():
+                    found[key] += " link:" + str(file.readlink())
     return found
 
 
