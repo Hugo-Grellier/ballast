@@ -9,17 +9,17 @@ The trusted step runner is `chat.run_step`, called by `run.py` after the launche
 | 1 | Take `runs/<run>/lock` (`fcntl.flock`, non-blocking). | Refuse (exit 2), naming the active step from `run.json`. |
 | 2 | If `run.json.active_step` is set (the previous wrapper died and `discard-runs` cleared the marker), close it as `interrupted`, run its postcondition, and record both. This late close stores `tree_after` as the current tree manifest and sets `last_manifest`. It records `late_close: true` and `attribution: "uncertain"`: every change since `tree_before` is attributed to the step, so the step's write-scope check covers it. Attributing agent edits to the operator would hide them behind operator authority. It also records `protected_compared: false`, because the step-7 snapshot lived only in the dead wrapper's memory. Protection then rests on bwrap's read-only binds (interactive driver) and on the launcher baseline over `launcher.BASES` at the next invocation. Note that `autonomy.PROTECTED` covers all of `.ballast`, while `BASES` covers only `.ballast/spec_workflow`. | Recorded. The new step continues only if that close recorded `scope_stopped: true`. |
 | 3 | Compare the tree with `last_manifest`. Record an `out-of-step-change` if they differ. | Never fails. |
-| 4 | Branch synchronization (`starting=False`, Chat `rerun` text). | Print the existing block. Record a `sync` event and a `refusal`. Exit 1. No agent. |
+| 4 | Branch synchronization (`starting=False`, Chat `rerun` text). Record what it brought in as an `out-of-step-change` with `actor: "sync"` (#66). | Print the existing block. Record a `sync` event and a `refusal`. Exit 1. No agent. |
 | 5 | Evaluate the entry condition ([phase-graph.md](phase-graph.md)). | Record the `check` and the `refusal`, print the failing check, exit 1. No agent. |
 | 6 | Choose the integration: `review` uses `review_integration`, otherwise the step's `-i integration` or the run's. Run `confinement_self_test`, and for Codex `codex_sandbox_nests`. | Refuse that integration with the reason (exit 2) and name the other integration when it is available. |
 | 7 | Snapshot `tree_before` and the protected state. Write `active_step` to `run.json`, then the `start` step entry, then `in-progress` (unit name). | n/a |
 | 8 | Run the agent: interactive (below) in `chat` mode, headless `agent.py` argv in `human-gated` mode. | n/a |
 | 9 | When the session ends: `stop_scope(unit)` until systemd reports it gone, then `_stop_descendants()`. | Not confirmed: record `scope_stopped: false`, keep `in-progress`, exit 4. The launcher refuses until `discard-runs`. |
-| 10 | Compare the protected state with step 7. | Changed: write `BALLAST_TAMPERED` with the paths, record `tampered`, exit 4. |
+| 10 | Compare the protected state with step 7. It also covers `.claude/settings.json`, `.claude/settings.local.json` and `.codex/` (#66). | Changed: write `BALLAST_TAMPERED` with the paths, record `tampered`, exit 4. |
 | 11 | Remove `in-progress`. Run the postcondition and the cumulative checks, then the write-scope check against `tree_before`. | Record the `check` events and outcome `failed`, exit 1. |
 | 12 | Store `tree_after`. Write the `close` entry and clear `active_step`. For `review`, write the `review` event. Write the ledger `step` and `snapshot` events. Archive. Run the Draft PR checkpoint. | Archive and ledger failures are reported as today and never turn a failed step into a passing one. |
 
-Steps 9–12 also run when the wrapper receives `SIGHUP`, `SIGTERM` or `SIGINT`, or when the operator presses the escape sequence `Ctrl-]` `Ctrl-]`. The outcome is then `interrupted` unless the postcondition passed after a normal agent exit. A second signal during steps 9–12 is ignored, as `agent.main` ignores a second `SIGINT`.
+Steps 9–12 also run when the wrapper receives `SIGHUP`, `SIGTERM` or `SIGINT`, or when the operator presses the escape sequence `Ctrl-]` `Ctrl-]`. The outcome is then `interrupted` unless the postcondition passed after a normal agent exit. A second signal during steps 9–12 is ignored, as `agent.main` ignores a second `SIGINT`. An agent that could not be launched at all (for example no systemd user manager, or a refused argv) is recorded as `failed`, exit 1, not `interrupted` (#66).
 
 ## Interactive argv (inside bwrap, inside the scope)
 
@@ -51,6 +51,8 @@ The prompt precedes the tool lists, which are variadic and would otherwise take 
 
 `tools/setup` merges the project's `[agents.permissions]` rules into the installed `claude-settings.json` only. So before the protected-state snapshot, the step writes its own settings file in its log directory, which the agent sees read-only. That file holds the allow and deny rules of the installed `claude-settings.json`, project rules included, followed by those of `claude-chat-settings.json` (`agent.chat_settings`). A test keeps the deny list a superset of the installed headless settings, project rules included.
 
+Inside bwrap, `.specify/workflow-state` and `<git common dir>/speckit-runs` are empty read-only tmpfs mounts, so a step never reads an earlier step's conversation log; only the step's own `claude-settings.json` is bound back read-only (#66).
+
 **Codex:**
 
 ```text
@@ -75,7 +77,8 @@ codex --sandbox workspace-write --ask-for-approval never \
 ## Log and `meta.json`
 
 - **Directory**: `.specify/workflow-state/<run>/agents/<step>/`. It is opened as a directory handle before the agent starts, and files are created through it with `O_NOFOLLOW`.
-- **`stdout.log`**: the raw pty stream.
+- **`stdout.log`**: the raw pty stream. The operator's terminal gets the same stream without OSC 52 clipboard sequences; when the session ends, the wrapper resets terminal modes, waits briefly for late answers to the agent's terminal queries, and flushes them (#66).
+- **Headless steps** (human-gated mode): `agent.py` writes its logs to the same directory, named through `BALLAST_STEP_LOG` (#66).
 - **`meta.json`**: run ID, feature, integration, model, role, phase, the argv (program name only for `argv[0]`), driver, `started_at`, `finished_at`, exit code, `protected_changes`, `stopped_descendants` and `scope_stopped`. These are the headless keys plus `phase`, `driver`, `model`, `role` and `scope_stopped`.
 - Nothing from these files is copied into a PR, Issue or committed file.
 

@@ -63,9 +63,9 @@ Two entries per step, both written by the trusted runner: `start` before the age
 | Kind | Fields | Written when |
 | --- | --- | --- |
 | `check` | `check` (the `artifacts.py` name: `spec`, `clarified-spec`, `intent`, `plan`, `tasks`, `implementation`, `decisions`, `convergence`, `write-scope`, `project-checks`), `purpose` (`entry`, `postcondition`, `gate`, `operator`), `passed`, `detail` (≤ 2,000 characters, the `ContractError` text), `digests` (artifact digests the check read), `tree`, `step` or null | Every evaluation by the runner. Failures are kept forever, and nothing overwrites them (FR-010). |
-| `project-checks` | `results` (`[{command, exit, seconds, timed_out, provenance: "runner"}]`), `unavailable` (bool), `tree` | `ballast run checks`. |
+| `project-checks` | `results` (`[{command, exit, seconds, timed_out, provenance: "runner"}]`), `unavailable` (bool), `tree`, `protected_changes` (a non-empty list never counts as passing, #66) | `ballast run checks`. |
 | `review` | `kind`, `step`, `reviewer` (`{provider, model, role}`), `cross_provider`, `report` (path), `report_digest`, `verdict` (enum) | Close of a `review` step whose report exists and changed in that step. |
-| `out-of-step-change` | `actor: "operator"`, `paths` (sorted, ≤ 500, then a count), `from_manifest`, `to_manifest`, `stale` (HD IDs whose digests no longer match) | The first invocation after a change made between steps (FR-011). |
+| `out-of-step-change` | `actor: "operator"` (or `"sync"` for what a branch synchronization brought in, #66), `paths` (sorted, ≤ 500, then a count), `from_manifest`, `to_manifest`, `stale` (HD IDs whose digests no longer match) | The first invocation after a change made between steps (FR-011). |
 | `refusal` | `command`, `phase` or `gate`, `reason`, `failed_check` (`E-NNNN`) or null | A refused `step`, `approve`, `publish` or `mode`, when a run record exists. |
 | `sync` | `outcome`, `cause`, `ledger_event` | Each `step`'s branch check. A pointer only; the full event stays in the ledger. |
 

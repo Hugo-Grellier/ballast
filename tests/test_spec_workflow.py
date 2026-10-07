@@ -452,7 +452,7 @@ if os.environ.get("FAKE_TAMPER"):
 if os.environ.get("FAKE_RELINK"):
     import shutil
     path, _, target = os.environ["FAKE_RELINK"].partition("=")
-    shutil.rmtree(path)
+    os.unlink(path) if os.path.islink(path) else shutil.rmtree(path)
     os.symlink(target, path)
 if os.environ.get("FAKE_MKDIR"):
     os.makedirs(os.environ["FAKE_MKDIR"])
@@ -817,6 +817,89 @@ class AgentWrapperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 4)
         self.assertIn(".claude/skills/entries", result.stderr)
+
+    def test_writing_agent_cli_configuration_fails_the_step(self) -> None:
+        """#66 SEC-010: a later Claude or Codex step would load it."""
+        (self.root / ".claude").mkdir()
+        (self.root / ".codex").mkdir()
+        for name in (
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".codex/config.toml",
+        ):
+            with self.subTest(name=name):
+                result = self.run_wrapper(
+                    "codex",
+                    "exec",
+                    "$speckit-plan",
+                    FAKE_TAMPER=str(self.root / name),
+                )
+                self.assertEqual(result.returncode, 4)
+                self.assertIn(name, result.stderr)
+                (self.root / name).unlink()
+                self.clear_marker()
+                (self.root / "BALLAST_TAMPERED").unlink(missing_ok=True)
+
+    def test_rewriting_a_linked_agent_configuration_fails_the_step(self) -> None:
+        """Review of #66: the CLI loads the link's target, so that is protected."""
+        target = self.root / "cfg/settings.json"
+        target.parent.mkdir()
+        target.write_text("{}\n")
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").symlink_to("../cfg/settings.json")
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(target)
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".claude/settings.json", result.stderr)
+
+    def test_rewriting_a_linked_file_inside_codex_fails_the_step(self) -> None:
+        """Review of #66: a regular .codex holding a link to a writable file."""
+        target = self.root / "cfg/config.toml"
+        target.parent.mkdir()
+        target.write_text("model = 'x'\n")
+        (self.root / ".codex").mkdir()
+        (self.root / ".codex/config.toml").symlink_to("../cfg/config.toml")
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(target)
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".codex/config.toml", result.stderr)
+
+    def test_a_huge_linked_configuration_tree_is_bounded(self) -> None:
+        """Review of #66: a link to a large tree cannot stall the check."""
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        tree = self.root / "tree"
+        tree.mkdir()
+        for name in ("a", "b", "c"):
+            (tree / name).write_text(name)
+        with self.assertRaisesRegex(OSError, "more than"):
+            agent._followed(tree, ".codex", {}, set(), [3])  # noqa: SLF001
+        (self.root / ".codex").symlink_to(tree)
+        with patch.object(agent, "CONFIG_ENTRIES", 3):
+            after = agent._protected_after(self.root, self.root / "log")  # noqa: SLF001
+        self.assertIn("unreadable", after["(protected state)"])
+
+    def test_retargeting_a_link_inside_linked_codex_fails_the_step(self) -> None:
+        """Review of #66: a nested link is recorded by target, not only content."""
+        config = self.root / "cfg/codex"
+        config.mkdir(parents=True)
+        for name in ("a.toml", "b.toml"):
+            (config / name).write_text("model = 'x'\n")
+        (config / "config.toml").symlink_to("a.toml")
+        (self.root / ".codex").symlink_to("cfg/codex")
+        result = self.run_wrapper(
+            "codex",
+            "exec",
+            "$speckit-plan",
+            FAKE_RELINK=f"{config / 'config.toml'}={config / 'b.toml'}",
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".codex/config.toml", result.stderr)
 
     def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
         """Review of #96: nothing ran, so the marker must not strand the run."""

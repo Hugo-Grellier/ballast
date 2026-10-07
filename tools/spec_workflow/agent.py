@@ -121,6 +121,7 @@ CONFINED_DENY = tuple(
     for action in ("-exec", "-ok", "-delete", "-fprint", "-fls")
 )
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+STEP_LOG = re.compile(r"[0-9]{8}T[0-9]{12}Z-[a-z-]{1,32}-(claude|codex)")
 BLOCKING = re.compile(r"^RECONCILE_STATUS: (BLOCKED_[A-Z_]+)\s*$", re.MULTILINE)
 FORBIDDEN = (
     "dangerously",
@@ -143,6 +144,9 @@ NO_BYTECODE = os.devnull
 # run (any of which a later resume executes), so it is protected.
 SPECIFY_WRITABLE = ("feature.json", "extensions/.cache", "workflows/.cache")
 LOG_FILES = ("stdout.log", "stderr.log", "meta.json")
+# Agent CLI configuration a checkout can carry (Claude settings, Codex config).
+AGENT_CONFIG = (".claude/settings.json", ".claude/settings.local.json", ".codex")
+CONFIG_ENTRIES = 2000
 REAP_SECONDS = 10.0
 INTERRUPT_GRACE_SECONDS = 5.0
 # The operator ends an interactive step with Ctrl-] twice within a second.
@@ -155,6 +159,12 @@ TERMINAL_RESET = (
     b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l"
     b"\x1b[?2004l\x1b[?25h\x1b>\x1b[0m"
 )
+# How long late answers to the agent's terminal queries may take to arrive
+# before they are flushed, so the operator's shell never reads them (#66).
+DRAIN_SECONDS = 0.2
+# OSC 52 with the 7-bit (ESC ]) and the 8-bit (C1 OSC) introducer.
+OSC52 = (b"\x1b]52;", b"\x9d52;")
+OSC_END = re.compile(rb"\x07|\x1b\\|\x9c|\x18|\x1a")  # BEL, ST; CAN, SUB abort
 
 
 def permission_args(integration: str, args: list[str]) -> list[str]:
@@ -213,13 +223,11 @@ def _log_dir(root: Path, integration: str, prompt: str) -> tuple[Path, str]:
     key = run_id if RUN_ID.fullmatch(run_id) else "no-run"
     command = re.sub(r"[^a-z0-9.-]", "", prompt.split(maxsplit=1)[0].lower()) or "agent"
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    path = (
-        root
-        / ".specify/workflow-state"
-        / key
-        / "agents"
-        / f"{stamp}-{command}-{integration}"
-    )
+    # A Chat run names the directory its step record points to (#66 ENG-007).
+    name = os.environ.get("BALLAST_STEP_LOG", "")
+    if not STEP_LOG.fullmatch(name):
+        name = f"{stamp}-{command}-{integration}"
+    path = root / ".specify/workflow-state" / key / "agents" / name
     path.mkdir(parents=True, exist_ok=True)
     return path, key
 
@@ -274,7 +282,48 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
     skip += [own_log / name for name in LOG_FILES]
     found = digests(root, input_bases(root), skip)
     found.update(_installed_skills(root))
+    # Hooks and allow rules there run, or widen permissions, in the next
+    # agent step; no step may write them (#66 SEC-010).
+    for name in AGENT_CONFIG:
+        _followed(root / name, name, found, set(), [CONFIG_ENTRIES])
     return found
+
+
+def _followed(
+    path: Path, key: str, found: dict[str, str], seen: set[Path], budget: list[int]
+) -> None:
+    """Record `path` as the agent CLI reads it: every link followed (#66).
+
+    A link keeps its text and also records what it resolves to, so neither a
+    retarget nor a change of a linked file or directory goes unnoticed. A
+    tree past CONFIG_ENTRIES raises OSError instead of stalling the check:
+    before the step that refuses it, after the step it reads as a change.
+    """
+    budget[0] -= 1
+    if budget[0] < 0:
+        message = f"agent configuration has more than {CONFIG_ENTRIES} entries"
+        raise OSError(message)
+    link = f" link:{path.readlink()}" if path.is_symlink() else ""
+    if path.is_dir():
+        real = path.resolve()
+        found[key] = ("cycle" if real in seen else "dir") + link
+        if real not in seen:
+            seen.add(real)
+            for child in sorted(path.iterdir()):
+                _followed(child, f"{key}/{child.name}", found, seen, budget)
+    elif path.is_file():
+        with path.open("rb") as handle:
+            found[key] = hashlib.file_digest(handle, "sha256").hexdigest() + link
+    elif link:
+        found[key] = "dangling" + link
+
+
+def _protected_after(root: Path, own_log: Path) -> dict[str, str]:
+    """Return the protected state after a step; unreadable state reads as changed."""
+    try:
+        return _protected_state(root, own_log)
+    except OSError as error:
+        return {"(protected state)": f"unreadable: {error}"}
 
 
 def _installed_skills(root: Path) -> dict[str, str]:
@@ -708,6 +757,66 @@ class _Escape:
         return b""
 
 
+class _Clipboard:
+    """Drop OSC 52 (clipboard) sequences from the relayed output (#66, SEC-006).
+
+    A sequence may span reads: a possible start at the end of a read is held
+    until the next read, however long that takes (a released `ESC` followed
+    later by `]52;` would still reach the terminal as one sequence).
+    """
+
+    def __init__(self) -> None:
+        self.pending = b""
+        self.dropping = False
+
+    def feed(self, data: bytes) -> bytes:
+        """Return the bytes to show the operator."""
+        data, self.pending = self.pending + data, b""
+        shown = bytearray()
+        while data:
+            if self.dropping:
+                end = OSC_END.search(data)
+                if end is None:
+                    # A trailing ESC may be the first half of ESC \.
+                    self.pending = data[-1:] if data.endswith(b"\x1b") else b""
+                    break
+                data, self.dropping = data[end.end() :], False
+                continue
+            found = [(data.find(o), o) for o in OSC52 if o in data]
+            if not found:
+                keep = max(
+                    (n for o in OSC52 for n in range(1, len(o)) if o[:n] == data[-n:]),
+                    default=0,
+                )
+                shown += data[: len(data) - keep]
+                self.pending = data[len(data) - keep :]
+                break
+            start, opener = min(found)
+            shown += data[:start]
+            data, self.dropping = data[start + len(opener) :], True
+        return bytes(shown)
+
+
+def _restore_terminal(
+    stdin_fd: int, stdout_fd: int, saved: list, *, drain: bool
+) -> None:
+    """Undo modes the agent may have left on, then drop pending input.
+
+    With `drain`, late answers to the agent's terminal queries get a moment
+    to arrive first, so the flush, not the operator's shell, takes them.
+    """
+    with suppress(OSError):
+        _write_all(stdout_fd, TERMINAL_RESET)
+    if drain:
+        time.sleep(DRAIN_SECONDS)
+    with suppress(termios.error):
+        termios.tcsetattr(stdin_fd, termios.TCSAFLUSH, saved)
+
+
+class LaunchError(RuntimeError):
+    """The interactive agent could not be started; nothing ran (#66 ENG-013)."""
+
+
 def _end_session(process: subprocess.Popen, unit: str) -> None:
     """Hang up the agent's session, then kill what is left of it and its scope."""
     for number, wait in ((signal.SIGHUP, HANGUP_GRACE_SECONDS), (signal.SIGKILL, 5.0)):
@@ -745,10 +854,13 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
     if not SCOPE.fullmatch(unit):
         message = f"invalid agent scope name {unit!r}"
         raise ValueError(message)
-    argv = interactive_argv(
-        integration, _real_executable(integration), prompt, model, settings=settings
-    )
-    systemd_run, scope_options = _containment(root)
+    try:
+        argv = interactive_argv(
+            integration, _real_executable(integration), prompt, model, settings=settings
+        )
+        systemd_run, scope_options = _containment(root)
+    except (OSError, ValueError, autonomy.AutonomyError) as error:
+        raise LaunchError(str(error)) from error
     env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
     git, _ = autonomy.trusted_program("git", root)
     if git is not None:
@@ -773,47 +885,62 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
     process = None
     interrupted = False
     try:
-        confined = autonomy.confined_argv(
-            root,
-            argv,
-            private=private,
-            feature=feature,
-            env=env,
-            interactive_pty=True,
-            readonly_extra=(".claude", ".codex"),
-            integration=integration,
-        )
-        env = autonomy.confined_env(env, integration)
-        command = [
-            systemd_run,
-            "--user",
-            "--scope",
-            "--quiet",
-            "--collect",
-            f"--unit={unit.removesuffix('.scope')}",
-            *scope_options,
-            "--",
-            *confined,
-        ]
-        master, slave = os.openpty()
-        if saved is not None:
-            _copy_size(stdin_fd, slave)
-        process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
-            command,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            env=env,
-            start_new_session=True,
-            preexec_fn=_take_terminal,  # noqa: PLW1509 - no threads in this wrapper
-            close_fds=True,
-        )
+        try:
+            confined = autonomy.confined_argv(
+                root,
+                argv,
+                private=private,
+                feature=feature,
+                env=env,
+                interactive_pty=True,
+                readonly_extra=(".claude", ".codex"),
+                # Earlier steps' logs record what the operator typed (#66 SEC-008).
+                hidden_extra=(
+                    root / ".specify/workflow-state",
+                    autonomy.git_path(root, "--git-common-dir") / "speckit-runs",
+                ),
+                keep_visible=(root / settings,),
+                integration=integration,
+            )
+            env = autonomy.confined_env(env, integration)
+            command = [
+                systemd_run,
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                f"--unit={unit.removesuffix('.scope')}",
+                *scope_options,
+                "--",
+                *confined,
+            ]
+            master, slave = os.openpty()
+            if saved is not None:
+                _copy_size(stdin_fd, slave)
+            process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
+                command,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                env=env,
+                start_new_session=True,
+                preexec_fn=_take_terminal,  # noqa: PLW1509 - no threads in this wrapper
+                close_fds=True,
+            )
+        except (
+            OSError,
+            ValueError,
+            subprocess.SubprocessError,
+            autonomy.AutonomyError,
+        ) as error:
+            raise LaunchError(str(error)) from error
         os.close(slave)
         slave = -1
         signal.signal(signal.SIGWINCH, lambda *_: _copy_size(stdin_fd, master))
         if saved is not None:
             tty.setraw(stdin_fd)
         escape = _Escape()
+        clipboard = _Clipboard()
         reading = True
         while True:
             if ending["signal"] is not None:
@@ -836,7 +963,7 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
                         process.wait(HANGUP_GRACE_SECONDS)
                     interrupted = ending["signal"] is not None
                     break
-                _write_all(stdout_fd, data)
+                _write_all(stdout_fd, clipboard.feed(data))
                 stdout_log.write(data)
                 stdout_log.flush()
             if stdin_fd in ready:
@@ -860,12 +987,10 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
                 break
     finally:
         if saved is not None:
-            # Undo modes the agent may have left on, and drop pending input
-            # (late answers to its terminal queries) before the shell reads.
-            with suppress(OSError):
-                _write_all(stdout_fd, TERMINAL_RESET)
-            with suppress(termios.error):
-                termios.tcsetattr(stdin_fd, termios.TCSAFLUSH, saved)
+            # A hung-up terminal sends no more answers: no drain then.
+            _restore_terminal(
+                stdin_fd, stdout_fd, saved, drain=ending["signal"] is None
+            )
         for number in handlers:
             signal.signal(number, signal.SIG_IGN)
         signal.signal(signal.SIGWINCH, signal.SIG_DFL)
@@ -1696,7 +1821,7 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             "failing this step\n"
         )
         exit_code = EXIT_BLOCKED
-    after = _protected_state(root, log_dir)
+    after = _protected_after(root, log_dir)
     tampered = sorted(
         name
         for name in protected.keys() | after.keys()

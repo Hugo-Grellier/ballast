@@ -2452,6 +2452,8 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     home: Path | None = None,
     interactive_pty: bool = False,
     readonly_extra: tuple[str, ...] = (),
+    hidden_extra: tuple[Path, ...] = (),
+    keep_visible: tuple[Path, ...] = (),
     integration: str | None,
     with_login: bool = True,
 ) -> list[str]:
@@ -2472,6 +2474,10 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     Chat step whose stdio is a wrapper-owned pty, already its controlling
     terminal, passes it (#20 D-3): TIOCSTI then reaches only the agent's own
     pty. Every other caller keeps `--new-session`.
+
+    `hidden_extra` names directories replaced by an empty read-only tmpfs
+    when they exist, and `keep_visible` files inside them bound back
+    read-only (a Chat step's own settings, #66 SEC-008).
 
     `with_login=False` keeps the overlays but copies no login: the local
     fallback (`codex exec --oss`) needs none (#23 SEC2-001).
@@ -2537,6 +2543,14 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     args += _binds_for_worktree(root, feature)
     args += _installed_skill_binds(root)
     args += extra
+    for path in hidden_extra:
+        if path.is_dir():
+            # A link is hidden where it leads, so nothing reaches the target.
+            args += ["--tmpfs", str(path.resolve())]
+            hidden.append(path.resolve())
+    for path in keep_visible:
+        if path.is_file() and not path.is_symlink():
+            args += ["--ro-bind", str(path), str(path)]
     for path in hidden:
         args += ["--remount-ro", str(path)]
     args += ["--unshare-pid", "--unshare-ipc"]
@@ -3734,7 +3748,7 @@ def _publication_target(
     return repo, default_branch, branch, push_url, adopted, current
 
 
-def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
+def publish(root: Path, run_id: str) -> dict:  # noqa: PLR0911
     """Commit, push and open one Draft PR as the operator.
 
     Returns {"ok": bool, "category": str|None, "message": str, "url": str|None}.
@@ -3787,40 +3801,15 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
         )
         # The record is rendered by trusted recorders, so it is always publishable.
         allowed.add(record_path(run["feature"]))
-        git(root, "add", "--all")
-        _refuse_staged_embedded(root, head)
-        staged = git(
-            root, "diff", "--cached", "--name-only", "--no-renames", head
-        ).stdout.split()
-        problems = [p for p in staged if _protected_path(p) or (p not in allowed)] + [
-            p
-            for p in staged
-            if (root / p).is_file() and (root / p).stat().st_size > MAX_PUBLISHED_FILE
-        ]
-        if problems:
-            git(root, "reset", "-q", check=False)
-            return refuse(
-                "postcondition",
-                "refusing to publish unexpected, protected or oversized paths: "
-                + ", ".join(sorted(set(problems))[:10]),
-            )
-        if git(root, "diff", "--cached", "--quiet", check=False).returncode != 0:
-            title = f"feat: {run.get('issue_title') or 'autonomous change'}"
-            git(
-                root,
-                "commit",
-                "--no-verify",
-                "-q",
-                "-m",
-                title[:100],
-                "-m",
-                f"Refs #{run['issue']}",
-                "-m",
-                f"Autonomous-Run: {run_id}",
-            )
-        pushed = _push(root, push_url, branch)
-        if pushed.returncode != 0:
-            return refuse("forge", f"git push failed: {pushed.stderr.strip()[:500]}")
+        title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
+        staged = _commit_and_push(
+            root,
+            head,
+            allowed,
+            (title, f"Refs #{run['issue']}", f"Autonomous-Run: {run_id}"),
+            push_url,
+            branch,
+        )
         body = render_pr_body(
             run,
             decisions,
@@ -3832,7 +3821,6 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
             feedback=read_feedback(root, run_id),
         )
         _guard_body(body)
-        title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
         if adopted is not None:
             url = _adopt_pr(
                 root,
@@ -3850,6 +3838,51 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: C901, PLR0911
     except AutonomyError as error:
         return refuse(error.category, str(error))
     return {"ok": True, "category": None, "message": "published", "url": url}
+
+
+def _commit_and_push(  # noqa: PLR0913, PLR0917 - the publishers' shared tail
+    root: Path,
+    head: str,
+    allowed: set[str] | None,
+    message: tuple[str, ...],
+    push_url: str,
+    branch: str,
+) -> list[str]:
+    """Stage the tree, refuse what must not be published, commit and push.
+
+    Shared by the Autonomous and Chat publishers (#66 ENG-005). `allowed`,
+    when given, names the only paths that may differ from `head`. Returns
+    the staged paths; a refusal raises a `postcondition` or `forge` error.
+    """
+    git(root, "add", "--all")
+    _refuse_staged_embedded(root, head)
+    staged = git(
+        root, "diff", "--cached", "--name-only", "--no-renames", head
+    ).stdout.split()
+    problems = [
+        p
+        for p in staged
+        if _protected_path(p) or (allowed is not None and p not in allowed)
+    ] + [
+        p
+        for p in staged
+        if (root / p).is_file() and (root / p).stat().st_size > MAX_PUBLISHED_FILE
+    ]
+    if problems:
+        git(root, "reset", "-q", check=False)
+        kinds = "protected" if allowed is None else "unexpected, protected"
+        text = f"refusing to publish {kinds} or oversized paths: " + ", ".join(
+            sorted(set(problems))[:10]
+        )
+        raise AutonomyError(text, "postcondition")
+    if git(root, "diff", "--cached", "--quiet", check=False).returncode != 0:
+        paragraphs = [arg for line in message for arg in ("-m", line)]
+        git(root, "commit", "--no-verify", "-q", *paragraphs)
+    pushed = _push(root, push_url, branch)
+    if pushed.returncode != 0:
+        text = f"git push failed: {pushed.stderr.strip()[:500]}"
+        raise AutonomyError(text, "forge")
+    return staged
 
 
 def _refuse_staged_embedded(root: Path, head: str) -> None:
@@ -3889,41 +3922,19 @@ def _publish_chat(root: Path, run: dict) -> dict:
         ]
         if findings:
             return refuse("postcondition", "; ".join(findings))
-        head = run["start_head"]
-        git(root, "add", "--all")
-        _refuse_staged_embedded(root, head)
-        staged = git(
-            root, "diff", "--cached", "--name-only", "--no-renames", head
-        ).stdout.split()
-        problems = [p for p in staged if _protected_path(p)] + [
-            p
-            for p in staged
-            if (root / p).is_file() and (root / p).stat().st_size > MAX_PUBLISHED_FILE
-        ]
-        if problems:
-            git(root, "reset", "-q", check=False)
-            return refuse(
-                "postcondition",
-                "refusing to publish protected or oversized paths: "
-                + ", ".join(sorted(set(problems))[:10]),
-            )
         title = f"feat: {run.get('issue_title') or Path(run['feature']).name}"[:100]
-        if git(root, "diff", "--cached", "--quiet", check=False).returncode != 0:
-            git(
-                root,
-                "commit",
-                "--no-verify",
-                "-q",
-                "-m",
+        _commit_and_push(
+            root,
+            run["start_head"],
+            None,
+            (
                 title,
-                "-m",
                 f"Refs #{run['issue']}",
-                "-m",
                 f"Chat-Run: {run['run_id']} (mode {effective_mode(run)})",
-            )
-        pushed = _push(root, push_url, branch)
-        if pushed.returncode != 0:
-            return refuse("forge", f"git push failed: {pushed.stderr.strip()[:500]}")
+            ),
+            push_url,
+            branch,
+        )
         section = chat.publish_section(root, run)
         if adopted is not None:
             url = _adopt_pr(

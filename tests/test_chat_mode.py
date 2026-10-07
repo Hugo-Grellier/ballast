@@ -1046,6 +1046,18 @@ class StartTests(ChatCase):
         )
         self.assertEqual(self.run_ids(), [])
 
+    def test_confinement_lost_after_start_refuses_the_step(self) -> None:
+        """#20 TST-012: the step checks confinement again, before any agent."""
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        (self.bin / "bwrap").write_text("#!/bin/sh\nexit 1\n")
+        result = self.step(run_id, "specify", [["print", "ran"]])
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn("cannot run confined: confinement unavailable", result.text)
+        self.assertFalse(self.agent_ran())
+        self.assertEqual(self.record(run_id).steps, [])
+        self.assertFalse((launcher.state_dir(self.root) / "in-progress").exists())
+
     def test_codex_without_a_nested_sandbox_names_claude(self) -> None:
         os.environ["FAKE_CODEX_NESTS"] = "1"
         result = self.refused(
@@ -1242,6 +1254,18 @@ class StepEntryTests(ChatCase):
             ["--ro-bind", claude, claude], [bwrap[i : i + 3] for i in range(len(bwrap))]
         )
         self.assertNotIn(str(self.root / ".codex"), bwrap)
+        # #66 SEC-008: earlier logs and the archive are hidden; the step's own
+        # settings file is bound back, read-only, on top.
+        pairs = [bwrap[i : i + 2] for i in range(len(bwrap))]
+        archive = autonomy.git_path(self.root, "--git-common-dir") / "speckit-runs"
+        for hidden in (str(self.root / ".specify/workflow-state"), str(archive)):
+            self.assertIn(["--tmpfs", hidden], pairs)
+            self.assertIn(["--remount-ro", hidden], pairs)
+        own = str(self.root / settings)
+        self.assertGreater(
+            pairs.index(["--ro-bind", own]),
+            pairs.index(["--tmpfs", str(self.root / ".specify/workflow-state")]),
+        )
         for flag in ("--unshare-pid", "--unshare-ipc", "--die-with-parent"):
             self.assertIn(flag, bwrap)
         systemd = [
@@ -1430,6 +1454,43 @@ class StepEntryTests(ChatCase):
             self.assertNotEqual(outcomes[target], "ok", target)
         self.assertEqual((skill / "SKILL.md").read_text(), "review\n")
 
+    @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
+    def test_real_bwrap_hides_earlier_step_logs(self) -> None:
+        """#66 SEC-008: what the operator typed earlier stays out of later steps."""
+        self.real_bwrap()
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        first = self.step(
+            run_id,
+            "specify",
+            [["write", f"{FEATURE}/spec.md", SPEC], ["print", "pasted-secret"]],
+        )
+        self.assertEqual(first.code, 0, first.text)
+        earlier = self.record(run_id).steps[0]["step"]
+        state = self.root / ".specify/workflow-state"
+        log = state / run_id / "agents" / earlier / "stdout.log"
+        self.assertIn(b"pasted-secret", log.read_bytes())
+        archive = autonomy.git_path(self.root, "--git-common-dir") / "speckit-runs"
+        self.assertTrue(any(archive.iterdir()))
+        second = self.step(
+            run_id,
+            "clarify",
+            [
+                ["run", ["cat", str(log)]],
+                ["run", ["ls", "-A", str(archive)]],
+                ["run", ["sh", "-c", f"cat {state}/*/agents/*/claude-settings.json"]],
+            ],
+        )
+        self.assertEqual(second.code, 0, second.text)
+        cat, listing, settings = [
+            r for r in self.fake_report()["results"] if r[0] == "run"
+        ]
+        self.assertNotEqual(cat[2], 0, cat)
+        self.assertNotIn("pasted-secret", cat[3])
+        self.assertEqual((listing[2], listing[3]), (0, ""))
+        self.assertEqual(settings[2], 0, settings)
+        self.assertIn("permissions", settings[3])
+
 
 class TerminalTests(ChatCase):
     """T026 [AC-003, FR-005, D-3, R3a]: the wrapper-owned pty."""
@@ -1527,6 +1588,68 @@ class TerminalTests(ChatCase):
         self.assertIn("\x1b[?1000l", reset)
         self.assertGreater(result.text.find(reset), result.text.find("mouse on"))
         self.assertEqual(result.before, result.after)
+
+    def test_clipboard_writes_are_not_relayed(self) -> None:
+        """#66 SEC-006: an OSC 52 write never reaches the operator's terminal."""
+        run_id = self.started()
+        result = self.step(
+            run_id,
+            "specify",
+            [
+                ["write", f"{FEATURE}/spec.md", SPEC],
+                ["print", "\x1b]52;c;ZWNobyBwd25lZA==\x07shown"],
+            ],
+        )
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("shown", result.text)
+        self.assertNotIn("]52;", result.text)
+        step = self.record(run_id).steps[0]["step"]
+        log = self.root / f".specify/workflow-state/{run_id}/agents/{step}/stdout.log"
+        self.assertIn(b"\x1b]52;c;ZWNobyBwd25lZA==\x07shown", log.read_bytes())
+
+
+class TerminalFilterTests(unittest.TestCase):
+    """#66 SEC-006: what the wrapper relays and leaves on the operator's terminal."""
+
+    def test_clipboard_sequences_are_dropped_across_reads(self) -> None:
+        data = b"a\x1b]52;c;ZWNobw==\x07b\x1b]52;c;eA==\x1b\\c\x1b"
+        for size in (1, 3, len(data)):
+            with self.subTest(size=size):
+                clipboard = agent._Clipboard()  # noqa: SLF001
+                shown = b"".join(
+                    clipboard.feed(data[i : i + size])
+                    for i in range(0, len(data), size)
+                )
+                # A trailing ESC is held: it may start the next sequence.
+                self.assertEqual(shown, b"abc")
+        # Review of #66: however long the pause after ESC, nothing leaks.
+        clipboard = agent._Clipboard()  # noqa: SLF001
+        self.assertEqual(clipboard.feed(b"\x1b"), b"")
+        self.assertEqual(clipboard.feed(b"]52;c;eA==\x07ok\x1b[0m"), b"ok\x1b[0m")
+        # The 8-bit introducer (C1 OSC) too, split across reads.
+        self.assertEqual(clipboard.feed(b"x\x9d5"), b"x")
+        self.assertEqual(clipboard.feed(b"2;c;eA==\x9cy"), b"y")
+
+    def test_late_answers_are_flushed_after_the_drain(self) -> None:
+        import threading  # noqa: PLC0415
+        import tty  # noqa: PLC0415
+
+        for drain in (False, True):
+            with self.subTest(drain=drain):
+                master, slave = os.openpty()
+                try:
+                    saved = termios.tcgetattr(slave)
+                    tty.setraw(slave)
+                    # A terminal's answer to a query, arriving just after the end.
+                    late = threading.Timer(0.02, os.write, (master, b"\x1b[0n\n"))
+                    late.start()
+                    agent._restore_terminal(slave, slave, saved, drain=drain)  # noqa: SLF001
+                    late.join()
+                    readable = select.select([slave], [], [], 0.3)[0]
+                    self.assertEqual(readable, [] if drain else [slave])
+                finally:
+                    os.close(master)
+                    os.close(slave)
 
 
 class StepCloseTests(ChatCase):
@@ -1894,6 +2017,55 @@ class StepCloseTests(ChatCase):
         (self.root / "tools/x.py").unlink()
         done = self.step(run_id, "clarify", [["write", f"{FEATURE}/spec.md", SPEC]])
         self.assertEqual(done.code, 0, done.text)
+
+    def test_violations_past_the_path_cap_stay_open(self) -> None:
+        """#66 SEC-002: paths past the stored cap block like the listed ones."""
+        run_id = self.started()
+        many = self.root / "tools/many"
+        write = (
+            "import os, sys; os.makedirs(sys.argv[1]); "
+            "[open(f'{sys.argv[1]}/{i:04}.py', 'w').write('x') "
+            "for i in range(int(sys.argv[2]))]"
+        )
+        result = self.step(
+            run_id,
+            "specify",
+            [
+                ["write", f"{FEATURE}/spec.md", SPEC],
+                ["run", [sys.executable, "-c", write, str(many), "501"]],
+            ],
+        )
+        self.assertEqual(result.code, 1, result.text)
+        (event,) = [
+            e for e in self.events_of(run_id, "check") if e["check"] == "write-scope"
+        ]
+        self.assertEqual((len(event["paths"]), event["more"]), (chat.PATH_LIMIT, 1))
+        for path in event["paths"]:
+            (self.root / path).unlink()
+        passed, detail = chat._violations_check(self.chat_run(run_id))  # noqa: SLF001
+        self.assertFalse(passed)
+        self.assertIn("tools/many/0500.py", detail)
+        (many / "0500.py").unlink()
+        self.assertTrue(chat._violations_check(self.chat_run(run_id))[0])  # noqa: SLF001
+
+    def test_launch_failure_is_a_failed_step(self) -> None:
+        """#66 ENG-013: an agent that never started was not interrupted."""
+        run_id = self.started()
+        _write(
+            self.bin / "systemctl",
+            FAKE_SYSTEMCTL.replace(
+                'if args[:1] == ["is-active"]:',
+                'if args[:1] == ["show"]:\n    sys.exit(1)\n'
+                'if args[:1] == ["is-active"]:',
+            ),
+        )
+        result = self.step(run_id, "specify", [["print", "ran"]])
+        self.assertEqual(result.code, chat.EXIT_BLOCKED, result.text)
+        self.assertIn("The agent did not start", result.text)
+        self.assertFalse(self.agent_ran())
+        close = self.record(run_id).steps[-1]
+        self.assertEqual((close["entry"], close["outcome"]), ("close", "failed"))
+        self.assertFalse((launcher.state_dir(self.root) / "in-progress").exists())
 
 
 AT = "2026-10-06T10:00:00+00:00"
@@ -2847,6 +3019,8 @@ class ReturnPreflightTests(ChatCase):
                 self.assertEqual((result.code, headless.code), (2, 2))
                 self.assertIn(headless.err.strip(), result.text)
                 self.assertFalse(self.agent_ran())
+                if name != "in-progress":  # #20 TST-006
+                    self.assertFalse((state / "in-progress").exists())
                 restore()
         self.assertEqual(self.record(run_id).steps, [])
 
@@ -2877,6 +3051,10 @@ class ReturnPreflightTests(ChatCase):
         )
         self.assertLess(synced, started)
         self.assertTrue((self.root / "base.txt").exists())
+        # #66 ENG-010: what the merge brought in is attributed to it.
+        (change,) = self.events_of(run_id, "out-of-step-change")
+        self.assertEqual(change["actor"], "sync")
+        self.assertIn("base.txt", change["paths"])
 
     def test_dirty_tree_blocks_with_the_chat_recovery(self) -> None:
         run_id = self.start()
@@ -2894,6 +3072,8 @@ class ReturnPreflightTests(ChatCase):
         )
         self.assertFalse(self.agent_ran())
         self.assertEqual(self.record(run_id).steps, [])
+        marker = launcher.state_dir(self.root) / "in-progress"
+        self.assertFalse(marker.exists())  # #20 TST-006
 
 
 class HandoffTests(ChatCase):
@@ -3098,6 +3278,9 @@ class ConcurrencyTests(ChatCase):
                 ("resume", "other1"),
                 ("continue", "other1", "--reason", "block-resolved", "--ref", "x"),
                 ("mode", run_id, "human-gated", "--reason", "x"),
+                ("reject", run_id, "intent", "--reason", "x"),  # #20 TST-009
+                ("resolve", run_id, "DEC-0001"),
+                ("publish", run_id),
             ):
                 with self.subTest(args=args):
                     result = self.ballast("run", *args)
@@ -3185,7 +3368,9 @@ class LedgerEvidenceTests(ChatCase):
         self.assertEqual(result.code, 0, result.text)
         self.assertIn('"compliance": "compliant"', result.out)
         # The same kinds of evidence and identity as a human-gated run,
-        # including #19's acceptance packet recorded with the draft PR.
+        # including #19's acceptance packet recorded with the draft PR. The
+        # set is literal (#20 TST-007): these are the kinds `ledger report`
+        # reads for a ballast-feature run; a fixture would only restate them.
         headless = {
             "run",
             "step",
@@ -3262,6 +3447,12 @@ class ReviewStepTests(ChatCase):
     def test_review_report_rules(self) -> None:
         run_id = self.implemented()
         report = f"{FEATURE}/reviews/test-review.md"
+        failing = {
+            "outside reviews": r"Failed check: write-scope \(E-",
+            "missing": r"Failed check: review-report \(E-\d+\): \S+ is missing",
+            "bad verdict": r"Failed check: review-report \(E-\d+\): .*latest verdict",
+            "unchanged": r"Failed check: review-report \(E-\d+\): .*did not change",
+        }
         for name, actions in (
             (
                 "outside reviews",
@@ -3275,9 +3466,13 @@ class ReviewStepTests(ChatCase):
             ("unchanged", []),
         ):
             with self.subTest(case=name):
+                if name == "missing":  # #20 TST-008: each rule on its own
+                    (self.root / report).unlink()
                 result = self.step(run_id, "review", actions, extra=("--kind", "test"))
                 self.assertEqual(result.code, 1, result.text)
                 self.assertEqual(self.record(run_id).steps[-1]["outcome"], "failed")
+                self.assertRegex(result.text, failing[name])
+                (self.root / "src/other.py").unlink(missing_ok=True)
         self.assertEqual(self.events_of(run_id, "review"), [])
 
     def test_single_provider_review_is_not_cross_provider(self) -> None:
@@ -3288,7 +3483,19 @@ class ReviewStepTests(ChatCase):
             for entry in os.environ["PATH"].split(os.pathsep)
             if not shutil.which("codex", path=entry)
         )
-        run_id = self.start()
+        started = self.ballast(
+            "run",
+            "start",
+            "--mode",
+            "chat",
+            "-i",
+            f"feature_directory={FEATURE}",
+            "-i",
+            "integration=claude",
+        )
+        self.assertEqual(started.code, 0, started.text)
+        self.assertIn("(same provider: reduced independence)", started.out)  # TST-008
+        run_id = self.run_ids()[-1]
         record = self.record(run_id).run
         self.assertEqual(record["review_integration"], "claude")
         self.assertFalse(record["cross_provider"])
@@ -3306,6 +3513,25 @@ class ReviewStepTests(ChatCase):
         (review,) = self.events_of(run_id, "review")
         self.assertFalse(review["cross_provider"])
         self.assertEqual(review["verdict"], "changes-requested")
+
+    def test_ledger_agrees_when_an_author_step_used_the_reviewer(self) -> None:
+        """#66 ENG-008: one cross-provider answer for the record and the ledger."""
+        run_id = self.implemented()
+        analyze = self.step(run_id, "analyze", [], extra=("-i", "integration=codex"))
+        self.assertEqual(analyze.code, 0, analyze.text)
+        report = f"{FEATURE}/reviews/implementation-review.md"
+        result = self.step(
+            run_id,
+            "review",
+            [["write", report, "# Review\n\n- Verdict: approved\n"]],
+            extra=("--kind", "implementation"),
+        )
+        self.assertEqual(result.code, 0, result.text)
+        (review,) = self.events_of(run_id, "review")
+        self.assertEqual(review["reviewer"]["provider"], "codex")
+        self.assertFalse(review["cross_provider"])
+        reviews = ledger.report(self.root, run_id)["outcome"]["reviews"]
+        self.assertEqual([r["cross_provider"] for r in reviews], [False])
 
 
 class ProjectChecksTests(ChatCase):
@@ -3332,6 +3558,32 @@ class ProjectChecksTests(ChatCase):
             (verification["status"], verification["check_id"]),
             ("passed", "project-check-1"),
         )
+
+    def test_checks_that_changed_protected_inputs_never_count(self) -> None:
+        """#66 ENG-012: restoring the files does not make the result count."""
+        run_id = self.start()
+        fake = {
+            "results": [
+                {
+                    "command": "true",
+                    "exit": 0,
+                    "seconds": 0.1,
+                    "timed_out": False,
+                    "provenance": "runner",
+                }
+            ],
+            "unavailable": False,
+            "tree": self.chat_run(run_id).tree(),
+            "protected_changes": ["ballast.toml"],
+        }
+        with patch.object(artifacts, "project_checks", return_value=fake):
+            result = self.call(chat.checks, self.root, run_id)
+        self.assertEqual(result.code, chat.EXIT_TAMPERED, result.text)
+        (event,) = self.events_of(run_id, "project-checks")
+        self.assertEqual(event["protected_changes"], ["ballast.toml"])
+        passed, detail = chat._checks_result(self.chat_run(run_id))  # noqa: SLF001
+        self.assertFalse(passed)
+        self.assertIn("changed protected inputs", detail)
 
     def test_no_checks_table_is_recorded_unavailable(self) -> None:
         run_id = self.start()
@@ -3717,6 +3969,12 @@ class ModeSwitchTests(ChatCase):
         start, close = self.record(run_id).steps
         self.assertEqual((start["driver"], close["outcome"]), ("headless", "completed"))
         self.assertEqual(self.fake_report()["argv"][0], "-p")
+        # #66 ENG-007: the recorded log directory holds the wrapper's logs.
+        log = self.root / close["log"]
+        self.assertEqual(log.name, start["step"])
+        self.assertTrue((log / "stdout.log").is_file())
+        self.assertTrue((log / "meta.json").is_file())
+        self.assertEqual([p.name for p in log.parent.iterdir()], [start["step"]])
         steps = [
             e["data"]["action"]
             for e in self.ledger(run_id)
@@ -3724,7 +3982,26 @@ class ModeSwitchTests(ChatCase):
         ]
         self.assertEqual(steps, ["started", "completed"])
 
-    def test_a_paused_engine_run_continues_as_a_linked_chat_run(self) -> None:
+    def test_a_linked_run_synchronizes_before_its_first_agent(self) -> None:
+        """#20 TST-005: the link runs nothing; its first step syncs, then blocks."""
+        self.paused_engine()
+        self.advance_base({"base.txt": "b\n"})
+        self.edit("README.md", "dirty\n")
+        result = self.ballast(
+            "run", "mode", "eng00001", "chat", "--reason", "talk it through"
+        )
+        self.assertEqual(result.code, 0, result.text)
+        (run_id,) = self.run_ids()
+        self.assertFalse(self.agent_ran())
+        self.approve_in_process(run_id, "scope")
+        step = self.step(run_id, "specify", [["print", "ran"]])
+        self.assertEqual(step.code, 1, step.text)
+        self.assertIn("BLOCKED_UPSTREAM_SYNC (dirty)", step.text)
+        self.assertEqual(self.events_of(run_id, "sync")[-1]["outcome"], "blocked")
+        self.assertEqual(self.record(run_id).steps, [])
+        self.assertFalse(self.agent_ran())
+
+    def paused_engine(self) -> None:
         engine = self.root / ".specify/workflows/runs/eng00001"
         engine.mkdir(parents=True)
         (engine / "state.json").write_text(
@@ -3737,6 +4014,10 @@ class ModeSwitchTests(ChatCase):
             branch_sync._pin_path(self.root, "eng00001"),  # noqa: SLF001
             {"branch": "27-demo-run", "feature": FEATURE},
         )
+
+    def test_a_paused_engine_run_continues_as_a_linked_chat_run(self) -> None:
+        engine = self.root / ".specify/workflows/runs/eng00001"
+        self.paused_engine()
         self.feature_file("spec.md", SPEC)
         feature = artifacts.Feature(self.root, FEATURE, "eng00001")
         feature.run_id = "eng00001"
@@ -3927,6 +4208,35 @@ class ContinueTests(ChatCase):
         (decision,) = autonomy.read_human_decisions(self.root, source)
         self.assertEqual(decision["kind"], "merge-feedback")
         self.assertEqual(len(self.run_ids()), 1)
+        record = autonomy.read_run(self.root, source)  # #20 TST-011
+        self.assertEqual(record["status"], "continued")
+        lower = record["mode_history"][-1]
+        self.assertEqual(
+            (lower["action"], lower["mode"], lower["decision_id"]),
+            ("lower", "chat", decision["id"]),
+        )
+        self.assertIn(
+            "PD-0001 (intent, agent-provisional, not yet superseded)", result.out
+        )
+
+    def test_an_active_source_is_refused_in_chat_too(self) -> None:
+        """#20 TST-011: --mode chat keeps the source refusals."""
+        self.make_run("auto0002")
+        result = self.ballast(
+            "run",
+            "continue",
+            "auto0002",
+            "--reason",
+            "changes-requested",
+            "--ref",
+            "x",
+            "--mode",
+            "chat",
+        )
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn("run auto0002 is active", result.err)
+        self.assertEqual(self.run_ids(), [])
+        self.assertEqual(autonomy.read_human_decisions(self.root, "auto0002"), [])
 
     def test_autonomous_is_never_raised(self) -> None:
         source = self.stopped_autonomous()
@@ -3966,6 +4276,9 @@ class ContinueTests(ChatCase):
         (run_id,) = self.run_ids()
         self.assertEqual(branch_sync.read_pin(self.root, run_id), {})
         self.assertIn("run", {e["kind"] for e in self.ledger(run_id)})
+        self.assertEqual(self.events_of(run_id, "sync")[-1]["outcome"], "blocked")
+        self.assertEqual(self.record(run_id).steps, [])  # #20 TST-005
+        self.assertFalse(self.agent_ran())
         self.git("checkout", "--", "README.md")
         self.commit_all("lowered record")  # the recovery the block names
         step = self.step(run_id, "clarify", [["write", f"{FEATURE}/spec.md", SPEC]])

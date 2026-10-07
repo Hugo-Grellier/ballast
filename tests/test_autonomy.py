@@ -1666,6 +1666,37 @@ class ConfinementTests(AutonomyCase):
         sources = [argv[i + 1] for i, a in enumerate(argv) if a == "--ro-bind"]
         self.assertNotIn(str(skills / "own-skill"), sources)
 
+    def test_hidden_directories_are_hidden_where_they_lead(self) -> None:
+        """#66 SEC-008: a linked log directory is hidden at its target."""
+        target = self.base / "elsewhere/workflow-state"
+        target.mkdir(parents=True)
+        (self.root / ".specify").mkdir(exist_ok=True)
+        link = self.root / ".specify/workflow-state"
+        link.symlink_to(target)
+        keep = self.root / "keep.json"
+        keep.write_text("{}")
+        private = self.base / "private"
+        private.mkdir(exist_ok=True)
+        argv = autonomy.confined_argv(
+            self.root,
+            ["true"],
+            private=private,
+            feature=FEATURE,
+            home=self.base / "home",
+            env={},
+            hidden_extra=(link, self.base / "absent"),
+            keep_visible=(keep,),
+            integration="claude",
+        )
+        pairs = [tuple(argv[i : i + 2]) for i in range(len(argv) - 1)]
+        self.assertIn(("--tmpfs", str(target.resolve())), pairs)
+        self.assertIn(("--remount-ro", str(target.resolve())), pairs)
+        self.assertNotIn(str(self.base / "absent"), argv)
+        self.assertGreater(
+            pairs.index(("--ro-bind", str(keep))),
+            pairs.index(("--tmpfs", str(target.resolve()))),
+        )
+
 
 def chat_record(case: AutonomyCase, run_id: str = "chat42", **changes: object) -> dict:
     """Return a valid ballast-chat record for FEATURE."""
