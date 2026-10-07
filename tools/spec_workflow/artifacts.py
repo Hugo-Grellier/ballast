@@ -3396,11 +3396,14 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
         return {"status": "no-python", "results": results}, None, []
     try:
         snapshot = ledger.artifact_digests(root, relative)
+        published = _published_tests(root, tests)
     except (OSError, ValueError):
         return {"status": "snapshot-unavailable", "results": results}, None, []
     ran: dict[str, dict] = {}
     exhausted = False
     for test in tests:
+        if test not in published:
+            continue
         try:
             ran[test] = run_commands(
                 root,
@@ -3418,7 +3421,8 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
         for test in criteria[ac]:
             done = ran.get(test)
             if done is None:
-                results.append({"ac": ac, "test": test, "status": "not run"})
+                status = "not run" if test in published else "not published"
+                results.append({"ac": ac, "test": test, "status": status})
                 continue
             status = "passed" if done["exit"] == 0 else "failed"
             results.append(
@@ -3432,6 +3436,38 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
             recorded.append((ac, test, status, abs(done["exit"])))
     summary = {"status": "recorded", "results": results, "exhausted": exhausted}
     return summary, snapshot, recorded
+
+
+def _published_tests(root: Path, tests: list[str]) -> set[str]:
+    """Return the tests whose module file the run publishes (#117 review).
+
+    `git add --all` publishes tracked and unignored files; a test in an
+    ignored or missing file would pass here and be absent from the PR head.
+    """
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    modules: dict[str, str] = {}
+    for test in tests:
+        parts = test.split(".")
+        for size in range(len(parts) - 1, 0, -1):
+            path = "/".join(parts[:size]) + ".py"
+            if (root / path).is_file() and not (root / path).is_symlink():
+                modules[test] = path
+                break
+    if not modules:
+        return set()
+    listed = ledger._git(  # noqa: SLF001 - the ledger's hardened Git
+        root,
+        "--literal-pathspecs",
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        *sorted(set(modules.values())),
+    ).split("\0")
+    return {test for test, path in modules.items() if path in listed}
 
 
 def _record_acceptance(

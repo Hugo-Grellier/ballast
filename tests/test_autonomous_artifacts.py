@@ -1264,6 +1264,26 @@ class AcceptanceChecksTests(AcceptanceCase):
         self.git("commit", "-q", "-m", "publish")
         self.assertEqual(ledger.commit_tree(self.root, "HEAD"), tree["tree"])
 
+    def test_tests_the_pr_would_not_carry_are_not_run(self) -> None:
+        """An ignored or missing test file is absent at PR head: no evidence."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("tests/test_local.py\n")
+        (self.root / "tests/test_local.py").write_text(ACCEPT_TESTS)
+        local = "tests.test_local.Accept.test_pass"
+        missing = "tests.test_gone.Accept.test_pass"
+        self.manifest({"AC-001": [local], "AC-002": [missing, PASSING], "AC-003": []})
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(), [("runner-recorded", "AC-002", PASSING, "passed")]
+        )
+        record = self.record_text()
+        self.assertIn(
+            f"- `AC-001` `{local}`: not run (its file is not in the published tree)",
+            record,
+        )
+        self.assertIn(f"- `AC-002` `{missing}`: not run (its file is not", record)
+
     def test_agent_written_manifest_cannot_inject_commands_or_results(self) -> None:
         marker = self.base / "injected"
         for criteria, changes in (

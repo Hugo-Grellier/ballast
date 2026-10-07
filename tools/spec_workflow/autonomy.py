@@ -3531,7 +3531,12 @@ def _acceptance_lines(acceptance: dict | None) -> list[str]:
         result = (
             "no test mapped (missing)"
             if test is None
-            else f"{_code(str(test))}: {item.get('status')}"
+            else f"{_code(str(test))}: "
+            + (
+                "not run (its file is not in the published tree)"
+                if item.get("status") == "not published"
+                else str(item.get("status"))
+            )
             + (" (timed out)" if item.get("timed_out") else "")
         )
         lines.append(f"- {_code(str(item.get('ac')))} {result}")
