@@ -3354,7 +3354,7 @@ def _feedback_due(run: dict) -> bool:
     return state == "review-pending" or (state == "idle" and not run.get("frozen_tree"))
 
 
-def _acceptance_checks(  # noqa: C901, PLR0911 - every refusal is reported
+def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is reported
     feature: Feature, run: dict, timeout_minutes: int
 ) -> tuple[dict, dict | None, list[tuple[str, str, str, int]]]:
     """Run each test the agent-proposed manifest maps (#117, ADR-0018).
@@ -3369,8 +3369,12 @@ def _acceptance_checks(  # noqa: C901, PLR0911 - every refusal is reported
     import ledger  # noqa: PLC0415 - ledger imports this module
 
     root, relative = feature.root, feature.relative
-    if not os.path.lexists(root / relative / "acceptance-evidence.json"):
+    path = root / relative / "acceptance-evidence.json"
+    if not os.path.lexists(path):
         return {"status": "no-manifest"}, None, []
+    # Bounded before it is read: the manifest is agent-written.
+    if path.is_file() and path.stat().st_size > autonomy.MAX_PUBLISHED_FILE:
+        return {"status": "too-many"}, None, []
     try:
         manifest = ledger.archive_manifest(root, run["run_id"], relative)
     except ledger.StaleManifestError:

@@ -662,6 +662,17 @@ class CriteriaTests(PacketCase):
         self.assertEqual(found["AC-003"][2], "missing")
         self.assertEqual(found["AC-006"][2], "not run")
         self.assertIn("labeled runner-recorded", text)
+        # Shortened packets keep the label where they drop test references.
+        sources = self.collect()
+        spec = f"{self.blob(f'{FEATURE}/spec.md')}?plain=1#L5"
+        self.assertIn(
+            f"Verified at head: [AC-001]({spec}) (runner-recorded)",
+            packet.render(sources, level=2),
+        )
+        self.assertIn(
+            "1 of 2 tests failed at head (runner-recorded)",
+            rows(packet.render(sources, level=4))["AC-002"][3],
+        )
 
     def test_test_name_without_a_safe_path_is_named_unlinked(self) -> None:
         # Both validators accept an empty dotted segment; it is no file path.

@@ -1347,7 +1347,7 @@ def _detail(sources: Sources, criterion: Criterion, level: int) -> str:
             + f" · CI at head: {ci}"
         )
     elif level >= 4 or not tests:  # noqa: PLR2004
-        detail = str(criterion.reason)
+        detail = str(criterion.reason) + _runner_note(criterion)
     else:
         lines = []
         for test in tests:
@@ -1366,6 +1366,13 @@ def _detail(sources: Sources, criterion: Criterion, level: int) -> str:
     return detail
 
 
+def _runner_note(criterion: Criterion) -> str:
+    """Keep the runner's label where a shortened packet drops test references."""
+    if any(t.source == "runner-recorded" for t in criterion.tests):
+        return " (runner-recorded)"
+    return ""
+
+
 def _criteria_lines(sources: Sources, level: int) -> list[str]:
     spec = f"{sources.feature}/spec.md"
     lines = ["### Criteria", ""]
@@ -1381,6 +1388,7 @@ def _criteria_lines(sources: Sources, level: int) -> list[str]:
         if verified:
             ids = ", ".join(
                 f"[{c.id}]({_line(sources.repo, sources.head, spec, c.line)})"
+                + _runner_note(c)
                 for c in verified
             )
             lines += [f"Verified at head: {ids}.", ""]

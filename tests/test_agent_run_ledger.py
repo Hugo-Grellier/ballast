@@ -1508,6 +1508,25 @@ class LedgerTests(unittest.TestCase):
             ):
                 ledger.new_event("run_1", FEATURE, kind, "runner-recorded", data)
 
+    def test_failed_runner_write_leaves_the_ledger_as_it_was(self) -> None:
+        """#117: the runner's checks are recorded all or none."""
+        self._complete_evidence_run(review=False, convergence=False)
+        path = ledger.ledger_path(self.root, "run_1")
+        before = path.read_bytes()
+        with (
+            patch.object(ledger.os, "fsync", side_effect=OSError("disk full")),
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            ledger.record_runner_checks(
+                self.root,
+                "run_1",
+                FEATURE,
+                ledger.artifact_digests(self.root, FEATURE),
+                [("AC-001", "tests.test_demo.DemoTests.test_one", "passed", 0)],
+            )
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(ledger.read(self.root, "run_1")[1], [])
+
     def test_removed_worktree_labels_prior_evidence_unavailable(self) -> None:
         self._complete_evidence_run()
         active = self.root / ".specify/workflows/runs/run_1"

@@ -3494,9 +3494,9 @@ ACCEPTANCE_STATUS = {
         "was checked"
     ),
     "too-many": (
-        f"acceptance-evidence.json maps more than {ACCEPTANCE_TESTS} criterion-test "
-        "pairs; no "
-        "criterion was checked"
+        "acceptance-evidence.json is over the limit (more than "
+        f"{ACCEPTANCE_TESTS} criterion-test pairs, or over 1 MiB); no criterion "
+        "was checked"
     ),
     "no-python": "no .venv/bin/python to run the tests; no criterion was checked",
     "snapshot-unavailable": (

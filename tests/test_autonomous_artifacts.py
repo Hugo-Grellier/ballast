@@ -26,6 +26,7 @@ from test_autonomy import (
     TOOLS,
     AutonomyCase,
     _bwrap_works,
+    artifacts,
     autonomy,
     isolate_operator_state,
     ledger,
@@ -1317,13 +1318,23 @@ class AcceptanceChecksTests(AcceptanceCase):
                 self.manifest(criteria)
                 self.ok(self.check("run-checks"))
                 self.assertEqual(self.acceptance(), {"status": "too-many"})
-                self.assertIn("more than 100 criterion-test pairs", self.record_text())
+                self.assertIn("over the limit (more than 100", self.record_text())
         self.assertEqual(self.checks(), [])
         # A test two criteria map records one result per pair.
         self.manifest({"AC-001": [PASSING] * 1, "AC-002": [PASSING] * 1, "AC-003": []})
         self.ok(self.check("run-checks"))
         self.assertEqual(self.acceptance()["status"], "recorded")
         self.assertEqual(len(self.checks()), 2)
+
+    def test_oversized_manifest_is_refused_before_it_is_read(self) -> None:
+        path = self.feature / "acceptance-evidence.json"
+        path.write_text("[" + " " * autonomy.MAX_PUBLISHED_FILE + "]")
+        with patch.object(ledger, "archive_manifest") as archive:
+            feature = artifacts.resolve_feature(self.root, "run42", None)
+            run = autonomy.read_run(self.root, "run42")
+            summary, _, _ = artifacts._acceptance_checks(feature, run, 1)  # noqa: SLF001
+        self.assertEqual(summary, {"status": "too-many"})
+        archive.assert_not_called()
 
     def test_boolean_schema_version_is_malformed(self) -> None:
         self.manifest({"AC-001": [PASSING], "AC-002": [], "AC-003": []})
@@ -1334,6 +1345,37 @@ class AcceptanceChecksTests(AcceptanceCase):
         self.ok(self.check("run-checks"))
         self.assertEqual(self.acceptance(), {"status": "malformed"})
         self.assertEqual(self.checks(), [])
+
+    def test_timeout_and_exhausted_wall_time_are_explicit(self) -> None:
+        """A timed-out test is failed; tests past the wall time are not run."""
+        feature = artifacts.resolve_feature(self.root, "run42", None)
+        run = autonomy.read_run(self.root, "run42")
+        timed_out = {"command": "x", "exit": 124, "seconds": 60.0, "timed_out": True}
+        with patch.object(
+            artifacts,
+            "run_commands",
+            side_effect=[[timed_out], artifacts.ChecksExhaustedError()],
+        ) as ran:
+            summary, snapshot, recorded = artifacts._acceptance_checks(  # noqa: SLF001
+                feature, run, 1
+            )
+        self.assertEqual(ran.call_count, 2)
+        self.assertEqual(recorded, [("AC-002", FAILING, "failed", 124)])
+        self.assertTrue(summary["exhausted"])
+        self.assertEqual(
+            [(r["ac"], r.get("test"), r.get("status")) for r in summary["results"]],
+            [
+                ("AC-003", None, None),
+                ("AC-001", PASSING, "not run"),
+                ("AC-002", FAILING, "failed"),
+                ("AC-002", PASSING, "not run"),
+            ],
+        )
+        lines = "\n".join(autonomy._acceptance_lines(summary))  # noqa: SLF001
+        self.assertIn(f"- `AC-002` `{FAILING}`: failed (timed out)", lines)
+        self.assertIn(f"- `AC-001` `{PASSING}`: not run", lines)
+        self.assertIn("the wall-time limit ran out", lines)
+        self.assertEqual(snapshot, ledger.artifact_digests(self.root, FEATURE))
 
     def test_unwritable_ledger_records_nothing_and_says_so(self) -> None:
         """All or none: a refused ledger write leaves no partial evidence."""

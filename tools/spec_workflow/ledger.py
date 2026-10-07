@@ -962,10 +962,16 @@ def append_batch(root: Path, batch: list[dict[str, Any]]) -> None:
             json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
             for event in batch
         )
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        with path.open("ab") as handle:
+            size = handle.tell()
+            try:
+                handle.write(text.encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            except OSError:
+                # A failed write leaves no partial event behind.
+                handle.truncate(size)
+                raise
 
 
 def _sha(path: Path) -> str:
