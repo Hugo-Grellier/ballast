@@ -851,7 +851,20 @@ class AgentWrapperTests(unittest.TestCase):
             "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(target)
         )
         self.assertEqual(result.returncode, 4)
-        self.assertIn(".claude/settings.json->", result.stderr)
+        self.assertIn(".claude/settings.json", result.stderr)
+
+    def test_rewriting_a_linked_file_inside_codex_fails_the_step(self) -> None:
+        """Review of #66: a regular .codex holding a link to a writable file."""
+        target = self.root / "cfg/config.toml"
+        target.parent.mkdir()
+        target.write_text("model = 'x'\n")
+        (self.root / ".codex").mkdir()
+        (self.root / ".codex/config.toml").symlink_to("../cfg/config.toml")
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(target)
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".codex/config.toml", result.stderr)
 
     def test_retargeting_a_link_inside_linked_codex_fails_the_step(self) -> None:
         """Review of #66: a nested link is recorded by target, not only content."""
@@ -868,7 +881,7 @@ class AgentWrapperTests(unittest.TestCase):
             FAKE_RELINK=f"{config / 'config.toml'}={config / 'b.toml'}",
         )
         self.assertEqual(result.returncode, 4)
-        self.assertIn(".codex->config.toml", result.stderr)
+        self.assertIn(".codex/config.toml", result.stderr)
 
     def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
         """Review of #96: nothing ran, so the marker must not strand the run."""

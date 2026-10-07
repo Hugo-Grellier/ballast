@@ -283,21 +283,28 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
     # Hooks and allow rules there run, or widen permissions, in the next
     # agent step; no step may write them (#66 SEC-010).
     for name in AGENT_CONFIG:
-        path = root / name
-        if not path.is_symlink():
-            found.update(digests(root, [path], []))
-            continue
-        # A link is followed: its target is what the CLI loads.
-        found[name] = "link:" + str(path.readlink())
-        target = path.resolve()
-        files = sorted(target.rglob("*")) if target.is_dir() else [target]
-        for file in files:
-            if file.is_file():
-                key = f"{name}->{file.relative_to(target)}"
-                found[key] = hashlib.sha256(file.read_bytes()).hexdigest()
-                if file.is_symlink():
-                    found[key] += " link:" + str(file.readlink())
+        _followed(root / name, name, found, set())
     return found
+
+
+def _followed(path: Path, key: str, found: dict[str, str], seen: set[Path]) -> None:
+    """Record `path` as the agent CLI reads it: every link followed (#66).
+
+    A link keeps its text and also records what it resolves to, so neither a
+    retarget nor a change of a linked file or directory goes unnoticed.
+    """
+    link = f" link:{path.readlink()}" if path.is_symlink() else ""
+    if path.is_dir():
+        real = path.resolve()
+        found[key] = ("cycle" if real in seen else "dir") + link
+        if real not in seen:
+            seen.add(real)
+            for child in sorted(path.iterdir()):
+                _followed(child, f"{key}/{child.name}", found, seen)
+    elif path.is_file():
+        found[key] = hashlib.sha256(path.read_bytes()).hexdigest() + link
+    elif link:
+        found[key] = "dangling" + link
 
 
 def _installed_skills(root: Path) -> dict[str, str]:
