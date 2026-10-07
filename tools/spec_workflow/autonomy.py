@@ -2084,15 +2084,17 @@ def claude_homes(home: Path, env: dict[str, str]) -> list[Path]:
 
     A step can point `CLAUDE_CONFIG_DIR` at the default home itself, so its
     login needs the same treatment as the selected one.
+    Resolved (#97): bwrap cannot mount on a link, and only real paths show
+    whether two homes are nested.
     """
     selected = Path(env.get("CLAUDE_CONFIG_DIR") or home / ".claude")
-    return list(dict.fromkeys((selected, home / ".claude")))
+    return list(dict.fromkeys(p.resolve() for p in (selected, home / ".claude")))
 
 
 def codex_homes(home: Path, env: dict[str, str]) -> list[Path]:
-    """Every Codex home a step could read: the selected one first (#76)."""
+    """Every Codex home a step could read, resolved: the selected one first (#76)."""
     selected = Path(env.get("CODEX_HOME") or home / ".codex")
-    return list(dict.fromkeys((selected, home / ".codex")))
+    return list(dict.fromkeys(p.resolve() for p in (selected, home / ".codex")))
 
 
 AGENT_HOMES = {"claude": claude_homes, "codex": codex_homes}
@@ -2359,9 +2361,31 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
+def _hidden_credentials(home: Path, env: dict[str, str]) -> list[Path]:
+    """Every credential path the sandbox hides before its later binds."""
+    names = (".claude.json", *CREDENTIAL_FILES, *CREDENTIAL_DIRS)
+    paths = [home / name for name in names]
+    return paths + [Path(env[n]) for n in CREDENTIAL_LOCATIONS if env.get(n)]
+
+
 def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
-    """Refuse a home of one CLI inside the other's: one mount would reveal it."""
+    """Refuse a home of one CLI inside the other's: one mount would reveal it.
+
+    Likewise a home that is, or contains, a hidden path (#97): a step's
+    overlay of its own home comes after the hiding mounts.
+    """
     claude, codex = (homes(home, env) for homes in AGENT_HOMES.values())
+    hidden_paths = [*_hidden_credentials(home, env), *TMPFS_HIDDEN, Path("/var/run")]
+    if env.get("XDG_RUNTIME_DIR"):
+        hidden_paths.append(Path(env["XDG_RUNTIME_DIR"]))
+    for path in claude + codex:
+        for hidden in hidden_paths:
+            if hidden.resolve().is_relative_to(path):
+                message = (
+                    f"agent home {path} contains {hidden}, which a step must "
+                    "not read: give the CLI its own home directory"
+                )
+                raise AutonomyError(message, "ineligible")
     for path in claude:
         for other in codex:
             if path.is_relative_to(other) or other.is_relative_to(path):
@@ -2458,12 +2482,17 @@ def _global_git_config_binds(
 def _refuse_credentials_in_worktree(
     root: Path, home: Path, env: dict[str, str]
 ) -> None:
-    """Refuse a credential path inside the worktree: `--bind root root` exposes it."""
+    """Refuse a credential path inside the worktree: `--bind root root` exposes it.
+
+    Every path the sandbox hides before that bind (#97), and the runtime
+    directory. The global Git files need no refusal: they are emptied after it.
+    """
     inside = Path(root).resolve()
-    paths = [home, home / ".netrc"]
+    paths = [home, *_hidden_credentials(home, env)]
     for homes in AGENT_HOMES.values():
         paths += homes(home, env)
-    paths += [Path(env[name]) for name in CREDENTIAL_LOCATIONS if env.get(name)]
+    if env.get("XDG_RUNTIME_DIR"):
+        paths.append(Path(env["XDG_RUNTIME_DIR"]))
     for path in paths:
         if path.resolve().is_relative_to(inside):
             message = (
