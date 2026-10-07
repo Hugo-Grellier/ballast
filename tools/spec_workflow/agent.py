@@ -161,7 +161,8 @@ TERMINAL_RESET = (
 # How long late answers to the agent's terminal queries may take to arrive
 # before they are flushed, so the operator's shell never reads them (#66).
 DRAIN_SECONDS = 0.2
-OSC52 = b"\x1b]52;"
+# OSC 52 with the 7-bit (ESC ]) and the 8-bit (C1 OSC) introducer.
+OSC52 = (b"\x1b]52;", b"\x9d52;")
 OSC_END = re.compile(rb"\x07|\x1b\\|\x9c|\x18|\x1a")  # BEL, ST; CAN, SUB abort
 
 
@@ -763,15 +764,18 @@ class _Clipboard:
                     break
                 data, self.dropping = data[end.end() :], False
                 continue
-            start = data.find(OSC52)
-            if start < 0:
-                sizes = range(len(OSC52) - 1, 0, -1)
-                keep = next((n for n in sizes if data.endswith(OSC52[:n])), 0)
+            found = [(data.find(o), o) for o in OSC52 if o in data]
+            if not found:
+                keep = max(
+                    (n for o in OSC52 for n in range(1, len(o)) if o[:n] == data[-n:]),
+                    default=0,
+                )
                 shown += data[: len(data) - keep]
                 self.pending = data[len(data) - keep :]
                 break
+            start, opener = min(found)
             shown += data[:start]
-            data, self.dropping = data[start + len(OSC52) :], True
+            data, self.dropping = data[start + len(opener) :], True
         return bytes(shown)
 
 

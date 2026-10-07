@@ -1626,6 +1626,9 @@ class TerminalFilterTests(unittest.TestCase):
         clipboard = agent._Clipboard()  # noqa: SLF001
         self.assertEqual(clipboard.feed(b"\x1b"), b"")
         self.assertEqual(clipboard.feed(b"]52;c;eA==\x07ok\x1b[0m"), b"ok\x1b[0m")
+        # The 8-bit introducer (C1 OSC) too, split across reads.
+        self.assertEqual(clipboard.feed(b"x\x9d5"), b"x")
+        self.assertEqual(clipboard.feed(b"2;c;eA==\x9cy"), b"y")
 
     def test_late_answers_are_flushed_after_the_drain(self) -> None:
         import threading  # noqa: PLC0415
