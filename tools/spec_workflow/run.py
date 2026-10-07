@@ -1371,10 +1371,12 @@ def _checkpoint_command(options: list[str]) -> int:
     if outcome.state == "skipped" and outcome.reason == "no-draft-pr":
         record = autonomy.find_run(ROOT, run_id)
         if record is not None and record["status"] == "published":
-            # GitHub's PR list can lag a just-created PR (#111).
+            # GitHub's PR list can lag a just-created PR (#111); the same
+            # skip also covers a checkout off the run's pinned branch.
             return _refuse(
-                f"GitHub does not list run {run_id}'s Draft PR yet; retry "
-                f"ballast run checkpoint {run_id} once it does"
+                f"no open Draft PR found for published run {run_id}: check out "
+                "its pinned branch, or, if GitHub does not list the new PR yet, "
+                f"retry ballast run checkpoint {run_id}"
             )
         return _refuse(
             f"run {run_id} has no Draft PR yet; ballast run publish {run_id} opens "
