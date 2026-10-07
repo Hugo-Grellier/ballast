@@ -1466,6 +1466,33 @@ class PrepareTrustTests(TrustWorktreeCase):
             held = installation.hold(state)
         self.assertIsNone(held)  # it was installed meanwhile: nothing to prepare
 
+    def test_a_preparation_finished_before_the_lock_is_not_repeated(self) -> None:
+        # The holder ends between `settled` (busy) and `lock` (free).
+        worktree = self.worktree()
+        self.prepare(worktree)
+        state = self.state(worktree)
+        installation = ts.setup.Setup(worktree)
+        with patch.object(ts.setup.Setup, "settled", side_effect=[False, True]):
+            self.assertIsNone(installation.hold(state))
+        descriptor = launcher.checkout_lock(state, shared=False)
+        self.assertIsNotNone(descriptor)  # hold released the lock it took
+        os.close(descriptor)
+
+    def test_a_failed_recheck_releases_the_lock(self) -> None:
+        worktree = self.worktree()
+        self.prepare(worktree)
+        state = self.state(worktree)
+        installation = ts.setup.Setup(worktree)
+        with (
+            patch.object(ts.setup.Setup, "settled", return_value=False),
+            patch.object(ts.setup.Setup, "current", side_effect=OSError("boom")),
+            self.assertRaises(OSError),
+        ):
+            installation.hold(state)
+        descriptor = launcher.checkout_lock(state, shared=False)
+        self.assertIsNotNone(descriptor)
+        os.close(descriptor)
+
     def test_a_second_preparation_still_refuses_a_plain_holder(self) -> None:
         worktree = self.worktree()
         self.prepare(worktree)

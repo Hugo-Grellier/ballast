@@ -710,13 +710,24 @@ class Setup:
         start = time.monotonic()
         while not self.settled(state):
             try:
-                return self.lock(state)
+                fd = self.lock(state)
             except RefusedError:
                 wait = (
                     SETTLE_WAIT_SECONDS if self.settling(state) else LOCK_RETRY_SECONDS
                 )
                 if time.monotonic() > start + wait:
                     raise
+            else:
+                # The holder may have finished between `settled` and the lock.
+                try:
+                    unfinished = os.path.lexists(state / launcher.SETUP_ATTEMPT)
+                    if unfinished or not self.current(state):
+                        return fd
+                except BaseException:
+                    os.close(fd)
+                    raise
+                os.close(fd)
+                return None
             time.sleep(0.02)
         return None
 
