@@ -12,7 +12,7 @@ Prepared 2026-10-07 by the driving agent for #24, against `main` at `69f5602` (r
 | Roadmap gate item 6 (free fallback) has no live completion on the qualified host: with the operator's home the fallback is refused (`~/.agents/skills` not empty), and the selected `qwen3:4b-16k` did not write the step's artifact ([qualification.md D6](qualification.md#ac-002-recovery-drills)) | qualified by #23 as "completes or is refused with a recorded cause" | operator decides whether that is enough for 1.0 |
 | #22 SC-004: the packet's reproduce command failed on this host because of the pilot project's script ([qualification.md](qualification.md#ui-demo-on-pr-3-22-sc-001-and-sc-004)) | Ballast behaved as specified | operator notes it, or reruns with a portable scenario |
 | Required checks are not enforced on `main` (section 3) | not configured | operator (R2) |
-| This PR (#24 evidence) | open | operator review and merge |
+| [#115](https://github.com/Hugo-Grellier/ballast/pull/115) (#24 evidence) | open | operator review and merge |
 
 [#113](https://github.com/Hugo-Grellier/ballast/issues/113) (Chat step friction) is filed without a milestone. Its item 2, Chat has no `discover` step and cannot read the Issue, touches roadmap gate item 2. The operator may move it to v1.0.
 

@@ -26,4 +26,4 @@
 
 - [X] T012 Write the release checklist: v1.0 issues, specs, ADRs, required checks read with `gh api`, operator-only steps (depends on T011) (AC-004)
 - [X] T013 Get an independent review of the evidence and fix its findings (depends on T001 to T012)
-- [ ] T014 Open the PR, with `Refs #24` and blockers unless every AC passes (depends on T013)
+- [X] T014 Open the PR, with `Refs #24` and blockers unless every AC passes (depends on T013): #115
