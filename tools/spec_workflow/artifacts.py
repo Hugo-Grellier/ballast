@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -3246,6 +3247,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     remaining: object = None,
     keep_output: bool = False,
     read_only: bool = False,
+    stdin: str | None = None,
 ) -> list[dict]:
     """Run trusted check commands, each confined; the mode-neutral core.
 
@@ -3283,6 +3285,8 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                     env=env,
                     capture_output=True,
                     text=True,
+                    errors="replace",
+                    input=stdin,
                     timeout=timeout if left is None else min(timeout, left),
                     check=False,
                 )
@@ -3393,7 +3397,9 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
         ac: list(dict.fromkeys(tests)) for ac, tests in manifest["criteria"].items()
     }
     tests = sorted({test for mapped in criteria.values() for test in mapped})
-    if sum(map(len, criteria.values())) > autonomy.ACCEPTANCE_TESTS:
+    if sum(map(len, criteria.values())) > autonomy.ACCEPTANCE_TESTS or any(
+        len(test) > TEST_NAME_LIMIT for test in tests
+    ):
         return {"status": "too-many"}, None, []
     results: list[dict] = [{"ac": ac} for ac in sorted(criteria) if not criteria[ac]]
     if not tests:
@@ -3413,6 +3419,7 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
         if test not in published:
             continue
         try:
+            code = secrets.choice(range(*DONE_CODES))
             ran[test] = run_commands(
                 root,
                 relative,
@@ -3433,7 +3440,11 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
                 timeout_minutes,
                 remaining=lambda: autonomy.remaining_seconds(run),
                 read_only=True,
+                stdin=f"{code}\n",
             )[0]
+            ran[test]["exit"] = (
+                0 if ran[test]["exit"] == code else ran[test]["exit"] or 1
+            )
         except ChecksExhaustedError:
             exhausted = True
             break
@@ -3463,8 +3474,10 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
 # from a published file of the checkout (argv: test, checkout, allowed files),
 # then run it as `ledger check` does. Bytecode comes only from a fresh cache
 # (`-X pycache_prefix`), never from an agent-writable __pycache__ (#117).
+TEST_NAME_LIMIT = 300  # characters of a mapped test name the runner runs
 ACCEPTANCE_CHECK = (
     "import json,os,sys,unittest;"
+    "done=int(sys.stdin.readline());sys.stdin.close();"
     "name,root,allowed=sys.argv[1],sys.argv[2],set(json.loads(sys.argv[3]));"
     "suite=unittest.defaultTestLoader.loadTestsFromName(name);"
     "parts=name.split('.');"
@@ -3475,9 +3488,14 @@ ACCEPTANCE_CHECK = (
     "!=[os.path.join(root,*parts[:i+1])])];"
     "bad and sys.exit(3);"
     "result=unittest.TestResult();suite.run(result);"
-    "sys.exit(0 if result.testsRun==1 and result.wasSuccessful() "
+    "sys.exit(done if result.testsRun==1 and result.wasSuccessful() "
     "and not result.skipped and not result.expectedFailures else 1)"
 )
+# A passed test exits with this run's code, read from stdin before any test
+# code is imported: an import-time `sys.exit(0)` or `os._exit(0)` is failed.
+# ponytail: in-process test code can still find it by introspection; it is
+# agent-written code either way, and the merge reviewer judges the tests.
+DONE_CODES = (10, 250)
 
 
 def _published_tests(root: Path, tests: list[str]) -> dict[str, set[str]]:

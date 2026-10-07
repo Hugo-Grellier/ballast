@@ -1331,6 +1331,30 @@ class AcceptanceChecksTests(AcceptanceCase):
         self.ok(self.check("run-checks"))
         self.assertIn(("runner-recorded", "AC-001", PASSING, "failed"), self.checks())
 
+    def test_an_exit_before_the_test_runs_is_failed(self) -> None:
+        """Review: an import-time exit 0 never reads as passed."""
+        for exit_call in ("sys.exit(0)", "os._exit(0)"):
+            with self.subTest(exit_call=exit_call):
+                (self.root / "tests/test_accept.py").write_text(
+                    f"import os, sys\n{exit_call}\n" + ACCEPT_TESTS
+                )
+                self.freeze()
+                self.ok(self.check("run-checks"))
+                self.assertNotIn("passed", {c[3] for c in self.checks()})
+
+    def test_undecodable_output_and_long_names_are_reported(self) -> None:
+        (self.root / "tests/test_accept.py").write_text(
+            "import os\nos.write(1, b'\\xff\\xfe')\n" + ACCEPT_TESTS
+        )
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertIn(("runner-recorded", "AC-001", PASSING, "passed"), self.checks())
+        long = "tests.test_accept.Accept.test_" + "x" * 300
+        self.manifest({"AC-001": [long], "AC-002": [], "AC-003": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "too-many"})
+        self.assertIn("a test name over 300 characters", self.record_text())
+
     def test_a_test_in_a_published_package_init_runs(self) -> None:
         (self.root / "tests/test_pkg").mkdir()
         (self.root / "tests/test_pkg/__init__.py").write_text(ACCEPT_TESTS)

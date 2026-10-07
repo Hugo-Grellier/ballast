@@ -3495,7 +3495,8 @@ ACCEPTANCE_STATUS = {
     ),
     "too-many": (
         "acceptance-evidence.json is over the limit (more than "
-        f"{ACCEPTANCE_TESTS} criterion-test pairs, or over 1 MiB); no criterion "
+        f"{ACCEPTANCE_TESTS} criterion-test pairs, a test name over 300 characters, "
+        "or over 1 MiB); no criterion "
         "was checked"
     ),
     "unpublished": (
