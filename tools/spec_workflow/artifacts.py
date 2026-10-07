@@ -3404,6 +3404,7 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
     try:
         snapshot = ledger.artifact_digests(root, relative)
         published = _published_tests(root, tests)
+        real = root.resolve()
     except (OSError, ValueError):
         return {"status": "snapshot-unavailable", "results": results}, None, []
     ran: dict[str, dict] = {}
@@ -3415,7 +3416,20 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
             ran[test] = run_commands(
                 root,
                 relative,
-                [shlex.join([str(python), "-c", ledger.UNITTEST_CHECK, test])],
+                [
+                    shlex.join(
+                        [
+                            str(python),
+                            "-X",
+                            "pycache_prefix=/tmp/ballast-acceptance-pyc",
+                            "-c",
+                            ACCEPTANCE_CHECK,
+                            test,
+                            str(real),
+                            json.dumps(sorted(str(real / p) for p in published[test])),
+                        ]
+                    )
+                ],
                 timeout_minutes,
                 remaining=lambda: autonomy.remaining_seconds(run),
                 read_only=True,
@@ -3445,7 +3459,28 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
     return summary, snapshot, recorded
 
 
-def _published_tests(root: Path, tests: list[str]) -> set[str]:
+# Load one mapped test, refuse it unless every module along its name came
+# from a published file of the checkout (argv: test, checkout, allowed files),
+# then run it as `ledger check` does. Bytecode comes only from a fresh cache
+# (`-X pycache_prefix`), never from an agent-writable __pycache__ (#117).
+ACCEPTANCE_CHECK = (
+    "import json,os,sys,unittest;"
+    "name,root,allowed=sys.argv[1],sys.argv[2],set(json.loads(sys.argv[3]));"
+    "suite=unittest.defaultTestLoader.loadTestsFromName(name);"
+    "parts=name.split('.');"
+    "mods=[sys.modules.get('.'.join(parts[:i])) for i in range(1,len(parts)+1)];"
+    "bad=[m for i,m in enumerate(mods) if m is not None and ("
+    "os.path.realpath(m.__file__) not in allowed if getattr(m,'__file__',None)"
+    " else [os.path.realpath(x) for x in getattr(m,'__path__',[])]"
+    "!=[os.path.join(root,*parts[:i+1])])];"
+    "bad and sys.exit(3);"
+    "result=unittest.TestResult();suite.run(result);"
+    "sys.exit(0 if result.testsRun==1 and result.wasSuccessful() "
+    "and not result.skipped and not result.expectedFailures else 1)"
+)
+
+
+def _published_tests(root: Path, tests: list[str]) -> dict[str, set[str]]:
     """Return the tests whose module file the run publishes (#117 review).
 
     `git add --all` publishes tracked and unignored files; a test in an
@@ -3477,7 +3512,7 @@ def _published_tests(root: Path, tests: list[str]) -> set[str]:
         ) and all((root / path).resolve() == real / path for path in candidates):
             found[test] = candidates
     listed = _published_paths(root, set().union(*found.values()))
-    return {test for test, paths in found.items() if paths <= listed}
+    return {test: paths for test, paths in found.items() if paths <= listed}
 
 
 def _published_paths(root: Path, paths: set[str]) -> set[str]:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import py_compile
 import subprocess
 import sys
 import unittest
@@ -1295,6 +1296,40 @@ class AcceptanceChecksTests(AcceptanceCase):
         self.ok(self.check("run-checks"))
         self.assertEqual(self.checks(), [])
         self.assertIn("not in the published tree", self.record_text())
+
+    def test_a_forged_bytecode_cache_is_never_executed(self) -> None:
+        """An ignored, unchecked-hash .pyc of a passing test_fail never runs."""
+        forged = ACCEPT_TESTS.replace('self.fail("not yet")', "pass")
+        source = self.base / "forged.py"
+        source.write_text(forged)
+        tag = sys.implementation.cache_tag
+        cache = self.root / f"tests/__pycache__/test_accept.{tag}.pyc"
+        cache.parent.mkdir(exist_ok=True)
+        py_compile.compile(
+            str(source),
+            cfile=str(cache),
+            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+        )
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertIn(("runner-recorded", "AC-002", FAILING, "failed"), self.checks())
+
+    def test_a_module_loaded_from_an_unpublished_file_is_refused(self) -> None:
+        """The import origin, not the file layout, decides (review SEC-002)."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("hidden.py\n")
+        (self.root / "hidden.py").write_text(ACCEPT_TESTS)
+        (self.root / "tests/__init__.py").write_text(
+            "import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location("
+            "'tests.test_accept', 'hidden.py')\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "sys.modules['tests.test_accept'] = module\n"
+        )
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertIn(("runner-recorded", "AC-001", PASSING, "failed"), self.checks())
 
     def test_a_test_in_a_published_package_init_runs(self) -> None:
         (self.root / "tests/test_pkg").mkdir()
