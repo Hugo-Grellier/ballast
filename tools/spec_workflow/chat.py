@@ -574,8 +574,11 @@ def _bounded(paths: list[str]) -> dict[str, object]:
     return fields
 
 
-def out_of_step(run: Run) -> dict | None:
-    """Record changes made between steps, attributed to the operator (FR-011).
+def out_of_step(run: Run, actor: str = "operator") -> dict | None:
+    """Record changes made between steps, attributed to `actor` (FR-011).
+
+    The actor is the operator, or `sync` for what a branch synchronization
+    brought in (#66 ENG-010).
 
     Compares the tree with the last stored manifest; a difference is one
     `out-of-step-change` event with the changed paths and the human decisions
@@ -591,7 +594,7 @@ def out_of_step(run: Run) -> dict | None:
     run.changed()
     event = run.event(
         "out-of-step-change",
-        actor="operator",
+        actor=actor,
         from_manifest=previous,
         to_manifest=current,
         stale=_made_stale(run, paths),
@@ -792,7 +795,10 @@ def _violations_check(run: Run) -> tuple[bool, str]:
             continue
         current = manifest(run.root) if current is None else current
         after = read_manifest(run.dir, event.get("tree"))
-        still += [p for p in event.get("paths", []) if current.get(p) == after.get(p)]
+        paths = event.get("paths", [])
+        if event.get("more"):
+            paths = _all_violations(run, event, after)
+        still += [p for p in paths if current.get(p) == after.get(p)]
     if still:
         paths = ", ".join(sorted(set(still))[:10])
         return False, (
@@ -800,6 +806,30 @@ def _violations_check(run: Run) -> tuple[bool, str]:
             "restore or change them before the next step"
         )
     return True, "no open write-scope violation"
+
+
+def _all_violations(run: Run, event: dict, after: dict[str, str]) -> list[str]:
+    """Every out-of-scope path of a failed check that stored only the first few.
+
+    Recomputed from the step's start manifest; when that step is not found,
+    every path of the after manifest stays open (fail closed, #66 SEC-002).
+    """
+    start = next(
+        (
+            entry
+            for entry in run.steps()
+            if entry.get("step") == event.get("step") and entry["entry"] == "start"
+        ),
+        None,
+    )
+    if start is None:
+        return sorted(after)
+    before = read_manifest(run.dir, start.get("tree_before"))
+    return [
+        path
+        for path in changed_paths(before, after)
+        if not _in_scope(run, start["phase"], path)
+    ]
 
 
 def _scope_check(run: Run) -> tuple[bool, str]:
@@ -826,6 +856,9 @@ def _checks_result(run: Run) -> tuple[bool, str]:
         return False, "no project checks recorded; run `ballast run checks`"
     if latest["tree"] != run.tree():
         return False, f"the project checks ({latest['id']}) ran on another tree"
+    if latest.get("protected_changes"):
+        # A check that changed protected inputs proves nothing (#66 ENG-012).
+        return False, f"the project checks ({latest['id']}) changed protected inputs"
     if latest.get("unavailable"):
         return True, f"no [checks] table: checks unavailable ({latest['id']})"
     failed = [r["command"] for r in latest["results"] if r["exit"] != 0]
@@ -1673,7 +1706,11 @@ def _ledger_review(run: Run, review: dict, start: dict) -> None:
         "kind": {"spec-reconciliation": "spec-reconciliation"}.get(kind, kind),
         "verdict": LEDGER_VERDICTS[review["verdict"]],
         "reviewer_provider": review["reviewer"]["provider"],
-        "author_provider": run.record["integration"],
+        # The ledger compares the two providers: pick the author provider that
+        # makes it agree with the run record's cross_provider (#66 ENG-008).
+        "author_provider": run.record["integration"]
+        if review["cross_provider"]
+        else review["reviewer"]["provider"],
     }
     model = start.get("model")
     if isinstance(model, str) and ledger.MODEL.fullmatch(model):
@@ -1765,6 +1802,7 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
                 EXIT_INTERRUPTED if outcome.interrupted else EXIT_BLOCKED,
                 phase=phase,
             )
+        out_of_step(run, actor="sync")
         run.changed()
         passed, failing, event_id, detail = entry(run, phase, kind)
         if not passed:
@@ -1900,7 +1938,7 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
                 settings,
             )
         else:
-            result = _headless(run, integration, prompt)
+            result = _headless(run, integration, prompt, name)
         # Steps 9 to 12 run to the end: a second signal is ignored.
         numbers = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
         previous = {number: signal.signal(number, signal.SIG_IGN) for number in numbers}
@@ -1953,8 +1991,11 @@ def _interactive(  # noqa: PLR0913, PLR0917 - one session, every input explicit
                 stdout_log=stdout_log,
                 settings=settings,
             )
-    except (OSError, ValueError, autonomy.AutonomyError) as error:
+    except (OSError, ValueError, agent.LaunchError, autonomy.AutonomyError) as error:
         result["error"] = str(error)
+        # A launch failure started no agent: the step failed, it was not
+        # interrupted (#66 ENG-013).
+        result["launch_failed"] = isinstance(error, agent.LaunchError)
         result["scope_stopped"] = launcher.stop_scope(unit)
         _err(f"ballast: the interactive step could not run: {error}")
     result["meta"] = {
@@ -1982,14 +2023,18 @@ def _write_settings(log_dir: Path) -> None:
         os.close(log_fd)
 
 
-def _headless(run: Run, integration: str, prompt: str) -> dict:
-    """Run the phase headless through the unchanged agent.py (human-gated mode)."""
+def _headless(run: Run, integration: str, prompt: str, name: str) -> dict:
+    """Run the phase headless through agent.py (human-gated mode).
+
+    agent.py writes its logs to the step's own directory, `name`.
+    """
     program = HERE / "bin" / integration
     args = ["-p", prompt] if integration == "claude" else ["exec", prompt]
     env = {
         **{k: v for k, v in os.environ.items() if k not in draft_pr.TOKEN_VARIABLES},
         "BALLAST_SPEC_WORKFLOW": "1",
         "SPECKIT_WORKFLOW_RUN_ID": run.id,
+        "BALLAST_STEP_LOG": name,
     }
     interrupted = False
 
@@ -2124,7 +2169,9 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917 - steps 9 to 12, 
         run, phase, kind, name, start["tree_before"], tree_after
     )
     credential = result.get("headless_code") == agent.EXIT_AUTH
-    if result["interrupted"]:
+    if result.get("launch_failed"):
+        outcome = "failed"
+    elif result["interrupted"]:
         outcome = "interrupted"
     elif failures or result["exit_code"] != 0:
         outcome = "failed"
@@ -2157,6 +2204,8 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917 - steps 9 to 12, 
     _out(f"Step {name}: {outcome}")
     if credential:  # the cause of any failed check, so it comes first
         _out(f"Blocked (credential): {agent.AUTH_REASONS[result['argv'][0]]}.")
+    elif result.get("launch_failed"):  # likewise the cause of any failed check
+        _out(f"The agent did not start: {_first_line(str(result['error']))}")
     elif failures:
         check, event_id, detail = failures[0]
         _out(f"Failed check: {check} ({event_id}): {_first_line(detail)}")
@@ -2639,6 +2688,7 @@ def checks(root: Path, run_id: str) -> int:
             results=result["results"],
             unavailable=result["unavailable"],
             tree=result["tree"],
+            protected_changes=result["protected_changes"][:PATH_LIMIT],
         )
         try:
             snapshot = ledger.artifact_digests(root, run.feature_dir)

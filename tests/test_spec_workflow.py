@@ -818,6 +818,28 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertIn(".claude/skills/entries", result.stderr)
 
+    def test_writing_agent_cli_configuration_fails_the_step(self) -> None:
+        """#66 SEC-010: a later Claude or Codex step would load it."""
+        (self.root / ".claude").mkdir()
+        (self.root / ".codex").mkdir()
+        for name in (
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".codex/config.toml",
+        ):
+            with self.subTest(name=name):
+                result = self.run_wrapper(
+                    "codex",
+                    "exec",
+                    "$speckit-plan",
+                    FAKE_TAMPER=str(self.root / name),
+                )
+                self.assertEqual(result.returncode, 4)
+                self.assertIn(name, result.stderr)
+                (self.root / name).unlink()
+                self.clear_marker()
+                (self.root / "BALLAST_TAMPERED").unlink(missing_ok=True)
+
     def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
         """Review of #96: nothing ran, so the marker must not strand the run."""
         sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
