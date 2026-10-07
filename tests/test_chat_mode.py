@@ -1574,9 +1574,11 @@ class StepCloseTests(ChatCase):
                 ["write", f"{FEATURE}/spec.md", SPEC],
                 ["print", "closing"],
                 ["close_terminal"],
-                ["sleep", 1],
+                ["sleep", 1.5],
             ],
-            keys=(("wait", b"closing"), ("sleep", 0.3), ("signal", signal.SIGTERM)),
+            # The output cannot show the terminal closing: 0.5 s after the
+            # last line is inside the 2 s grace and well past the close.
+            keys=(("wait", b"closing"), ("sleep", 0.5), ("signal", signal.SIGTERM)),
         )
         self.assertEqual(result.code, 130, result.text)
         self.assertEqual(self.record(run_id).steps[-1]["outcome"], "interrupted")
