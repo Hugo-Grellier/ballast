@@ -743,11 +743,14 @@ continues it as a linked [Chat run](#chat-runs) instead. Raising a run to
 Autonomous after start is never possible.
 
 **Refresh.** `ballast run checkpoint RUN_ID` refreshes the Draft PR checkpoint
-and the acceptance packet of an Autonomous or Chat run from the current records, in any
-status, `published` included, for example after `ballast ledger check`. It
-starts no agent and changes no decision, mode or status. Without a Draft PR it
-refuses and writes nothing; while another invocation of the run is active it
-refuses. The refreshed packet still lists every decision as agent-provisional.
+and the acceptance packet of an Autonomous or Chat run from the current
+records, in any status, `published` included, for example after `ballast
+ledger check`. It starts no agent and changes no decision, mode or status.
+Without a Draft PR it refuses and writes nothing; while another invocation of
+the run is active, or a Chat step holds the run's lock, it refuses. An
+Autonomous run's refreshed packet still lists every decision as
+agent-provisional; a Chat run's lists the operator's approvals from its
+operator records.
 
 **Runs started before branch pinning.** A run started before v0.5.0 has a pin
 with only its `branch`, and every `resume` or `continue` blocks it as

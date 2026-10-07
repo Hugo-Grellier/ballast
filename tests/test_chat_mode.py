@@ -3832,6 +3832,27 @@ class PublishTests(ChatCase):
         self.assertIn(f"run {run_id} is busy: step implement", result.text)
         self.assertEqual(packets(), before + 2)
 
+    def test_a_failed_packet_never_fails_publish(self) -> None:
+        """#111: the checkpoint after publication never changes the exit."""
+        run_id = self.start()
+        self.through_final(run_id)
+        with patch.object(chat.draft_pr, "checkpoint", side_effect=RuntimeError):
+            result = self.call(chat.publish, self.root, run_id)
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("Draft PR: failed-retryable (internal-error)", result.out)
+        self.assertEqual(self.record(run_id).run["status"], "published")
+
+    def test_checkpoint_without_a_pr_creates_nothing(self) -> None:
+        """#111: a Chat refresh before publication refuses and writes nothing."""
+        run_id = self.start()
+        self.through_final(run_id)
+        before = self.ledger(run_id)
+        result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} has no Draft PR yet", result.text)
+        self.assertEqual(self.ledger(run_id), before)
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
+
     def through_final_after_scope(self, run_id: str) -> None:
         self.approve_in_process(run_id, "intent")
         self.feature_file("plan.md", PLAN)
