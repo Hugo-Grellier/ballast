@@ -3885,7 +3885,7 @@ class PublishTests(ChatCase):
             demo = self.ballast("run", "demo", run_id, "home", "--no-wait")
         self.assertEqual(result.code, 2, result.text)
         self.assertIn(f"run {run_id} is busy: step implement", result.text)
-        self.assertEqual(demo.code, 1, demo.text)  # `demo` waits for a Chat step
+        self.assertEqual(demo.code, 1, demo.text)  # `demo` refuses during a Chat step
         self.assertIn("lock-held", demo.text)
         lock = autonomy.run_dir(self.root, run_id) / "invocation.lock"
         with lock.open("w") as held:  # `ballast run demo` holds this one
