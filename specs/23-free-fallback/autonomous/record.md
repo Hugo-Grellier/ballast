@@ -5,6 +5,7 @@ Run `f200c320` for #23 (`specs/23-free-fallback`). Generated from the operator r
 ## Mode and risk
 
 - Mode start: autonomous at 2026-10-06T10:43:28+00:00 by operator
+- Mode lower: human-gated at 2026-10-07T00:52:02+00:00 by operator, decision HD-0004: block-resolved
 - Risk: R2 (scope-record); history: R2 at 2026-10-06T10:43:28+00:00
 - Limits (default): 240 minutes wall time, 40 agent steps
 - Spend: bounded by the agent-step limit; every agent step, retry and fix cycle counts; monetary spend is not measured
@@ -126,12 +127,14 @@ Reduced independence: reviews used the authoring provider.
 ## Fix loop
 
 - Cycles used: 0 of 3
+- Cycle 0 (implementation): reviews none recorded; feedback checks: `uvx ruff check` exited 0, `uvx ruff format --check` exited 0, `uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py` timed out
 
 ## Block resolutions
 
 - HD-0001 at 2026-10-06T11:17:43+00:00 by operator: resolved the contradiction block at decide-tasks; resumed in Autonomous at validate-plan; changed during the block: `specs/23-free-fallback/contracts/`, `specs/23-free-fallback/data-model.md`, `specs/23-free-fallback/decisions.md`, `specs/23-free-fallback/plan.md`, `specs/23-free-fallback/quickstart.md`, `specs/23-free-fallback/research.md`, `specs/23-free-fallback/tasks.md`; reference: operator resumed after the contradiction block at decide-tasks
 - HD-0002 at 2026-10-06T18:10:56+00:00 by operator: resolved the upstream-sync block at validate-implementation; resumed in Autonomous at validate-plan; changed during the block: `outside`, `specs/23-free-fallback/decisions.md`, `specs/23-free-fallback/plan.md`, `specs/23-free-fallback/quickstart.md`, `specs/23-free-fallback/research.md`, `specs/23-free-fallback/tasks.md`; reference: operator resumed after the upstream-sync block at validate-implementation
 - HD-0003 at 2026-10-06T18:16:57+00:00 by operator: resolved the review-finding block at record-plan-review; resumed in Autonomous at validate-plan; changed during the block: `specs/23-free-fallback/contracts/`, `specs/23-free-fallback/data-model.md`, `specs/23-free-fallback/plan.md`, `specs/23-free-fallback/quickstart.md`, `specs/23-free-fallback/research.md`, `specs/23-free-fallback/tasks.md`; reference: operator resumed after the review-finding block at record-plan-review
+- HD-0004 at 2026-10-07T00:52:02+00:00 by operator: resolved the block; the run continued human-gated; reference: checks-implementation timed out at the engine's 300 s default (fixed in #99); host gate, live check and reviews incl. independent security-2 in specs/23-free-fallback/reviews/
 
 ## Checks
 
