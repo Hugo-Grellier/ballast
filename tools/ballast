@@ -948,9 +948,8 @@ def creates_venv(command: str) -> bool:
 
     It does when it runs `uv run` or `uv sync` on the checkout's own project.
     Global options may precede the subcommand. `--no-project`, `--isolated`
-    and, for sync, `--dry-run` leave .venv alone, and `--directory` or
-    `--project` elsewhere uses another one, but only uv's own options count:
-    the scan stops at the program `uv run` starts.
+    and, for sync, `--dry-run` leave .venv alone, but only uv's own options
+    count: the scan stops at the program `uv run` starts.
     """
     tokens = command.replace("(", " ").split()
     for index, part in enumerate(tokens):
@@ -970,11 +969,9 @@ def creates_venv(command: str) -> bool:
         exempt = {"--no-project", "--isolated"} | (
             {"--dry-run"} if sub == "sync" else set()
         )
-        elsewhere = any(
-            options.get(name, ".").rstrip("/") not in {".", ""}
-            for name in ("--directory", "--project")
-        )
-        if not exempt & options.keys() and not elsewhere:
+        # `--directory` or `--project` elsewhere may still reach the root
+        # project (discovery, workspaces), so it never exempts: warn.
+        if not exempt & options.keys():
             return True
     return False
 

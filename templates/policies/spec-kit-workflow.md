@@ -455,7 +455,7 @@ run would fail as tampered.
 `.venv` is a protected input, so an agent check that creates it is a tamper.
 A fresh worktree has none, and `uv run` or `uv sync` creates it: when a
 `[checks]` command or `extra_allow` rule runs either (without `--no-project`
-or `--isolated`, for sync `--dry-run`, and no `--directory` or `--project` naming another directory) in a `pyproject.toml` project without `.venv`, setup and
+or `--isolated`, for sync `--dry-run`) in a `pyproject.toml` project without `.venv`, setup and
 worktree preparation print a warning, `ballast doctor` reports `checks-venv`,
 and Autonomous eligibility refuses. Run `uv sync --locked` before `ballast
 trust`.
