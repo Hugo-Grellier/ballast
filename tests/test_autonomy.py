@@ -1621,6 +1621,25 @@ class ConfinementTests(AutonomyCase):
         env = run.call_args.kwargs["env"]
         self.assertFalse(set(secrets) & set(env))
 
+    def test_deadline_spent_during_sandbox_setup_launches_nothing(self) -> None:
+        """#117 review: the time left is measured just before each launch."""
+        left = [5.0]
+        real = autonomy.confined_argv
+
+        def slow_setup(*args: object, **kwargs: object) -> list[str]:
+            left[0] = 0.0
+            return real(*args, **kwargs)
+
+        with (
+            patch.object(autonomy, "confined_argv", side_effect=slow_setup),
+            patch.object(artifacts, "subprocess") as launcher,
+            self.assertRaises(artifacts.ChecksExhaustedError),
+        ):
+            artifacts.run_commands(
+                self.root, FEATURE, ["true"], 1, remaining=lambda: left[0]
+            )
+        launcher.run.assert_not_called()
+
     def test_custom_gh_and_xdg_config_locations_are_hidden(self) -> None:
         """Review F1: GH_CONFIG_DIR and XDG_CONFIG_HOME are cleared and hidden."""
         gh = self.base / "elsewhere/gh"

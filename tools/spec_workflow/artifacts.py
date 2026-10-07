@@ -3260,9 +3260,6 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     results = []
     with tempfile.TemporaryDirectory(prefix="ballast-checks-") as private:
         for command in commands:
-            left = remaining() if callable(remaining) else None
-            if left is not None and left <= 0:
-                raise ChecksExhaustedError
             argv = autonomy.confined_argv(
                 root,
                 ["sh", "-c", command],
@@ -3272,6 +3269,10 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                 integration=None,  # no agent CLI: neither login (#81)
                 writable_checkout=not read_only,
             )
+            # Measured after the sandbox is set up, just before the launch.
+            left = remaining() if callable(remaining) else None
+            if left is not None and left <= 0:
+                raise ChecksExhaustedError
             timeout = timeout_minutes * 60
             started = time.monotonic()
             timed_out = False

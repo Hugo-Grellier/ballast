@@ -3515,10 +3515,11 @@ def _acceptance_lines(acceptance: dict | None) -> list[str]:
         "### Acceptance checks (runner-recorded)",
         "",
         (
-            "The runner ran each test the agent-proposed acceptance-evidence.json "
-            "maps, confined like run-checks with a read-only checkout, and recorded "
-            "each result in the ledger as `runner-recorded`: agent-written tests "
-            "run by Ballast, not an operator's check."
+            "The runner runs each test the agent-proposed acceptance-evidence.json "
+            "maps, confined like run-checks with a read-only checkout, and records "
+            "the results in the ledger as `runner-recorded`: agent-written tests "
+            "run by Ballast, not an operator's check. A line below names any "
+            "reason no test ran or no result was recorded."
         ),
         "",
     ]
