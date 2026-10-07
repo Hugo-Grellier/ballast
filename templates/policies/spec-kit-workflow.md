@@ -295,7 +295,7 @@ validator reads `feature_directory` from the run's inputs, requires
 | intent approval | `intent.md` | Written only after the `approve-intent` gate; has the intent sections and one approval record whose spec digest matches the current `spec.md`. |
 | plan | `plan.md` | Intent still valid; non-empty; no plan-template placeholders or unresolved clarification. |
 | tasks | `tasks.md` | Plan still valid; at least one `- [ ] T###` task, unique IDs, every `(depends on T###)` names an existing task. |
-| implement | repository change | Every task checked and a path outside the feature directory changed since the pre-implementation baseline, or `tasks.md` declares `<!-- workflow: no-code-change -->` (visible at the task gate). |
+| implement | repository change | Every task checked and a path outside the feature directory changed since the pre-implementation baseline, or `tasks.md` declares `<!-- workflow: no-code-change -->` (visible at the task gate). In an Autonomous run, a task tagged `[DEFERRED-TO-PR]` may stay open only when the tasks decision recorded it (see Autonomous runs). |
 | decisions | `decisions.md` (optional) | Every `DEC-NNNN — Proposal` has a matching resolution. |
 | convergence | `reviews/convergence.md` | All of the above, no pending task (converge appends none), and the latest `- Verdict:` line is `CONVERGED`. |
 
@@ -567,6 +567,21 @@ compared. `deploy`, `release`, `merge`, `mark-ready` and `other`, and any
 action starting with one of them, are never authorized. Any other entry is
 legacy: it still authorizes only an action with exactly its text, with a
 warning.
+
+**Deferred tasks.** A task only the operator can do (a manual browser or
+device check, a demo capture) is kept out of `tasks.md` when it can be; demo
+captures are requested with `ballast run demo` instead. One that remains is
+tagged `[DEFERRED-TO-PR]` after its other tags and left open. When the tasks
+decision is recorded, the recorder (never the agent) lists every open tagged
+task in it; `validate-implementation` and `convergence` then accept those tasks
+open, and no other. A task tagged after the tasks decision, or a listed task
+whose tag or text changed, is pending and blocks the run. The run record and the Draft
+PR show a `Deferred to the PR` section, and the acceptance packet lists the
+open tagged tasks at head next to the criteria they cite; one the tasks
+decision did not record with the same text is marked pending, not deferred. A deferred task is
+never evidence: its criterion stays `missing` until an operator records a
+check. Chat and human-gated runs accept no deferral; the operator does the
+task.
 
 Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
 it read it (title, labels, body with the acceptance criteria, the intake scope
@@ -938,7 +953,9 @@ An interrupted launcher exit (130) leaves a waiting gate's apparent `reject`
 choice unobserved, because Spec Kit may write that choice on Ctrl-C.
 
 For a significant feature with an approved spec, map each `AC-NNN` to named
-`unittest` cases in `acceptance-evidence.json`. The local tool checks one mapped
+`unittest` cases in `acceptance-evidence.json`, or to `[]` when no unit test
+proves it (a browser or demo check): such a criterion stays `missing`, since
+Ballast records no evidence for a manual check. The local tool checks one mapped
 case at a time, records its exit and implementation snapshot, and archives the
 manifest by digest. Changing the approved mapping within a run archives a new
 version; earlier mapped checks become stale. Suite-wide check commands do not
@@ -1290,7 +1307,7 @@ authoritative. It is rebuilt from those sources at every checkpoint.
   | `failed` | a mapped test failed at the head commit |
   | `stale` | evidence exists only for another commit, spec or manifest; the packet names which |
   | `not run` | a mapped test has no recorded check |
-  | `missing` | no `acceptance-evidence.json`, or no test mapped to the criterion |
+  | `missing` | no `acceptance-evidence.json`, or no test mapped to the criterion (`[]` included); a row whose criterion an open `[DEFERRED-TO-PR]` task cites names that task |
 
   Each test links to its file at the head commit; ledger evidence, which has
   no URL, is named `ledger event <seq> of run <run>`. A verified row also links
@@ -1302,6 +1319,9 @@ authoritative. It is rebuilt from those sources at every checkpoint.
   `DEC-NNNN` records of `decisions.md`, open review findings with severity and
   report, `run-checks` results, GitHub check runs at the head commit and
   suite-wide ledger checks. Zero counts are written as `None (0).`
+- **Deferred to the PR**: open `tasks.md` tasks tagged `[DEFERRED-TO-PR]` at
+  the head commit, each linked to its line, when there are any. They are
+  operator checks, never evidence.
 - **Sources**: intent, spec, plan, tasks, decisions, acceptance evidence,
   review reports, run record and diff, each pinned to the head commit, or
   `not present`.

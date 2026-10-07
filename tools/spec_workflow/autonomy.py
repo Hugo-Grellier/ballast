@@ -3608,6 +3608,31 @@ def _relative_link(record_dir: str) -> object:
     return link
 
 
+def _deferred_lines(decisions: list[dict]) -> list[str]:
+    """Tasks the current tasks decision left open for the PR (#112); none, no lines."""
+    lines = [
+        f"- {_code(str(item.get('task', '')))} ({entry['id']}): "
+        f"{_code(' '.join(str(item.get('text', '')).split()))}"
+        for entry in current(decisions, "tasks")
+        for item in entry.get("deferred") or []
+        if isinstance(item, dict)
+    ]
+    if not lines:
+        return []
+    return [
+        "",
+        "## Deferred to the PR",
+        "",
+        (
+            "Tasks tagged `[DEFERRED-TO-PR]` when tasks were accepted "
+            "(agent-provisional). The run did not do them; their criteria keep no "
+            "evidence from them. The operator does them before merging."
+        ),
+        "",
+        *lines,
+    ]
+
+
 def _sections(  # noqa: PLR0913 - one rendering, every input explicit
     run: dict,
     decisions: list[dict],
@@ -3626,6 +3651,7 @@ def _sections(  # noqa: PLR0913 - one rendering, every input explicit
         f"- {e['id']} ({e['point']}, agent-provisional): {neutralize(e['summary'])}"
         for e in material
     ] or ["None."]
+    lines += _deferred_lines(decisions)
     lines += ["", "## Provisional decisions", ""]
     lines += _decision_rows(decisions, link, short=short) if decisions else ["None."]
     lines.append("")

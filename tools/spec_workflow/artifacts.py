@@ -110,6 +110,10 @@ UNRESOLVED_CLARIFICATION = re.compile(
 TASK_LINE = re.compile(r"^\s*[-*] \[( |x|X)\] (T\d{3,})\b(.*)$", re.MULTILINE)
 DEPENDS_ON = re.compile(r"\(depends on ([^)]*)\)")
 TASK_ID = re.compile(r"T\d{3,}")
+# An operator-only task (#112): a browser or device check, a demo capture.
+DEFERRED_TAG = "[DEFERRED-TO-PR]"
+DEFERRED_TEXT = 300  # Characters of a deferred task the record shows.
+DEFERRED = re.compile(r"^(?:[ \t]+\[[^\]\n]{1,40}\])*?[ \t]+\[DEFERRED-TO-PR\]")
 DECISION_HEADING = re.compile(r"^##\s+DEC-", re.MULTILINE)
 DECISION_RECORD = re.compile(
     # Em dash per the intent extension; en dash and hyphen are tolerated.
@@ -433,11 +437,81 @@ def check_tasks(feature: Feature) -> None:
     parse_tasks(feature)
 
 
+def deferred_tasks(text: str) -> dict[str, tuple[bool, str, int]]:
+    """{task_id: (done, description, line)} of tasks tagged [DEFERRED-TO-PR].
+
+    The description includes the task's indented continuation lines, so the
+    digest the tasks decision binds covers the whole task.
+    """
+    found = {}
+    for match in TASK_LINE.finditer(text):
+        mark, task_id, rest = match.groups()
+        if DEFERRED.match(rest):
+            line = text.count("\n", 0, match.start(2)) + 1
+            parts = [rest.strip()]
+            for following in text[match.end() :].split("\n")[1:]:
+                if (
+                    not following[:1].isspace()
+                    or not following.strip()
+                    or TASK_LINE.match(following)
+                ):
+                    break
+                parts.append(following.strip())
+            found[task_id] = (mark != " ", "\n".join(parts), line)
+    return found
+
+
+def task_digest(description: str) -> str:
+    """SHA-256 of a task's text: what the tasks decision binds a deferral to."""
+    return hashlib.sha256(description.encode()).hexdigest()
+
+
+def recorded_deferrals(feature: Feature) -> set[tuple[str, str]]:
+    """(task ID, text digest) pairs the current tasks decision deferred to the PR."""
+    if (
+        feature.run is None
+        or autonomy is None
+        or autonomy.effective_mode(feature.run) != "autonomous"
+    ):
+        return set()
+    entries = autonomy.read_decisions(feature.root, feature.run["run_id"])
+    return {
+        (item["task"], item["sha256"])
+        for entry in autonomy.current(entries, "tasks")
+        for item in entry.get("deferred") or []
+        if isinstance(item, dict)
+        and isinstance(item.get("task"), str)
+        and isinstance(item.get("sha256"), str)
+    }
+
+
 def _require_tasks_done(feature: Feature) -> str:
+    """Every task done; in an Autonomous run, recorded deferrals may stay open (#112).
+
+    A task tagged [DEFERRED-TO-PR] stays open only when the tasks decision
+    recorded it, with the same text, before implementation: the record, the
+    Draft PR and its packet list it, and its criterion keeps no evidence.
+    """
     text, tasks = parse_tasks(feature)
     pending = [task_id for task_id, done in tasks.items() if not done]
+    if pending and feature.run is not None:
+        recorded = recorded_deferrals(feature)
+        allowed = {
+            task_id
+            for task_id, (_, description, _) in deferred_tasks(text).items()
+            if (task_id, task_digest(description)) in recorded
+        }
+        pending = [task_id for task_id in pending if task_id not in allowed]
     if pending:
         message = f"{feature.relative}/tasks.md has pending tasks: {', '.join(pending)}"
+        late = sorted(set(pending) & set(deferred_tasks(text)))
+        if feature.run is not None and late:
+            message += (
+                f"; {', '.join(late)} {'is' if len(late) == 1 else 'are'} tagged "
+                f"{DEFERRED_TAG} but the tasks decision did not record "
+                f"{'it' if len(late) == 1 else 'them'} with this text: a task is "
+                "deferred to the PR only as written when tasks are accepted"
+            )
         raise ContractError(message)
     return text
 
@@ -1619,7 +1693,7 @@ DRAFT_FIELDS = (
     "review",
     "assumption",
 )
-RUNNER_FIELDS = ("id", "prev", "at", "provider", "step_id", "role", "agent")
+RUNNER_FIELDS = ("id", "prev", "at", "provider", "step_id", "role", "agent", "deferred")
 # Review kinds each review point may record.
 POINT_KINDS = {
     "plan-review": ("plan",),
@@ -2871,6 +2945,22 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
         for entry in entries:
             entry["fix_cycle"] = fix["cycles"]
     _supersede(feature, point, entries)
+    if point == "tasks":
+        # No tasks.md defers nothing; the tasks check refuses it on its own.
+        tasks_file = feature.file("tasks.md")
+        tasks_text = feature.read("tasks.md") if tasks_file.is_file() else ""
+        deferred = [
+            {
+                "task": task_id,
+                "text": description[:DEFERRED_TEXT],
+                "sha256": task_digest(description),
+            }
+            for task_id, (done, description, _) in deferred_tasks(tasks_text).items()
+            if not done
+        ]
+        for entry in entries:
+            if deferred:
+                entry["deferred"] = deferred
     if point == "final-acceptance":
         for entry in entries:
             _final_check(feature, entry)
