@@ -1986,6 +1986,7 @@ class RunCliTests(RunCase):
         self.assertEqual(self.run_ids(), [])
 
     def test_setting_outside_checkout(self) -> None:
+        environ = dict(os.environ)
         code, _, err = self.gated("--local-fallback", MODEL)
         self.assertEqual(code, 0, err)
         ((_, run_id),) = self.launched
@@ -1998,7 +1999,7 @@ class RunCliTests(RunCase):
         ):
             fallback.write_setting(self.root, run_id, MODEL)
         self.assertNotIn("fallback", (self.root / "ballast.toml").read_text())
-        self.assertFalse(any("FALLBACK" in name for name in os.environ))
+        self.assertEqual(dict(os.environ), environ)
 
     def test_opt_in_records_the_served_digest(self) -> None:
         """SEC2-002: the launcher pins the model's digest; unreachable is null."""
