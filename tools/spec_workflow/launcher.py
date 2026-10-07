@@ -107,9 +107,10 @@ RUN_STATE = (".specify/workflows/runs", ".specify/workflow-state")
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # The operator's tamper recovery, in order (#114).
 RECOVER = (
-    "restore the protected files, recreate .venv (`uv sync --locked`), delete "
-    f"{TAMPER_MARKER}, run `ballast discard-runs`, review the checkout, then run "
-    "`ballast trust`"
+    "run nothing from the checkout until you have reviewed it (`git status` and "
+    "the listed files) and restored the protected files with Git; then delete and "
+    "recreate .venv (`uv sync --locked`), delete "
+    f"{TAMPER_MARKER}, run `ballast discard-runs`, then `ballast trust`"
 )
 EXIT_REFUSED = 2
 COMMANDS = {"run": ("-IS", "run.py"), "ledger": ("-IS", "ledger.py")}
@@ -587,38 +588,38 @@ UV_VALUED = frozenset(
 )
 
 
-def creates_venv(command: str) -> bool:  # noqa: C901 - one small option parser
-    """Whether a command (or a `Bash(...)` rule) runs `uv run` or `uv sync` (#114).
+def creates_venv(command: str) -> bool:
+    """Whether a command (or a `Bash(...)` rule) creates the root .venv (#114).
 
+    It does when it runs `uv run` or `uv sync` on the checkout's own project.
     Global options may precede the subcommand. `--no-project`, `--isolated`
-    and, for sync, `--dry-run` leave .venv alone, but only among uv's own
-    options: the scan stops at the program `uv run` starts.
+    and, for sync, `--dry-run` leave .venv alone, and `--directory` or
+    `--project` elsewhere uses another one, but only uv's own options count:
+    the scan stops at the program `uv run` starts.
     """
     tokens = command.replace("(", " ").split()
     for index, part in enumerate(tokens):
         if part != "uv" and not part.endswith("/uv"):
             continue
-        rest = iter(tokens[index + 1 :])
-        sub = None
-        for word in rest:
+        words, options, sub = iter(tokens[index + 1 :]), {}, None
+        for word in words:
             if not word.startswith("-"):
+                if sub is not None or word not in {"run", "sync"}:
+                    break
                 sub = word
-                break
-            if word in UV_VALUED:
-                next(rest, None)
-        if sub not in {"run", "sync"}:
+                continue
+            name, _, value = word.partition("=")
+            options[name] = value or (next(words, "") if name in UV_VALUED else "")
+        if sub is None:
             continue
         exempt = {"--no-project", "--isolated"} | (
             {"--dry-run"} if sub == "sync" else set()
         )
-        for word in rest:
-            if not word.startswith("-"):
-                return True  # the program: no exempting option came first
-            if word.partition("=")[0] in exempt:
-                break
-            if word in UV_VALUED:
-                next(rest, None)
-        else:
+        elsewhere = any(
+            options.get(name, ".").rstrip("/") not in {".", ""}
+            for name in ("--directory", "--project")
+        )
+        if not exempt & options.keys() and not elsewhere:
             return True
     return False
 

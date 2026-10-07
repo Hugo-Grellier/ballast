@@ -1217,10 +1217,11 @@ RECOVERY = {
     "limit": "Review the evidence so far, then continue human-gated or start a "
     "new run with a larger limit; resume never raises a limit.",
     "postcondition": "Fix the failed contract, then resume, or continue human-gated.",
-    "tamper": "Restore the protected files and recreate .venv (uv sync --locked), "
-    "delete BALLAST_TAMPERED, run ballast discard-runs, review the checkout and run "
-    "ballast trust. The discarded run cannot resume in Autonomous; continue it in "
-    "Chat with ballast run continue RUN_ID --mode chat --reason block-resolved "
+    "tamper": "Run nothing from the checkout until you have reviewed it and "
+    "restored the protected files with Git; then delete and recreate .venv (uv sync "
+    "--locked), delete BALLAST_TAMPERED, run ballast discard-runs and ballast "
+    "trust. The discarded run cannot resume in Autonomous; continue it in Chat "
+    "with ballast run continue RUN_ID --mode chat --reason block-resolved "
     "--ref TEXT.",
     "unfinished-step": "Review the checkout, run ballast discard-runs, then ballast "
     "trust. The discarded run cannot resume in Autonomous; continue it in Chat with "
