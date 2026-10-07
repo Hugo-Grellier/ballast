@@ -1071,7 +1071,9 @@ class ConfinementTests(AutonomyCase):
         dotfile = self.root / "dotfiles/gitconfig"  # in the writable worktree
         xdg = self.base / "dotfiles/xdg-gitconfig"  # linked out of ~/.config
         custom = self.root / "custom-gitconfig"
-        for path in (dotfile, xdg, custom):
+        elsewhere = self.base / "elsewhere/git/config"
+        elsewhere.parent.mkdir(parents=True)
+        for path in (dotfile, xdg, custom, elsewhere):
             path.parent.mkdir(exist_ok=True)
             path.write_text("[http]\n\textraheader = AUTHORIZATION: bearer x\n")
         (home / ".gitconfig").symlink_to(dotfile)
@@ -1082,7 +1084,15 @@ class ConfinementTests(AutonomyCase):
             # Relative to the step's working directory, the worktree.
             ({"GIT_CONFIG_GLOBAL": "custom-gitconfig"}, [dotfile, xdg, custom]),
             ({"GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}, [dotfile, xdg]),
-            ({"XDG_CONFIG_HOME": str(self.base / "elsewhere")}, [dotfile]),
+            # Both XDG files: the step's git falls back to the default one,
+            # which an agent home of ~/.config would overlay back into view.
+            (
+                {
+                    "XDG_CONFIG_HOME": str(elsewhere.parent.parent),
+                    "CLAUDE_CONFIG_DIR": str(home / ".config"),
+                },
+                [dotfile, xdg, elsewhere],
+            ),
         ):
             with self.subTest(env=env):
                 private = self.base / f"private-{len(list(self.base.iterdir()))}"
@@ -2402,6 +2412,14 @@ class RealConfinementTests(AutonomyCase):
             (
                 ({}, [home / ".gitconfig", dotfile, xdg]),
                 ({"GIT_CONFIG_GLOBAL": str(custom)}, [custom, dotfile, xdg]),
+                # A custom XDG directory, and an agent home overlaying ~/.config.
+                (
+                    {
+                        "XDG_CONFIG_HOME": str(custom.parent),
+                        "CLAUDE_CONFIG_DIR": str(home / ".config"),
+                    },
+                    [home / ".config/git/config", xdg],
+                ),
             )
         ):
             with self.subTest(env=extra):

@@ -2439,8 +2439,11 @@ def _global_git_config_binds(
     bwrap cannot mount over a link: bind over the file it resolves to, and
     nothing for a dangling or non-regular target.
     """
-    xdg = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
-    paths = [home / ".gitconfig", xdg / "git/config"]
+    # The default XDG file too: the step's git falls back to it, since
+    # confined_env() drops XDG_CONFIG_HOME.
+    paths = [home / ".gitconfig", home / ".config/git/config"]
+    if env.get("XDG_CONFIG_HOME"):
+        paths.append(Path(env["XDG_CONFIG_HOME"]) / "git/config")
     if env.get("GIT_CONFIG_GLOBAL"):
         # Relative to the step's working directory, where its git starts.
         paths.append(root / env["GIT_CONFIG_GLOBAL"])
