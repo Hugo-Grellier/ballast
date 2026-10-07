@@ -611,7 +611,7 @@ def creates_venv(command: str) -> bool:
             options[name] = value or (next(words, "") if name in UV_VALUED else "")
         if sub is None:
             continue
-        exempt = {"--no-project", "--isolated"} | (
+        exempt = {"--no-project", "--no_workspace", "--isolated"} | (
             {"--dry-run"} if sub == "sync" else set()
         )
         # `--directory` or `--project` elsewhere may still reach the root

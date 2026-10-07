@@ -580,6 +580,7 @@ class ProjectTests(DoctorCase):
             ("uv run --python 3.13 --with pyyaml --no-project python", False),
             ("uv run --python 3.13 --no-project x", False),
             ("uv run --isolated x", False),
+            ("uv run --no_workspace --with pyyaml python -m unittest", False),
             ("uv sync --dry-run", False),
             ("uvx ruff check", False),
             ("uv pip list", False),
