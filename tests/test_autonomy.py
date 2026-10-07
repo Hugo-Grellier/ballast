@@ -2719,6 +2719,42 @@ class EligibilityTests(AutonomyCase):
         )
         self.assertTrue(any("blocked by #12" in r for r in self.reasons()))
 
+    def test_uv_checks_without_venv_are_refused(self) -> None:
+        """#114: an agent's first `uv run` would create .venv and end the run."""
+        self.eligible_issue()
+        (self.root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        config = self.root / "ballast.toml"
+        original = GITHUB_PIN
+        refused = "creates .venv, a protected input"
+        for table, creates in (
+            ('[checks]\ncommands = ["uv run --locked pytest"]\n', True),
+            ('[checks]\ncommands = ["make lint", "uv sync --locked"]\n', True),
+            ('[agents.permissions]\nextra_allow = ["Bash(uv run pytest *)"]\n', True),
+            (
+                '[checks]\ncommands = ["uv run --no-project --with x python -m t"]\n',
+                False,
+            ),
+            ('[checks]\ncommands = ["uvx ruff check", "uv pip list"]\n', False),
+            ('[checks]\ncommands = "uv run pytest"\n', False),
+        ):
+            with self.subTest(table=table):
+                config.write_text(original + table)
+                reasons = self.reasons()
+                self.assertEqual(any(refused in r for r in reasons), creates, reasons)
+                if creates:
+                    self.assertTrue(
+                        any(
+                            "`uv sync --locked` before `ballast trust`" in r
+                            for r in reasons
+                        )
+                    )
+        config.write_text(original + '[checks]\ncommands = ["uv run pytest"]\n')
+        (self.root / ".venv").mkdir()
+        self.assertFalse(any(refused in r for r in self.reasons()))
+        (self.root / ".venv").rmdir()
+        (self.root / "pyproject.toml").unlink()
+        self.assertFalse(any(refused in r for r in self.reasons()))
+
     def test_missing_scope_record(self) -> None:
         for kwargs in ({"labels": ()}, {"author": "NONE"}):
             with self.subTest(kwargs=kwargs):

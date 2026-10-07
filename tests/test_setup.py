@@ -1526,6 +1526,27 @@ class PrepareTests(WorktreeCase):
         self.prepared(bare, self.root)
         self.assertFalse((bare / ".specify/memory/constitution.md").exists())
 
+    def test_uv_checks_without_venv_warn_before_trust(self) -> None:
+        # #114: a fresh worktree has no .venv, and an agent's first `uv run`
+        # would create it (a protected input) and end the run as tampered.
+        warning = "`uv sync --locked` before `ballast trust`"
+        (self.root / "ballast.toml").write_text(
+            PIN.format("vA") + '[checks]\ncommands = ["uv run --locked pytest"]\n'
+        )
+        (self.root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        code, out, err = self.setup()
+        self.assertEqual(code, 0, err)
+        self.assertIn(warning, out)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "uv checks")
+        worktree = self.worktree()
+        code, out, err = self.prepare(worktree)
+        self.assertEqual(code, 0, err)
+        self.assertIn("warning: 'uv run --locked pytest' creates .venv", out)
+        self.assertTrue(out.rstrip().endswith(warning), out)
+        (worktree / ".venv").mkdir()
+        self.assertIsNone(setup.launcher.venv_warning(worktree))
+
     def test_sibling_and_kept_sources(self) -> None:
         # AC-003: the primary is at another pin; a sibling, then a kept copy.
         sibling = self.worktree("vB")

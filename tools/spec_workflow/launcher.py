@@ -104,6 +104,13 @@ SCOPE_SECONDS = 10.0
 # (4); a manager error exits 1 without a state.
 UNIT_NOT_ACTIVE = frozenset({3, 4})
 RUN_STATE = (".specify/workflows/runs", ".specify/workflow-state")
+RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# The operator's tamper recovery, in order (#114).
+RECOVER = (
+    "restore the protected files, recreate .venv (`uv sync --locked`), delete "
+    f"{TAMPER_MARKER}, run `ballast discard-runs`, review the checkout, then run "
+    "`ballast trust`"
+)
 EXIT_REFUSED = 2
 COMMANDS = {"run": ("-IS", "run.py"), "ledger": ("-IS", "ledger.py")}
 # The intake helper acts with the operator's `gh` authority before any run, so
@@ -533,6 +540,47 @@ def _setup_refusal(root: Path, state: Path) -> str | None:
     return None
 
 
+# `uv run` and `uv sync` create or sync the project's .venv, a protected
+# input; `--no-project` and `--isolated` leave it alone (#114).
+UV_SYNCS = re.compile(r"(?<![\w./-])uv\s+(?:run|sync)\b")
+UV_NO_VENV = ("--no-project", "--isolated")
+VENV_REMEDY = "run `uv sync --locked` before `ballast trust`"
+
+
+def _strings(table: object, key: str) -> list[str]:
+    value = table.get(key) if isinstance(table, dict) else None
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def venv_warning(root: Path) -> str | None:
+    """Why an agent's first [checks] run would tamper here, or None (#114).
+
+    A configured check or extra_allow command that runs `uv run` or `uv sync`
+    creates .venv when the checkout has none, as a fresh worktree does; only a
+    project (pyproject.toml) gets one.
+    """
+    if os.path.lexists(root / ".venv") or not (root / "pyproject.toml").is_file():
+        return None
+    try:
+        config = tomllib.loads(read_config(root))
+    except (OSError, ValueError):
+        return None
+    agents = config.get("agents")
+    commands = _strings(config.get("checks"), "commands") + _strings(
+        agents.get("permissions") if isinstance(agents, dict) else None,
+        "extra_allow",
+    )
+    for command in commands:
+        if UV_SYNCS.search(command) and not any(
+            flag in command.split() for flag in UV_NO_VENV
+        ):
+            return (
+                f"{command!r} creates .venv, a protected input, on an agent's first "
+                f"run, and this checkout has none; {VENV_REMEDY}"
+            )
+    return None
+
+
 def _unfinished(marker: Path) -> str:
     """Return the unfinished-step refusal, naming the run and step if marked."""
     try:
@@ -559,7 +607,7 @@ def _refusal(root: Path) -> str | None:
 
 def _trust_refusal(root: Path, state: Path) -> str | None:
     if os.path.lexists(root / TAMPER_MARKER):
-        return f"{TAMPER_MARKER} exists: an agent changed protected files"
+        return f"{TAMPER_MARKER} exists: an agent changed protected files; {RECOVER}"
     if os.path.lexists(state / IN_PROGRESS):
         return _unfinished(state / IN_PROGRESS)
     try:
@@ -589,56 +637,81 @@ def _trust_refusal(root: Path, state: Path) -> str | None:
     return None
 
 
-def _remove_tree(root: Path, name: str) -> None:
+def _remove_tree(root: Path, name: str) -> list[str]:
     """Delete root/name without following a link anywhere on its path.
 
     An agent may have left processes behind or replaced a parent such as
     `.specify/workflows` with a link to an operator directory. Each parent is
     opened relative to the previous handle with O_NOFOLLOW, and rmtree with
     dir_fd refuses a linked leaf and never follows links inside the tree.
+    Returns the names the leaf held, read through the same handles.
     """
     *parents, leaf = Path(name).parts
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
     try:
         for part in parents:
-            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
             child = os.open(part, flags, dir_fd=fd)
             os.close(fd)
             fd = child
+        leaf_fd = os.open(leaf, flags, dir_fd=fd)
+        try:
+            names = os.listdir(leaf_fd)  # noqa: PTH208 - through the no-follow handle
+        finally:
+            os.close(leaf_fd)
         shutil.rmtree(leaf, dir_fd=fd)
     except FileNotFoundError:
-        return
+        return []
     finally:
         os.close(fd)
+    return names
 
 
 def _discard(root: Path, state: Path) -> int:
-    """Stop a dead wrapper's agent, then drop the unverifiable saved runs."""
+    """Stop a dead wrapper's agent, drop the saved runs, and say what changed."""
     marker = state / IN_PROGRESS
-    if os.path.lexists(marker) and not stop_scope(marker.read_text().strip()):
+    marked = os.path.lexists(marker)
+    if marked and not stop_scope(marker.read_text().strip()):
         sys.stderr.write(
             "refusing to discard run state: the unfinished agent step's processes "
             "could not be confirmed stopped; reboot, then retry\n"
         )
         return EXIT_REFUSED
+    changes = []
     try:
         for name in RUN_STATE:
-            _remove_tree(root, name)
+            if os.path.lexists(root / name):
+                runs = sorted(
+                    n for n in _remove_tree(root, name) if RUN_ID.fullmatch(n)
+                )
+                listed = f" (runs: {', '.join(runs)})" if runs else ""
+                changes.append(f"removed {name}{listed}")
     except OSError as error:
         sys.stderr.write(
             f"refusing to discard run state: {error}; a path component may be "
             "a link, so inspect the checkout\n"
         )
         return EXIT_REFUSED
-    (state / IN_PROGRESS).unlink(missing_ok=True)
-    sys.stdout.write("discarded local run state; start a fresh run\n")
+    marker.unlink(missing_ok=True)
+    if marked:
+        changes.append("stopped the unfinished agent step and removed its marker")
+    lines = [f"  {change}" for change in changes] or ["  nothing to discard"]
+    sys.stdout.write(
+        "discarded local run state:\n"
+        + "\n".join(lines)
+        + "\nUnchanged: the checkout's files, BALLAST_TAMPERED, .venv and the run "
+        "records in your state directory.\nNext: review the checkout, then run "
+        "`ballast trust`. A stopped Autonomous run cannot resume after this; "
+        "continue it in Chat with `ballast run continue RUN_ID --mode chat "
+        "--reason block-resolved --ref TEXT`, or start a fresh run.\n"
+    )
     return 0
 
 
 def _trust(root: Path, state: Path) -> int:
     """Record the reviewed checkout as the baseline for later commands."""
     if os.path.lexists(root / TAMPER_MARKER):
-        sys.stderr.write(f"restore the checkout and delete {TAMPER_MARKER}\n")
+        sys.stderr.write(f"{TAMPER_MARKER} exists: {RECOVER}\n")
         return EXIT_REFUSED
     if os.path.lexists(state / IN_PROGRESS):
         # Saved run state is outside the baseline, so it cannot be vouched for.

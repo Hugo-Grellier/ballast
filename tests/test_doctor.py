@@ -556,6 +556,28 @@ class ProjectTests(DoctorCase):
         )
         self.assertEqual(check["remedy"], shim.CHECKS_REMEDY)
 
+    def test_uv_check_without_venv_is_reported(self) -> None:
+        # Issue #114: an agent's first `uv run` creates .venv, a protected
+        # input, so the run stops as tampered; doctor says so beforehand.
+        (self.project / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        (self.project / "ballast.toml").write_text(
+            '[standard]\nref = "v0.1.0"\n'
+            "[agents.permissions]\n"
+            'extra_allow = ["Bash(uv run --locked *)"]\n'
+            "[checks]\n"
+            'commands = ["uv run --locked pytest"]\n'
+        )
+        _, checks = self.checks()
+        check = checks["checks-venv"]
+        self.assert_gap(check)
+        self.assertIn("uv run --locked pytest creates .venv", check["detail"])
+        self.assertEqual(
+            check["remedy"], "run `uv sync --locked` before `ballast trust`"
+        )
+        (self.project / ".venv").mkdir()
+        _, checks = self.checks()
+        self.assertEqual(checks["checks-venv"]["status"], "passing")
+
     def test_text_report_escapes_control_characters(self) -> None:
         # A checkout's ballast.toml must not forge a doctor line or emit
         # terminal escapes through a [checks] command.

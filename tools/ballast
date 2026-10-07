@@ -893,7 +893,13 @@ PROJECT_GATES = {
     "setup-current": EVERY[1:],
     "trust": ("ballast run", "ballast ledger"),
     "checks-allowed": ("Claude agents running [checks]",),
+    "checks-venv": ("agents running [checks]",),
 }
+# Same rule as the launcher's venv_warning (#114): `uv run` and `uv sync`
+# create .venv, a protected input; `--no-project` and `--isolated` do not.
+UV_SYNCS = re.compile(r"(?<![\w./-])uv\s+(?:run|sync)\b")
+UV_NO_VENV = ("--no-project", "--isolated")
+VENV_REMEDY = "run `uv sync --locked` before `ballast trust`"
 CHECKS_REMEDY = (
     'add a rule such as "Bash(<command> *)" to [agents.permissions] extra_allow'
     " in ballast.toml, then rerun `ballast setup`"
@@ -953,6 +959,37 @@ def _checks_allowed(root: Path) -> Outcome:
     if any(re.match(r"[A-Za-z_][A-Za-z0-9_]*=", str(c)) for c in uncovered):
         detail += " (a leading VAR=value never matches an allow rule)"
     return "missing", detail, CHECKS_REMEDY
+
+
+def _checks_venv(root: Path) -> Outcome:
+    """Whether an agent's first [checks] run would create .venv and tamper (#114)."""
+    if os.path.lexists(root / ".venv") or not (root / "pyproject.toml").is_file():
+        return "passing", "no .venv to create"
+    try:
+        config = tomllib.loads(read_config(root))
+    except (OSError, ValueError) as error:
+        return "inconclusive", f"cannot read ballast.toml: {error}", VENV_REMEDY
+    agents = config.get("agents")
+    permissions = agents.get("permissions") if isinstance(agents, dict) else None
+    commands = []
+    for table, key in (
+        (config.get("checks"), "commands"),
+        (permissions, "extra_allow"),
+    ):
+        value = table.get(key) if isinstance(table, dict) else None
+        commands += (
+            [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+        )
+    for command in commands:
+        if UV_SYNCS.search(command) and not any(
+            flag in command.split() for flag in UV_NO_VENV
+        ):
+            detail = (
+                f"{command} creates .venv, a protected input, on an agent's first "
+                "run, and this checkout has none: the run would stop as tampered"
+            )
+            return "missing", detail, VENV_REMEDY
+    return "passing", "no configured command creates .venv"
 
 
 def manifest(standard: Path) -> tuple[tuple[int, ...] | None, set[str], str | None]:
@@ -1062,7 +1099,10 @@ def _reviewed(launcher: Path, root: Path) -> list[str]:
 def _refusal_remedy(refusal: str) -> str:
     """Return the operator's next step for a launcher refusal."""
     if "BALLAST_TAMPERED" in refusal:
-        return "restore the checkout and delete BALLAST_TAMPERED, then " + TRUST
+        return (
+            "restore the protected files and recreate .venv, delete BALLAST_TAMPERED, "
+            "run `ballast discard-runs`, then " + TRUST
+        )
     if refusal.startswith("pinned "):
         return (
             "restore the previous pin in ballast.toml, or fix the cause and rerun "
@@ -1133,6 +1173,7 @@ def project_checks(context: Context) -> list[Check]:
         return finish("after fixing ballast.toml")
     results["ballast-toml"] = ("passing", f"ref {context.ref}")
     results["checks-allowed"] = _checks_allowed(context.root)
+    results["checks-venv"] = _checks_venv(context.root)
     if context.local and not (context.standard / "tools").is_dir():
         detail = f"local standard {context.standard} is not a checkout of the standard"
         remedy = "set BALLAST_STANDARD_DIR to a checkout of the standard, or unset it"

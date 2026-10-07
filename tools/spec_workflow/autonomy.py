@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
 
-from launcher import digests, state_dir  # noqa: E402
+from launcher import digests, state_dir, venv_warning  # noqa: E402
 
 VERSION = 1
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -1173,6 +1173,13 @@ RESTART_COMMAND = (
 )
 
 
+def chat_continue_command(run_id: str) -> str:
+    """Return the one continuation left once `discard-runs` dropped its state (#114)."""
+    return (
+        f"ballast run continue {run_id} --mode chat --reason block-resolved --ref TEXT"
+    )
+
+
 def resumable(category: str, limit: str | None = None) -> bool:
     """Whether `ballast run resume` continues a block of this category (#21)."""
     if category == "limit":
@@ -1210,9 +1217,14 @@ RECOVERY = {
     "limit": "Review the evidence so far, then continue human-gated or start a "
     "new run with a larger limit; resume never raises a limit.",
     "postcondition": "Fix the failed contract, then resume, or continue human-gated.",
-    "tamper": "Restore the protected files and recreate .venv, delete the "
-    "marker, review the checkout, then discard the run state and trust again.",
-    "unfinished-step": "Review the checkout, discard the run state, then start again.",
+    "tamper": "Restore the protected files and recreate .venv (uv sync --locked), "
+    "delete BALLAST_TAMPERED, run ballast discard-runs, review the checkout and run "
+    "ballast trust. The discarded run cannot resume in Autonomous; continue it in "
+    "Chat with ballast run continue RUN_ID --mode chat --reason block-resolved "
+    "--ref TEXT.",
+    "unfinished-step": "Review the checkout, run ballast discard-runs, then ballast "
+    "trust. The discarded run cannot resume in Autonomous; continue it in Chat with "
+    "ballast run continue RUN_ID --mode chat --reason block-resolved --ref TEXT.",
     "permission": "Restore the missing permission or credential, then retry.",
     "ineligible": "Remove the cause, then resume, or run the feature human-gated "
     "instead. A run keeps the [autonomous] policy it started with: after you "
@@ -2987,7 +2999,7 @@ def risk_reasons(level: str, boundaries: list[str], policy: dict) -> list[str]:
     return reasons
 
 
-def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
+def check_eligibility(  # noqa: C901, PLR0912, PLR0913 - one list of independent rules
     root: Path,
     *,
     issue: int,
@@ -3068,6 +3080,10 @@ def check_eligibility(  # noqa: C901, PLR0913 - one list of independent rules
         f"{REFUSAL}git configuration carries a credential: {finding}"
         for finding in credential_findings(root)
     ]
+    venv = venv_warning(root)
+    if venv:
+        # #114: the first agent check run would end the run as tampered.
+        reasons.append(f"{REFUSAL}{venv}")
     if self_test:
         try:
             confinement_self_test(root)

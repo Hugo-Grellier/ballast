@@ -650,14 +650,21 @@ class Setup:
             lines = [prepared, verdict.remedy]
         else:
             lines = [prepared, *verdict.lines()]
-        for line in lines:
+        for line in lines + self.venv_lines():
             say(line)
 
     def closing(self, verdict: object, *, unchanged: bool = False) -> list[str]:
         """Return the lines that say what happened to the trust baseline."""
         if verdict is None:  # trust is not recorded here: today's reminder
-            return [] if unchanged else SETUP_REMINDER
-        return verdict.lines()
+            lines = [] if unchanged else SETUP_REMINDER
+        else:
+            lines = verdict.lines()
+        return [*lines, *self.venv_lines()]
+
+    def venv_lines(self) -> list[str]:
+        """Warn before any agent starts that its first check run would tamper (#114)."""
+        warning = launcher.venv_warning(self.root)
+        return [f"warning: {printable(warning)}"] if warning else []
 
     def settle(self, state: Path) -> object:
         """Record the trust baseline if eligible, under the lock; the verdict.

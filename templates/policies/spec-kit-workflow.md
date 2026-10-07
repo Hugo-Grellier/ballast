@@ -443,10 +443,22 @@ modules, but only the installed launcher is outside agent reach. A planted
 `.pth` runs in anything started from `.venv`, so after this failure run nothing
 from the checkout: inspect the listed files and `git status`, restore them with
 Git, remove `__pycache__` directories, delete and recreate `.venv` with the
-project's locked dependency install, delete the marker, and `ballast
-trust` again. Run one headless workflow per
+project's locked dependency install, delete the marker, run `ballast
+discard-runs` (it lists the run state it removed), and `ballast trust` again.
+The discarded run state is gone, so a run stopped on `tamper` or
+`unfinished-step` cannot resume in Autonomous or continue human-gated; continue
+it in Chat with `ballast run continue RUN_ID --mode chat --reason
+block-resolved --ref TEXT`, or start a new run. Run one headless workflow per
 checkout at a time: the check covers every run's saved state, so a concurrent
 run would fail as tampered.
+
+`.venv` is a protected input, so an agent check that creates it is a tamper.
+A fresh worktree has none, and `uv run` or `uv sync` creates it: when a
+`[checks]` command or `extra_allow` rule runs either (without `--no-project`
+or `--isolated`) in a `pyproject.toml` project without `.venv`, setup and
+worktree preparation print a warning, `ballast doctor` reports `checks-venv`,
+and Autonomous eligibility refuses. Run `uv sync --locked` before `ballast
+trust`.
 
 Both integrations produce the same artifacts; provider differences live only
 in this runtime configuration. Validators treat everything an agent can write,
@@ -702,7 +714,7 @@ Resume refuses, naming the command that applies, a run that is:
 | completed | `ballast run publish RUN_ID` |
 | published | `ballast run checkpoint RUN_ID` |
 | continued (lowered by `continue`) | resume the continuation run |
-| stopped on `tamper` or `unfinished-step` | `ballast discard-runs` |
+| stopped on `tamper` or `unfinished-step` | `ballast discard-runs` and `ballast trust`, then `ballast run continue RUN_ID --mode chat --reason block-resolved --ref TEXT` |
 | stopped on `forge` or `permission` | `ballast run publish RUN_ID` |
 | stopped on `upstream-sync` at start | your `ballast run start --mode autonomous` command |
 | stopped on the agent-step or wall-time limit | `ballast run continue RUN_ID --reason block-resolved --ref TEXT`, or a new run with a larger limit |
