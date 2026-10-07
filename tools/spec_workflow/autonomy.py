@@ -1514,20 +1514,19 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
         risk = [level for level in RISKS if level in values]
     authorized = []
     for entry in _strings(table.get("authorized_privileged_actions", []), "actions"):
-        kind = action_kind(entry)
-        action = kind if kind in PRIVILEGED_KINDS else entry
-        if kind not in PRIVILEGED_KINDS and kind in ACTION_KINDS:
+        if never_authorized(entry):
             warnings.append(
                 WIDENING.format(key=f"authorized_privileged_actions {entry!r}")
             )
             continue
-        if kind not in PRIVILEGED_KINDS:
-            # Legacy free text (#95): kept, so existing configurations still
-            # authorize what they named, but only by exact text.
+        # Only a kind spelled exactly authorizes the kind; any other text is
+        # legacy (#95): kept, so existing configurations still authorize what
+        # they named, but only by exact text, never a whole class.
+        if entry not in PRIVILEGED_KINDS:
             kinds = ", ".join(PRIVILEGED_KINDS)
             warnings.append(LEGACY_ACTION.format(action=entry, kinds=kinds))
-        if action not in authorized:
-            authorized.append(action)
+        if entry not in authorized:
+            authorized.append(entry)
     policy = {
         "risk": risk,
         "excluded_boundaries": sorted(
@@ -2870,19 +2869,30 @@ def action_kind(action: str) -> str:
     return "-".join(action.partition(":")[0].lower().split())
 
 
+def never_authorized(action: str) -> bool:
+    """Tell whether an action is `other` or starts with a never-authorized one.
+
+    `deploy production` counts as `deploy`, so legacy exact text can never
+    authorize what FR-027 forbids (#95).
+    """
+    kind = action_kind(action)
+    forbidden = [k for k in ACTION_KINDS if k not in PRIVILEGED_KINDS]
+    return any(kind == k or kind.startswith(k + "-") for k in forbidden)
+
+
 def unauthorized_actions(actions: list[str], policy: dict) -> list[str]:
     """Return declared privileged actions the narrowed policy does not authorize.
 
     A kind from PRIVILEGED_KINDS is authorized by that kind; any other action
-    only by a legacy entry with exactly its text. `other` and the kinds of
-    NEVER_AUTHORIZED never are.
+    only by a legacy entry with exactly its text. `other` and anything starting
+    with a NEVER_AUTHORIZED action never are.
     """
     allowed = set(policy.get("authorized_privileged_actions", []))
 
     def authorized(action: str) -> bool:
-        kind = action_kind(action)
-        if kind in ACTION_KINDS and kind not in PRIVILEGED_KINDS:
+        if never_authorized(action):
             return False
+        kind = action_kind(action)
         return (kind in PRIVILEGED_KINDS and kind in allowed) or action in allowed
 
     return sorted({a for a in actions if not authorized(a)})
@@ -3458,12 +3468,12 @@ def _resolution_lines(run: dict, human: list[dict]) -> list[str]:
             # Recorded, then the resume stopped before the workflow restarted.
             where = "resolved the block; the run did not resume"
         changed = ", ".join(_code(p) for p in (resume or {}).get("changed_inputs", []))
-        policy = ((resume or {}).get("policy") or {}).get("current")
-        if policy is not None:
-            allowed = policy.get("authorized_privileged_actions") or ["none"]
+        refreshed = (resume or {}).get("policy")
+        if refreshed:
             where += (
-                "; the operator re-read [autonomous] from the trusted ballast.toml "
-                f"(authorized actions: {', '.join(_code(a) for a in allowed)})"
+                "; the operator re-read [autonomous] from the trusted ballast.toml: "
+                f"{_policy_text(refreshed['previous'])} became "
+                f"{_policy_text(refreshed['current'])}"
             )
         lines.append(
             f"- {entry['id']} at {entry.get('at')} by {entry.get('by')}: {where}"
@@ -3471,6 +3481,19 @@ def _resolution_lines(run: dict, human: list[dict]) -> list[str]:
             + f"; reference: {neutralize(entry.get('ref', ''))}"
         )
     return [*lines, ""]
+
+
+def _policy_text(policy: dict) -> str:
+    """One line of a policy snapshot for the record."""
+
+    def listed(key: str) -> str:
+        return ", ".join(_code(v) for v in policy.get(key) or []) or "none"
+
+    return (
+        f"(risk {listed('risk')}; excluded boundaries "
+        f"{listed('excluded_boundaries')}; authorized actions "
+        f"{listed('authorized_privileged_actions')})"
+    )
 
 
 def _relative_link(record_dir: str) -> object:

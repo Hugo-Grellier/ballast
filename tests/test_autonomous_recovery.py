@@ -580,9 +580,13 @@ class ResumeTests(StubCase):
         run_id = self.blocked_run()
         before = self.frozen(run_id)
         self.authorize()
-        for source in (None, "setup"):
+        for source in (None, "setup", "legacy"):
             with self.subTest(source=source):
-                self.trust_baseline(source)
+                self.trust_baseline("trust" if source == "legacy" else source)
+                if source == "legacy":
+                    # A baseline without provenance may be setup's.
+                    state = autonomy.state_dir(self.root)
+                    (state / launcher.TRUSTED_SOURCE).unlink()
                 code, _, err = self.main("resume", run_id, "--refresh-policy")
                 self.assertEqual(code, 2, err)
                 self.assertIn("recorded by `ballast trust`", err)

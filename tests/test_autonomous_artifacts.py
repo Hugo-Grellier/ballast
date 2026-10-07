@@ -1270,6 +1270,23 @@ class RiskRecheckTests(RecorderCase):
         self.ok(self.record("plan"))
         self.assertEqual(self.decisions()[0]["privileged_actions"], [action])
 
+    def test_refreshed_policy_clears_the_ineligible_block(self) -> None:
+        """#95: the recorder decides against the snapshot a refresh replaced."""
+        action = "secret-provisioning: a token for the e2e check"
+        self.step({"plan.json": self.draft("plan", privileged_actions=[action])})
+        self.failed(self.record("plan"), "privileged action")
+        self.assertEqual(self.block()["category"], "ineligible")
+        # What `resume --refresh-policy` writes before the re-entry.
+        record = autonomy.read_run(self.root, "run42")
+        record["eligibility"]["policy"]["authorized_privileged_actions"] = [
+            "secret-provisioning"
+        ]
+        autonomy.write_run(self.root, record)
+        autonomy.resolve_block(self.root, "run42")
+        autonomy.consume_steps(self.root, "run42")
+        self.step({"plan.json": self.draft("plan", privileged_actions=[action])})
+        self.ok(self.record("plan"))
+
     def test_review_declared_action_blocks(self) -> None:
         draft = self.review_draft("plan-review", "plan", privileged_actions=["deploy"])
         self.step({"plan-review.json": draft}, role="reviewer")

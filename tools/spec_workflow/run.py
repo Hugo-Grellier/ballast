@@ -1827,8 +1827,9 @@ def _interrupted(run_id: str, record: dict) -> dict:
 def _trusted_policy() -> tuple[dict, list[str]]:
     """Read `[autonomous]` from the ballast.toml `ballast trust` recorded (#95).
 
-    Only a ballast.toml whose bytes equal the operator's own trust baseline
-    counts: a baseline setup recorded, or none, refuses.
+    Only a ballast.toml whose bytes equal a baseline bound to `trust`
+    provenance counts: a baseline setup recorded, a legacy one without
+    provenance, or none, refuses.
     """
     launcher = branch_sync.launcher
     path = ROOT / "ballast.toml"
@@ -1838,12 +1839,15 @@ def _trusted_policy() -> tuple[dict, list[str]]:
     )
     try:
         data = path.read_bytes() if path.is_file() and not path.is_symlink() else b""
-        baseline = launcher.operator_baseline(launcher.state_dir(ROOT))
-    except OSError as error:
+        recorded, provenance = launcher._provenance(launcher.state_dir(ROOT))  # noqa: SLF001
+        baseline = json.loads(recorded) if recorded else None
+    except (OSError, ValueError) as error:
         raise autonomy.AutonomyError(refusal) from error
+    # A baseline without bound provenance may be setup's; refuse it too.
     if (
         not data
-        or baseline is None
+        or (provenance or {}).get("source") != "trust"
+        or not isinstance(baseline, dict)
         or baseline.get("ballast.toml") != hashlib.sha256(data).hexdigest()
     ):
         raise autonomy.AutonomyError(refusal)

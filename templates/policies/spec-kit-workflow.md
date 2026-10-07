@@ -550,9 +550,10 @@ present: retire it with `git rm` and a commit (Git history keeps it).
 `external-write`, `permission-change`, `deploy`, `release`, `merge`,
 `mark-ready` or `other`; the recorder refuses a draft naming any other kind,
 and the step is retried. `[autonomous] authorized_privileged_actions` lists
-the kinds the project authorizes, and only the kind is compared. `deploy`,
-`release`, `merge`, `mark-ready` and `other` are never authorized. A legacy
-free-text entry still authorizes an action with exactly its text, with a
+the kinds the project authorizes, spelled exactly, and only the kind is
+compared. `deploy`, `release`, `merge`, `mark-ready` and `other`, and any
+action starting with one of them, are never authorized. Any other entry is
+legacy: it still authorizes only an action with exactly its text, with a
 warning.
 
 Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
@@ -681,7 +682,8 @@ action in `ballast.toml` does not reach a run blocked `ineligible`. After
 editing it and running `ballast trust`, resume with `--refresh-policy`: after
 the synchronization, the runner re-reads `[autonomous]` from `ballast.toml`
 only when its bytes equal the baseline `ballast trust` recorded (a baseline
-setup recorded, or none, refuses), replaces the run's policy snapshot, and
+setup recorded, one without provenance, or none, refuses), replaces the run's
+policy snapshot, and
 records the previous and new policy with the block resolution, where the
 record shows it. Limits never change. A block
 resolution is not an approval of any provisional decision: every decision made

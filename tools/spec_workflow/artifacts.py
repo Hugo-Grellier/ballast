@@ -873,7 +873,7 @@ def _split_sections(text: str) -> tuple[str, dict[str, str]]:
         if match is None:
             current.append(line)
         elif match.group(1) in sections:
-            message = f"section '## {match.group(1)}' appears twice"
+            message = f"section {'## ' + match.group(1)!r} appears twice"
             raise ContractError(message)
         else:
             current = sections[match.group(1)] = []
@@ -1141,11 +1141,13 @@ def _check_brief_iacs(feature: Feature, iacs: list[tuple[str, str]]) -> None:
     criteria = _issue_criteria(feature)
     mine = [" ".join(text.split()) for _, text in iacs]
     if criteria is not None and mine != criteria:
-        missing = "; ".join(c for c in criteria if c not in mine) or "none"
-        extra = "; ".join(c for c in mine if c not in criteria) or "none"
+        missing = [c for c in criteria if c not in mine]
+        extra = [c for c in mine if c not in criteria]
+        # Quoted: the retry note drops Issue and agent text (#95).
         detail = (
             "'## Issue acceptance criteria' must list the Issue's criteria verbatim "
-            f"and in order (missing: {missing}; not in the Issue: {extra})"
+            f"and in order (missing: {', '.join(map(repr, missing)) or 'none'}; "
+            f"not in the Issue: {', '.join(map(repr, extra)) or 'none'})"
         )
         raise _brief_error(feature, detail)
 
