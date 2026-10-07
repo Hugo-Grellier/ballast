@@ -16,7 +16,7 @@
 
 ## DEC-0001 — Resolution
 
-- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05). Listed in the PR for merge review. The operator has not reviewed this option individually. Option 1.
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. Option 1.
 - **Resolution**: The spec stands unchanged.
   - The fallback is considered only after the step's first primary attempt. A primary that fails on a draft-retry attempt never falls back, and a fallback is never followed by a draft retry or another fallback. A step that falls back therefore makes exactly two attempts (SC-005, FR-006). A step that never considers the fallback keeps the existing draft-retry loop unchanged.
   - Changed-state evidence covers more than the tracked tree, the feature's reviews and drafts:
@@ -34,7 +34,7 @@
   - Unchanged: spec.md, intent.md, autonomous/record.md.
 - **Tests**: `tests/test_fallback.py` (`StateTests`, `WrapperFallbackTests.test_retry_attempt_never_falls_back`, `test_ignored_path_change_refuses`, `test_primary_commit_refuses`, `test_unverifiable_state_refuses`, `test_user_codex_config_not_read`, `PermissionTests.test_other_codex_config_layer_refuses`, `ProbeTests.test_probe_deadline_refuses`, `LedgerFallbackTests.test_human_gated_review_by_fallback_not_cross_provider`, `RunCliTests.test_status_shows_setting`, `test_human_gated_meta_records_setting`, `ModuleTests.test_stdlib_only_no_model_list`), as mapped in tasks.md and quickstart.md.
 
-## DEC-0002 — Discovery
+## DEC-0002 — Proposal
 
 - **Found during**: the implement step of the Autonomous run `f200c320`, 2026-10-06, at task T001 (the host pilot of research R10).
 - **Conflict**: T001 requires every pilot probe to run "from the operator's terminal, not from inside a confined agent step". The implement step is a confined agent step. Its tool permissions refuse every command that needs approval, including version and help probes (`codex --version`, `ollama --version`), and its home directory is read-only, so `uvx` and the test modules' operator-state setup also fail. T001's own stop rule applies: "the host cannot run the probes". Every task from T002 on depends on the pilot's results: the `--config` key that pins the base URL, the `codex exec --json` event shape, the Codex configuration layers, the Codex Spec Kit skill path and the quota and availability signatures. Coding them without the pilot would mean guessing at host facts on an R2 boundary, which the tasks forbid ("Never switch backend silently"; "A pilot result that contradicts research R1 to R10 is a discovery").
@@ -46,7 +46,11 @@
   3. Implement T002 to T036 against placeholder host facts that fail closed: an unknown config key, event shape or layer list always refuses. The fallback could never be selected until a later pilot fills them in. AC-001 to AC-004 and AC-018 would stay unproven, so the feature would not meet its intent.
 - **Needs**: an operator resolution before the implement step continues. Option 1 is the narrowest and keeps the tasks as written.
 
-## DEC-0003 — Discovery
+## DEC-0002 — Resolution
+
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. Option 1.
+- **Resolution**: The operator ran the T001 probes from the host shell and the results are in the Pilot section of `evaluation.md` (items 1 to 10). No spec, plan or task change from this decision.
+## DEC-0003 — Proposal
 
 - **Found during**: task T001, the host pilot, run on 2026-10-06 from the operator side under DEC-0002 option 1. Evidence is in [evaluation.md](evaluation.md#pilot).
 - **Conflict**:
@@ -68,10 +72,10 @@
 
 ## DEC-0003 — Resolution
 
-- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The Ollama upgrade to 0.13.4 or newer is an operator host action, requested 2026-10-06.
-- **Resolution**: option 1. The fallback talks only to Ollama's default loopback endpoint `127.0.0.1:11434`; `--local-fallback-endpoint` is dropped, and the wrapper keeps stripping `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, so nothing an agent or the checkout controls can redirect the provider. No boundary widens. The pilot's `--oss` run (and whether it needs a login) is repeated after the upgrade, before T001 is ticked.
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The operator then did the host action this decision needs, the Ollama upgrade to 0.35.1, on 2026-10-06. Option 1.
+- **Resolution**: The fallback talks only to Ollama's default loopback endpoint `127.0.0.1:11434`; `--local-fallback-endpoint` is dropped, and the wrapper keeps stripping `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, so nothing an agent or the checkout controls can redirect the provider. No boundary widens. The pilot's `--oss` run (and whether it needs a login) is repeated after the upgrade, before T001 is ticked.
 
-## DEC-0004 — Discovery
+## DEC-0004 — Proposal
 
 - **Found during**: task T001, the host pilot rerun on 2026-10-06 from the operator side, after the Ollama upgrade to 0.35.1. Evidence is in [evaluation.md](evaluation.md#9-rerun-on-ollama-0351-2026-10-06-operator-host-outside-confinement).
 - **Conflict**: DEC-0003 option 1 is met (Ollama 0.35.1, default endpoint, no login needed), but `codex exec --oss --local-provider ollama -m qwen3:4b --json` still fails on a trivial prompt. Codex sends about 7.7k tokens of instructions, and the host's Ollama serves the model with a 4096-token context, so the server returns `exceed_context_size_error` (HTTP 400) and Codex retries five times, then emits `turn.failed`. T001's stop rule applies: the model cannot answer through the candidate. R1 and R5 assume a model that runs under Codex, and none of them states a minimum context length. The `--oss` provider offers no per-run way to raise the context (Ollama's context comes from the server setting, the model's `num_ctx` or the Modelfile, not from Codex). An agent can't change it without changing host state.
@@ -84,10 +88,6 @@
 
 ## DEC-0004 — Resolution
 
-- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The model variant is an operator host action, done 2026-10-06.
-- **Resolution**: option 1, adapted. The operator created `qwen3:4b-16k` (`FROM qwen3:4b`, `PARAMETER num_ctx 16384`) rather than changing the server setting. It answers under Codex ([evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06)). The qualified candidate is a local model variant whose served context is at least 16384 tokens. Research R5 gains check 11a, which reads `num_ctx` from `/api/show` `parameters` and refuses a model below the minimum or with no `num_ctx`. Tasks T037 (tests first) and T013 add it. No boundary widens.
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The driving agent created the `qwen3:4b-16k` variant on 2026-10-06 (a local model variant, not a server setting). Option 1, adapted.
+- **Resolution**: The driving agent created `qwen3:4b-16k` (`FROM qwen3:4b`, `PARAMETER num_ctx 16384`) rather than changing the server setting. It answers under Codex ([evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06)). The qualified candidate is a local model variant whose served context is at least 16384 tokens. Research R5 gains check 11a, which reads `num_ctx` from `/api/show` `parameters` and refuses a model below the minimum or with no `num_ctx`. Tasks T037 (tests first) and T013 add it. No boundary widens.
 
-## DEC-0002 — Resolution
-
-- **Status**: resolved by the driving agent (claude/claude-opus-5-5) under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review.
-- **Resolution**: option 1. The operator ran the T001 probes from the host shell and the results are in the Pilot section of `evaluation.md` (items 1 to 10). No spec, plan or task change from this decision.
