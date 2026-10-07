@@ -280,6 +280,23 @@ def _invocation_lock(run_id: str) -> object:
         os.close(fd)
 
 
+@contextlib.contextmanager
+def _run_locks(run_id: str, holder: str) -> object:
+    """Hold the invocation lock, and a Chat run's own lock too (#111).
+
+    Chat `step`, `publish` and others hold only the Chat lock, so a
+    PR-editing command that may meet a Chat run (`checkpoint`, `demo`) takes
+    both, and a busy Chat run refuses it as `LockHeld`.
+    """
+    with _invocation_lock(run_id), contextlib.ExitStack() as stack:
+        if _chat_run(run_id):
+            try:
+                stack.enter_context(chat.Lock(chat.load(ROOT, run_id), holder))
+            except chat.Refused as refusal:
+                raise LockHeld(str(refusal)) from refusal
+        yield
+
+
 def _clock(run_id: str, *, start: bool) -> bool:
     """Open or close the run's active-time clock (#21 R8); False on failure.
 
@@ -1342,20 +1359,14 @@ def _checkpoint_command(options: list[str]) -> int:
     if len(options) != 1:
         return _refuse("checkpoint needs exactly one RUN_ID")
     run_id = options[0]
-    chat_run = _chat_run(run_id)
-    if not chat_run:
+    if not _chat_run(run_id):
         record = _source_run(run_id)
         if isinstance(record, str):
             return _refuse(record)
     try:
-        with contextlib.ExitStack() as locks:
-            # `demo` holds the invocation lock for every mode; a Chat step
-            # holds the Chat run's own lock (#111). Take both.
-            locks.enter_context(_invocation_lock(run_id))
-            if chat_run:
-                locks.enter_context(chat.Lock(chat.load(ROOT, run_id), "checkpoint"))
+        with _run_locks(run_id, "checkpoint"):
             outcome = draft_pr.checkpoint(ROOT, run_id, create=False)
-    except (LockHeld, chat.Refused) as held:
+    except LockHeld as held:
         return _refuse(str(held))
     if outcome.state == "skipped" and outcome.reason == "no-draft-pr":
         return _refuse(
@@ -1389,7 +1400,7 @@ def _demo_command(options: list[str]) -> int:
         sys.stdout.write(demo.format_outcome(outcome) + "\n")
         return EXIT_BLOCKED
     try:
-        with _invocation_lock(run_id):
+        with _run_locks(run_id, "demo"):
             outcome = demo.request(ROOT, run_id, scenario, wait=wait)
     except LockHeld:
         outcome = demo.DemoOutcome(

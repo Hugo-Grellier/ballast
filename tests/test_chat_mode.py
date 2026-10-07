@@ -3828,8 +3828,11 @@ class PublishTests(ChatCase):
         self.assertEqual(self.record(run_id).run["status"], "published")
         with chat.Lock(self.chat_run(run_id), "step implement"):
             result = self.ballast("run", "checkpoint", run_id)
+            demo = self.ballast("run", "demo", run_id, "home", "--no-wait")
         self.assertEqual(result.code, 2, result.text)
         self.assertIn(f"run {run_id} is busy: step implement", result.text)
+        self.assertEqual(demo.code, 1, demo.text)  # `demo` waits for a Chat step
+        self.assertIn("lock-held", demo.text)
         lock = autonomy.run_dir(self.root, run_id) / "invocation.lock"
         with lock.open("w") as held:  # `ballast run demo` holds this one
             fcntl.flock(held, fcntl.LOCK_EX)
