@@ -3498,6 +3498,10 @@ ACCEPTANCE_STATUS = {
         f"{ACCEPTANCE_TESTS} criterion-test pairs, or over 1 MiB); no criterion "
         "was checked"
     ),
+    "unpublished": (
+        "acceptance-evidence.json is git-ignored, so the PR would not carry it; "
+        "no criterion was checked"
+    ),
     "no-python": "no .venv/bin/python to run the tests; no criterion was checked",
     "snapshot-unavailable": (
         "the implementation tree could not be fingerprinted; no criterion was checked"

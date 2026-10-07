@@ -3376,11 +3376,18 @@ def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is repor
     # Bounded before it is read: the manifest is agent-written.
     if path.is_file() and path.stat().st_size > autonomy.MAX_PUBLISHED_FILE:
         return {"status": "too-many"}, None, []
+    # A manifest the PR head will not carry binds nothing a reviewer can see.
+    manifest_path = f"{relative}/acceptance-evidence.json"
+    try:
+        if manifest_path not in _published_paths(root, {manifest_path}):
+            return {"status": "unpublished"}, None, []
+    except (OSError, ValueError):
+        return {"status": "snapshot-unavailable"}, None, []
     try:
         manifest = ledger.archive_manifest(root, run["run_id"], relative)
     except ledger.StaleManifestError:
         return {"status": "stale"}, None, []
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
         return {"status": "malformed"}, None, []
     criteria = {
         ac: list(dict.fromkeys(tests)) for ac, tests in manifest["criteria"].items()
@@ -3444,8 +3451,6 @@ def _published_tests(root: Path, tests: list[str]) -> set[str]:
     `git add --all` publishes tracked and unignored files; a test in an
     ignored or missing file would pass here and be absent from the PR head.
     """
-    import ledger  # noqa: PLC0415 - ledger imports this module
-
     modules: dict[str, str] = {}
     for test in tests:
         parts = test.split(".")
@@ -3454,20 +3459,29 @@ def _published_tests(root: Path, tests: list[str]) -> set[str]:
             if (root / path).is_file() and not (root / path).is_symlink():
                 modules[test] = path
                 break
-    if not modules:
-        return set()
-    listed = ledger._git(  # noqa: SLF001 - the ledger's hardened Git
-        root,
-        "--literal-pathspecs",
-        "ls-files",
-        "-z",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "--",
-        *sorted(set(modules.values())),
-    ).split("\0")
+    listed = _published_paths(root, set(modules.values()))
     return {test for test, path in modules.items() if path in listed}
+
+
+def _published_paths(root: Path, paths: set[str]) -> set[str]:
+    """Return the paths `git add --all` publishes: tracked or unignored."""
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    if not paths:
+        return set()
+    return set(
+        ledger._git(  # noqa: SLF001 - the ledger's hardened Git
+            root,
+            "--literal-pathspecs",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            *sorted(paths),
+        ).split("\0")
+    )
 
 
 def _record_acceptance(

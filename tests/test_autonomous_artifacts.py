@@ -1356,6 +1356,24 @@ class AcceptanceChecksTests(AcceptanceCase):
         self.assertEqual(summary, {"status": "too-many"})
         archive.assert_not_called()
 
+    def test_ignored_manifest_runs_nothing(self) -> None:
+        """The PR head would not carry it: nothing binds to it."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("acceptance-evidence.json\n")
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "unpublished"})
+        self.assertIn("acceptance-evidence.json is git-ignored", self.record_text())
+        self.assertEqual(self.checks(), [])
+
+    def test_deeply_nested_manifest_is_malformed(self) -> None:
+        depth = 100_000
+        path = self.feature / "acceptance-evidence.json"
+        path.write_text("[" * depth + "]" * depth)
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "malformed"})
+        self.assertEqual(self.checks(), [])
+
     def test_boolean_schema_version_is_malformed(self) -> None:
         self.manifest({"AC-001": [PASSING], "AC-002": [], "AC-003": []})
         path = self.feature / "acceptance-evidence.json"
