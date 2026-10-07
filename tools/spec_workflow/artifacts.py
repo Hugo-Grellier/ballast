@@ -3452,8 +3452,10 @@ def _published_tests(root: Path, tests: list[str]) -> set[str]:
     ignored or missing file would pass here and be absent from the PR head.
     Every file Python could import along the dotted name (each prefix's
     `.py` module and package `__init__.py`) must be published, so whichever
-    one the import resolves to is in the PR.
+    one the import resolves to is in the PR. A symlink on the way (file or
+    directory) could lead to unpublished code, so it refuses the test.
     """
+    real = root.resolve()
     found: dict[str, set[str]] = {}
     for test in tests:
         parts = test.split(".")
@@ -3466,7 +3468,13 @@ def _published_tests(root: Path, tests: list[str]) -> set[str]:
             )
             if os.path.lexists(root / path)
         }
-        if any(Path(path).stem != "__init__" for path in candidates):
+        # The test module itself (`tests.test_*` or deeper) must exist.
+        module = "/".join(parts[:2])
+        if any(
+            path in {f"{module}.py", f"{module}/__init__.py"}
+            or path.startswith(f"{module}/")
+            for path in candidates
+        ) and all((root / path).resolve() == real / path for path in candidates):
             found[test] = candidates
     listed = _published_paths(root, set().union(*found.values()))
     return {test for test, paths in found.items() if paths <= listed}
