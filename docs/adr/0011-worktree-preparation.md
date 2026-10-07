@@ -1,6 +1,6 @@
 # ADR-0011: A new worktree is prepared from a verified local installation
 
-- Status: proposed (with the plan of [feature 15](../../specs/15-worktree-setup/plan.md), 2026-10-06); accepted when its PR merges
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (with the plan of [feature 15](../../specs/15-worktree-setup/plan.md), 2026-10-06); accepted when its PR merges
 - Feature: [15-worktree-setup](../../specs/15-worktree-setup/spec.md); decisions R1 to R9 in its [research](../../specs/15-worktree-setup/research.md)
 - Extends: [ADR-0007](0007-recoverable-installation.md) (stage, journal, record, lock); relies on [ADR-0002](0002-cli-standard-manifest.md) (manifest as data) and [ADR-0008](0008-verified-cache-and-update-preview.md) (verified cache)
 

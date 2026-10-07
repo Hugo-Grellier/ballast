@@ -1,6 +1,6 @@
 # ADR-0014: Local zero-cost fallback through Codex local-provider mode
 
-- Status: proposed (2026-10-06, with the plan of [feature 23](../../specs/23-free-fallback/plan.md#architecture-boundaries), where it is called ADR-0012 because that number was taken before the plan was written; agent-provisional in Autonomous run `f200c320`, accepted only when the operator merges the feature PR)
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (2026-10-06, with the plan of [feature 23](../../specs/23-free-fallback/plan.md#architecture-boundaries), where it is called ADR-0012 because that number was taken before the plan was written; agent-provisional in Autonomous run `f200c320`, accepted only when the operator merges the feature PR)
 - Feature: [23-free-fallback](../../specs/23-free-fallback/spec.md), FR-001 to FR-011, AC-001 to AC-021; research [R1 to R10](../../specs/23-free-fallback/research.md); [decisions.md](../../specs/23-free-fallback/decisions.md) DEC-0001, DEC-0003, DEC-0004; host evidence in [evaluation.md](../../specs/23-free-fallback/evaluation.md)
 - Extends: [ADR-0003](0003-launcher-github-authority.md) (trusted programs) and [ADR-0010](0010-autonomous-resume-and-bounded-recovery.md) (limits and retries)
 

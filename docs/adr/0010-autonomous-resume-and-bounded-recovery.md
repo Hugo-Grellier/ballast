@@ -1,6 +1,6 @@
 # ADR-0010: Autonomous runs resume in Autonomous and recover within fixed bounds
 
-- Status: proposed (2026-10-06, with the plan of [feature 21](../../specs/21-autonomous-reviewed-pr/plan.md), research R1–R20). Agent-provisional: written in Autonomous run `fcba2ba4` and its continuation by the driving agent under the operator's standing authority for v1.0 issues; merging the feature PR is the human approval that accepts it.
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (2026-10-06, with the plan of [feature 21](../../specs/21-autonomous-reviewed-pr/plan.md), research R1–R20). Agent-provisional: written in Autonomous run `fcba2ba4` and its continuation by the driving agent under the operator's standing authority for v1.0 issues; merging the feature PR is the human approval that accepts it.
 - Feature: [21-autonomous-reviewed-pr](../../specs/21-autonomous-reviewed-pr/spec.md), FR-001 to FR-027
 - Amends: [ADR-0004](0004-autonomous-provisional-decisions.md) (continuation rule). Builds on: [ADR-0005](0005-launcher-branch-synchronization.md)
 
