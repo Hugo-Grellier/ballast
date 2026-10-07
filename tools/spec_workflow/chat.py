@@ -1166,10 +1166,10 @@ def archive(run: Run) -> None:
         _err(f"ballast: Chat archive failed: {error}")
 
 
-def checkpoint(run: Run) -> None:
+def checkpoint(run: Run, *, create: bool = True) -> None:
     """Run the Draft PR checkpoint (#17) and its packet (#19); assign no status."""
     try:
-        outcome = draft_pr.checkpoint(run.root, run.id)
+        outcome = draft_pr.checkpoint(run.root, run.id, create=create)
         line = draft_pr.format_line(outcome)
         if outcome.packet is not None:
             line += "\n" + draft_pr.packet.format_line(outcome.packet)
@@ -3163,6 +3163,7 @@ def publish(root: Path, run_id: str) -> int:
             f"Draft PR: {result['url']}\nThe PR's Chat section lists every human "
             "approval; merging stays your decision."
         )
-        # The acceptance packet (#19, #111), as after every Chat step.
-        checkpoint(run)
+        # The acceptance packet (#19, #111) for the PR just verified; never a
+        # second PR, even while GitHub's list lags.
+        checkpoint(run, create=False)
     return EXIT_OK

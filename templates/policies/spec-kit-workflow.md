@@ -1302,8 +1302,8 @@ the end of `ballast run start`, `resume` and `continue`, from that run's own
 ledger and records: record checks for a human-gated run under its run ID, then
 resume it. For an Autonomous or Chat run, record checks under its run ID, then
 `ballast run checkpoint RUN_ID` rebuilds the packet and the Draft PR section
-from that run's ledger and records, in any status and without an agent; a
-Chat run's packet names its mode `chat`. An Autonomous run's `ballast run
+from that run's ledger and records, in any status and without an agent; its
+packet's run line names the run ID and its current mode. An Autonomous run's `ballast run
 publish` retry runs no checkpoint, and `ballast run continue` starts a
 new run whose packet reads only the new run's ledger.
 

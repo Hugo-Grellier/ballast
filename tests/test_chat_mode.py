@@ -3826,19 +3826,6 @@ class PublishTests(ChatCase):
         self.assertNotIn("not an autonomous run", result.text)
         self.assertEqual(packets(), before + 2)
         self.assertEqual(self.record(run_id).run["status"], "published")
-        with chat.Lock(self.chat_run(run_id), "step implement"):
-            result = self.ballast("run", "checkpoint", run_id)
-            demo = self.ballast("run", "demo", run_id, "home", "--no-wait")
-        self.assertEqual(result.code, 2, result.text)
-        self.assertIn(f"run {run_id} is busy: step implement", result.text)
-        self.assertEqual(demo.code, 1, demo.text)  # `demo` waits for a Chat step
-        self.assertIn("lock-held", demo.text)
-        lock = autonomy.run_dir(self.root, run_id) / "invocation.lock"
-        with lock.open("w") as held:  # `ballast run demo` holds this one
-            fcntl.flock(held, fcntl.LOCK_EX)
-            result = self.ballast("run", "checkpoint", run_id)
-        self.assertEqual(result.code, 2, result.text)
-        self.assertIn(f"run {run_id} has an active invocation", result.text)
         self.assertEqual(packets(), before + 2)
 
     def test_a_failed_packet_never_fails_publish(self) -> None:
@@ -3862,14 +3849,38 @@ class PublishTests(ChatCase):
         self.assertEqual(len(recorded), 1)
         self.assertEqual(recorded[0]["outcome"], "failed-retryable")
 
-    def test_checkpoint_without_a_pr_creates_nothing(self) -> None:
-        """#111: a Chat refresh before publication refuses and writes nothing."""
+    def test_publish_never_opens_a_second_pr_while_the_list_lags(self) -> None:
+        """#111: the checkpoint after publication only refreshes."""
+        run_id = self.start()
+        self.through_final(run_id)
+        self.gh_data("repos_acme_demo.json", {"default_branch": "main"})
+        self.gh_data("repos_acme_demo_pulls.json", [])  # not listed yet
+        result = self.call(chat.publish, self.root, run_id)
+        self.assertEqual(result.code, 0, result.text)
+        creates = [c for c in self.gh_calls() if c[:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+
+    def test_checkpoint_refusals_write_nothing(self) -> None:
+        """#111: no PR yet, or a busy run, refuses a Chat refresh."""
         run_id = self.start()
         self.through_final(run_id)
         before = self.ledger(run_id)
         result = self.ballast("run", "checkpoint", run_id)
         self.assertEqual(result.code, 2, result.text)
         self.assertIn(f"run {run_id} has no Draft PR yet", result.text)
+        with chat.Lock(self.chat_run(run_id), "step implement"):
+            result = self.ballast("run", "checkpoint", run_id)
+            demo = self.ballast("run", "demo", run_id, "home", "--no-wait")
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} is busy: step implement", result.text)
+        self.assertEqual(demo.code, 1, demo.text)  # `demo` waits for a Chat step
+        self.assertIn("lock-held", demo.text)
+        lock = autonomy.run_dir(self.root, run_id) / "invocation.lock"
+        with lock.open("w") as held:  # `ballast run demo` holds this one
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} has an active invocation", result.text)
         self.assertEqual(self.ledger(run_id), before)
         self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
 
