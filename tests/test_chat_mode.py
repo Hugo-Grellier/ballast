@@ -3775,6 +3775,127 @@ class PublishTests(ChatCase):
             any(b"sk-test-0000SECRET" in path.read_bytes() for path in logs)
         )
 
+    def test_publish_and_checkpoint_carry_the_acceptance_packet(self) -> None:
+        """#111 [AC-016]: a Chat Draft PR gets the #19 packet, and refreshes."""
+        run_id = self.start()
+        self.through_final(run_id)
+        self.gh_data("repos_acme_demo.json", {"default_branch": "main"})
+        served = self.gh_dir / "repos_acme_demo_pulls_7.json"
+
+        def serve_body(body: str | None = None) -> None:
+            """Serve PR #7 at the pushed head, with `body` when given."""
+            pr = json.loads(served.read_text())
+            head = self.git("rev-parse", "HEAD").strip()
+            pr["head"]["sha"] = head
+            pr["base"]["sha"] = self.git("rev-parse", "main").strip()
+            self.gh_data(
+                f"repos_acme_demo_commits_{head}_check-runs.json", {"check_runs": []}
+            )
+            if body is not None:
+                pr["body"] = body
+            served.write_text(json.dumps(pr))
+            self.gh_data("repos_acme_demo_pulls.json", [pr])
+
+        def packets() -> int:
+            return sum(e["kind"] == "acceptance_packet" for e in self.ledger(run_id))
+
+        real = autonomy.publish
+
+        def publish(root: Path, run: str) -> dict:
+            result = real(root, run)
+            serve_body()  # GitHub's view of the PR the publisher just opened
+            return result
+
+        before = packets()
+        with patch.object(autonomy, "publish", publish):
+            result = self.call(chat.publish, self.root, run_id)
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("Draft PR: reused", result.out)
+        self.assertIn("Acceptance packet: published #7", result.out)
+        body = self.body()
+        self.assertEqual(body.count("<!-- ballast:acceptance-packet:begin -->"), 1)
+        self.assertEqual(body.count(chat.CHAT_BEGIN), 1)
+        self.assertIn(f"- Run: `{run_id}` (chat)", body)
+        self.assertEqual(packets(), before + 1)
+
+        # `ballast run checkpoint` refreshes a Chat run's packet (#111).
+        serve_body(body)
+        result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("Acceptance packet:", result.out)
+        self.assertNotIn("not an autonomous run", result.text)
+        self.assertEqual(packets(), before + 2)
+        self.assertEqual(self.record(run_id).run["status"], "published")
+        self.assertEqual(packets(), before + 2)
+
+    def test_a_failed_packet_never_fails_publish(self) -> None:
+        """#111: the checkpoint after publication never changes the exit."""
+        run_id = self.start()
+        self.through_final(run_id)
+        before = self.ledger(run_id)
+        packet = chat.draft_pr.packet
+        with patch.object(packet, "publish", side_effect=RuntimeError):
+            result = self.call(chat.publish, self.root, run_id)
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn(
+            "Acceptance packet: failed-retryable (internal-error)", result.out
+        )
+        self.assertEqual(self.record(run_id).run["status"], "published")
+        recorded = [
+            e["data"]
+            for e in self.ledger(run_id)[len(before) :]
+            if e["kind"] == "acceptance_packet"
+        ]
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["outcome"], "failed-retryable")
+
+    def test_publish_never_opens_a_second_pr_while_the_list_lags(self) -> None:
+        """#111: the checkpoint after publication only refreshes."""
+        run_id = self.start()
+        self.through_final(run_id)
+        self.gh_data("repos_acme_demo.json", {"default_branch": "main"})
+        self.gh_data("repos_acme_demo_pulls.json", [])  # not listed yet
+        result = self.call(chat.publish, self.root, run_id)
+        self.assertEqual(result.code, 0, result.text)
+        creates = [c for c in self.gh_calls() if c[:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertIn(
+            f"Acceptance packet: pending (no-pr): run `ballast run checkpoint "
+            f"{run_id}` once GitHub lists the Draft PR",
+            result.out,
+        )
+        result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(
+            f"no open Draft PR found for published run {run_id}: check out its "
+            "pinned branch",
+            result.text,
+        )
+
+    def test_checkpoint_refusals_write_nothing(self) -> None:
+        """#111: no PR yet, or a busy run, refuses a Chat refresh."""
+        run_id = self.start()
+        self.through_final(run_id)
+        before = self.ledger(run_id)
+        result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} has no Draft PR yet", result.text)
+        with chat.Lock(self.chat_run(run_id), "step implement"):
+            result = self.ballast("run", "checkpoint", run_id)
+            demo = self.ballast("run", "demo", run_id, "home", "--no-wait")
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} is busy: step implement", result.text)
+        self.assertEqual(demo.code, 1, demo.text)  # `demo` refuses during a Chat step
+        self.assertIn("lock-held", demo.text)
+        lock = autonomy.run_dir(self.root, run_id) / "invocation.lock"
+        with lock.open("w") as held:  # `ballast run demo` holds this one
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} has an active invocation", result.text)
+        self.assertEqual(self.ledger(run_id), before)
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["pr", "create"]])
+
     def through_final_after_scope(self, run_id: str) -> None:
         self.approve_in_process(run_id, "intent")
         self.feature_file("plan.md", PLAN)

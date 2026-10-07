@@ -14,7 +14,7 @@
     ballast run continue RUN_ID --reason block-resolved|changes-requested \
         --ref TEXT [--mode chat|human-gated]
     ballast run publish RUN_ID
-    ballast run checkpoint RUN_ID                 # an Autonomous run
+    ballast run checkpoint RUN_ID                 # an Autonomous or Chat run
     ballast run demo RUN_ID SCENARIO [--no-wait]  # a run with an open Draft PR
 
 Chat runs (#20), driven by the operator one action at a time:
@@ -61,8 +61,8 @@ tasks or code input changed during the block. Mode, risk and limits stay as
 recorded at start, and only active time counts against the wall time.
 `continue` lowers a run to human-gated after implementation, through the
 gate-only ballast-continue; before implementation it points to `resume`.
-`checkpoint` refreshes an Autonomous run's Draft PR checkpoint and acceptance
-packet, in any status, without an agent. `demo` (#22, demo.py) dispatches
+`checkpoint` refreshes an Autonomous or Chat run's Draft PR checkpoint and
+acceptance packet, in any status, without an agent. `demo` (#22, demo.py) dispatches
 one declared demo capture for the run's open Draft PR, records it, waits at
 most 120 s (none with `--no-wait`) and refreshes the packet; it starts no
 agent and refuses while the tamper or in-progress marker exists. One
@@ -278,6 +278,23 @@ def _invocation_lock(run_id: str) -> object:
         yield
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def _run_locks(run_id: str, holder: str) -> object:
+    """Hold the invocation lock, and a Chat run's own lock too (#111).
+
+    Chat `step`, `publish` and others hold only the Chat lock, so a
+    PR-editing command that may meet a Chat run (`checkpoint`, `demo`) takes
+    both, and a busy Chat run refuses it as `LockHeld`.
+    """
+    with _invocation_lock(run_id), contextlib.ExitStack() as stack:
+        if _chat_run(run_id):
+            try:
+                stack.enter_context(chat.Lock(chat.load(ROOT, run_id), holder))
+            except chat.Refused as refusal:
+                raise LockHeld(str(refusal)) from refusal
+        yield
 
 
 def _clock(run_id: str, *, start: bool) -> bool:
@@ -1335,21 +1352,32 @@ def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity i
 def _checkpoint_command(options: list[str]) -> int:
     """`ballast run checkpoint RUN_ID`: refresh the PR evidence, no agent (#21 R12).
 
-    Any run status. It never changes the run's records: only #17's
-    checkpoint and #19's packet run, and they never create a Draft PR here.
+    An Autonomous or Chat run (#111), any run status. It never changes the
+    run's records: only #17's checkpoint and #19's packet run, and they never
+    create a Draft PR here.
     """
     if len(options) != 1:
         return _refuse("checkpoint needs exactly one RUN_ID")
-    record = _source_run(options[0])
-    if isinstance(record, str):
-        return _refuse(record)
-    run_id = record["run_id"]
+    run_id = options[0]
+    if not _chat_run(run_id):
+        record = _source_run(run_id)
+        if isinstance(record, str):
+            return _refuse(record)
     try:
-        with _invocation_lock(run_id):
+        with _run_locks(run_id, "checkpoint"):
             outcome = draft_pr.checkpoint(ROOT, run_id, create=False)
     except LockHeld as held:
         return _refuse(str(held))
     if outcome.state == "skipped" and outcome.reason == "no-draft-pr":
+        record = autonomy.find_run(ROOT, run_id)
+        if record is not None and record["status"] == "published":
+            # GitHub's PR list can lag a just-created PR (#111); the same
+            # skip also covers a checkout off the run's pinned branch.
+            return _refuse(
+                f"no open Draft PR found for published run {run_id}: check out "
+                "its pinned branch, or, if GitHub does not list the new PR yet, "
+                f"retry ballast run checkpoint {run_id}"
+            )
         return _refuse(
             f"run {run_id} has no Draft PR yet; ballast run publish {run_id} opens "
             "it once the run completes"
@@ -1381,7 +1409,7 @@ def _demo_command(options: list[str]) -> int:
         sys.stdout.write(demo.format_outcome(outcome) + "\n")
         return EXIT_BLOCKED
     try:
-        with _invocation_lock(run_id):
+        with _run_locks(run_id, "demo"):
             outcome = demo.request(ROOT, run_id, scenario, wait=wait)
     except LockHeld:
         outcome = demo.DemoOutcome(

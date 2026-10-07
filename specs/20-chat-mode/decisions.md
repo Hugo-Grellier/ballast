@@ -71,3 +71,18 @@
 
 - Decision: accepted. Decided by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05). Listed for the merge review.
 - Rationale: the checks add evidence about real TUIs, not coverage of a boundary: each boundary they touch is already tested deterministically, with real confinement. #24 runs the same checks across repositories with a person at the terminal, so they lose nothing by moving there.
+
+## DEC-0005 — Proposal
+
+- **Observed during**: v1.0 qualification (#24), blank pilot; Issue #111
+- **Classification**: implementation bug (AC-016: the Draft PR carries "the same evidence a headless run provides")
+- **Observation**: `ballast run publish` for a Chat run opened the Draft PR with the Chat section only. The #17 checkpoint, which publishes the #19 acceptance packet, ran after every Chat step but not after publication, when the branch is usually first pushed. `ballast run checkpoint` refused Chat runs as "not an autonomous run", so no later refresh existed.
+- **Proposed decision**: Chat `publish` runs the same Draft PR checkpoint, and so the same packet builder, after a successful publication, as every Chat step does. `ballast run checkpoint RUN_ID` accepts a Chat run, under both the run's invocation lock (held by `demo`) and the Chat run's own lock (held by a running step), and never creates a PR. `ballast run demo`, which also edits the PR body, takes the Chat run's lock too, so it refuses (`lock-held`) while a Chat step or publication runs instead of racing it. After publication the checkpoint only refreshes; it never creates a second PR. The packet's existing run line names the run ID and its current mode (`chat` while the run stays in Chat); `packet.py` is unchanged.
+- **Alternatives**: a documented Chat-only refresh such as a `step`; it would start an agent to refresh evidence.
+- **Affected artifacts**: `tools/spec_workflow/chat.py`, `tools/spec_workflow/run.py`, `templates/policies/spec-kit-workflow.md`, `README.md`
+- **Status**: resolved below
+
+## DEC-0005 — Resolution
+
+- Decision: accepted. Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05). Listed for the merge review.
+- Rationale: it reuses the #17 checkpoint and #19 packet unchanged, so Chat and Autonomous PRs carry one packet format, and the refresh needs no agent. Evidence: `PublishTests.test_publish_and_checkpoint_carry_the_acceptance_packet`.

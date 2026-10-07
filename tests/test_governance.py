@@ -149,7 +149,10 @@ class PolicyWordingTests(unittest.TestCase):
                 "every decision made after a resume stays agent-provisional, and "
                 "merging the PR stays the single human approval"
             ),
-            "The refreshed packet still lists every decision as agent-provisional",
+            (
+                "An Autonomous run's refreshed packet still lists every decision as "
+                "agent-provisional"
+            ),
         ):
             self.assertIn(text, section)
         workflow = " ".join(

@@ -1166,10 +1166,20 @@ def archive(run: Run) -> None:
         _err(f"ballast: Chat archive failed: {error}")
 
 
-def checkpoint(run: Run) -> None:
-    """Run the Draft PR checkpoint (#17), last in the invocation; assign no status."""
+def checkpoint(run: Run, *, create: bool = True) -> None:
+    """Run the Draft PR checkpoint (#17) and its packet (#19); assign no status."""
     try:
-        line = draft_pr.format_line(draft_pr.checkpoint(run.root, run.id))
+        outcome = draft_pr.checkpoint(run.root, run.id, create=create)
+        line = draft_pr.format_line(outcome)
+        if outcome.packet is not None:
+            line += "\n" + draft_pr.packet.format_line(outcome.packet)
+        elif not create and outcome.reason == "no-draft-pr":
+            # ponytail: GitHub's PR list can lag a just-created PR; name the
+            # refresh instead of polling it.
+            line += (
+                "\nAcceptance packet: pending (no-pr): run `ballast run "
+                f"checkpoint {run.id}` once GitHub lists the Draft PR"
+            )
     except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
         line = f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
     _out(line)
@@ -3160,4 +3170,7 @@ def publish(root: Path, run_id: str) -> int:
             f"Draft PR: {result['url']}\nThe PR's Chat section lists every human "
             "approval; merging stays your decision."
         )
+        # The acceptance packet (#19, #111) for the PR just verified; never a
+        # second PR, even while GitHub's list lags.
+        checkpoint(run, create=False)
     return EXIT_OK

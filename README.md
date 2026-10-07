@@ -170,7 +170,8 @@ ballast run approve RUN_ID GATE               # from your terminal; reject ... -
 ballast run resolve RUN_ID DEC-NNNN
 ballast run checks RUN_ID
 ballast run mode RUN_ID chat|human-gated --reason TEXT
-ballast run publish RUN_ID
+ballast run publish RUN_ID                    # Draft PR with the Chat section, then the packet
+ballast run checkpoint RUN_ID                 # refresh the Draft PR and packet, no agent
 ```
 
 A step is an interactive Claude or Codex session for one phase. It runs with the headless permission rules (anything else is denied, never prompted) under the same `bwrap` confinement as an Autonomous step, so Chat needs `bwrap` too. When the session ends (`/exit`, or `Ctrl-]` twice), Ballast confirms the agent is gone and checks the phase's artifact. Every gate needs your `ballast run approve` from a terminal; nothing the agent writes or says approves anything. Leave whenever you like: `status` and the next `step` pick the run up later, from any terminal, after the full preflight. `ballast run continue RUN_ID ... --mode chat` continues a stopped Autonomous run in Chat. Conversation logs stay local. Working in a plain agent session outside `ballast run` gives none of these guarantees.
