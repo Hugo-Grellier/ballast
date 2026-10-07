@@ -23,7 +23,7 @@ Once per machine, run this line. It downloads the `ballast` command of one relea
 
 <!-- x-release-please-start-version -->
 ```sh
-(c=$PATH; PATH=/usr/local/bin:/usr/bin:/bin; v=v0.9.0; u=https://github.com/Hugo-Grellier/ballast/releases/download/$v; d=$(TMPDIR=/tmp mktemp -d) && { curl -q -fsSL -o "$d/ballast" "$u/ballast" && curl -q -fsSL -o "$d/ballast.sha256" "$u/ballast.sha256" || { echo "ballast: cannot download $v from $u; nothing installed" >&2; false; }; } && { [ "$(cut -d" " -f1 "$d/ballast.sha256")" = "$(sha256sum <"$d/ballast" | cut -d" " -f1)" ] || { echo "ballast: checksum mismatch for $v; nothing installed" >&2; false; }; } && BALLAST_CALLER_PATH="$c" /usr/bin/python3 -I -S "$d/ballast" self-install)
+(c=$PATH; PATH=/usr/local/bin:/usr/bin:/bin; v=v0.10.0; u=https://github.com/Hugo-Grellier/ballast/releases/download/$v; d=$(TMPDIR=/tmp mktemp -d) && { curl -q -fsSL -o "$d/ballast" "$u/ballast" && curl -q -fsSL -o "$d/ballast.sha256" "$u/ballast.sha256" || { echo "ballast: cannot download $v from $u; nothing installed" >&2; false; }; } && { [ "$(cut -d" " -f1 "$d/ballast.sha256")" = "$(sha256sum <"$d/ballast" | cut -d" " -f1)" ] || { echo "ballast: checksum mismatch for $v; nothing installed" >&2; false; }; } && BALLAST_CALLER_PATH="$c" /usr/bin/python3 -I -S "$d/ballast" self-install)
 ```
 <!-- x-release-please-end -->
 

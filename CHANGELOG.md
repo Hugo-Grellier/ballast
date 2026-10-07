@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.0](https://github.com/Hugo-Grellier/ballast/compare/v0.9.0...v0.10.0) (2026-10-07)
+
+
+### Features
+
+* **workflow:** record per-criterion checks from the agent-proposed manifest in Autonomous runs ([#122](https://github.com/Hugo-Grellier/ballast/issues/122)) ([4fc8624](https://github.com/Hugo-Grellier/ballast/commit/4fc8624e70161b6f0318f7be16d2bcb19da54fa7))
+
+
+### Bug Fixes
+
+* **run:** publish the acceptance packet for Chat runs and refresh it with checkpoint ([#119](https://github.com/Hugo-Grellier/ballast/issues/119)) ([308471d](https://github.com/Hugo-Grellier/ballast/commit/308471da7c7e54bb3b16368675b7836cb4851504))
+* **workflow:** defer operator-only tasks to the PR and let a criterion map to no test ([#121](https://github.com/Hugo-Grellier/ballast/issues/121)) ([88d73eb](https://github.com/Hugo-Grellier/ballast/commit/88d73eb698baf6b2cde7034d8acdcfc13d56de10))
+* **workflow:** name the one recovery after a tamper block and warn before uv creates .venv ([#120](https://github.com/Hugo-Grellier/ballast/issues/120)) ([f91b9cb](https://github.com/Hugo-Grellier/ballast/commit/f91b9cb425e10b2a6610ba6305ca434ce909c297))
+
+
+### Documentation
+
+* **adr:** accept ADR-0006 to ADR-0016 for the 1.0 release ([#116](https://github.com/Hugo-Grellier/ballast/issues/116)) ([bd09afe](https://github.com/Hugo-Grellier/ballast/commit/bd09afee8d86afc73b85d8b979c181f3dfd51a92))
+
 ## [0.9.0](https://github.com/Hugo-Grellier/ballast/compare/v0.8.1...v0.9.0) (2026-10-07)
 
 
