@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -668,6 +669,64 @@ class ResumeTests(StubCase):
                 code, _, err = self.main("resume", run_id)
                 self.assertEqual(code, 2)
                 self.assertIn(text, err)
+        self.assertEqual(len(self.launched), 1)
+
+    def test_tamper_recovery_names_one_working_command(self) -> None:
+        """#114: after discard-runs, resume and continue never point at each other."""
+        for category in ("tamper", "unfinished-step"):
+            with self.subTest(category=category):
+                run_id = self.blocked_run(step="decide-tasks")
+                autonomy.record_block(
+                    self.root,
+                    run_id,
+                    autonomy.make_block(category, "x", run_id=run_id),
+                )
+                block = autonomy.read_block(self.root, run_id)
+                self.assertIn("--mode chat", block["recovery"])
+                # What `ballast discard-runs` leaves: no engine state, no baseline.
+                for name in (".specify/workflows/runs", ".specify/workflow-state"):
+                    shutil.rmtree(self.root / name / run_id, ignore_errors=True)
+                chat = autonomy.chat_continue_command(run_id)
+                before = self.frozen(run_id)
+                for argv in (
+                    ("resume", run_id),
+                    ("continue", run_id, "--reason", "block-resolved", "--ref", "x"),
+                ):
+                    code, _, err = self.main(*argv)
+                    self.assertEqual(code, 2, err)
+                    self.assertIn(chat, err)
+                    self.assertNotIn("ballast run resume", err)
+                self.assertEqual(self.frozen(run_id), before)
+                source = autonomy.read_run(self.root, run_id)
+                self.assertIsNone(
+                    run._continue_refusal(source, "block-resolved", "chat")  # noqa: SLF001
+                )
+
+    def test_dead_invocation_after_discard_reaches_chat(self) -> None:
+        """#114 review: a wrapper killed mid-step leaves an active run, no block."""
+        run_id = self.blocked_run(step="decide-tasks")
+        autonomy.resolve_block(self.root, run_id)
+        record = autonomy.read_run(self.root, run_id)
+        record["status"] = "active"
+        autonomy.write_json(autonomy.run_file(self.root, run_id), record)
+        for name in (".specify/workflows/runs", ".specify/workflow-state"):
+            shutil.rmtree(self.root / name / run_id, ignore_errors=True)
+        argv = ("continue", run_id, "--mode", "chat", "--reason", "block-resolved")
+        code, _, err = self.main(*argv, "--ref", "x")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"ballast run resume {run_id} stops it", err)
+        code, _, err = self.main("resume", run_id)
+        self.assertEqual(code, 2, err)
+        self.assertIn(autonomy.chat_continue_command(run_id), err)
+        source = autonomy.read_run(self.root, run_id)
+        self.assertEqual(source["status"], "stopped")
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(block["category"], "interrupted")
+        self.assertEqual(block["command"], autonomy.chat_continue_command(run_id))
+        self.assertEqual(block["recovery"], autonomy.DISCARDED_RECOVERY)
+        self.assertIsNone(
+            run._continue_refusal(source, "block-resolved", "chat")  # noqa: SLF001
+        )
         self.assertEqual(len(self.launched), 1)
 
     def test_start_time_sync_block_restarts(self) -> None:

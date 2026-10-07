@@ -1461,6 +1461,13 @@ def _continue_refusal(source: dict, reason: str, mode: str) -> str | None:  # no
         return (
             f"run {run_id} is {source['status']}; only a stopped, completed or "
             "published autonomous run can be continued"
+            + (
+                # #114: a dead invocation is stopped as interrupted by resume.
+                f". If its invocation is gone, ballast run resume {run_id} stops "
+                "it and names the next command"
+                if source["status"] == "active"
+                else ""
+            )
         )
     try:
         block = autonomy.read_block(ROOT, run_id)
@@ -1476,6 +1483,14 @@ def _continue_refusal(source: dict, reason: str, mode: str) -> str | None:  # no
         return f"run {run_id} has no block to resolve"
     if mode == "chat":
         return None
+    if block is not None and block["category"] in {"tamper", "unfinished-step"}:
+        # #114: recovery discards the run state, so neither resume nor
+        # ballast-continue (which needs the implementation baseline) can.
+        return (
+            f"run {run_id} stopped on a {block['category']} block; after "
+            "ballast discard-runs and ballast trust only Chat continues it: "
+            + autonomy.chat_continue_command(run_id)
+        )
     if _restart_only(run_id, block):
         return (
             f"run {run_id} reached its fixed limit before implementation; nothing "
@@ -1728,6 +1743,11 @@ def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibili
     """Why an Autonomous run cannot be resumed, naming the command that applies."""
     run_id, status = record["run_id"], record["status"]
     if status == "continued":
+        if autonomy.effective_mode(record) == "chat":
+            return (
+                f"run {run_id} was lowered and continues in a linked Chat run; "
+                "drive that run with ballast run step, not resume"
+            )
         return (
             f"run {run_id} was lowered and continues in a ballast-continue run; "
             "resume that run instead"
@@ -1752,9 +1772,13 @@ def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibili
         return f"run {run_id} is stopped without a recorded block; start it again"
     category = block["category"]
     if category in {"tamper", "unfinished-step"}:
+        # #114: discard-runs drops the engine state and implementation
+        # baseline, which no trust covers, so only Chat can continue.
         return (
-            f"run {run_id} stopped on a {category} block; recover with "
-            "ballast discard-runs"
+            f"run {run_id} stopped on a {category} block and cannot resume in "
+            "Autonomous: its run state is unverified and `ballast discard-runs` "
+            "drops it. After the recovery (ballast discard-runs, then ballast "
+            "trust), continue it in Chat: " + autonomy.chat_continue_command(run_id)
         )
     if category in autonomy.PUBLISH_RETRY:
         return (
@@ -1780,7 +1804,10 @@ def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibili
             "block-resolved --ref TEXT, or start a new run with a larger limit"
         )
     if not _engine_exists(run_id):
-        return f"run {run_id} has no workflow state to resume; start it again"
+        return (
+            f"run {run_id} has no workflow state to resume (ballast discard-runs "
+            "drops it); continue it in Chat: " + autonomy.chat_continue_command(run_id)
+        )
     return None
 
 
@@ -1839,12 +1866,16 @@ def _interrupted(run_id: str, record: dict) -> dict:
     autonomy.close_crashed_invocation(record, autonomy.latest_recorded(ROOT, record))
     autonomy.set_status(record, "stopped")
     autonomy.write_run(ROOT, record)
+    discarded = not _engine_exists(run_id)
     block = autonomy.make_block(
         "interrupted",
         "the run's last invocation ended without finishing (the runner was "
         "killed or the host stopped)",
         run_id=run_id,
         step_id=_engine_state(run_id).get("current_step_id"),
+        # #114: without engine state only Chat continues it.
+        recovery=autonomy.DISCARDED_RECOVERY if discarded else None,
+        command=autonomy.chat_continue_command(run_id) if discarded else None,
     )
     autonomy.record_block(ROOT, run_id, block)
     return autonomy.set_block_inputs(

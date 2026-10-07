@@ -1612,6 +1612,27 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assertEqual(self.launch("trust").returncode, 0)
         self.assertEqual(self.launch("run", "start").returncode, 0)
 
+    def test_discard_says_what_it_changed(self) -> None:
+        # #114: the operator learns which runs lost their state and the one
+        # continuation left, instead of a bare "start a fresh run".
+        self.assertEqual(self.launch("trust").returncode, 0)
+        (self.root / ".specify/workflow-state/aefcdab6").mkdir(parents=True)
+        (state,) = (Path(self.env["XDG_STATE_HOME"]) / "ballast").iterdir()
+        (state / "in-progress").write_text("ballast-agent-r1-step.scope\n")
+        result = self.launch("discard-runs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("removed .specify/workflows/runs (runs: r1)", result.stdout)
+        self.assertIn("removed .specify/workflow-state (runs: aefcdab6)", result.stdout)
+        self.assertIn("stopped the unfinished agent step", result.stdout)
+        self.assertIn(
+            "ballast run continue RUN_ID --mode chat --reason block-resolved",
+            result.stdout,
+        )
+        again = self.launch("discard-runs")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("nothing to discard", again.stdout)
+        self.assertNotIn("removed", again.stdout)
+
     def test_unfinished_step_refusal_names_the_run_and_step(self) -> None:
         """#20 AC-013, FR-012: the marker's unit names the run and the step."""
         self.assertEqual(self.launch("trust").returncode, 0)

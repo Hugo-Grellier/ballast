@@ -556,6 +556,62 @@ class ProjectTests(DoctorCase):
         )
         self.assertEqual(check["remedy"], shim.CHECKS_REMEDY)
 
+    def test_creates_venv_reads_uv_options(self) -> None:
+        # #114 review: only uv's own options exempt a command, global options
+        # may precede the subcommand, and the CLI's copy matches the launcher's.
+        loader = SourceFileLoader(
+            "launcher_for_doctor", str(ROOT / "tools/spec_workflow/launcher.py")
+        )
+        launcher = module_from_spec(spec_from_loader("launcher_for_doctor", loader))
+        loader.exec_module(launcher)
+        for command, creates in (
+            ("uv run --locked pytest", True),
+            ("uv sync --locked", True),
+            ("Bash(uv run pytest *)", True),
+            ("uv --quiet run pytest", True),
+            ("/usr/bin/uv run x", True),
+            ("uv run echo --no-project", True),
+            ("uv run --python=3.13 x --isolated", True),
+            ("uv --directory . run pytest", True),
+            ("uv --directory sub run pytest", True),
+            ("uv run --project=sub/ pytest", True),
+            ("uv run --project ./ pytest", True),
+            ("uv run --locked echo --no-project", True),
+            ("uv run --python 3.13 --with pyyaml --no-project python", False),
+            ("uv run --python 3.13 --no-project x", False),
+            ("uv run --isolated x", False),
+            ("uv run --no_workspace --with pyyaml python -m unittest", False),
+            ("uv sync --dry-run", False),
+            ("uvx ruff check", False),
+            ("uv pip list", False),
+            ("make test", False),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(shim.creates_venv(command), creates)
+                self.assertEqual(launcher.creates_venv(command), creates)
+
+    def test_uv_check_without_venv_is_reported(self) -> None:
+        # Issue #114: an agent's first `uv run` creates .venv, a protected
+        # input, so the run stops as tampered; doctor says so beforehand.
+        (self.project / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        (self.project / "ballast.toml").write_text(
+            '[standard]\nref = "v0.1.0"\n'
+            "[agents.permissions]\n"
+            'extra_allow = ["Bash(uv run --locked *)"]\n'
+            "[checks]\n"
+            'commands = ["uv run --locked pytest"]\n'
+        )
+        _, checks = self.checks()
+        check = checks["checks-venv"]
+        self.assert_gap(check)
+        self.assertIn("uv run --locked pytest creates .venv", check["detail"])
+        self.assertEqual(
+            check["remedy"], "run `uv sync --locked` before `ballast trust`"
+        )
+        (self.project / ".venv").mkdir()
+        _, checks = self.checks()
+        self.assertEqual(checks["checks-venv"]["status"], "passing")
+
     def test_text_report_escapes_control_characters(self) -> None:
         # A checkout's ballast.toml must not forge a doctor line or emit
         # terminal escapes through a [checks] command.
