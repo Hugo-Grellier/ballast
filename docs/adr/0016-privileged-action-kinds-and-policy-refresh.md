@@ -1,6 +1,6 @@
 # ADR-0016: Privileged actions are fixed kinds, and the operator can refresh a run's policy
 
-- Status: proposed (2026-10-07, with the fix for Issue #95). Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review; merging the PR is the human approval that accepts it.
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (2026-10-07, with the fix for Issue #95). Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review; merging the PR is the human approval that accepts it.
 - Amends: [ADR-0004](0004-autonomous-provisional-decisions.md) (the `[autonomous]` policy snapshot) and [ADR-0010](0010-autonomous-resume-and-bounded-recovery.md) (resume keeps everything recorded at start)
 
 ## Context

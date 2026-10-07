@@ -169,7 +169,7 @@ class PolicyWordingTests(unittest.TestCase):
     def test_adr_0010_amends_adr_0004(self) -> None:
         adr = ROOT / "docs/adr/0010-autonomous-resume-and-bounded-recovery.md"
         text = adr.read_text()
-        self.assertIn("- Status: proposed", text)
+        self.assertIn("- Status: accepted", text)
         self.assertIn("Agent-provisional", text)
         old = (ROOT / "docs/adr/0004-autonomous-provisional-decisions.md").read_text()
         self.assertIn("Amended by [ADR-0010]", old)
@@ -350,7 +350,7 @@ class LocalFallbackDocumentTests(unittest.TestCase):
         for heading in ("## Summary", "### Alternatives", "## Pilot", "## Workflow"):
             self.assertIn(heading, evaluation)
         adr = (ROOT / self.DOCUMENTS[1]).read_text()
-        self.assertIn("- Status: proposed", adr)
+        self.assertIn("- Status: accepted", adr)
         for text in ("first** primary attempt", "200,000", "16384", "exact allowlist"):
             self.assertIn(text, adr)
 

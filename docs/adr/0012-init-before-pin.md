@@ -1,6 +1,6 @@
 # ADR-0012: `ballast init` runs before a pin, as a tool the standard declares
 
-- Status: proposed, agent-provisional (Autonomous run of [feature 13](../../specs/13-adaptive-init/plan.md)); accepted only when its PR merges
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed, agent-provisional (Autonomous run of [feature 13](../../specs/13-adaptive-init/plan.md)); accepted only when its PR merges
 - Feature: [13-adaptive-init](../../specs/13-adaptive-init/spec.md), FR-001, FR-004, FR-014, FR-015, FR-016, FR-020, FR-021
 - Extends: [ADR-0002](0002-cli-standard-manifest.md)
 

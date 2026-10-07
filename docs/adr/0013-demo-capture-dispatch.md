@@ -1,6 +1,6 @@
 # ADR-0013: Demo capture dispatch under the launcher's GitHub authority
 
-- Status: proposed (2026-10-06, with the plan of [feature 22](../../specs/22-ui-demo/plan.md#architecture-boundaries); agent-provisional in Autonomous run `d6b5dff2`, accepted only when the operator merges the feature PR)
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (2026-10-06, with the plan of [feature 22](../../specs/22-ui-demo/plan.md#architecture-boundaries); agent-provisional in Autonomous run `d6b5dff2`, accepted only when the operator merges the feature PR)
 - Feature: [22-ui-demo](../../specs/22-ui-demo/spec.md), FR-004, FR-006, FR-007, FR-015, AC-010; research [R2](../../specs/22-ui-demo/research.md#r2-where-the-contract-lives-and-what-the-runner-executes), [R12](../../specs/22-ui-demo/research.md#r12-new-github-calls-adr-0013), [R15](../../specs/22-ui-demo/research.md#r15-execution-scope-of-the-capture-run-plan-review-f-001); [decisions.md DEC-0001](../../specs/22-ui-demo/decisions.md#dec-0001--proposal)
 - Extends: [ADR-0003](0003-launcher-github-authority.md) and [ADR-0006](0006-review-packet-reads.md), whose fixed command allowlist says a later feature extends it by a new ADR
 

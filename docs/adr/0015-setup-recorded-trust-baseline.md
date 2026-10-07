@@ -1,6 +1,6 @@
 # ADR-0015: Setup records the trust baseline when it installed exactly what a human reviewed
 
-- Status: proposed (with the implementation of [feature 55](../../specs/55-setup-trust/spec.md), 2026-10-06); accepted when its PR merges
+- Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (with the implementation of [feature 55](../../specs/55-setup-trust/spec.md), 2026-10-06); accepted when its PR merges
 - Feature: [55-setup-trust](../../specs/55-setup-trust/spec.md), FR-001 to FR-020, AC-001 to AC-027; decisions R1 to R19 in its [research](../../specs/55-setup-trust/research.md)
 - Supersedes in part: [ADR-0007](0007-recoverable-installation.md) ("setup never records trust") and [ADR-0011](0011-worktree-preparation.md) ("Preparation never reads any `trusted.json`" for the checkout's own baseline, and preparation's local-only, no-network outcome)
 - Builds on: [ADR-0005](0005-launcher-branch-synchronization.md) (the trusted Git path), [ADR-0002](0002-cli-standard-manifest.md) (doctor reads the launcher's `status --json`)
