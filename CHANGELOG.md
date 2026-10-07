@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.9.0](https://github.com/Hugo-Grellier/ballast/compare/v0.8.1...v0.9.0) (2026-10-07)
+
+
+### Features
+
+* **routing:** qualify one zero-cost provider fallback ([#103](https://github.com/Hugo-Grellier/ballast/issues/103)) ([a9c8e1c](https://github.com/Hugo-Grellier/ballast/commit/a9c8e1cec29aeec4e82bdc790ece1ab67ab3e1f2))
+* **setup:** trust a checkout setup just installed without a separate operator command ([#101](https://github.com/Hugo-Grellier/ballast/issues/101)) ([7ae08ed](https://github.com/Hugo-Grellier/ballast/commit/7ae08ed90344ad8eb7906f88388c79a3675f3538))
+
+
+### Bug Fixes
+
+* **agent:** hide the operator's global Git configuration from confined steps ([#107](https://github.com/Hugo-Grellier/ballast/issues/107)) ([4a28076](https://github.com/Hugo-Grellier/ballast/commit/4a28076c48c17c9aba6c170550fa8c5bbbf32961))
+* **agent:** refuse every hidden credential path in the worktree and resolve agent homes ([#108](https://github.com/Hugo-Grellier/ballast/issues/108)) ([09d8596](https://github.com/Hugo-Grellier/ballast/commit/09d8596dac302e1fadc89b5bd51eee229a8588a5))
+* **launcher:** do not treat an agent that closes its terminal before exit as interrupted ([#104](https://github.com/Hugo-Grellier/ballast/issues/104)) ([282f7f3](https://github.com/Hugo-Grellier/ballast/commit/282f7f3ec3e51d830eccdcc2eb0a526a0cb0b0a9))
+* **run:** harden Chat mode and headless steps (review follow-ups from [#20](https://github.com/Hugo-Grellier/ballast/issues/20)) ([#106](https://github.com/Hugo-Grellier/ballast/issues/106)) ([37d8ace](https://github.com/Hugo-Grellier/ballast/commit/37d8acec8605661d40d66f1cb92db8b9047ab3b5))
+* **setup:** do not prepare again an installation that finished before the lock ([#109](https://github.com/Hugo-Grellier/ballast/issues/109)) ([f2bb775](https://github.com/Hugo-Grellier/ballast/commit/f2bb77564da3e4b98d5e85e141d8ba1b27adb9dc))
+* **workflow:** close five Autonomous recovery gaps ([#105](https://github.com/Hugo-Grellier/ballast/issues/105)) ([bcac2bd](https://github.com/Hugo-Grellier/ballast/commit/bcac2bd27fe1b84a5921b5760e708ada463155ea))
+
 ## [0.8.1](https://github.com/Hugo-Grellier/ballast/compare/v0.8.0...v0.8.1) (2026-10-06)
 
 
