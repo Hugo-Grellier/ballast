@@ -2544,9 +2544,10 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     args += _installed_skill_binds(root)
     args += extra
     for path in hidden_extra:
-        if path.is_dir() and not path.is_symlink():
-            args += ["--tmpfs", str(path)]
-            hidden.append(path)
+        if path.is_dir():
+            # A link is hidden where it leads, so nothing reaches the target.
+            args += ["--tmpfs", str(path.resolve())]
+            hidden.append(path.resolve())
     for path in keep_visible:
         if path.is_file() and not path.is_symlink():
             args += ["--ro-bind", str(path), str(path)]

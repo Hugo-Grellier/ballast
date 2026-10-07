@@ -146,6 +146,8 @@ SPECIFY_WRITABLE = ("feature.json", "extensions/.cache", "workflows/.cache")
 LOG_FILES = ("stdout.log", "stderr.log", "meta.json")
 # Agent CLI configuration a checkout can carry (Claude settings, Codex config).
 AGENT_CONFIG = (".claude/settings.json", ".claude/settings.local.json", ".codex")
+CONFIG_ENTRIES = 2000
+CONFIG_FILE_BYTES = 1024 * 1024
 REAP_SECONDS = 10.0
 INTERRUPT_GRACE_SECONDS = 5.0
 # The operator ends an interactive step with Ctrl-] twice within a second.
@@ -284,16 +286,24 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
     # Hooks and allow rules there run, or widen permissions, in the next
     # agent step; no step may write them (#66 SEC-010).
     for name in AGENT_CONFIG:
-        _followed(root / name, name, found, set())
+        _followed(root / name, name, found, set(), [CONFIG_ENTRIES])
     return found
 
 
-def _followed(path: Path, key: str, found: dict[str, str], seen: set[Path]) -> None:
+def _followed(
+    path: Path, key: str, found: dict[str, str], seen: set[Path], budget: list[int]
+) -> None:
     """Record `path` as the agent CLI reads it: every link followed (#66).
 
     A link keeps its text and also records what it resolves to, so neither a
-    retarget nor a change of a linked file or directory goes unnoticed.
+    retarget nor a change of a linked file or directory goes unnoticed. The
+    walk is bounded: a link to a huge tree records `truncated` (which differs
+    from any earlier state, so the step fails) instead of stalling the check.
     """
+    budget[0] -= 1
+    if budget[0] < 0:
+        found[key] = "truncated"
+        return
     link = f" link:{path.readlink()}" if path.is_symlink() else ""
     if path.is_dir():
         real = path.resolve()
@@ -301,9 +311,14 @@ def _followed(path: Path, key: str, found: dict[str, str], seen: set[Path]) -> N
         if real not in seen:
             seen.add(real)
             for child in sorted(path.iterdir()):
-                _followed(child, f"{key}/{child.name}", found, seen)
+                _followed(child, f"{key}/{child.name}", found, seen, budget)
     elif path.is_file():
-        found[key] = hashlib.sha256(path.read_bytes()).hexdigest() + link
+        info = path.stat()
+        found[key] = (
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            if info.st_size <= CONFIG_FILE_BYTES
+            else f"large:{info.st_size}:{info.st_mtime_ns}"
+        ) + link
     elif link:
         found[key] = "dangling" + link
 

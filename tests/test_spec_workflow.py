@@ -866,6 +866,22 @@ class AgentWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertIn(".codex/config.toml", result.stderr)
 
+    def test_a_huge_linked_configuration_tree_is_bounded(self) -> None:
+        """Review of #66: a link to a large tree cannot stall the check."""
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        tree = self.root / "tree"
+        tree.mkdir()
+        for name in ("a", "b", "c"):
+            (tree / name).write_text(name)
+        found: dict[str, str] = {}
+        agent._followed(tree, ".codex", found, set(), [3])  # noqa: SLF001
+        self.assertEqual(found[".codex/c"], "truncated")
+        self.assertEqual(len(found), 4)
+
     def test_retargeting_a_link_inside_linked_codex_fails_the_step(self) -> None:
         """Review of #66: a nested link is recorded by target, not only content."""
         config = self.root / "cfg/codex"
