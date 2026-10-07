@@ -185,7 +185,10 @@ ACCEPTANCE_EVIDENCE = (
     "verification task for every behavior acceptance criterion. Cite its "
     "stable `AC-NNN` ID in the task. Do not omit tests merely because the "
     "spec did not ask for them. If no automated test seam is appropriate, "
-    "record the manual evidence and reason.\n"
+    "record the manual evidence and reason. Never create a task the implementing "
+    "agent cannot do in its run (a manual browser or device check, a demo "
+    "recording, an operator step): follow the template's operator-only checks "
+    "guidance.\n"
 )
 # The preset renders its bash setup line even for `--script py` (#74): Ballast
 # swaps in the lines Spec Kit renders for `--script py` (its Claude rendering),

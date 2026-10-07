@@ -8,32 +8,36 @@
 +
 @@ -138 +138 @@
 -**Tests are OPTIONAL**: Only generate test tasks if explicitly requested in the feature specification or if user requests TDD approach.
-+**Acceptance evidence is required**: Generate a test or explicit verification task for every behavior acceptance criterion. Cite its stable `AC-NNN` ID in the task. Do not omit tests merely because the spec did not ask for them. If no automated test seam is appropriate, record the manual evidence and reason.
++**Acceptance evidence is required**: Generate a test or explicit verification task for every behavior acceptance criterion. Cite its stable `AC-NNN` ID in the task. Do not omit tests merely because the spec did not ask for them. If no automated test seam is appropriate, record the manual evidence and reason. Never create a task the implementing agent cannot do in its run (a manual browser or device check, a demo recording, an operator step): follow the template's operator-only checks guidance.
 --- a/templates/tasks-template.md
 +++ b/templates/tasks-template.md
-@@ -11 +11 @@
+@@ -11 +11,5 @@
 -**Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
-+**Acceptance evidence**: Each behavior acceptance criterion needs a test or other explicit verification task. Do not omit tests merely because the spec did not ask for them; if no automated test seam is appropriate, record the manual evidence and reason.
-@@ -20,0 +21 @@
++**Acceptance evidence**: Each behavior acceptance criterion needs a test or other explicit verification task. Do not omit tests merely because the spec did not ask for them; if no automated test seam is appropriate, record the manual evidence and reason. Add one task that writes `acceptance-evidence.json` in the feature directory: `{"schema_version": 1, "spec_digest": "<sha256 of spec.md>", "criteria": {"AC-001": ["tests.test_module.Class.test_method"], "AC-002": []}}`, mapping every criterion to the `unittest` cases that prove it, and to `[]` when no unit test does. The mapping is a proposal; only `ballast ledger check` records evidence, and a criterion mapped to `[]` stays missing in the acceptance packet.
++
++**Operator-only checks**: Do not create tasks the implementing agent cannot do in its run: a manual browser or device check, a demo recording or screenshot, or anything only the operator can do. Prefer an automated test. Demo captures are requested later with `ballast run demo`, never in a task. When a criterion still needs an operator check, write it as one task tagged `[DEFERRED-TO-PR]` after its other tags, e.g. `- [ ] T020 [US1] [DEFERRED-TO-PR] Manual browser check of the undo button [AC-002]`, leave it unchecked, and tag every task that depends on it the same way. In an Autonomous run `validate-implementation` lets such a task stay open only when it was tagged when the tasks decision was recorded; the run record, the Draft PR and its acceptance packet list it as deferred, and it is never evidence.
++
++**Workflow-owned steps**: Never create tasks for steps the workflow runs itself after implementation: the full gate, quickstart runs, reviews (engineering, test, security, documentation and the other specialists), converge and spec reconciliation. `validate-implementation` requires every task in this file to be done before those steps run, so such a task can never be ticked in time and blocks the run. List what they must verify in plan.md or quickstart.md instead.
+@@ -20,0 +25 @@
 +- Test and verification tasks must cite the acceptance criterion ID(s) they prove, e.g. `[AC-001]`.
-@@ -29 +30 @@
+@@ -29 +34 @@
 -<!-- 
 +<!--
-@@ -32 +33 @@
+@@ -32 +37 @@
 -  
 +
-@@ -38 +39 @@
+@@ -38 +43 @@
 -  
 +
-@@ -43 +44 @@
+@@ -43 +48 @@
 -  
 +
-@@ -83 +84 @@
+@@ -83 +88 @@
 -### Tests for User Story 1 (OPTIONAL - only if tests requested) ⚠️
 +### Acceptance tests for User Story 1
-@@ -109 +110 @@
+@@ -109 +114 @@
 -### Tests for User Story 2 (OPTIONAL - only if tests requested) ⚠️
 +### Acceptance tests for User Story 2
-@@ -131 +132 @@
+@@ -131 +136 @@
 -### Tests for User Story 3 (OPTIONAL - only if tests requested) ⚠️
 +### Acceptance tests for User Story 3

@@ -40,6 +40,7 @@ import urllib.parse
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import artifacts
 import autonomy
 import demo
 import draft_pr
@@ -69,6 +70,7 @@ VERIFIED, FAILED, NOT_RUN, STALE, MISSING = STATES = (
 )
 COUNT_KEYS = dict(zip(STATES, ledger.PACKET_COUNTS, strict=True))
 PATH_SEGMENT = re.compile(r"[A-Za-z0-9._-]{1,100}")
+AC_REF = re.compile(r"\bAC-[0-9]{3}\b")
 TEST_NAME = re.compile(r"tests\.test_[A-Za-z0-9_.]+\.test_[A-Za-z0-9_]+")
 FINDING_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 DEC_HEADING = re.compile(r"#{1,6}[ \t]+(DEC-[0-9]{4})\b(.*)")
@@ -158,6 +160,18 @@ class Criterion:
     reason: str | None = None
     tests: tuple[TestEvidence, ...] = ()
     ui: tuple[UiResult, ...] = ()
+
+
+@dataclass(frozen=True)
+class DeferredTask:
+    """An open tasks.md task tagged [DEFERRED-TO-PR] at head (#112)."""
+
+    id: str
+    text: str
+    line: int
+    criteria: tuple[str, ...]
+    # The current tasks decision of an Autonomous run lists it with this text.
+    recorded: bool = False
 
 
 @dataclass(frozen=True)
@@ -298,6 +312,7 @@ class Sources:
     config: ReviewConfig = field(default_factory=ReviewConfig)
     api: ApiComparison | None = None
     ui: tuple[UiResult, ...] = ()
+    deferred: tuple[DeferredTask, ...] = ()
     # Never read by criteria, counts or evidence states (#22 FR-014).
     demo: demo.DemoSection | None = None
 
@@ -583,7 +598,6 @@ def _manifest(text: str | None, raw: bytes | None) -> Manifest | None:
         if (
             not ledger.AC.fullmatch(ac_id)
             or not isinstance(tests, list)
-            or not tests
             or not all(isinstance(t, str) and TEST_NAME.fullmatch(t) for t in tests)
         ):
             raise MalformedError
@@ -851,6 +865,14 @@ class _Step:
         except MalformedError:
             self.fail("failed-retryable", "manifest-malformed")
         decisions_text, _ = read("decisions.md")
+        tasks_text, _ = read("tasks.md")
+        deferred = tuple(
+            DeferredTask(task, text, line, tuple(dict.fromkeys(AC_REF.findall(text))))
+            for task, (done, text, line) in artifacts.deferred_tasks(
+                tasks_text or ""
+            ).items()
+            if not done
+        )
         record_text, _ = read("autonomous/record.md")
         fingerprint = ledger.commit_tree(root, head)
         try:
@@ -889,6 +911,20 @@ class _Step:
             risk = (record.get("risk") or {}).get("level")
             risk_source = "run record"
             entries = autonomy.read_decisions(root, run.run_id)
+            # Only a run still in Autonomous defers (a lowered run does not).
+            listed = {
+                (item.get("task"), item.get("sha256"))
+                for entry in autonomy.current(entries, "tasks")
+                for item in entry.get("deferred") or []
+                if isinstance(item, dict) and mode == "autonomous"
+            }
+            deferred = tuple(
+                replace(
+                    d,
+                    recorded=(d.id, artifacts.task_digest(d.text)) in listed,
+                )
+                for d in deferred
+            )
             for entry in autonomy.current_decisions(entries):
                 decisions.append(
                     ProvisionalDecision(
@@ -1026,6 +1062,7 @@ class _Step:
             config=config,
             api=api,
             ui=ui,
+            deferred=deferred,
             demo=demos,
         )
 
@@ -1313,6 +1350,11 @@ def _detail(sources: Sources, criterion: Criterion, level: int) -> str:
         detail = f"{criterion.reason}: " + "; ".join(lines)
     for result in criterion.ui:
         detail += f" · UI {inert(result.name, 80)}: {_ui_text(sources, result)}"
+    deferred = [
+        d.id for d in sources.deferred if criterion.id in d.criteria and d.recorded
+    ]
+    if deferred:
+        detail += f" · deferred to the PR: {', '.join(deferred)}"
     return detail
 
 
@@ -1324,8 +1366,10 @@ def _criteria_lines(sources: Sources, level: int) -> list[str]:
         return [*lines, f"No acceptance criteria found in [spec.md]({link}).", ""]
     rows = list(sources.criteria)
     if level >= 2:  # noqa: PLR2004
-        verified = [c for c in rows if c.state == VERIFIED]
-        rows = [c for c in rows if c.state != VERIFIED]
+        # A verified criterion that a deferred task cites keeps its row (#112).
+        cited = {ac for d in sources.deferred if d.recorded for ac in d.criteria}
+        verified = [c for c in rows if c.state == VERIFIED and c.id not in cited]
+        rows = [c for c in rows if c not in verified]
         if verified:
             ids = ", ".join(
                 f"[{c.id}]({_line(sources.repo, sources.head, spec, c.line)})"
@@ -1354,11 +1398,42 @@ def _criteria_lines(sources: Sources, level: int) -> list[str]:
     lines += [
         (
             "To record evidence for one criterion at the current commit: "
-            f"`ballast ledger check {sources.run_id} AC-NNN TEST`."
+            f"`ballast ledger check {sources.run_id} AC-NNN TEST`. A criterion "
+            "with no mapped unit test stays missing: Ballast records no evidence "
+            "for a manual or demo check."
         ),
         "",
     ]
     return lines
+
+
+def _deferred_lines(sources: Sources, archive: bool) -> list[str]:  # noqa: FBT001
+    """Open [DEFERRED-TO-PR] tasks at head (#112); none, no section."""
+    if not sources.deferred:
+        return []
+    path = f"{sources.feature}/tasks.md"
+    items = [
+        f"- [{d.id}]({_line(sources.repo, sources.head, path, d.line)}): "
+        f"{inert(d.text)}"
+        + (
+            " — not recorded by the tasks decision: pending, not deferred"
+            if not d.recorded
+            else ""
+        )
+        for d in sources.deferred
+    ]
+    return [
+        "### Deferred to the PR",
+        "",
+        (
+            "Open tasks tagged `[DEFERRED-TO-PR]` at head. Those the tasks decision "
+            "of an Autonomous run recorded are left for the operator (a browser or "
+            "device check, a demo capture). None is evidence: do them before merging."
+        ),
+        "",
+        *_capped(sources, items, archive),
+        "",
+    ]
 
 
 def _record_link(sources: Sources, line: int | None) -> str:
@@ -1613,6 +1688,7 @@ def render(sources: Sources, level: int = 1, *, archive: bool = False) -> str:
     lines = [
         *header,
         *_criteria_lines(sources, level),
+        *_deferred_lines(sources, archive),
         *_decision_lines(sources),
         *_finding_lines(sources),
         *_check_lines(sources),

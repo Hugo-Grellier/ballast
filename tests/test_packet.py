@@ -555,6 +555,62 @@ class CriteriaTests(PacketCase):
         self.assertEqual({row[2] for row in rows(text).values()}, {"missing"})
         self.assertEqual(rows(text)["AC-001"][3], "no acceptance-evidence.json")
 
+    def test_unit_testless_criterion_and_deferred_tasks_stay_missing(self) -> None:
+        """#112: `[]` maps no test; deferred tasks are listed, never evidence."""
+        self.write_feature(criteria={**MAPPING, "AC-003": []})
+        (self.feature / "tasks.md").write_text(
+            "- [x] T001 Implement [AC-001]\n"
+            "- [ ] T002 [US1] [DEFERRED-TO-PR] Manual browser check [AC-003]\n"
+            "- [x] T003 [DEFERRED-TO-PR] Done check [AC-002]\n"
+            "- [ ] T004 [DEFERRED-TO-PR] Demo of the verified one [AC-001]\n"
+        )
+        self.head = self.commit()
+        self.open_pr()
+        self.verify("AC-001", T.format("one"))
+        self.verify("AC-001", T.format("two"))
+        sources = self.collect()
+        # Recorded by an Autonomous tasks decision (DecisionTests covers the match).
+        sources = replace(
+            sources,
+            deferred=tuple(replace(d, recorded=True) for d in sources.deferred),
+        )
+        text = packet.render(sources)
+        found = rows(text)
+        self.assertEqual(found["AC-001"][2], "verified")
+        self.assertTrue(found["AC-001"][3].endswith(" · deferred to the PR: T004"))
+        # Kept as a row when shortened, not folded into "Verified at head".
+        self.assertIn("AC-001", rows(packet.render(sources, level=2)))
+        self.assertEqual(found["AC-003"][2], "missing")
+        self.assertEqual(
+            found["AC-003"][3],
+            "no test named in acceptance-evidence.json · deferred to the PR: T002",
+        )
+        self.assertNotIn("deferred to the PR", found["AC-002"][3])
+        link = f"{self.blob(f'{FEATURE}/tasks.md')}?plain=1#L2"
+        self.assertIn("### Deferred to the PR\n\nOpen tasks tagged", text)
+        self.assertIn(
+            f"- [T002]({link}): \\[US1\\] \\[DEFERRED-TO-PR\\] Manual browser check",
+            text,
+        )
+        self.assertNotIn("[T003]", text)
+        self.assertIn("A criterion with no mapped unit test stays missing", text)
+        # Outside an Autonomous run no tag is a deferral: pending, on no row,
+        # and a verified criterion it cites folds as usual when shortened.
+        self.assertNotIn("| [AC-001](", packet.render(self.collect(), level=2))
+        _, text = self.packet()
+        self.assertNotIn("deferred to the PR", text)
+        self.assertIn(
+            "Manual browser check \\[AC-003\\] — not recorded by the tasks "
+            "decision: pending, not deferred",
+            text,
+        )
+        # Without deferred tasks, no section.
+        self.write_feature()
+        self.head = self.commit()
+        self.open_pr()
+        _, text = self.packet()
+        self.assertNotIn("### Deferred to the PR", text)
+
     def test_manifest_for_another_spec_makes_every_mapped_criterion_stale(self) -> None:
         self.write_feature(spec_digest="e" * 64)
         self.head = self.commit()
@@ -703,6 +759,59 @@ class DecisionTests(PacketCase):
         (self.feature / "reviews/plan.md").write_text("# Plan review\n")
         self.head = self.commit()
         self.open_pr()
+
+    def test_only_recorded_deferrals_are_called_deferred(self) -> None:
+        """#112: a tag added or rewritten after the tasks decision is pending."""
+        recorded = "[DEFERRED-TO-PR] Browser check [AC-003]"
+        (self.feature / "tasks.md").write_text(
+            f"- [x] T001 Implement [AC-001]\n- [ ] T002 {recorded}\n"
+            "- [ ] T003 [DEFERRED-TO-PR] Tagged later [AC-004]\n"
+        )
+        self.autonomous()
+        autonomy.append_log(
+            autonomy.run_dir(self.root, RUN) / "decisions.jsonl",
+            "PD",
+            {
+                "point": "tasks",
+                "decision": "accept",
+                "summary": "Tasks accepted.",
+                "deferred": [
+                    {
+                        "task": "T002",
+                        "text": recorded,
+                        "sha256": packet.artifacts.task_digest(recorded),
+                    }
+                ],
+            },
+        )
+        _, text = self.packet()
+        found = rows(text)
+        self.assertTrue(found["AC-003"][3].endswith(" · deferred to the PR: T002"))
+        self.assertNotIn("deferred to the PR", found["AC-004"][3])
+        self.assertIn(
+            "Tagged later \\[AC-004\\] — not recorded by the tasks decision: "
+            "pending, not deferred",
+            text,
+        )
+        self.assertNotIn("Browser check \\[AC-003\\] — not recorded", text)
+        before = autonomy.read_run(self.root, RUN)
+        # A run lowered out of Autonomous defers nothing.
+        record = autonomy.read_run(self.root, RUN)
+        autonomy.set_status(record, "stopped")
+        autonomy.change_mode(record, "human-gated", reason="t", decision_id=None)
+        autonomy.write_run(self.root, record)
+        _, lowered = self.packet()
+        self.assertNotIn("deferred to the PR: T002", lowered)
+        self.assertIn("Browser check \\[AC-003\\] — not recorded", lowered)
+        autonomy.write_run(self.root, before)
+        # Same ID, rewritten text: pending, not deferred.
+        tasks = self.feature / "tasks.md"
+        tasks.write_text(tasks.read_text().replace("Browser check", "Parser work"))
+        self.head = self.commit()
+        self.open_pr()
+        _, text = self.packet()
+        self.assertNotIn("deferred to the PR: T002", text)
+        self.assertIn("Parser work \\[AC-003\\] — not recorded", text)
 
     def test_autonomous_records_are_labeled_provisional_with_links(self) -> None:
         self.autonomous()

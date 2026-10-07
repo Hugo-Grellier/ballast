@@ -2514,6 +2514,75 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerError, "approved spec"):
             ledger.archive_manifest(self.root, "run_1", FEATURE)
 
+    def test_criterion_mapped_to_no_test_stays_missing(self) -> None:
+        """#112: `[]` represents a criterion no unit test proves; never passed."""
+        self.write_run([], None)
+        ledger.import_run(self.root, "run_1")
+        feature = self.root / FEATURE
+        spec = feature / "spec.md"
+        spec.write_text("- **AC-001**: Library.\n- **AC-002**: Browser view.\n")
+        digest = hashlib.sha256(spec.read_bytes()).hexdigest()
+        (feature / "intent.md").write_text(f"Approved spec sha256:{digest}\n")
+        test_id = "tests.test_demo.DemoTests.test_one"
+        manifest = feature / "acceptance-evidence.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_digest": digest,
+                    "criteria": {"AC-001": [test_id], "AC-002": []},
+                }
+            )
+        )
+        archived = ledger.archive_manifest(self.root, "run_1", FEATURE)
+        self.assertEqual(archived["criteria"]["AC-002"], [])
+        with self.assertRaisesRegex(ledger.LedgerError, "not mapped to this AC"):
+            ledger._check(self.root, "run_1", "AC-002", test_id)  # noqa: SLF001
+        snapshot = ledger.artifact_digests(self.root, FEATURE)
+        ledger.append(
+            self.root,
+            ledger.new_event(
+                "run_1", FEATURE, "snapshot", "operator-attested", snapshot
+            ),
+        )
+        ledger.append(
+            self.root,
+            ledger.new_event(
+                "run_1",
+                FEATURE,
+                "verification",
+                "operator-attested",
+                {
+                    "check_id": test_id,
+                    "ac_id": "AC-001",
+                    "status": "passed",
+                    "snapshot": snapshot["tree"],
+                    "spec_digest": digest,
+                    "manifest_digest": snapshot["manifest_digest"],
+                },
+            ),
+        )
+        outcome = ledger.report(self.root, "run_1")["outcome"]
+        self.assertEqual(
+            outcome["ac_status"], {"AC-001": "passed", "AC-002": "missing"}
+        )
+        self.assertEqual((outcome["ac_total"], outcome["ac_passed"]), (2, 1))
+        # A checkout change makes evidence stale; `[]` stays missing.
+        (self.root / "changed.py").write_text("answer = 42\n")
+        outcome = ledger.report(self.root, "run_1")["outcome"]
+        self.assertEqual(outcome["ac_status"], {"AC-001": "stale", "AC-002": "missing"})
+        # A historical report keeps `[]` missing too.
+        active = self.root / ".specify/workflows/runs/run_1"
+        shutil.copytree(active, ledger.archive_dir(self.root, "run_1") / "run")
+        shutil.rmtree(active)
+        outcome = ledger.report(self.root, "run_1")["outcome"]
+        self.assertEqual(
+            outcome["ac_status"], {"AC-001": "unavailable", "AC-002": "missing"}
+        )
+        manifest.write_text(manifest.read_text().replace("[]", '"x"'))
+        with self.assertRaisesRegex(ledger.LedgerError, "list of named tests"):
+            ledger.archive_manifest(self.root, "run_1", FEATURE)
+
     def test_stale_manifest_does_not_block_runner_snapshot(self) -> None:
         feature = self.root / FEATURE
         spec = feature / "spec.md"

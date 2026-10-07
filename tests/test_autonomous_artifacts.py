@@ -14,6 +14,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from typing import TYPE_CHECKING
@@ -1762,6 +1763,154 @@ class IntentEvidenceTests(RecorderCase):
             "| PD-0001 | intent | accept (agent-provisional)",
             (self.feature / "autonomous/record.md").read_text(),
         )
+
+
+DEFERRED_TASKS = (
+    "# Tasks: Demo run\n\n"
+    "- [x] T001 Implement demo in src/demo.py [AC-001]\n"
+    "- [ ] T002 [US1] [DEFERRED-TO-PR] Manual browser check of the demo [AC-001]\n"
+)
+
+
+class DeferredTaskTests(FixLoopCase):
+    """#112: an operator-only task stays open only as a recorded deferral."""
+
+    def accept_tasks(self, draft: dict | None = None) -> None:
+        tasks = draft or self.draft("tasks", artifact=f"{FEATURE}/tasks.md")
+        self.step({"tasks.json": tasks})
+        self.ok(self.record("tasks"))
+
+    def test_recorded_deferral_passes_and_is_listed(self) -> None:
+        (self.feature / "tasks.md").write_text(DEFERRED_TASKS)
+        self.accept_tasks()
+        entry = autonomy.current(self.decisions(), "tasks")[0]
+        self.assertEqual([d["task"] for d in entry["deferred"]], ["T002"])
+        record = (self.feature / "autonomous/record.md").read_text()
+        self.assertIn("## Deferred to the PR", record)
+        self.assertIn(f"- `T002` ({entry['id']}): ", record)
+        self.assertIn("Manual browser check of the demo", record)
+        self.ok(self.check("implementation"))
+        # A run lowered out of Autonomous keeps the decision but defers nothing.
+        artifacts = artifacts_module()
+        run = autonomy.read_run(self.root, "run42")
+        feature = SimpleNamespace(root=self.root, run=run)
+        self.assertEqual(
+            {t for t, _ in artifacts.recorded_deferrals(feature)}, {"T002"}
+        )
+        autonomy.set_status(run, "stopped")
+        autonomy.change_mode(run, "human-gated", reason="t", decision_id=None)
+        self.assertEqual(artifacts.recorded_deferrals(feature), set())
+
+    def test_unrecorded_or_untagged_open_task_blocks(self) -> None:
+        # Tagged only after the tasks decision: never deferred.
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace(" [DEFERRED-TO-PR]", "")
+        )
+        self.accept_tasks()
+        self.assertNotIn("deferred", autonomy.current(self.decisions(), "tasks")[0])
+        self.failed(self.check("implementation"), "pending tasks: T002")
+        (self.feature / "tasks.md").write_text(DEFERRED_TASKS)
+        self.failed(
+            self.check("implementation"),
+            "T002 is tagged [DEFERRED-TO-PR] but the tasks decision did not record it",
+        )
+        self.assertNotIn(
+            "## Deferred to the PR",
+            (self.feature / "autonomous/record.md").read_text(),
+        )
+
+    def test_recorded_task_without_its_tag_blocks(self) -> None:
+        (self.feature / "tasks.md").write_text(DEFERRED_TASKS)
+        self.accept_tasks()
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace(" [DEFERRED-TO-PR]", "")
+        )
+        self.failed(self.check("implementation"), "pending tasks: T002")
+
+    def test_rewritten_deferred_task_blocks(self) -> None:
+        """The deferral binds the task's text, not only its ID."""
+        (self.feature / "tasks.md").write_text(DEFERRED_TASKS)
+        self.accept_tasks()
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace("Manual browser check", "Implement the parser")
+        )
+        self.failed(self.check("implementation"), "did not record it with this text")
+        # An indented continuation line added later is part of the task.
+        (self.feature / "tasks.md").write_text(DEFERRED_TASKS)
+        self.accept_tasks()
+        self.ok(self.check("implementation"))
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS + "  and implement the parser\n"
+        )
+        self.failed(self.check("implementation"), "did not record it with this text")
+        # Beyond the excerpt the record shows, the text is still bound.
+        long = "Manual browser check " + "x" * 400
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace("Manual browser check", long)
+        )
+        self.accept_tasks()
+        self.ok(self.check("implementation"))
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace("Manual browser check", long + " and the parser")
+        )
+        self.failed(self.check("implementation"), "did not record it with this text")
+
+    def test_task_text_is_inert_in_the_record(self) -> None:
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace(
+                "Manual browser check", "![t](https://example.org/p) @owner `x`"
+            )
+        )
+        self.accept_tasks()
+        record = (self.feature / "autonomous/record.md").read_text()
+        self.assertIn(
+            "`[US1] [DEFERRED-TO-PR] ![t](https://example.org/p) @owner 'x' of the "
+            "demo [AC-001]`",
+            record,
+        )
+
+    def test_agent_cannot_name_deferrals(self) -> None:
+        draft = self.draft("tasks", artifact=f"{FEATURE}/tasks.md")
+        draft["deferred"] = [{"task": "T002", "text": "skip it"}]
+        (self.feature / "tasks.md").write_text(
+            DEFERRED_TASKS.replace(" [DEFERRED-TO-PR]", "")
+        )
+        self.accept_tasks(draft)
+        entry = autonomy.current(self.decisions(), "tasks")[0]
+        self.assertNotIn("deferred", entry)
+        self.assertIn("ignored runner-owned field deferred", entry["notes"])
+        self.failed(self.check("implementation"), "pending tasks: T002")
+
+    def test_tag_is_a_leading_tag_only(self) -> None:
+        tasks = artifacts_module().deferred_tasks(
+            "- [ ] T001 [P] [US1] [DEFERRED-TO-PR] Browser check\n"
+            "  in Firefox\n"
+            "  - [ ] T004 Nested task\n"
+            "- [ ] T002 Explain the [DEFERRED-TO-PR] tag in docs\n"
+            "\n"
+            "- [x] T003 [DEFERRED-TO-PR] Demo capture\n"
+        )
+        self.assertEqual(
+            tasks,
+            {
+                "T001": (
+                    False,
+                    "[P] [US1] [DEFERRED-TO-PR] Browser check\nin Firefox",
+                    1,
+                ),
+                "T003": (True, "[DEFERRED-TO-PR] Demo capture", 6),
+            },
+        )
+
+
+def artifacts_module() -> ModuleType:
+    """artifacts.py, imported from the trusted tools directory."""
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import artifacts  # noqa: PLC0415
+    finally:
+        sys.path.pop(0)
+    return artifacts
 
 
 class StepDraftTests(FixLoopCase):

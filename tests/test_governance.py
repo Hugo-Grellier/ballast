@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -108,6 +111,37 @@ class TasksTemplateTests(unittest.TestCase):
         ):
             self.assertIn(step, text)
         self.assertNotIn("Run quickstart.md validation", text)
+
+    def test_installed_template_carries_the_task_guidance(self) -> None:
+        """#112: the preset's tasks template replaces Ballast's copy at runtime.
+
+        Spec Kit resolves a preset template before `.specify/templates/`, so the
+        guidance must reach the preset's template through preset.patch.
+        """
+        template = (ROOT / "templates/spec-kit/templates/tasks-template.md").read_text()
+        self.assertIn("[DEFERRED-TO-PR]", template)
+        self.assertIn("`ballast run demo`", template)
+        self.assertIn('"AC-002": []', template)
+        program = shutil.which("patch")
+        if program is None:
+            self.skipTest("patch is not installed")
+        with tempfile.TemporaryDirectory() as temp:
+            # The pinned preset's own files, before Ballast's patch.
+            preset = Path(temp) / "preset"
+            shutil.copytree(ROOT / "tests/fixtures/spec-kit/preset", preset)
+            subprocess.run(  # noqa: S603 - fixed program and arguments
+                [program, "-p1", "-s", "-i", str(ROOT / "tools/spec-kit/preset.patch")],
+                cwd=preset,
+                check=True,
+            )
+            installed = (preset / "templates/tasks-template.md").read_text()
+        for name in (
+            "Acceptance evidence",
+            "Operator-only checks",
+            "Workflow-owned steps",
+        ):
+            start = template.index(f"**{name}**:")
+            self.assertIn(template[start : template.index("\n", start)], installed)
 
     def test_implementation_check_is_unchanged(self) -> None:
         """check_implementation still requires every task done (D-07)."""

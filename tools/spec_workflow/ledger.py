@@ -1289,8 +1289,9 @@ def archive_manifest(root: Path, run_id: str, feature: str) -> dict[str, Any]:
     if not isinstance(criteria, dict) or set(criteria) != ids:
         fail("acceptance manifest AC set differs from approved spec")
     for tests in criteria.values():
-        if not isinstance(tests, list) or not tests:
-            fail("each AC needs a named test")
+        # [] names no unit test: the criterion stays missing (#112).
+        if not isinstance(tests, list):
+            fail("each AC needs a list of named tests")
         for test in tests:
             if not isinstance(test, str) or not re.fullmatch(
                 r"tests\.test_[A-Za-z0-9_.]+\.test_[A-Za-z0-9_]+", test
@@ -2275,7 +2276,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
             if manifest_digest != _sha(manifest_file):
                 fail("acceptance manifest digest mismatch")
             for ac_id, tests in manifest["criteria"].items():
-                if not AC.fullmatch(ac_id) or not isinstance(tests, list) or not tests:
+                if not AC.fullmatch(ac_id) or not isinstance(tests, list):
                     fail("archived acceptance mapping is invalid")
                 if any(
                     not isinstance(test, str)
@@ -2320,7 +2321,9 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
                     for check in checks
                 )
                 ac[ac_id] = (
-                    "unavailable"
+                    "missing"
+                    if not tests
+                    else "unavailable"
                     if freshness == "historical"
                     else "stale"
                     if freshness == "stale"

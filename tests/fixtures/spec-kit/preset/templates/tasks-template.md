@@ -6,23 +6,18 @@ description: "Task list template for feature implementation"
 # Tasks: [FEATURE NAME]
 
 **Input**: Design documents from `/specs/[###-feature-name]/`
-
 **Prerequisites**: plan.md (required), spec.md (required for user stories), research.md, data-model.md, contracts/
 
-**Acceptance evidence**: Each behavior acceptance criterion needs a test or other explicit verification task. Do not omit tests merely because the spec did not ask for them; if no automated test seam is appropriate, record the manual evidence and reason. Add one task that writes `acceptance-evidence.json` in the feature directory: `{"schema_version": 1, "spec_digest": "<sha256 of spec.md>", "criteria": {"AC-001": ["tests.test_module.Class.test_method"], "AC-002": []}}`, mapping every criterion to the `unittest` cases that prove it, and to `[]` when no unit test does. The mapping is a proposal; only `ballast ledger check` records evidence, and a criterion mapped to `[]` stays missing in the acceptance packet.
-
-**Operator-only checks**: Do not create tasks the implementing agent cannot do in its run: a manual browser or device check, a demo recording or screenshot, or anything only the operator can do. Prefer an automated test. Demo captures are requested later with `ballast run demo`, never in a task. When a criterion still needs an operator check, write it as one task tagged `[DEFERRED-TO-PR]` after its other tags, e.g. `- [ ] T020 [US1] [DEFERRED-TO-PR] Manual browser check of the undo button [AC-002]`, leave it unchecked, and tag every task that depends on it the same way. In an Autonomous run `validate-implementation` lets such a task stay open only when it was tagged when the tasks decision was recorded; the run record, the Draft PR and its acceptance packet list it as deferred, and it is never evidence.
-
-**Workflow-owned steps**: Never create tasks for steps the workflow runs itself after implementation: the full gate, quickstart runs, reviews (engineering, test, security, documentation and the other specialists), converge and spec reconciliation. `validate-implementation` requires every task in this file to be done before those steps run, so such a task can never be ticked in time and blocks the run. List what they must verify in plan.md or quickstart.md instead.
+**Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
-## Format: `[ID] [P?] [Story] Description`
+## Format: `[ID] [P?] [Story?] Description [(depends on ...)]`
 
-- **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
+- **[P]**: Can run in parallel with other ready tasks once any listed dependencies are satisfied
+- **[Story?]**: Which user story this task belongs to (e.g., US1, US2, US3). Required for user story phases only.
+- **(depends on ...)**: Explicit dependency on any earlier task IDs. Omit if the task has no explicit dependencies.
 - Include exact file paths in descriptions
-- Test and verification tasks must cite the acceptance criterion ID(s) they prove, e.g. `[AC-001]`.
 
 ## Path Conventions
 
@@ -31,21 +26,21 @@ description: "Task list template for feature implementation"
 - **Mobile**: `api/src/`, `ios/src/` or `android/src/`
 - Paths shown below assume single project - adjust based on plan.md structure
 
-<!--
+<!-- 
   ============================================================================
   IMPORTANT: The tasks below are SAMPLE TASKS for illustration purposes only.
-
-  The $speckit-tasks command MUST replace these with actual tasks based on:
+  
+  The /speckit.tasks command MUST replace these with actual tasks based on:
   - User stories from spec.md (with their priorities P1, P2, P3...)
   - Feature requirements from plan.md
   - Entities from data-model.md
   - Endpoints from contracts/
-
+  
   Tasks MUST be organized by user story so each story can be:
   - Implemented independently
   - Tested independently
   - Delivered as an MVP increment
-
+  
   DO NOT keep these sample tasks in the generated tasks.md file.
   ============================================================================
 -->
@@ -55,8 +50,8 @@ description: "Task list template for feature implementation"
 **Purpose**: Project initialization and basic structure
 
 - [ ] T001 Create project structure per implementation plan
-- [ ] T002 Initialize [language] project with [framework] dependencies
-- [ ] T003 [P] Configure linting and formatting tools
+- [ ] T002 Initialize [language] project with [framework] dependencies (depends on T001)
+- [ ] T003 [P] Configure linting and formatting tools (depends on T001)
 
 ---
 
@@ -68,12 +63,12 @@ description: "Task list template for feature implementation"
 
 Examples of foundational tasks (adjust based on your project):
 
-- [ ] T004 Setup database schema and migrations framework
-- [ ] T005 [P] Implement authentication/authorization framework
-- [ ] T006 [P] Setup API routing and middleware structure
-- [ ] T007 Create base models/entities that all stories depend on
-- [ ] T008 Configure error handling and logging infrastructure
-- [ ] T009 Setup environment configuration management
+- [ ] T004 Setup database schema and migrations framework (depends on T002, T003)
+- [ ] T005 [P] Implement authentication/authorization framework (depends on T002, T003)
+- [ ] T006 [P] Setup API routing and middleware structure (depends on T002, T003)
+- [ ] T007 [P] Configure error handling and logging infrastructure (depends on T002, T003)
+- [ ] T008 [P] Setup environment configuration management (depends on T002, T003)
+- [ ] T009 Create base models/entities that all stories depend on (depends on T004)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -85,21 +80,21 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Acceptance tests for User Story 1
+### Tests for User Story 1 (OPTIONAL - only if tests requested) ⚠️
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T010 [P] [US1] Contract test for [endpoint] in tests/contract/test_[name].py
-- [ ] T011 [P] [US1] Integration test for [user journey] in tests/integration/test_[name].py
+- [ ] T010 [P] [US1] Contract test for [endpoint] in tests/contract/test_[name].py (depends on T009)
+- [ ] T011 [P] [US1] Integration test for [user journey] in tests/integration/test_[name].py (depends on T009)
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] Create [Entity1] model in src/models/[entity1].py
-- [ ] T013 [P] [US1] Create [Entity2] model in src/models/[entity2].py
+- [ ] T012 [P] [US1] Create [Entity1] model in src/models/[entity1].py (depends on T009)
+- [ ] T013 [P] [US1] Create [Entity2] model in src/models/[entity2].py (depends on T009)
 - [ ] T014 [US1] Implement [Service] in src/services/[service].py (depends on T012, T013)
-- [ ] T015 [US1] Implement [endpoint/feature] in src/[location]/[file].py
-- [ ] T016 [US1] Add validation and error handling
-- [ ] T017 [US1] Add logging for user story 1 operations
+- [ ] T015 [US1] Implement [endpoint/feature] in src/[location]/[file].py (depends on T014)
+- [ ] T016 [US1] Add validation and error handling (depends on T015)
+- [ ] T017 [US1] Add logging for user story 1 operations (depends on T015)
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently
 
@@ -111,17 +106,17 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Acceptance tests for User Story 2
+### Tests for User Story 2 (OPTIONAL - only if tests requested) ⚠️
 
-- [ ] T018 [P] [US2] Contract test for [endpoint] in tests/contract/test_[name].py
-- [ ] T019 [P] [US2] Integration test for [user journey] in tests/integration/test_[name].py
+- [ ] T018 [P] [US2] Contract test for [endpoint] in tests/contract/test_[name].py (depends on T009)
+- [ ] T019 [P] [US2] Integration test for [user journey] in tests/integration/test_[name].py (depends on T009)
 
 ### Implementation for User Story 2
 
-- [ ] T020 [P] [US2] Create [Entity] model in src/models/[entity].py
-- [ ] T021 [US2] Implement [Service] in src/services/[service].py
-- [ ] T022 [US2] Implement [endpoint/feature] in src/[location]/[file].py
-- [ ] T023 [US2] Integrate with User Story 1 components (if needed)
+- [ ] T020 [P] [US2] Create [Entity] model in src/models/[entity].py (depends on T009)
+- [ ] T021 [US2] Implement [Service] in src/services/[service].py (depends on T020)
+- [ ] T022 [US2] Implement [endpoint/feature] in src/[location]/[file].py (depends on T021)
+- [ ] T023 [US2] Integrate with User Story 1 components (if needed) (depends on T022)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently
 
@@ -133,16 +128,16 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Acceptance tests for User Story 3
+### Tests for User Story 3 (OPTIONAL - only if tests requested) ⚠️
 
-- [ ] T024 [P] [US3] Contract test for [endpoint] in tests/contract/test_[name].py
-- [ ] T025 [P] [US3] Integration test for [user journey] in tests/integration/test_[name].py
+- [ ] T024 [P] [US3] Contract test for [endpoint] in tests/contract/test_[name].py (depends on T009)
+- [ ] T025 [P] [US3] Integration test for [user journey] in tests/integration/test_[name].py (depends on T009)
 
 ### Implementation for User Story 3
 
-- [ ] T026 [P] [US3] Create [Entity] model in src/models/[entity].py
-- [ ] T027 [US3] Implement [Service] in src/services/[service].py
-- [ ] T028 [US3] Implement [endpoint/feature] in src/[location]/[file].py
+- [ ] T026 [P] [US3] Create [Entity] model in src/models/[entity].py (depends on T009)
+- [ ] T027 [US3] Implement [Service] in src/services/[service].py (depends on T026)
+- [ ] T028 [US3] Implement [endpoint/feature] in src/[location]/[file].py (depends on T027)
 
 **Checkpoint**: All user stories should now be independently functional
 
@@ -161,6 +156,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
+- [ ] TXXX Run quickstart.md validation
 
 ---
 
@@ -200,16 +196,54 @@ Examples of foundational tasks (adjust based on your project):
 
 ---
 
-## Parallel Example: User Story 1
+## Execution Wave DAG
 
-```bash
-# Launch all tests for User Story 1 together (if tests requested):
-Task: "Contract test for [endpoint] in tests/contract/test_[name].py"
-Task: "Integration test for [user journey] in tests/integration/test_[name].py"
+Tasks grouped by dependency resolution. Tasks within the same wave can run in parallel.
 
-# Launch all models for User Story 1 together:
-Task: "Create [Entity1] model in src/models/[entity1].py"
-Task: "Create [Entity2] model in src/models/[entity2].py"
+```text
+Wave 1 (no dependencies):
+  T001  Create project structure
+
+Wave 2 (T001 done):
+  T002  Initialize project (depends on T001)
+  T003  Configure linting (depends on T001)
+
+Wave 3 (T002, T003 done):
+  T004  Setup database schema (depends on T002, T003)
+  T005 [P] Implement auth framework (depends on T002, T003)
+  T006 [P] Setup API routing (depends on T002, T003)
+  T007 [P] Configure error handling (depends on T002, T003)
+  T008 [P] Setup environment config (depends on T002, T003)
+
+Wave 4 (T004 done):
+  T009  Create base models (depends on T004)
+
+Wave 5 (Phase 2 complete — all user stories can begin in parallel):
+  T010 [P] [US1] Contract test (depends on T009)
+  T011 [P] [US1] Integration test (depends on T009)
+  T012 [P] [US1] Create Entity1 model (depends on T009)
+  T013 [P] [US1] Create Entity2 model (depends on T009)
+  T018 [P] [US2] Contract test (depends on T009)
+  T019 [P] [US2] Integration test (depends on T009)
+  T020 [P] [US2] Create Entity model (depends on T009)
+  T024 [P] [US3] Contract test (depends on T009)
+  T025 [P] [US3] Integration test (depends on T009)
+  T026 [P] [US3] Create Entity model (depends on T009)
+
+Wave 6:
+  T014  [US1] Implement Service (depends on T012, T013)
+  T021  [US2] Implement Service (depends on T020)
+  T027  [US3] Implement Service (depends on T026)
+
+Wave 7:
+  T015  [US1] Implement endpoint (depends on T014)
+  T022  [US2] Implement endpoint (depends on T021)
+  T028  [US3] Implement endpoint (depends on T027)
+
+Wave 8:
+  T016  [US1] Validation (depends on T015)
+  T017  [US1] Logging (depends on T015)
+  T023  [US2] Integrate with US1 (depends on T022)
 ```
 
 ---
@@ -247,8 +281,9 @@ With multiple developers:
 
 ## Notes
 
-- [P] tasks = different files, no dependencies
-- [Story] label maps task to specific user story for traceability
+- [P] tasks = can run in parallel with other ready tasks once any listed dependencies are satisfied
+- (depends on ...) = explicit dependency on any earlier task IDs; omit if no explicit dependencies
+- [Story?] label maps task to specific user story for traceability when applicable
 - Each user story should be independently completable and testable
 - Verify tests fail before implementing
 - Commit after each task or logical group
