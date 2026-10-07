@@ -25,6 +25,7 @@ from test_autonomy import (
     AutonomyCase,
     autonomy,
     isolate_operator_state,
+    ledger,
 )
 
 if TYPE_CHECKING:
@@ -1089,6 +1090,183 @@ class RunChecksTests(RecorderCase):
         self.failed(self.check("run-checks"), "tamper block")
         self.assertEqual(self.block()["category"], "tamper")
         self.assertTrue((self.root / "BALLAST_TAMPERED").exists())
+
+
+ACCEPT_SPEC = (
+    "# Feature Specification: Demo run\n\n"
+    "1. **AC-001**: The first thing works.\n"
+    "2. **AC-002**: The second thing works.\n"
+    "3. **AC-003**: The page looks right.\n"
+)
+ACCEPT_TESTS = """import unittest
+
+
+class Accept(unittest.TestCase):
+    def test_pass(self):
+        pass
+
+    def test_fail(self):
+        self.fail("not yet")
+"""
+PASSING = "tests.test_accept.Accept.test_pass"
+FAILING = "tests.test_accept.Accept.test_fail"
+
+
+class AcceptanceChecksTests(RecorderCase):
+    """#117: run-checks records each mapped test, runner-recorded."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write(".venv/\n__pycache__/\n")
+        tests = self.root / "tests"
+        tests.mkdir()
+        (tests / "__init__.py").write_text("")
+        (tests / "test_accept.py").write_text(ACCEPT_TESTS)
+        python = self.root / ".venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.symlink_to(Path(sys.executable).resolve())
+        (self.feature / "spec.md").write_text(ACCEPT_SPEC)
+        digest = hashlib.sha256(ACCEPT_SPEC.encode()).hexdigest()
+        (self.feature / "intent.md").write_text(
+            f"- **Provisional spec digest**: sha256:{digest}\n"
+        )
+        self.manifest({"AC-001": [PASSING], "AC-002": [FAILING, PASSING], "AC-003": []})
+        self.freeze()
+
+    def manifest(self, criteria: object, **changes: object) -> None:
+        digest = hashlib.sha256(ACCEPT_SPEC.encode()).hexdigest()
+        data = {"schema_version": 1, "spec_digest": digest, "criteria": criteria}
+        (self.feature / "acceptance-evidence.json").write_text(
+            json.dumps({**data, **changes})
+        )
+
+    def events(self) -> list[dict]:
+        events, problems = ledger.read(self.root, "run42")
+        self.assertEqual(problems, [])
+        return events
+
+    def checks(self) -> list[tuple[str, str, str, str]]:
+        return [
+            (
+                e["source"],
+                e["data"]["ac_id"],
+                e["data"]["check_id"],
+                e["data"]["status"],
+            )
+            for e in self.events()
+            if e["kind"] == "verification"
+        ]
+
+    def acceptance(self) -> dict | None:
+        return autonomy.read_acceptance(self.root, "run42")
+
+    def record_text(self) -> str:
+        return (self.feature / "autonomous/record.md").read_text()
+
+    def test_each_mapped_pair_is_recorded_runner_recorded(self) -> None:
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(),
+            [
+                ("runner-recorded", "AC-001", PASSING, "passed"),
+                ("runner-recorded", "AC-002", FAILING, "failed"),
+                ("runner-recorded", "AC-002", PASSING, "passed"),
+            ],
+        )
+        events = self.events()
+        snapshot = next(e for e in events if e["kind"] == "snapshot")
+        self.assertEqual(snapshot["source"], "runner")
+        self.assertEqual(snapshot["data"], ledger.artifact_digests(self.root, FEATURE))
+        for event in events:
+            if event["kind"] == "verification":
+                self.assertEqual(event["data"]["snapshot"], snapshot["data"]["tree"])
+                self.assertEqual(
+                    event["data"]["manifest_digest"],
+                    snapshot["data"]["manifest_digest"],
+                )
+        record = self.record_text()
+        self.assertIn("### Acceptance checks (runner-recorded)", record)
+        self.assertIn(f"- `AC-001` `{PASSING}`: passed", record)
+        self.assertIn(f"- `AC-002` `{FAILING}`: failed", record)
+        # [] stays missing: nothing runs or is recorded for it.
+        self.assertIn("- `AC-003` no test mapped (missing)", record)
+        self.assertNotIn("operator-attested", {c[0] for c in self.checks()})
+
+    def test_results_bind_to_the_commit_the_run_publishes(self) -> None:
+        """Not stale on arrival: the published commit has the checked tree."""
+        self.ok(self.check("run-checks"))
+        tree = next(e for e in self.events() if e["kind"] == "snapshot")["data"]
+        self.git("add", "--all")
+        self.git("commit", "-q", "-m", "publish")
+        self.assertEqual(ledger.commit_tree(self.root, "HEAD"), tree["tree"])
+
+    def test_agent_written_manifest_cannot_inject_commands_or_results(self) -> None:
+        marker = self.base / "injected"
+        for criteria, changes in (
+            (
+                {"AC-001": [f"{PASSING}; touch {marker}"], "AC-002": [], "AC-003": []},
+                {},
+            ),
+            ({"AC-001": [PASSING], "AC-002": [], "AC-003": []}, {"results": {}}),
+            ({"AC-001": "passed", "AC-002": [], "AC-003": []}, {}),
+        ):
+            with self.subTest(criteria=criteria, changes=changes):
+                self.manifest(criteria, **changes)
+                self.ok(self.check("run-checks"))
+                self.assertEqual(self.acceptance(), {"status": "malformed"})
+                self.assertIn(
+                    "acceptance-evidence.json is malformed", self.record_text()
+                )
+        self.assertEqual(self.checks(), [])
+        self.assertFalse(marker.exists())
+
+    def test_stale_manifest_is_reported_and_runs_nothing(self) -> None:
+        self.manifest(
+            {"AC-001": [PASSING], "AC-002": [], "AC-003": []}, spec_digest="0" * 64
+        )
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "stale"})
+        self.assertIn("does not match the approved spec", self.record_text())
+        self.manifest({"AC-001": [PASSING], "AC-002": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "stale"})
+        self.assertEqual(self.checks(), [])
+
+    def test_missing_manifest_and_interpreter_are_reported(self) -> None:
+        (self.root / ".venv/bin/python").unlink()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance()["status"], "no-python")
+        self.assertIn("no .venv/bin/python", self.record_text())
+        (self.feature / "acceptance-evidence.json").unlink()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "no-manifest"})
+        self.assertIn("no acceptance-evidence.json", self.record_text())
+        self.assertEqual(self.checks(), [])
+
+    def test_too_many_tests_run_nothing(self) -> None:
+        names = [f"tests.test_accept.Accept.test_{n}" for n in range(101)]
+        self.manifest({"AC-001": names, "AC-002": [], "AC-003": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "too-many"})
+        self.assertIn("maps more than 100 tests", self.record_text())
+        self.assertEqual(self.checks(), [])
+
+    def test_failed_check_commands_run_no_acceptance_check(self) -> None:
+        self.ok(self.check("run-checks"))
+        self.assertIsNotNone(self.acceptance())
+        (self.root / "ballast.toml").write_text('[checks]\ncommands = ["exit 3"]\n')
+        self.failed(self.check("run-checks"), "check commands failed")
+        self.assertIsNone(self.acceptance())
+        self.assertEqual(len(self.checks()), 3)
+
+    def test_feedback_checks_record_no_evidence(self) -> None:
+        record = autonomy.read_run(self.root, "run42")
+        del record["frozen_tree"]
+        autonomy.write_run(self.root, record)
+        self.ok(self.check("run-checks", "--feedback"))
+        self.assertIsNone(self.acceptance())
+        self.assertEqual(self.checks(), [])
 
 
 class FinalAcceptanceTests(RecorderCase):

@@ -2129,6 +2129,42 @@ class RealConfinementTests(AutonomyCase):
     def test_self_test_passes(self) -> None:
         autonomy.confinement_self_test(self.root)
 
+    def test_acceptance_checks_get_a_read_only_checkout_and_no_credentials(
+        self,
+    ) -> None:
+        """#117: an agent-written test cannot write anything or read a secret."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        # /var/tmp, unlike /tmp, stays visible inside the sandbox.
+        home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
+        (home / ".config/gh").mkdir(parents=True)
+        (home / ".config/gh/hosts.yml").write_text("oauth_token: planted\n")
+        (home / ".git-credentials").write_text("https://u:planted@github.com\n")
+        (self.root / "build").mkdir()  # an output directory
+        self.enterContext(
+            patch.dict(os.environ, {"HOME": str(home), "GH_TOKEN": "planted"})
+        )
+        probes = {
+            "echo x > README.md": False,
+            "echo x > build/out": False,
+            'touch "$HOME/planted"': False,
+            'grep -rqs planted "$HOME/.git-credentials" "$HOME/.config"': False,
+            'test -n "$GH_TOKEN"': False,
+            "cat README.md >/dev/null && touch /tmp/scratch": True,
+        }
+        for command, succeeds in probes.items():
+            with self.subTest(command=command):
+                [result] = artifacts.run_commands(
+                    self.root, FEATURE, [command], 1, read_only=True
+                )
+                self.assertEqual(result["exit"] == 0, succeeds, result)
+        self.assertEqual((self.root / "README.md").read_text(), "demo\n")
+        self.assertFalse((self.root / "build/out").exists())
+        self.assertFalse((home / "planted").exists())
+        # The check commands keep their writable checkout.
+        [result] = artifacts.run_commands(self.root, FEATURE, ["echo x > build/out"], 1)
+        self.assertEqual(result["exit"], 0, result)
+
     def test_step_state_is_writable_and_the_operator_state_is_not(self) -> None:
         """#79: a confined step can create state and run uvx, and none persists."""
         operator = autonomy.state_dir(self.root)

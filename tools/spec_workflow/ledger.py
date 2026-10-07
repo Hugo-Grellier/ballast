@@ -53,6 +53,8 @@ OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 # Spec Kit writes `1. **AC-NNN**:`; older fixtures `- **AC-NNN**:`.
 CRITERION = re.compile(r"(?:-|[0-9]+\.)[ \t]+\*\*(AC-[0-9]{3})\*\*:[ \t]*(.*)")
 TITLE_LIMIT = 120
+# A unittest case a manifest may map a criterion to.
+TEST_NAME = re.compile(r"tests\.test_[A-Za-z0-9_.]+\.test_[A-Za-z0-9_]+")
 DROP_SPECS = ("rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", "specs")
 # Writing even a private index runs the agent-writable post-index-change hook.
 NO_HOOKS = ("-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false")
@@ -151,7 +153,19 @@ PACKET_REASONS: dict[str, frozenset[str]] = {
     ),
 }
 PACKET_COUNTS = ("verified", "failed", "not_run", "stale", "missing")
-SOURCES = {"runner", "client-counter", "operator-attested", "agent-reported"}
+SOURCES = {
+    "runner",
+    "client-counter",
+    "operator-attested",
+    "agent-reported",
+    # A per-criterion check the Autonomous runner ran from the agent-proposed
+    # manifest (#117, ADR-0018): evidence from agent-written tests, never an
+    # operator's.
+    "runner-recorded",
+}
+# The sources a criterion's evidence may come from: `ballast ledger check`
+# and the runner's acceptance checks.
+AC_SOURCES = frozenset({"operator-attested", "runner-recorded"})
 RANK = {"economy": 0, "standard": 1, "senior": 2, "critical": 3}
 EFFORT_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
 MIN_POLICY_COLUMNS = 2
@@ -711,6 +725,11 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
     }.get(event["kind"])
     if required_source and event["source"] != required_source:
         fail(f"{event['kind']} requires {required_source} source")
+    if event["source"] == "runner-recorded" and (
+        event["kind"] != "verification"
+        or not {"ac_id", "snapshot", "spec_digest", "manifest_digest"} <= set(data)
+    ):
+        fail("runner-recorded applies only to a bound criterion check")
 
 
 def _validate_fallback(data: dict[str, Any]) -> None:
@@ -1271,32 +1290,50 @@ def _approved_spec_ids(root: Path, feature: str) -> tuple[str, set[str]]:
     return digest, ids
 
 
-def archive_manifest(root: Path, run_id: str, feature: str) -> dict[str, Any]:
-    """Validate and copy the approved AC to unittest mapping into the archive."""
-    digest, ids = _approved_spec_ids(root, feature)
+class StaleManifestError(LedgerError):
+    """A well-formed acceptance manifest that does not match the approved spec."""
+
+
+def archive_manifest(  # noqa: C901 - shape, then staleness
+    root: Path, run_id: str, feature: str
+) -> dict[str, Any]:
+    """Validate and copy the approved AC to unittest mapping into the archive.
+
+    A manifest of the wrong shape raises LedgerError; a well-formed one bound
+    to another spec, AC set or approval raises StaleManifestError.
+    """
     path = root / feature / "acceptance-evidence.json"
     if path.is_symlink():
         fail("symlinked acceptance manifest is unavailable")
     source_bytes = path.read_bytes()
     data = json.loads(source_bytes)
     if (
-        set(data) != {"schema_version", "spec_digest", "criteria"}
+        not isinstance(data, dict)
+        or set(data) != {"schema_version", "spec_digest", "criteria"}
         or data["schema_version"] != 1
-        or data["spec_digest"] != digest
+        or not isinstance(data["spec_digest"], str)
     ):
         fail("acceptance manifest does not match approved spec")
     criteria = data["criteria"]
-    if not isinstance(criteria, dict) or set(criteria) != ids:
+    if not isinstance(criteria, dict):
         fail("acceptance manifest AC set differs from approved spec")
     for tests in criteria.values():
         # [] names no unit test: the criterion stays missing (#112).
         if not isinstance(tests, list):
             fail("each AC needs a list of named tests")
         for test in tests:
-            if not isinstance(test, str) or not re.fullmatch(
-                r"tests\.test_[A-Za-z0-9_.]+\.test_[A-Za-z0-9_]+", test
-            ):
+            if not isinstance(test, str) or not TEST_NAME.fullmatch(test):
                 fail("acceptance evidence must name a unittest case")
+    try:
+        digest, ids = _approved_spec_ids(root, feature)
+    except LedgerError as error:
+        raise StaleManifestError(str(error)) from None
+    if data["spec_digest"] != digest:
+        message = "acceptance manifest does not match approved spec"
+        raise StaleManifestError(message)
+    if set(criteria) != ids:
+        message = "acceptance manifest AC set differs from approved spec"
+        raise StaleManifestError(message)
     _store_manifest_bytes(root, run_id, source_bytes)
     return data
 
@@ -2261,6 +2298,8 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
         manifest_available = manifest_file is not None and manifest_file.is_file()
         manifest_stale = False
         ac: dict[str, str] = {}
+        # The sources of the evidence each criterion's state counts.
+        ac_sources: dict[str, list[str]] = {}
         if manifest_available:
             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
             if (
@@ -2289,7 +2328,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
                 matches = [
                     check
                     for check in checks
-                    if check["source"] == "operator-attested"
+                    if check["source"] in AC_SOURCES
                     and check["data"].get("ac_id") == ac_id
                     and check["data"]["check_id"] in tests
                     and check["data"].get("snapshot") == snapshot_tree
@@ -2301,10 +2340,15 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
                     check["data"]["check_id"]: check["data"]["status"]
                     for check in matches
                 }
+                latest_source = {
+                    check["data"]["check_id"]: check["source"] for check in matches
+                }
+                if latest_source:
+                    ac_sources[ac_id] = sorted(set(latest_source.values()))
                 older_checks = {
                     check["data"]["check_id"]
                     for check in checks
-                    if check["source"] == "operator-attested"
+                    if check["source"] in AC_SOURCES
                     and check["data"].get("ac_id") == ac_id
                     and check["data"]["check_id"] in tests
                     and (
@@ -2315,7 +2359,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
                     )
                 }
                 older_mapping = any(
-                    check["source"] == "operator-attested"
+                    check["source"] in AC_SOURCES
                     and check["data"].get("ac_id") == ac_id
                     and check["data"].get("manifest_digest") != manifest_digest
                     for check in checks
@@ -2345,6 +2389,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
                 )
             if manifest["spec_digest"] != (snapshot or {}).get("spec_digest"):
                 ac.clear()
+                ac_sources.clear()
                 manifest_available = False
                 manifest_stale = True
         passed_ac = sum(value == "passed" for value in ac.values())
@@ -2361,6 +2406,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
                 passed_ac if manifest_available and freshness != "historical" else None
             ),
             "ac_status": ac,
+            "ac_sources": ac_sources,
             "ac_executable_coverage": (
                 f"{passed_ac}/{len(ac)}" if ac and freshness != "historical" else None
             ),
@@ -2886,6 +2932,41 @@ def _check(root: Path, run_id: str, ac_id: str, test_id: str) -> int:
     return result.returncode or (0 if unchanged else 1)
 
 
+def record_runner_checks(
+    root: Path,
+    run_id: str,
+    feature: str,
+    snapshot: dict[str, str],
+    results: list[tuple[str, str, str, int]],
+) -> None:
+    """Append the runner's acceptance checks (#117, ADR-0018).
+
+    One runner snapshot, then one `runner-recorded` verification per
+    `(ac_id, test, status, exit_code)`, bound to that snapshot. Only the
+    trusted Autonomous `run-checks` step calls this; no CLI command offers it.
+    """
+    append(root, new_event(run_id, feature, "snapshot", "runner", snapshot))
+    for ac_id, test, status, code in results:
+        append(
+            root,
+            new_event(
+                run_id,
+                feature,
+                "verification",
+                "runner-recorded",
+                {
+                    "check_id": test,
+                    "ac_id": ac_id,
+                    "status": status,
+                    "exit_code": code,
+                    "snapshot": snapshot["tree"],
+                    "spec_digest": snapshot["spec_digest"],
+                    "manifest_digest": snapshot["manifest_digest"],
+                },
+            ),
+        )
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0915 - CLI branches.
     """Handle local import, observation, verification, and report commands."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2896,7 +2977,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0915 - CLI bra
     recorder.add_argument("run_id")
     recorder.add_argument("kind", choices=sorted(FIELDS.keys() - RUNNER_ONLY))
     recorder.add_argument(
-        "--source", required=True, choices=sorted(SOURCES - {"runner"})
+        "--source",
+        required=True,
+        choices=sorted(SOURCES - {"runner", "runner-recorded"}),
     )
     recorder.add_argument(
         "--data", required=True, help="A JSON object using only schema fields"

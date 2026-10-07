@@ -187,6 +187,8 @@ WALL_TIME = (1, 1440, 240)
 # raise (#21 R9).
 AGENT_STEPS = (1, 200, 40)
 CHECK_TIMEOUT = (1, 240, 30)
+# Distinct mapped tests the runner's acceptance checks run (#117).
+ACCEPTANCE_TESTS = 100
 # Fix cycles per run, never reset by a resume, and correctable-draft retries
 # per agent step invocation (#21 R1, R4).
 FIX_CYCLES = 3
@@ -2174,7 +2176,12 @@ def _installed_skill_binds(root: Path) -> list[str]:
     return args
 
 
-def _binds_for_worktree(root: Path, feature: str | None) -> list[str]:
+def _binds_for_worktree(
+    root: Path, feature: str | None, *, writable: bool = True
+) -> list[str]:
+    if not writable:
+        # The whole checkout read-only (#117): nothing under it is writable.
+        return ["--ro-bind", str(root), str(root), *_git_binds(root)]
     args = ["--bind", str(root), str(root)]
     for name in PROTECTED:
         path = root / name
@@ -2534,6 +2541,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     keep_visible: tuple[Path, ...] = (),
     integration: str | None,
     with_login: bool = True,
+    writable_checkout: bool = True,
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
@@ -2559,6 +2567,9 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
 
     `with_login=False` keeps the overlays but copies no login: the local
     fallback (`codex exec --oss`) needs none (#23 SEC2-001).
+
+    `writable_checkout=False` binds the whole checkout read-only: the
+    runner's acceptance checks run agent-written tests (#117, ADR-0018).
     """
     if integration is not None and integration not in AGENT_HOMES:
         message = f"unknown integration {integration!r}"
@@ -2618,7 +2629,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
             args += ["--ro-bind", "/dev/null", str(path)]
     args += _agent_home_binds(home, env, private, integration, with_login)
     args += _visible_binds(root, command)
-    args += _binds_for_worktree(root, feature)
+    args += _binds_for_worktree(root, feature, writable=writable_checkout)
     args += _installed_skill_binds(root)
     args += extra
     for path in hidden_extra:
@@ -3475,7 +3486,58 @@ IGNORED_FILES_NOTE = (
 )
 
 
-def _check_lines(checks: list[dict] | None) -> list[str]:
+ACCEPTANCE_STATUS = {
+    "no-manifest": "no acceptance-evidence.json; every criterion stays missing",
+    "malformed": "acceptance-evidence.json is malformed; no criterion was checked",
+    "stale": (
+        "acceptance-evidence.json does not match the approved spec; no criterion "
+        "was checked"
+    ),
+    "too-many": (
+        f"acceptance-evidence.json maps more than {ACCEPTANCE_TESTS} tests; no "
+        "criterion was checked"
+    ),
+    "no-python": "no .venv/bin/python to run the tests; no criterion was checked",
+    "ledger-unavailable": "the run's ledger is unavailable; no result was recorded",
+}
+
+
+def _acceptance_lines(acceptance: dict | None) -> list[str]:
+    """Render the runner's per-criterion checks (#117, ADR-0018)."""
+    if acceptance is None:
+        return []
+    lines = [
+        "",
+        "### Acceptance checks (runner-recorded)",
+        "",
+        (
+            "The runner ran each test the agent-proposed acceptance-evidence.json "
+            "maps, confined like run-checks with a read-only checkout, and recorded "
+            "each result in the ledger as `runner-recorded`: agent-written tests "
+            "run by Ballast, not an operator's check."
+        ),
+        "",
+    ]
+    status = acceptance.get("status")
+    if status in ACCEPTANCE_STATUS:
+        lines.append(f"- {ACCEPTANCE_STATUS[status]}")
+    for item in acceptance.get("results") or []:
+        test = item.get("test")
+        result = (
+            "no test mapped (missing)"
+            if test is None
+            else f"{_code(str(test))}: {item.get('status')}"
+            + (" (timed out)" if item.get("timed_out") else "")
+        )
+        lines.append(f"- {_code(str(item.get('ac')))} {result}")
+    if acceptance.get("exhausted"):
+        lines.append("- the wall-time limit ran out; the remaining tests did not run")
+    return lines
+
+
+def _check_lines(
+    checks: list[dict] | None, acceptance: dict | None = None
+) -> list[str]:
     lines = ["## Checks", ""]
     if checks is None:
         lines.append("- run-checks: not run yet")
@@ -3488,6 +3550,7 @@ def _check_lines(checks: list[dict] | None) -> list[str]:
     lines += [
         IGNORED_FILES_NOTE,
         "- agent-reported: none; agent claims never satisfy run-checks",
+        *_acceptance_lines(acceptance),
         "",
         "CI results appear on this PR.",
         "",
@@ -3643,6 +3706,7 @@ def _sections(  # noqa: PLR0913 - one rendering, every input explicit
     human: list[dict] | None = None,
     feedback: list[dict] | None = None,
     local_fallback: str | None = None,
+    acceptance: dict | None = None,
 ) -> list[str]:
     material = [e for e in current_decisions(decisions) if e.get("material")]
     lines = [*_mode_lines(run, local_fallback), *_r2_lines(run, decisions)]
@@ -3674,7 +3738,7 @@ def _sections(  # noqa: PLR0913 - one rendering, every input explicit
     lines += _open_findings(decisions)
     lines += _fix_lines(run, decisions, feedback or [])
     lines += _resolution_lines(run, human or [])
-    lines += _check_lines(checks)
+    lines += _check_lines(checks, acceptance)
     return lines
 
 
@@ -3691,6 +3755,7 @@ def render_record(  # noqa: PLR0913 - one rendering, every input explicit
     human: list[dict] | None = None,
     feedback: list[dict] | None = None,
     local_fallback: str | None = None,
+    acceptance: dict | None = None,
 ) -> str:
     """Deterministic bytes of specs/<f>/autonomous/record.md.
 
@@ -3717,6 +3782,7 @@ def render_record(  # noqa: PLR0913 - one rendering, every input explicit
             human=human,
             feedback=feedback,
             local_fallback=local_fallback,
+            acceptance=acceptance,
         ),
     ]
     return "\n".join(lines).rstrip("\n") + "\n"
@@ -3734,6 +3800,7 @@ def render_run_record(root: Path, run: dict) -> str:
         human=read_human_decisions(root, run_id),
         feedback=read_feedback(root, run_id),
         local_fallback=fallback.describe(root, run_id),
+        acceptance=read_acceptance(root, run_id),
     )
 
 
@@ -3747,6 +3814,7 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
     branch: str,
     human: list[dict] | None = None,
     feedback: list[dict] | None = None,
+    acceptance: dict | None = None,
 ) -> str:
     """Render the Draft PR body; short decision rows over 60,000 characters."""
 
@@ -3781,6 +3849,7 @@ def render_pr_body(  # noqa: PLR0913 - one rendering, every input explicit
             short=short,
             human=human,
             feedback=feedback,
+            acceptance=acceptance,
         )
         if short:
             sections.insert(
@@ -3929,6 +3998,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: PLR0911
             branch=branch,
             human=read_human_decisions(root, run_id),
             feedback=read_feedback(root, run_id),
+            acceptance=read_acceptance(root, run_id),
         )
         _guard_body(body)
         if adopted is not None:
@@ -4386,6 +4456,18 @@ def _create_verified(  # noqa: PLR0913 - every input explicit
         message = f"Draft PR {url} was created but {problem}"
         raise AutonomyError(message, "postcondition")
     return url
+
+
+def read_acceptance(root: Path, run_id: str) -> dict | None:
+    """Read the runner's acceptance checks (#117), when run-checks ran them."""
+    path = run_dir(root, run_id) / "acceptance-checks.json"
+    if not os.path.lexists(path):
+        return None
+    data = read_json(path, "acceptance checks")
+    if not isinstance(data, dict):
+        message = "acceptance checks are malformed"
+        raise AutonomyError(message)
+    return data
 
 
 def read_checks(root: Path, run_id: str) -> list[dict] | None:

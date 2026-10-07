@@ -505,7 +505,7 @@ runner contract for it. Every validator above still runs unchanged.
 | `checks-implementation`, `checks-fix-N` (`run-checks --feedback`) | trusted `artifacts.py`, confined | The same `[checks]` commands as `run-checks`, as feedback for the fix loop: a failed command is recorded in operator state (`checks-feedback.jsonl`) and reaches the fix step only through the fix input, never as a block; a protected-input change, a tree change or the wall-time limit still blocks. A cycle step with nothing to do writes nothing. |
 | `fix-N` (`speckit.ballast.fix`), `record-fix-N`, `review-fix-N`, `review-specialists-fix-N`, `record-fix-review-N` (`record-decision --point implementation-review --recheck`) | confined agent (skipped by the wrapper unless the run's fix state asks for it), then trusted `artifacts.py` | The fix step changes only code, tests, `tasks.md` and `decisions.md` for the findings and failed checks the fix input lists; `record-fix` counts the cycle only after that step ran and the implementation contract still holds; the recheck records the reviews again, superseding the earlier ones, and sets the next fix state or blocks as `fix-cycle limit (3)`. |
 | Draft retries | the trusted agent wrapper | After an Autonomous agent step, the recorder's own draft checks; a correctable refusal reruns the step with the message, at most twice, each attempt counted. |
-| `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. |
+| `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. When the commands pass, it then runs each test `acceptance-evidence.json` maps, once, confined with the whole checkout read-only, within the check timeout and the wall time, and records one `runner-recorded` result per criterion and test in the ledger (ADR-0018 in the Ballast repository). A missing, malformed, stale or oversized (over 100 tests) manifest, or no `.venv/bin/python`, runs none and is named in the run record; a failed test is recorded, not a block. |
 | Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. It never merges, marks ready, releases or deploys. |
 
 Agent steps in an Autonomous run run under `bwrap`: the host is read-only, the
@@ -1303,16 +1303,18 @@ authoritative. It is rebuilt from those sources at every checkpoint.
 
   | State | Meaning |
   | --- | --- |
-  | `verified` | every test `acceptance-evidence.json` maps to it passed in a `ballast ledger check` bound to the head commit, the spec at head and the manifest at head |
+  | `verified` | every test `acceptance-evidence.json` maps to it passed in a `ballast ledger check` or an Autonomous run's `runner-recorded` check bound to the head commit, the spec at head and the manifest at head |
   | `failed` | a mapped test failed at the head commit |
   | `stale` | evidence exists only for another commit, spec or manifest; the packet names which |
   | `not run` | a mapped test has no recorded check |
   | `missing` | no `acceptance-evidence.json`, or no test mapped to the criterion (`[]` included); a row whose criterion an open `[DEFERRED-TO-PR]` task cites names that task |
 
   Each test links to its file at the head commit; ledger evidence, which has
-  no URL, is named `ledger event <seq> of run <run>`. A verified row also links
-  the head commit's GitHub check runs when there are any. CI and `run-checks`
-  run whole suites, so they never change a criterion's state.
+  no URL, is named `ledger event <seq> of run <run>`, prefixed
+  `runner-recorded` when the Autonomous runner recorded it. A verified row
+  also links the head commit's GitHub check runs when there are any. CI and
+  the `[checks]` commands run whole suites, so they never change a
+  criterion's state.
 - **Decisions, open findings and checks**: an Autonomous run's provisional
   decisions labeled `agent-provisional` and linked to the committed run
   record, human gate decisions and recorded human actions labeled `human`,
@@ -1326,10 +1328,12 @@ authoritative. It is rebuilt from those sources at every checkpoint.
   review reports, run record and diff, each pinned to the head commit, or
   `not present`.
 
-Per-criterion evidence comes only from `ballast ledger check RUN_ID AC-NNN
+Per-criterion evidence comes from `ballast ledger check RUN_ID AC-NNN
 tests.test_module.Class.test_method` on a clean checkout of the pushed
-commit. `run-checks` runs whole suites, so an Autonomous run's packet shows its
-mapped criteria as `not run`. The packet is rebuilt only at a checkpoint, at
+commit (`operator-attested`) and, in an Autonomous run, from `run-checks`,
+which runs each mapped test after the final review and records it
+`runner-recorded`: agent-written tests run by Ballast, bound to the tree the
+run publishes, never an operator's check. The packet is rebuilt only at a checkpoint, at
 the end of `ballast run start`, `resume` and `continue`, from that run's own
 ledger and records: record checks for a human-gated run under its run ID, then
 resume it. For an Autonomous or Chat run, record checks under its run ID, then

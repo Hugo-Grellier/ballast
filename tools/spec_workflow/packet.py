@@ -136,6 +136,7 @@ class TestEvidence:
     belongs_to: tuple[str, str] | None = None  # (commit|spec|manifest|snapshot, hex)
     file: str | None = None
     sequence: int | None = None
+    source: str | None = None  # the ledger source of the result shown
 
 
 @dataclass(frozen=True)
@@ -621,7 +622,7 @@ def evaluate(  # noqa: PLR0913, PLR0917 - The R4 inputs, explicit.
         data = event["data"]
         if (
             event["kind"] == "verification"
-            and event["source"] == "operator-attested"
+            and event["source"] in ledger.AC_SOURCES
             and data.get("ac_id")
         ):
             checks.setdefault((data["ac_id"], data["check_id"]), []).append(event)
@@ -691,7 +692,9 @@ def _test(
     if bound:
         latest = bound[-1]
         result = "passed" if latest["data"]["status"] == "passed" else FAILED
-        return TestEvidence(test, result, None, file, latest["sequence"])
+        return TestEvidence(
+            test, result, None, file, latest["sequence"], latest["source"]
+        )
     if not events:
         return TestEvidence(test, NOT_RUN, None, file)
     latest = events[-1]
@@ -704,7 +707,9 @@ def _test(
         belongs = ("manifest", str(data.get("manifest_digest") or "none")[:12])
     else:
         belongs = ("snapshot", str(data.get("snapshot") or "none")[:12])
-    return TestEvidence(test, STALE, belongs, file, latest["sequence"])
+    return TestEvidence(
+        test, STALE, belongs, file, latest["sequence"], latest["source"]
+    )
 
 
 def _criterion(
@@ -1313,7 +1318,10 @@ def _test_ref(sources: Sources, test: TestEvidence) -> str:
     else:
         text = f"`{test.test}` (file not found at head)"
     if test.sequence is not None:
-        text += f" ({_ledger_ref(sources, test.sequence)})"
+        # A runner check of an agent-written test is never shown as an
+        # operator's (#117, ADR-0018).
+        label = "runner-recorded, " if test.source == "runner-recorded" else ""
+        text += f" ({label}{_ledger_ref(sources, test.sequence)})"
     return text
 
 
@@ -1398,9 +1406,11 @@ def _criteria_lines(sources: Sources, level: int) -> list[str]:
     lines += [
         (
             "To record evidence for one criterion at the current commit: "
-            f"`ballast ledger check {sources.run_id} AC-NNN TEST`. A criterion "
-            "with no mapped unit test stays missing: Ballast records no evidence "
-            "for a manual or demo check."
+            f"`ballast ledger check {sources.run_id} AC-NNN TEST`. An Autonomous "
+            "run records its mapped tests itself after run-checks, labeled "
+            "runner-recorded: agent-written tests run by Ballast, not an "
+            "operator's check. A criterion with no mapped unit test stays "
+            "missing: Ballast records no evidence for a manual or demo check."
         ),
         "",
     ]

@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -3244,6 +3245,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     *,
     remaining: object = None,
     keep_output: bool = False,
+    read_only: bool = False,
 ) -> list[dict]:
     """Run trusted check commands, each confined; the mode-neutral core.
 
@@ -3251,7 +3253,8 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     exhausted deadline raises ChecksExhaustedError before the next command,
     and no command may run past it. Without it (a Chat run, #20) only each
     command's own timeout applies. With `keep_output` (#21 R3) a failed
-    command's result carries a bounded, printable `output_tail`.
+    command's result carries a bounded, printable `output_tail`. With
+    `read_only` (#117) the whole checkout is read-only to the command.
     """
     env = autonomy.confined_env(dict(os.environ), None)
     results = []
@@ -3267,6 +3270,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                 feature=feature,
                 env=dict(os.environ),
                 integration=None,  # no agent CLI: neither login (#81)
+                writable_checkout=not read_only,
             )
             timeout = timeout_minutes * 60
             started = time.monotonic()
@@ -3350,7 +3354,110 @@ def _feedback_due(run: dict) -> bool:
     return state == "review-pending" or (state == "idle" and not run.get("frozen_tree"))
 
 
-def run_checks(feature: Feature, *, feedback: bool = False) -> None:
+def _acceptance_checks(  # noqa: C901, PLR0911 - every refusal is reported
+    feature: Feature, run: dict, timeout_minutes: int
+) -> tuple[dict, dict | None, list[tuple[str, str, str, int]]]:
+    """Run each test the agent-proposed manifest maps (#117, ADR-0018).
+
+    Each distinct test runs once, confined like the check commands but with
+    the whole checkout read-only, under the check timeout and the run's wall
+    time. Returns the record's summary, the snapshot the results bind to (None
+    when nothing ran) and one `(ac, test, status, exit)` per mapped pair that
+    ran. A missing, malformed, stale or oversized manifest runs nothing and
+    says so; nothing here writes the ledger.
+    """
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    root, relative = feature.root, feature.relative
+    if not os.path.lexists(root / relative / "acceptance-evidence.json"):
+        return {"status": "no-manifest"}, None, []
+    try:
+        manifest = ledger.archive_manifest(root, run["run_id"], relative)
+    except ledger.StaleManifestError:
+        return {"status": "stale"}, None, []
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"status": "malformed"}, None, []
+    criteria = {
+        ac: list(dict.fromkeys(tests)) for ac, tests in manifest["criteria"].items()
+    }
+    tests = sorted({test for mapped in criteria.values() for test in mapped})
+    if len(tests) > autonomy.ACCEPTANCE_TESTS:
+        return {"status": "too-many"}, None, []
+    results: list[dict] = [{"ac": ac} for ac in sorted(criteria) if not criteria[ac]]
+    if not tests:
+        return {"status": "recorded", "results": results}, None, []
+    python = root / ".venv/bin/python"
+    if not python.is_file():
+        return {"status": "no-python", "results": results}, None, []
+    snapshot = ledger.artifact_digests(root, relative)
+    ran: dict[str, dict] = {}
+    exhausted = False
+    for test in tests:
+        try:
+            ran[test] = run_commands(
+                root,
+                relative,
+                [shlex.join([str(python), "-c", ledger.UNITTEST_CHECK, test])],
+                timeout_minutes,
+                remaining=lambda: autonomy.remaining_seconds(run),
+                read_only=True,
+            )[0]
+        except ChecksExhaustedError:
+            exhausted = True
+            break
+    recorded = []
+    for ac in sorted(criteria):
+        for test in criteria[ac]:
+            done = ran.get(test)
+            if done is None:
+                results.append({"ac": ac, "test": test, "status": "not run"})
+                continue
+            status = "passed" if done["exit"] == 0 else "failed"
+            results.append(
+                {
+                    "ac": ac,
+                    "test": test,
+                    "status": status,
+                    "timed_out": done["timed_out"],
+                }
+            )
+            recorded.append((ac, test, status, abs(done["exit"])))
+    summary = {"status": "recorded", "results": results, "exhausted": exhausted}
+    return summary, snapshot, recorded
+
+
+def _record_acceptance(
+    feature: Feature,
+    run: dict,
+    acceptance: tuple[dict, dict | None, list] | None,
+) -> None:
+    """Write the acceptance checks to the ledger and the operator records.
+
+    Called after the tamper and tree checks passed: the results bind to the
+    snapshot taken before the tests ran, which must still be current.
+    """
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    path = autonomy.run_dir(feature.root, run["run_id"]) / "acceptance-checks.json"
+    if acceptance is None:
+        # Failed check commands: no acceptance check ran this time.
+        path.unlink(missing_ok=True)
+        return
+    summary, snapshot, recorded = acceptance
+    if recorded:
+        try:
+            if ledger.artifact_digests(feature.root, feature.relative) != snapshot:
+                ledger.fail("the feature changed while the tests ran")
+            ledger.record_runner_checks(
+                feature.root, run["run_id"], feature.relative, snapshot, recorded
+            )
+        except (OSError, ValueError) as error:
+            sys.stderr.write(f"acceptance checks not recorded: {error}\n")
+            summary = {**summary, "status": "ledger-unavailable"}
+    autonomy.write_json(path, summary)
+
+
+def run_checks(feature: Feature, *, feedback: bool = False) -> None:  # noqa: C901 - one step
     """Run the trusted [checks] commands, confined, and record their results.
 
     With `feedback` (#21 R3) the results feed the fix loop: no frozen tree is
@@ -3381,6 +3488,9 @@ def run_checks(feature: Feature, *, feedback: bool = False) -> None:
         )
     except ChecksExhaustedError:
         _block(feature, "limit", "wall-time limit exhausted before run-checks")
+    acceptance = None
+    if not feedback and all(r["exit"] == 0 for r in results):
+        acceptance = _acceptance_checks(feature, run, checks["timeout_minutes"])
     if feedback:
         fix = autonomy.fix_state(run)
         autonomy.append_feedback(
@@ -3414,6 +3524,8 @@ def run_checks(feature: Feature, *, feedback: bool = False) -> None:
             "a check command changed the working tree; checks must leave the "
             "reviewed tree as it is (only git-ignored outputs may change)",
         )
+    if not feedback:
+        _record_acceptance(feature, run, acceptance)
     write_record(feature)
     if feedback:
         return
