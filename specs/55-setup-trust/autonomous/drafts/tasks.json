@@ -1,0 +1,33 @@
+{
+  "point": "tasks",
+  "decision": "accept",
+  "summary": "Agent-provisional: tasks.md covers FR-001 to FR-020 and maps every AC-001 to AC-027 to a test or verification task; 15 waves respect every dependency; analyze found no critical issue and its medium items are fixable during implementation.",
+  "basis": "Every AC-001 to AC-027 maps to a test or verification task (Notes table, analyze coverage); tests stay network-free via the repository_url seam, T047 is manual GitHub evidence. Each wave follows its dependencies and same-file chains. F-001 to F-006 map to tasks (decisions.md is absent; T001 creates it). Analyze found 0 critical. The medium items are fixable during implementation without changing intent and are carried as conditions: I1, update contract step 6 and data-model row text to restore-previous-bytes with T017; I2, update the plan's branch_sync row for the shared environment; C1, add a recover() case to T011 and T022; C2, add a planted fsmonitor/hook sentinel test for FR-020 to T027 or T028; D1, T038's constitution history entry must say proposed in #55, accepted on merge, with no approval wording (BL-INV-006). LOW items U1 to U3, T1, G1 and C3 can be fixed in place. One defect: T002 and T035 tell the agent to write gate results into autonomous/record.md. That file is generated, and editing it fails the next check. Record those results in reviews/ and the PR instead. Risk stays R2 (docs/policies/project/workflow.md: launcher trust model, agent authority). Decisions while doing these tasks stay agent-provisional, and the PR merge is the single human decision. Before merge, T047 needs a GitHub repository the operator can read, network access and an operator-run ballast trust; an agent never runs that command. docs/policies/project/engineering.md does not exist.",
+  "evidence": [
+    "specs/55-setup-trust/tasks.md",
+    ".specify/workflow-state/38380ec3/agents/20261006T184608008873Z-speckit-analyze-claude/stdout.log",
+    "specs/55-setup-trust/spec.md",
+    "specs/55-setup-trust/plan.md",
+    "specs/55-setup-trust/reviews/plan.md",
+    "specs/55-setup-trust/contracts/setup-trust.md",
+    "specs/55-setup-trust/quickstart.md",
+    ".specify/workflow-state/issues/55.md",
+    "docs/policies/project/workflow.md",
+    "docs/policies/workflow.md",
+    "docs/policies/spec-kit-workflow.md",
+    ".specify/memory/constitution.md",
+    "AGENTS.md"
+  ],
+  "artifact": "specs/55-setup-trust/tasks.md",
+  "model": "claude-opus-5-5",
+  "material": false,
+  "supersedes": null,
+  "risk": null,
+  "boundaries": [],
+  "privileged_actions": [
+    "operator runs ballast trust for the T047 end-to-end check",
+    "operator provides a readable scratch GitHub repository and network access for T047"
+  ],
+  "review": null,
+  "assumption": null
+}

@@ -333,7 +333,7 @@ write. Every command refuses an `XDG_STATE_HOME` that is relative or lies
 inside the checkout, `/tmp`, `/var/tmp`, `/dev/shm` or `$TMPDIR`, which
 agents can write. `ballast run ...` and `ballast ledger ...` then
 refuse, before executing any checkout code, if those inputs changed since
-`trust`, if `BALLAST_TAMPERED` exists, or if an agent step never finished its
+`trust` (or since the baseline setup recorded), if `BALLAST_TAMPERED` exists, or if an agent step never finished its
 check (for example because the agent killed the wrapper). Saved run state is
 not in the baseline, so after an unfinished step `trust` also refuses: review
 the checkout, run `ballast discard-runs`, then `trust` and start a
@@ -345,6 +345,32 @@ a link on the way to that state. A primary checkout's `.git` directory is not ha
 relies on the agent sandbox keeping it read-only. They run `run.py` and
 `ledger.py` under the launcher's own `/usr/bin/python3 -I -S`.
 Bytecode is excluded from the baseline because no workflow tool reads it.
+
+**Setup-recorded baseline.** Only the operator's `ballast trust` records a
+baseline after a review, with one exception that the operator's own
+`ballast setup` (and a new worktree's first-command preparation, which installs
+from a verified local copy) may also record it (ADR-0015). They record it only
+when every protected input is exactly what setup installed (no `.venv`, no
+committed `.specify` file other than the constitution, no edited installed
+file, a linked worktree's `.git` pointer naming a worktree of its own
+repository), `ballast.toml` and the constitution are committed and unchanged,
+and equal the default branch of the repository pinned in `[github] repository`
+(`ballast setup` also accepts the checkout's earlier baseline from `ballast
+trust`; a preparation never reads a baseline). That branch is
+read live, from the pinned repository only, with the operator's own Git
+authority (it needs network access and never prompts), and only for a
+repository `ballast trust` already reviewed on this machine, and only for the
+exact `ballast.toml` and constitution it reviewed for that repository (a
+baseline from before this version does not count; each project needs one
+`ballast trust` per machine first, and again after its default branch changes); nothing the
+checkout's Git configuration names is used. Setup records nothing when saved run
+state, an unfinished run, `BALLAST_TAMPERED` or an agent step's marker exists, so
+an agent step can never lead to a recorded baseline; it then says why and that
+`ballast trust` is needed after review. A baseline recorded from the operator's
+earlier one is marked as recorded by setup, so a later setup that records again
+needs the network or `ballast trust`. The launcher compares the baseline exactly
+as before, whoever recorded it, and `ballast doctor` shows which. Only the
+operator runs `ballast trust`; an agent never does.
 
 **Headless permissions.** Start and resume runs only with
 `ballast run`; a `preflight` step fails otherwise. It routes

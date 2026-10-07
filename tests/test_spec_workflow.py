@@ -1426,7 +1426,11 @@ class TrustedLauncherTests(unittest.TestCase):
         )
         self.assertEqual(list(state.iterdir()), [])
         self.assertEqual(self.launch("trust").returncode, 0)
-        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+        # #55: once a baseline exists, status also says who recorded it.
+        self.assertEqual(
+            self.status(),
+            {"installed": True, "refusal": None, "baseline_source": "trust"},
+        )
         (self.root / ".specify/extensions.yml").write_text("hooks: {x: y}\n")
         self.assertIn("workflow inputs changed", self.status()["refusal"])
         self.assertEqual(self.launch("trust").returncode, 0)
@@ -1437,7 +1441,10 @@ class TrustedLauncherTests(unittest.TestCase):
         (marker_dir / "in-progress").write_text("ballast-agent-r1-step.scope\n")
         self.assertIn("did not finish", self.status()["refusal"])
         (self.tools / "run.py").unlink()
-        self.assertEqual(self.status(), {"installed": False, "refusal": None})
+        self.assertEqual(
+            self.status(),
+            {"installed": False, "refusal": None, "baseline_source": "trust"},
+        )
 
     def test_no_baseline_names_the_inputs_to_review(self) -> None:
         # #15 AC-002: only the protected inputs that exist are listed.
@@ -1629,7 +1636,10 @@ class TrustedLauncherTests(unittest.TestCase):
         self.assert_refused(message)
         self.assertEqual(self.status()["refusal"], message)
         (self.root / ".ballast/.setup-version").write_text("fp older\n")
-        self.assertEqual(self.status(), {"installed": True, "refusal": None})
+        self.assertEqual(
+            self.status(),
+            {"installed": True, "refusal": None, "baseline_source": "trust"},
+        )
 
 
 def _ids(node: object) -> list[str]:
@@ -4523,3 +4533,448 @@ class DemoAuthorityTests(unittest.TestCase):
                 status, _ = self.main(*args)
                 self.assertEqual(status, 2)
         self.request.assert_not_called()
+
+
+def _load_launcher() -> object:
+    """Import the launcher module the way the operator-side tests do."""
+    sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+    try:
+        import launcher  # noqa: PLC0415
+    finally:
+        sys.path.pop(0)
+    return launcher
+
+
+class RecordBaselineTests(unittest.TestCase):
+    """#55: the baseline writer, its provenance and the reviewed repositories."""
+
+    def setUp(self) -> None:
+        self.launcher = _load_launcher()
+        home = operator_state(self)
+        environment = patch.dict(os.environ, {"XDG_STATE_HOME": str(home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.state = home / "checkout"
+        self.state.mkdir()
+        self.inputs = {"ballast.toml": "a" * 64, ".specify/x": "link:y"}
+
+    def test_the_baseline_bytes_are_what_trust_always_wrote(self) -> None:
+        self.launcher.record_baseline(self.state, self.inputs, source="trust")
+        self.assertEqual(
+            (self.state / "trusted.json").read_bytes(),
+            json.dumps(self.inputs, indent=1).encode(),
+        )
+
+    def test_provenance_is_bound_and_written_first(self) -> None:
+        order: list[str] = []
+        real = os.rename
+
+        def spy(source: str, target: str) -> None:
+            order.append(Path(target).name)
+            real(source, target)
+
+        with patch.object(os, "rename", spy):
+            self.launcher.record_baseline(
+                self.state, self.inputs, source="setup", reference={"kind": "x"}
+            )
+        self.assertEqual(order, ["trusted-source.json", "trusted.json"])
+        record = json.loads((self.state / "trusted-source.json").read_text())
+        digest = hashlib.sha256((self.state / "trusted.json").read_bytes()).hexdigest()
+        self.assertEqual(record["baseline"], f"sha256:{digest}")
+        self.assertEqual(
+            (record["schema"], record["source"], record["reference"]),
+            (1, "setup", {"kind": "x"}),
+        )
+        self.assertRegex(record["recorded"], r"^\d{4}-\d\d-\d\dT[\d:]+\+00:00$")
+
+    def test_a_trust_record_has_no_reference(self) -> None:
+        self.launcher.record_baseline(
+            self.state, self.inputs, source="trust", reference={"kind": "x"}
+        )
+        record = json.loads((self.state / "trusted-source.json").read_text())
+        self.assertNotIn("reference", record)
+
+    def test_a_crash_between_the_writes_reads_as_the_old_baseline(self) -> None:
+        self.launcher.record_baseline(self.state, self.inputs, source="trust")
+        old = (self.state / "trusted.json").read_bytes()
+        real = os.rename
+
+        def crash(source: str, target: str) -> None:
+            if Path(target).name == "trusted.json":
+                raise OSError(5, "killed")
+            real(source, target)
+
+        with patch.object(os, "rename", crash), self.assertRaises(OSError):
+            self.launcher.record_baseline(
+                self.state, {"other": "b" * 64}, source="setup", reference={}
+            )
+        self.assertEqual((self.state / "trusted.json").read_bytes(), old)
+        # The new provenance names a baseline that was never written.
+        self.assertEqual(self.launcher.baseline_source(self.state), "trust")
+        self.assertIsNone(self.launcher.operator_baseline(self.state))
+        self.assertEqual(
+            sorted(p.name for p in self.state.iterdir()),
+            [
+                "trusted-source.json",
+                "trusted.json",
+            ],
+        )
+
+    def test_files_are_private_and_a_link_is_never_followed(self) -> None:
+        self.launcher.record_baseline(self.state, self.inputs, source="trust")
+        for name in ("trusted.json", "trusted-source.json"):
+            self.assertEqual((self.state / name).stat().st_mode & 0o777, 0o600)
+        victim = self.state.parent / "victim"
+        victim.write_text("keep\n")
+        (self.state / "trusted.json").unlink()
+        (self.state / "trusted.json").symlink_to(victim)
+        self.launcher.record_baseline(self.state, self.inputs, source="trust")
+        self.assertEqual(victim.read_text(), "keep\n")
+        self.assertFalse((self.state / "trusted.json").is_symlink())
+
+    def test_source_and_operator_baseline_for_every_provenance(self) -> None:
+        def write(baseline: str | None, provenance: str | None) -> None:
+            for name, text in (
+                ("trusted.json", baseline),
+                ("trusted-source.json", provenance),
+            ):
+                path = self.state / name
+                path.unlink(missing_ok=True)
+                if text is not None:
+                    path.write_text(text)
+
+        body = json.dumps(self.inputs, indent=1)
+        bound = "sha256:" + hashlib.sha256(body.encode()).hexdigest()
+
+        def record(**changes: object) -> str:
+            return json.dumps(
+                {"schema": 1, "source": "trust", "baseline": bound, **changes}
+            )
+
+        cases = {
+            "no baseline": (None, None, None, None),
+            "legacy": (body, None, "trust", self.inputs),
+            "bound trust": (body, record(), "trust", self.inputs),
+            "bound setup": (body, record(source="setup"), "setup", None),
+            "unbound setup": (
+                body,
+                record(source="setup", baseline="sha256:0"),
+                "trust",
+                None,
+            ),
+            "unbound trust": (body, record(baseline="sha256:0"), "trust", None),
+            "unreadable": (body, "not json", "trust", None),
+            "unknown schema": (body, record(schema=2), "trust", None),
+            "list": (body, "[]", "trust", None),
+            "unreadable baseline": ("not json", None, "trust", None),
+        }
+        for name, (baseline, provenance, source, operator) in cases.items():
+            with self.subTest(name):
+                write(baseline, provenance)
+                self.assertEqual(
+                    self.launcher.baseline_source(self.state),
+                    source if baseline else None,
+                )
+                self.assertEqual(self.launcher.operator_baseline(self.state), operator)
+
+    def test_the_reviewed_record_reads_empty_unless_valid(self) -> None:
+        root = self.state.parent / "root"
+        root.mkdir()
+        path = self.launcher.state_base(root) / "reviewed-repositories.json"
+        self.assertEqual(self.launcher.reviewed_repositories(root), frozenset())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for text in (
+            "{",
+            "[]",
+            '{"schema": 2, "repositories": []}',
+            '{"schema": 1}',
+            '{"schema": 1, "repositories": ["a/b", 3]}',
+            '{"schema": 1, "repositories": ["a b/c"]}',
+        ):
+            with self.subTest(text=text):
+                path.write_text(text)
+                self.assertEqual(self.launcher.reviewed_repositories(root), frozenset())
+        path.write_text('{"schema": 1, "repositories": ["a/b"]}')
+        self.assertEqual(self.launcher.reviewed_repositories(root), frozenset({"a/b"}))
+
+    def test_ten_concurrent_trusts_keep_every_repository(self) -> None:
+        root = self.state.parent / "root"
+        root.mkdir()
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import launcher;"
+            "from pathlib import Path;"
+            "launcher.add_reviewed(Path(sys.argv[2]), sys.argv[3])"
+        )
+        env = {**os.environ, "XDG_STATE_HOME": os.environ["XDG_STATE_HOME"]}
+        children = [
+            subprocess.Popen(  # noqa: S603
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    code,
+                    str(ROOT / "tools/spec_workflow"),
+                    str(root),
+                    f"Owner/Repo{n}",
+                ],
+                env=env,
+            )
+            for n in range(10)
+        ]
+        self.assertEqual([c.wait(timeout=60) for c in children], [0] * 10)
+        found = self.launcher.reviewed_repositories(root)
+        self.assertEqual(found, frozenset(f"owner/repo{n}" for n in range(10)))
+        record = self.launcher.state_base(root) / "reviewed-repositories.json"
+        self.assertEqual(record.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(record.read_text())["repositories"], sorted(found))
+
+    def test_the_repository_rule_is_shared_with_the_draft_pr_tool(self) -> None:
+        self.assertEqual(self.launcher.split_repository("a/b.c"), ("a", "b.c"))
+        for bad in (
+            "a",
+            "a/b/c",
+            "../b",
+            "a/..",
+            "a b/c",
+            "",
+            3,
+            None,
+            "a/" + "x" * 101,
+        ):
+            self.assertIsNone(self.launcher.split_repository(bad), bad)
+
+    def test_state_base_refuses_where_agents_can_write(self) -> None:
+        root = self.state.parent / "root"
+        with (
+            patch.dict(os.environ, {"XDG_STATE_HOME": "/tmp/x"}),  # noqa: S108
+            self.assertRaises(OSError),
+        ):
+            self.launcher.state_base(root)
+
+
+class LauncherStateCase(unittest.TestCase):
+    """A minimal installed checkout with its own operator state."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name) / "checkout"
+        tools = self.root / ".ballast/spec_workflow"
+        tools.mkdir(parents=True)
+        (tools / "run.py").write_text("print('ran')\n")
+        (tools / "ledger.py").write_text("print('ledger')\n")
+        (self.root / ".specify/scripts").mkdir(parents=True)
+        (self.root / ".specify/scripts/x.sh").write_text("echo\n")
+        self.write_config('[github]\nrepository = "Acme/Demo"\n')
+        fake = trusted_directory(self)
+        _fake_systemd(fake)
+        self.env = {
+            **os.environ,
+            "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}",
+            "XDG_STATE_HOME": str(operator_state(self)),
+        }
+        self.launcher = _load_launcher()
+
+    def write_config(self, text: str) -> None:
+        (self.root / "ballast.toml").write_text(text)
+
+    def launch(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-IS",
+                str(ROOT / "tools/spec_workflow/launcher.py"),
+                *args,
+            ],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def status(self) -> dict:
+        return json.loads(self.launch("status", "--json").stdout)
+
+    def state(self) -> Path:
+        with patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            state = self.launcher.state_dir(self.root)
+        state.mkdir(parents=True, exist_ok=True)
+        return state
+
+    def reviewed(self) -> frozenset[str]:
+        with patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            return self.launcher.reviewed_repositories(self.root)
+
+
+class TrustProvenanceTests(LauncherStateCase):
+    """#55: `trust` and `status --json` report who recorded the baseline."""
+
+    def test_trust_writes_operator_provenance(self) -> None:
+        # AC-003, FR-012
+        self.assertNotIn("baseline_source", self.status())
+        self.assertEqual(self.launch("trust").returncode, 0)
+        self.assertEqual(
+            self.status(),
+            {"installed": True, "refusal": None, "baseline_source": "trust"},
+        )
+        record = json.loads((self.state() / "trusted-source.json").read_text())
+        self.assertEqual(record["source"], "trust")
+
+    def test_a_setup_baseline_is_reported_as_setup(self) -> None:
+        self.launch("trust")
+        self.launcher.record_baseline(
+            self.state(),
+            self.launcher.trusted_inputs(self.root),
+            source="setup",
+            reference={},
+        )
+        self.assertEqual(self.status()["baseline_source"], "setup")
+        self.assertIsNone(self.status()["refusal"])
+
+    def test_trust_output_is_unchanged_and_records_the_repository(self) -> None:
+        result = self.launch("trust")
+        count = len(self.launcher.trusted_inputs(self.root))
+        self.assertEqual(
+            result.stdout,
+            f"trusted {count} workflow inputs for {self.root}\n"
+            "recorded Acme/Demo as reviewed on this machine: setup may trust fresh "
+            "checkouts of it whose ballast.toml and constitution equal these and "
+            "its default branch\n",
+        )
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.reviewed(), frozenset({"acme/demo"}))
+
+    def test_trust_records_the_reviewed_digests_and_says_so_once(self) -> None:
+        # SEC2-001, SEC2-003
+        (self.root / ".specify/memory").mkdir()
+        (self.root / ".specify/memory/constitution.md").write_text("rules\n")
+        self.launch("trust")
+        record = json.loads(
+            (
+                Path(self.env["XDG_STATE_HOME"]) / "ballast/reviewed-repositories.json"
+            ).read_text()
+        )
+        inputs = self.launcher.trusted_inputs(self.root)
+        pair = [
+            inputs["ballast.toml"],
+            inputs.get(".specify/memory/constitution.md"),
+        ]
+        self.assertEqual(record["configurations"], {"acme/demo": [pair]})
+        again = self.launch("trust")
+        self.assertNotIn("as reviewed", again.stdout)
+        self.write_config('[github]\nrepository = "Acme/Demo"\n# changed\n')
+        changed = self.launch("trust")
+        self.assertIn("recorded Acme/Demo as reviewed", changed.stdout)
+
+    def test_reviewed_lists_the_repositories_and_writes_nothing(self) -> None:
+        # SEC2-003
+        empty = self.launch("reviewed", "--json")
+        self.assertEqual(json.loads(empty.stdout), {"repositories": []})
+        self.launch("trust")
+        listed = self.launch("reviewed", "--json")
+        self.assertEqual(json.loads(listed.stdout), {"repositories": ["acme/demo"]})
+
+    def test_a_missing_or_malformed_repository_adds_nothing(self) -> None:
+        for text in (
+            "",
+            '[github]\nrepository = "no good"\n',
+            "[github]\nrepository = 3\n",
+            "not = [toml",
+        ):
+            with self.subTest(text=text):
+                self.write_config(text)
+                result = self.launch("trust")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.reviewed(), frozenset())
+
+    def test_a_failure_to_record_the_repository_only_warns(self) -> None:
+        base = Path(self.env["XDG_STATE_HOME"]) / "ballast"
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "reviewed-repositories.lock").mkdir()  # not a file: the open fails
+        result = self.launch("trust")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("trusted ", result.stdout)
+        self.assertIn("could not record Acme/Demo as reviewed:", result.stderr)
+        self.assertIn("setup will not trust its fresh checkouts", result.stderr)
+        self.assertEqual(self.status()["baseline_source"], "trust")
+
+    def test_repositories_accumulate_across_checkouts(self) -> None:
+        self.launch("trust")
+        self.write_config('[github]\nrepository = "Other/Thing"\n')
+        self.launch("trust")
+        self.assertEqual(self.reviewed(), frozenset({"acme/demo", "other/thing"}))
+
+
+class SetupBaselineLauncherTests(LauncherStateCase):
+    """AC-022 to AC-024: refusals never depend on who recorded the baseline."""
+
+    def refusal(self) -> str | None:
+        return self.status()["refusal"]
+
+    def test_a_changed_input_is_refused_exactly_as_after_trust(self) -> None:
+        # AC-022
+        inputs = self.launcher.trusted_inputs(self.root)
+        self.launcher.record_baseline(
+            self.state(), inputs, source="setup", reference={}
+        )
+        self.assertIsNone(self.refusal())
+        (self.root / ".specify/scripts/x.sh").write_text("echo changed\n")
+        refusal = self.refusal()
+        self.assertEqual(
+            refusal,
+            "workflow inputs changed since `trust`: .specify/scripts/x.sh; "
+            "review them, then run `trust`",
+        )
+        for command in (("run", "resume", "r1"), ("ledger", "check"), ("intake",)):
+            result = self.launch(*command)
+            self.assertEqual(result.returncode, 2, command)
+            self.assertEqual(result.stderr, f"ballast: refusing: {refusal}\n")
+        self.launch("trust")
+        (self.root / ".specify/scripts/x.sh").write_text("echo changed\n")
+        self.assertIsNone(self.refusal())
+
+    def test_the_refusal_never_depends_on_the_provenance(self) -> None:
+        # AC-024
+        state = self.state()
+        inputs = self.launcher.trusted_inputs(self.root)
+        self.launcher.record_baseline(state, inputs, source="trust")
+        good = (state / "trusted.json").read_bytes()
+        bound = "sha256:" + hashlib.sha256(good).hexdigest()
+        forms = {
+            "missing": None,
+            "unreadable": "not json",
+            "other baseline": json.dumps(
+                {"schema": 1, "source": "setup", "baseline": "sha256:0"}
+            ),
+            "setup but unbound": json.dumps(
+                {"schema": 1, "source": "setup", "baseline": "x"}
+            ),
+            "unknown schema": json.dumps(
+                {"schema": 9, "source": "setup", "baseline": bound}
+            ),
+        }
+        (self.root / ".specify/scripts/x.sh").write_text("changed\n")
+        changed = self.refusal()
+        (self.root / ".specify/scripts/x.sh").write_text("echo\n")
+        for name, text in forms.items():
+            with self.subTest(name):
+                provenance = state / "trusted-source.json"
+                provenance.unlink(missing_ok=True)
+                if text is not None:
+                    provenance.write_text(text)
+                status = self.status()
+                self.assertIsNone(status["refusal"])
+                self.assertEqual(status["baseline_source"], "trust")
+                (self.root / ".specify/scripts/x.sh").write_text("changed\n")
+                self.assertEqual(self.refusal(), changed)
+                (self.root / ".specify/scripts/x.sh").write_text("echo\n")
+
+    def test_a_forged_setup_provenance_never_trusts_a_checkout(self) -> None:
+        state = self.state()
+        digest = "sha256:" + hashlib.sha256(b"{}").hexdigest()
+        (state / "trusted-source.json").write_text(
+            json.dumps({"schema": 1, "source": "setup", "baseline": digest})
+        )
+        self.assertIn("no trusted baseline", self.refusal())
+        self.assertNotIn("baseline_source", self.status())

@@ -14,7 +14,8 @@ can write. From the checkout root:
     ballast discard-runs       # after an unfinished agent step
 
 `status --json` prints whether the workflow is installed and why `run` would
-refuse, as `{"installed": bool, "refusal": null | "<reason>"}`; it writes
+refuse, as `{"installed": bool, "refusal": null | "<reason>"}`, plus
+`"baseline_source": "setup" | "trust"` once a trust baseline exists; it writes
 nothing, so `ballast doctor` can call it before trust.
 
 Every command except `status` takes the checkout lock shared, and refuses
@@ -24,14 +25,19 @@ as the workflow tool runs, so setup never switches the installation under
 them. They also refuse while the pin differs from the installed version.
 
 `trust` records digests of every executable workflow input in your state
-directory. `run`, `ledger` and `intake` refuse unless those inputs still match, no
-tamper marker exists, and no agent step was left unfinished. This file uses
-only the standard library and imports nothing from the checkout; agent.py
-imports its digest helpers.
+directory, and the repository `ballast.toml` pins as one you reviewed. `ballast
+setup` and a worktree's first-command preparation record the same baseline when
+the checkout holds exactly what they installed from reviewed configuration
+(ADR-0015); the source is kept beside it and never affects the comparison.
+`run`, `ledger` and `intake` refuse unless those inputs still match, no tamper
+marker exists, and no agent step was left unfinished. This file uses only the
+standard library and imports nothing from the checkout; agent.py imports its
+digest helpers.
 """
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -41,13 +47,20 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 
 TAMPER_MARKER = "BALLAST_TAMPERED"
 IN_PROGRESS = "in-progress"
 TRUSTED = "trusted.json"
+# Who recorded the baseline, bound to its exact bytes; display only (ADR-0015).
+TRUSTED_SOURCE = "trusted-source.json"
+# Machine-wide: the repositories `ballast trust` reviewed, identities only.
+REVIEWED = "reviewed-repositories.json"
+REVIEWED_LOCK = "reviewed-repositories.lock"
 # Written by tools/setup in the state directory: its journal while an attempt
 # is unfinished, its record of the installed content, and the checkout lock.
 SETUP_ATTEMPT = "setup-attempt.json"
@@ -111,8 +124,8 @@ def agent_temp_roots() -> tuple[Path, ...]:
     return tuple(Path(name).resolve() for name in sorted(names))
 
 
-def state_dir(root: Path) -> Path:
-    """Per-checkout operator state, outside every agent's write authority.
+def state_base(root: Path) -> Path:
+    """Return the operator state directory every checkout shares, validated.
 
     Raises OSError when XDG_STATE_HOME points where an agent can write: the
     trust baseline and the in-progress marker would then be the agent's (#34).
@@ -128,8 +141,13 @@ def state_dir(root: Path) -> Path:
             "which agents can write; set XDG_STATE_HOME elsewhere"
         )
         raise OSError(message)
+    return base / "ballast"
+
+
+def state_dir(root: Path) -> Path:
+    """Per-checkout operator state, outside every agent's write authority."""
     key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
-    return base / "ballast" / key
+    return state_base(root) / key
 
 
 def digests(root: Path, bases: list[Path], skip: list[Path]) -> dict[str, str]:
@@ -253,6 +271,205 @@ def claim_in_progress(state: Path, unit: str) -> None:
 
 class StepInProgressError(OSError):
     """Another agent step holds the checkout's in-progress marker."""
+
+
+def write_atomic(path: Path, data: bytes) -> None:
+    """Replace path with data, durably: a private temporary file, then rename."""
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.rename(name, path)  # noqa: PTH104 - tests observe the write order
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(name)  # noqa: PTH108
+        raise
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def record_baseline(
+    state: Path,
+    inputs: dict[str, str],
+    *,
+    source: str,
+    reference: dict | None = None,
+) -> None:
+    """Write the trust baseline and, first, the record of who wrote it.
+
+    The only writer of `trusted.json`. It decides nothing about eligibility:
+    `ballast trust` (the operator) and `setup_trust` (setup and preparation,
+    under ADR-0015's conditions) call it. The provenance is bound to the exact
+    baseline bytes, so a crash between the two writes leaves a record bound to a
+    baseline that was never written, which reads as the old baseline's `trust`.
+    Raises OSError; the caller reports it.
+    """
+    data = json.dumps(inputs, indent=1).encode()
+    provenance = {
+        "schema": 1,
+        "source": source,
+        "baseline": "sha256:" + hashlib.sha256(data).hexdigest(),
+        "recorded": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    if source == "setup":
+        provenance["reference"] = reference
+    write_atomic(
+        state / TRUSTED_SOURCE, (json.dumps(provenance, indent=1) + "\n").encode()
+    )
+    write_atomic(state / TRUSTED, data)
+
+
+def _provenance(state: Path) -> tuple[bytes | None, dict | None]:
+    """Return the baseline's bytes and its provenance if readable and bound."""
+    try:
+        data = (state / TRUSTED).read_bytes()
+    except OSError:
+        return None, None
+    try:
+        record = json.loads((state / TRUSTED_SOURCE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return data, None
+    bound = (
+        isinstance(record, dict)
+        and record.get("schema") == 1
+        and record.get("baseline") == "sha256:" + hashlib.sha256(data).hexdigest()
+    )
+    return data, record if bound else None
+
+
+def baseline_source(state: Path) -> str | None:
+    """Who recorded the baseline: None without one, else `setup` or `trust`.
+
+    Display only: a missing, unreadable or unbound record reads as `trust`
+    (FR-013), and the comparison never reads it (FR-015).
+    """
+    data, record = _provenance(state)
+    if data is None:
+        return None
+    return "setup" if record and record.get("source") == "setup" else "trust"
+
+
+def operator_baseline(state: Path) -> dict | None:
+    """Return the baseline's path-to-digest map when the operator recorded it.
+
+    Legacy baselines carry no provenance and can only be the operator's;
+    unreadable or unbound provenance is not the operator's, so eligibility fails
+    closed (research R7).
+    """
+    data, record = _provenance(state)
+    if data is None:
+        return None
+    if record is None and os.path.lexists(state / TRUSTED_SOURCE):
+        return None
+    if record is not None and record.get("source") != "trust":
+        return None
+    try:
+        baseline = json.loads(data)
+    except ValueError:
+        return None
+    ok = isinstance(baseline, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in baseline.items()
+    )
+    return baseline if ok else None
+
+
+REPOSITORY_NAME = re.compile(r"[A-Za-z0-9._-]{1,100}")
+
+
+def split_repository(value: object) -> tuple[str, str] | None:
+    """Split a `[github] repository` value into owner and name, or None."""
+    if not isinstance(value, str):
+        return None
+    owner, _, name = value.partition("/")
+    valid = all(
+        REPOSITORY_NAME.fullmatch(part) and part not in {".", ".."}
+        for part in (owner, name)
+    )
+    return (owner, name) if valid else None
+
+
+DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _reviewed_record(root: Path) -> tuple[list[str], dict[str, list[list[str]]]]:
+    """Return the reviewed names and per-repository configuration digest pairs.
+
+    Missing, unreadable, unknown-schema or malformed reads as empty, whole: a
+    record that is wrong anywhere is trusted nowhere.
+    """
+    try:
+        found = json.loads((state_base(root) / REVIEWED).read_text(encoding="utf-8"))
+        names = found["repositories"] if found["schema"] == 1 else []
+        configs = found.get("configurations", {})
+        valid = (
+            isinstance(names, list)
+            and all(isinstance(n, str) and split_repository(n) for n in names)
+            and isinstance(configs, dict)
+            and all(
+                isinstance(pairs, list)
+                and all(
+                    isinstance(pair, list)
+                    and len(pair) == 2  # noqa: PLR2004
+                    and all(isinstance(d, str) and DIGEST.fullmatch(d) for d in pair)
+                    for pair in pairs
+                )
+                for pairs in configs.values()
+            )
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return [], {}
+    return (names, configs) if valid else ([], {})
+
+
+def reviewed_repositories(root: Path) -> frozenset[str]:
+    """Return the repositories `ballast trust` reviewed here, case-folded."""
+    return frozenset(_reviewed_record(root)[0])
+
+
+def reviewed_configurations(root: Path, repository: str) -> frozenset[tuple[str, ...]]:
+    """Return the (`ballast.toml`, constitution) digests reviewed for a repository.
+
+    Setup counts the default branch only when it carries one of these pairs for
+    the repository the checkout pins (SEC2-001).
+    """
+    pairs = _reviewed_record(root)[1].get(repository.casefold(), [])
+    return frozenset(tuple(pair) for pair in pairs)
+
+
+def add_reviewed(
+    root: Path, repository: str, configuration: tuple[str, str] | None = None
+) -> bool:
+    """Record a repository, and the configuration reviewed for it, under a lock.
+
+    Returns whether the record changed; raises OSError. The record holds
+    identities and these two digests, nothing else.
+    """
+    base = state_base(root)
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+    lock = os.open(base / REVIEWED_LOCK, flags, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        names, before = _reviewed_record(root)
+        key = repository.casefold()
+        updated = sorted({*names, key})
+        configs = before
+        if configuration is not None and list(configuration) not in before.get(key, []):
+            configs = {**before, key: [*before.get(key, []), list(configuration)]}
+        document = {"schema": 1, "repositories": updated, "configurations": configs}
+        changed = updated != names or configs != before
+        if changed:
+            write_atomic(
+                base / REVIEWED, (json.dumps(document, indent=1) + "\n").encode()
+            )
+        return changed
+    finally:
+        os.close(lock)
 
 
 def checkout_lock(state: Path, *, shared: bool) -> int | None:
@@ -432,9 +649,49 @@ def _trust(root: Path, state: Path) -> int:
         return EXIT_REFUSED
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     inputs = trusted_inputs(root)
-    (state / TRUSTED).write_text(json.dumps(inputs, indent=1), encoding="utf-8")
+    record_baseline(state, inputs, source="trust")
     sys.stdout.write(f"trusted {len(inputs)} workflow inputs for {root}\n")
+    _review_repository(root, inputs)
     return 0
+
+
+def _review_repository(root: Path, inputs: dict[str, str]) -> None:
+    """Remember the repository the trusted `ballast.toml` pins as reviewed.
+
+    It decides which default branch setup may later count as reviewed
+    (ADR-0015). Failing to write it leaves the baseline recorded: warn only.
+    """
+    try:
+        text = read_config(root)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        github = (
+            tomllib.loads(text).get("github")
+            if digest == inputs.get("ballast.toml")
+            else None
+        )
+    except (OSError, ValueError):
+        return
+    value = github.get("repository") if isinstance(github, dict) else None
+    if split_repository(value) is None:
+        return
+    constitution = inputs.get(".specify/memory/constitution.md")
+    pair = (
+        (inputs["ballast.toml"], constitution)
+        if constitution and "ballast.toml" in inputs
+        else None
+    )
+    try:
+        if add_reviewed(root, value, pair):
+            sys.stdout.write(
+                f"recorded {value} as reviewed on this machine: setup may trust "
+                "fresh checkouts of it whose ballast.toml and constitution equal "
+                "these and its default branch\n"
+            )
+    except OSError as error:
+        sys.stderr.write(
+            f"could not record {value} as reviewed: {error}; setup will not "
+            "trust its fresh checkouts\n"
+        )
 
 
 def _marked(root: Path) -> bool:
@@ -466,19 +723,39 @@ def _hold(root: Path) -> str | None:
     return None
 
 
+def _reviewed_names(root: Path) -> list[str]:
+    """Return the reviewed repositories; none when the state directory is refused."""
+    try:
+        return sorted(reviewed_repositories(root))
+    except OSError:
+        return []
+
+
+def _status(root: Path, *, installed: bool) -> dict:
+    """Return what `status --json` prints; it writes nothing."""
+    try:
+        state = state_dir(root)
+    except OSError:
+        state = None
+    unfinished = state is not None and os.path.lexists(state / SETUP_ATTEMPT)
+    status = {
+        "installed": installed,
+        "refusal": _refusal(root) if installed or unfinished else None,
+    }
+    source = None if state is None else baseline_source(state)
+    # Present only once a baseline exists; an older launcher never has it.
+    return status if source is None else {**status, "baseline_source": source}
+
+
 def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
     """Verify the checkout, then run a workflow tool or record a baseline."""
     root = Path.cwd()
     installed = (root / ".ballast/spec_workflow/run.py").is_file()
     if argv == ["status", "--json"]:
-        try:
-            unfinished = os.path.lexists(state_dir(root) / SETUP_ATTEMPT)
-        except OSError:
-            unfinished = False
-        refusal = _refusal(root) if installed or unfinished else None
-        sys.stdout.write(
-            json.dumps({"installed": installed, "refusal": refusal}) + "\n"
-        )
+        sys.stdout.write(json.dumps(_status(root, installed=installed)) + "\n")
+        return 0
+    if argv == ["reviewed", "--json"]:
+        sys.stdout.write(json.dumps({"repositories": _reviewed_names(root)}) + "\n")
         return 0
     if not argv or argv[0] not in {*COMMANDS, "intake", "trust", "discard-runs"}:
         sys.stderr.write(__doc__ or "")

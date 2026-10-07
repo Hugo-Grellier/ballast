@@ -46,8 +46,10 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import demo  # noqa: F401 - Loaded here so run.py imports it before any agent step.
+import launcher
 import ledger
 import packet
+import setup_trust
 from artifacts import FEATURE_PATTERN, RUN_ID_PATTERN
 from launcher import IN_PROGRESS, TAMPER_MARKER, state_dir
 
@@ -75,7 +77,7 @@ SCOPE_LIMIT = 500
 SCOPE_FIELDS = ("Main outcome:", "Risk:", "Scope gate:")
 SCOPE_AUTHORS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 COMPARE_FILE_CAP = 300  # GitHub lists at most 300 files, on the first page only.
-NAME = re.compile(r"[A-Za-z0-9._-]{1,100}")
+NAME = launcher.REPOSITORY_NAME
 ISSUE = re.compile(r"specs/([1-9][0-9]{0,8})-")
 HTTP_STATUS = re.compile(r"HTTP ([0-9]{3})")
 GITHUB_REMOTE = re.compile(
@@ -85,9 +87,7 @@ GITHUB_REMOTE = re.compile(
     r"(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?"
 )
 EXIT_UNAUTHENTICATED = 4
-GIT_LOCATION = frozenset(
-    {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"}
-)
+GIT_LOCATION = setup_trust.GIT_LOCATION
 GIT_OVERRIDES = (("core.fsmonitor", "false"), ("core.hooksPath", os.devnull))
 
 REASONS = ledger.PR_REASONS
@@ -284,8 +284,7 @@ def _path_entries() -> list[str]:
 
 def _child_path(root: Path) -> str:
     """PATH for gh and git: gh runs git itself, so drop checkout entries too."""
-    excluded = (root.resolve(), *ledger.agent_temp_roots())
-    return os.pathsep.join(ledger.trusted_entries(_path_entries(), excluded))
+    return setup_trust.child_path(root, _path_entries())
 
 
 def _pin_path(root: Path, run_id: str) -> Path | None:
@@ -355,14 +354,7 @@ def _pinned_repository(root: Path) -> tuple[str, str] | None:
         return None
     github = config.get("github")
     value = github.get("repository") if isinstance(github, dict) else None
-    if not isinstance(value, str):
-        return None
-    owner, _, repo = value.partition("/")
-    if not all(
-        NAME.fullmatch(part) and part not in {".", ".."} for part in (owner, repo)
-    ):
-        return None
-    return owner, repo
+    return launcher.split_repository(value)
 
 
 def _now() -> datetime:

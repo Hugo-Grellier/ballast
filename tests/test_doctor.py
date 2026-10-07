@@ -853,6 +853,104 @@ class ProjectTests(DoctorCase):
                     )
 
 
+class TrustSourceTests(DoctorCase):
+    """#55 AC-003: doctor shows who recorded the baseline, from the launcher alone."""
+
+    REF = ProjectTests.REF
+    standard = ProjectTests.standard
+    install = ProjectTests.install
+    trust = ProjectTests.trust
+
+    def answer(self, **status: object) -> dict:
+        """Run doctor against a launcher that prints the given status."""
+        document = self.base / "answer.json"
+        if not document.exists():
+            self.pin(self.REF)
+            standard = self.standard()
+            self.install(standard)
+            (standard / "tools/spec_workflow/launcher.py").write_text(
+                f"import sys; sys.stdout.write(open({str(document)!r}).read())\n"
+            )
+        document.write_text(json.dumps(status) + "\n")
+        return self.checks()[1]["trust"]
+
+    def test_an_accepted_baseline_names_its_source(self) -> None:
+        for source in ("setup", "trust"):
+            with self.subTest(source):
+                check = self.answer(
+                    installed=True, refusal=None, baseline_source=source
+                )
+                self.assertEqual(check["status"], "passing")
+                self.assertEqual(
+                    check["detail"],
+                    "the launcher accepts this checkout; baseline recorded by "
+                    f"ballast {source}",
+                )
+
+    def test_a_refusal_names_the_source_of_the_current_baseline(self) -> None:
+        refusal = (
+            "workflow inputs changed since `trust`: x; review them, then run `trust`"
+        )
+        for source in ("setup", "trust"):
+            with self.subTest(source):
+                check = self.answer(
+                    installed=True, refusal=refusal, baseline_source=source
+                )
+                self.assert_gap(check)
+                self.assertEqual(
+                    check["detail"],
+                    f"launcher will refuse: {refusal}; the current baseline was "
+                    f"recorded by ballast {source}",
+                )
+                self.assertEqual(check["remedy"], shim.TRUST)
+
+    def test_an_older_launcher_or_no_baseline_reads_as_before(self) -> None:
+        for extra in (
+            {},
+            {"baseline_source": None},
+            {"baseline_source": "other"},
+            {"baseline_source": ["setup"]},
+        ):
+            with self.subTest(extra):
+                check = self.answer(installed=True, refusal=None, **extra)
+                self.assertEqual(check["detail"], "the launcher accepts this checkout")
+                check = self.answer(
+                    installed=True, refusal="no trusted baseline for x", **extra
+                )
+                self.assertEqual(
+                    check["detail"], "launcher will refuse: no trusted baseline for x"
+                )
+
+    def test_the_trust_check_lists_the_reviewed_repositories(self) -> None:
+        # SEC2-003: the machine-wide record is visible, never silent
+        self.pin(self.REF)
+        standard = self.standard()
+        self.install(standard)
+        (standard / "tools/spec_workflow/launcher.py").write_text(
+            "import sys\n"
+            "if sys.argv[1] == 'reviewed':\n"
+            '    print(\'{"repositories": ["a/b", "c/d"]}\')\n'
+            "else:\n"
+            '    print(\'{"installed": true, "refusal": null}\')\n'
+        )
+        check = self.checks()[1]["trust"]
+        self.assertEqual(check["status"], "passing")
+        self.assertEqual(
+            check["detail"],
+            "the launcher accepts this checkout; reviewed repositories on this "
+            "machine: a/b, c/d",
+        )
+
+    def test_the_real_launcher_reports_each_source(self) -> None:
+        self.pin(self.REF)
+        standard = self.standard()
+        self.install(standard)
+        self.trust(standard)
+        _, checks = self.checks()
+        self.assertIn("baseline recorded by ballast trust", checks["trust"]["detail"])
+        self.assertEqual(checks["trust"]["status"], "passing")
+
+
 class RedirectHandler(http.server.BaseHTTPRequestHandler):
     """Answers HEAD with the status in the path; /redirect points at /body."""
 

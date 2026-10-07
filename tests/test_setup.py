@@ -1037,7 +1037,8 @@ class RecoverableSetupTests(ProjectCase):
         self.assertNotIn("docs/policies/custom.md", self.record()["entries"])
         self.assertFalse((self.root / setup.KEPT / "docs/policies/custom.md").exists())
         self.assertEqual(
-            self.setup()[1], "nothing changed: vB is set up and verified\n"
+            self.setup()[1],
+            "nothing changed: vB is set up and verified\n" + NOT_RECORDED_RUNS,
         )
         git(self.root, "add", "-f", "docs/policies/workflow.md")
         before = self.snapshot()["checkout"]
@@ -1201,7 +1202,9 @@ class NoOpTests(ProjectCase):
             code, out, err = self.setup()
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(code, 0, err)
-        self.assertEqual(out, "nothing changed: vA is set up and verified\n")
+        self.assertEqual(
+            out, "nothing changed: vA is set up and verified\n" + NOT_RECORDED_RUNS
+        )
         self.assertEqual(self.snapshot(), before)
 
     def test_modified_installation_is_not_current(self) -> None:
@@ -1388,6 +1391,18 @@ PREPARED = (
     "Prepared the {ref} installation from {source} (verified, nothing downloaded).\n"
     "Review this worktree's protected inputs, then run `ballast trust`.\n"
 )
+# #55: setup now says why it recorded no trust baseline. ProjectCase holds saved
+# run state; a worktree of a project checked out under /tmp has a pointer the
+# eligibility check refuses (its repository is in an agent temp directory).
+NOT_RECORDED_RUNS = (
+    "No trust baseline recorded: saved run state shows agents ran here.\n"
+    "Review the changed protected inputs, then run `ballast trust` before the next "
+    "workflow run.\n"
+)
+NOT_RECORDED_POINTER = (
+    "No trust baseline recorded: the .git pointer does not name a worktree of "
+    "this repository.\n"
+)
 NO_SOURCE = (
     "setup: refusing: no verified installation of {ref} with this ballast.toml on "
     "this machine ({checked} checked). Next: run `ballast setup` once here (it may "
@@ -1489,7 +1504,8 @@ class PrepareTests(WorktreeCase):
         code, out, err = self.prepare(worktree)
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(
-            (code, out, err), (0, PREPARED.format(ref="vA", source=self.root), "")
+            (code, out, err),
+            (0, NOT_RECORDED_POINTER + PREPARED.format(ref="vA", source=self.root), ""),
         )
         record, source = self.record(worktree), self.record()
         self.assertEqual(record["files"], source["files"])
@@ -1896,7 +1912,9 @@ class PrepareTests(WorktreeCase):
         opened: list[str] = []
         code, out, err = self.prepare(worktree, opened)
         self.assertEqual(
-            (code, out), (0, PREPARED.format(ref="vA", source=self.root)), err
+            (code, out),
+            (0, NOT_RECORDED_POINTER + PREPARED.format(ref="vA", source=self.root)),
+            err,
         )
         self.assertIn(str(self.state() / "installation.json"), opened)
         self.assertEqual([p for p in opened if p.endswith("trusted.json")], [])
@@ -1951,13 +1969,17 @@ class PrepareTests(WorktreeCase):
                     self.assertEqual(
                         out,
                         "recovered an interrupted preparation: the new installation "
-                        "(vA) is complete\n",
+                        "(vA) is complete\n"
+                        + NOT_RECORDED_POINTER
+                        + "Review this worktree's protected inputs, then run "
+                        "`ballast trust`.\n",
                     )
                 else:
                     self.assertEqual(
                         out,
                         "recovered an interrupted preparation: no installation was "
                         "in place before it; none is now\n"
+                        + NOT_RECORDED_POINTER
                         + PREPARED.format(ref="vA", source=self.root),
                     )
                 self.assertEqual(tree(worktree, (".git",)), expected)

@@ -1041,6 +1041,40 @@ def _setup_current(context: Context, probes: set[str]) -> Outcome:
     return "inconclusive", f"setup --check failed: {state}", "ballast setup"
 
 
+def _recorder(status: dict) -> str | None:
+    """Name who recorded the baseline; an older launcher omits the key."""
+    source = status.get("baseline_source")
+    names = {"setup": "ballast setup", "trust": "ballast trust"}
+    return names.get(source) if isinstance(source, str) else None
+
+
+def _reviewed(launcher: Path, root: Path) -> list[str]:
+    """List the repositories `ballast trust` reviewed; empty from an older launcher."""
+    result = probe([PYTHON, "-I", "-S", str(launcher), "reviewed", "--json"], cwd=root)
+    try:
+        names = json.loads(result.stdout)["repositories"] if result else []
+    except (AttributeError, TypeError, KeyError, ValueError):
+        return []
+    ok = isinstance(names, list) and all(isinstance(n, str) for n in names)
+    return [n for n in names if n.isprintable()] if ok else []
+
+
+def _refusal_remedy(refusal: str) -> str:
+    """Return the operator's next step for a launcher refusal."""
+    if "BALLAST_TAMPERED" in refusal:
+        return "restore the checkout and delete BALLAST_TAMPERED, then " + TRUST
+    if refusal.startswith("pinned "):
+        return (
+            "restore the previous pin in ballast.toml, or fix the cause and rerun "
+            "`ballast setup`"
+        )
+    if "ballast setup" in refusal:
+        return "ballast setup"
+    if "did not finish" in refusal:
+        return "review the checkout, run `ballast discard-runs`, then `ballast trust`"
+    return TRUST
+
+
 def _trust(context: Context, probes: set[str]) -> Outcome:
     if "launcher-status" not in probes:
         return (
@@ -1065,21 +1099,19 @@ def _trust(context: Context, probes: set[str]) -> Outcome:
                 "it from a verified installation on this machine"
             )
         return "missing", "the workflow is not installed in this checkout", remedy
+    recorder = _recorder(status)
+    recorded = f"baseline recorded by {recorder}" if recorder else None
+    names = _reviewed(launcher, context.root)
+    listed = "reviewed repositories on this machine: " + ", ".join(names)
     if refusal is None:
-        return "passing", "the launcher accepts this checkout"
-    remedy = TRUST
-    if "BALLAST_TAMPERED" in refusal:
-        remedy = "restore the checkout and delete BALLAST_TAMPERED, then " + TRUST
-    elif refusal.startswith("pinned "):
-        remedy = (
-            "restore the previous pin in ballast.toml, or fix the cause and rerun "
-            "`ballast setup`"
-        )
-    elif "ballast setup" in refusal:
-        remedy = "ballast setup"
-    elif "did not finish" in refusal:
-        remedy = "review the checkout, run `ballast discard-runs`, then `ballast trust`"
-    return "missing", f"launcher will refuse: {refusal}", remedy
+        detail = "the launcher accepts this checkout"
+        detail += f"; {recorded}" if recorded else ""
+        return "passing", detail + (f"; {listed}" if names else "")
+    remedy = _refusal_remedy(refusal)
+    detail = f"launcher will refuse: {refusal}"
+    if recorder:
+        detail += f"; the current baseline was recorded by {recorder}"
+    return "missing", detail + (f"; {listed}" if names else ""), remedy
 
 
 def project_checks(context: Context) -> list[Check]:

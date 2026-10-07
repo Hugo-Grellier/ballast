@@ -15,7 +15,7 @@
 - The installation record, `installation.json` in operator state, holds the ref, fingerprint, entries and content digests. It is valid only while its fingerprint equals the live stamp. It, not the stamp, defines "current and verified", and a worktree copies its primary only when the copied content equals the primary's record.
 - The entries a switch replaced are kept in `.ballast/setup/kept/` with their record, so a rollback to the previous pin reinstalls them, verified, without a download.
 - An `flock` on `checkout.lock` in operator state serializes setup (exclusive) against `run`, `ledger`, `intake`, `trust` and `discard-runs` (shared, kept through `execv` by the workflow tool). The launcher refuses while a setup runs, while a journal exists, or while a valid record names a ref other than the pin.
-- Setup never writes the project's constitution except to create it when absent, never edits `ballast.toml`, never records trust and never clears operator markers.
+- Setup never writes the project's constitution except to create it when absent, never edits `ballast.toml`, never records trust and never clears operator markers. *Superseded in part by [ADR-0015](0015-setup-recorded-trust-baseline.md): "never records trust" no longer holds; setup records the baseline itself under that ADR's conditions.*
 
 ## Consequences
 
