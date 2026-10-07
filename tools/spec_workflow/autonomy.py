@@ -2084,15 +2084,17 @@ def claude_homes(home: Path, env: dict[str, str]) -> list[Path]:
 
     A step can point `CLAUDE_CONFIG_DIR` at the default home itself, so its
     login needs the same treatment as the selected one.
+    Resolved (#97): bwrap cannot mount on a link, and only real paths show
+    whether two homes are nested.
     """
     selected = Path(env.get("CLAUDE_CONFIG_DIR") or home / ".claude")
-    return list(dict.fromkeys((selected, home / ".claude")))
+    return list(dict.fromkeys(p.resolve() for p in (selected, home / ".claude")))
 
 
 def codex_homes(home: Path, env: dict[str, str]) -> list[Path]:
-    """Every Codex home a step could read: the selected one first (#76)."""
+    """Every Codex home a step could read, resolved: the selected one first (#76)."""
     selected = Path(env.get("CODEX_HOME") or home / ".codex")
-    return list(dict.fromkeys((selected, home / ".codex")))
+    return list(dict.fromkeys(p.resolve() for p in (selected, home / ".codex")))
 
 
 AGENT_HOMES = {"claude": claude_homes, "codex": codex_homes}
@@ -2458,9 +2460,14 @@ def _global_git_config_binds(
 def _refuse_credentials_in_worktree(
     root: Path, home: Path, env: dict[str, str]
 ) -> None:
-    """Refuse a credential path inside the worktree: `--bind root root` exposes it."""
+    """Refuse a credential path inside the worktree: `--bind root root` exposes it.
+
+    Every path the sandbox hides before that bind (#97). The global Git files
+    need no refusal: they are emptied after it.
+    """
     inside = Path(root).resolve()
-    paths = [home, home / ".netrc"]
+    names = (".claude.json", *CREDENTIAL_FILES, *CREDENTIAL_DIRS)
+    paths = [home, *(home / name for name in names)]
     for homes in AGENT_HOMES.values():
         paths += homes(home, env)
     paths += [Path(env[name]) for name in CREDENTIAL_LOCATIONS if env.get(name)]
