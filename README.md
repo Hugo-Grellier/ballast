@@ -147,7 +147,7 @@ Two `ballast.toml` tables configure it:
 [autonomous]                              # optional; can only narrow eligibility
 risk = ["R0", "R1"]
 excluded_boundaries = ["agent authority"]
-authorized_privileged_actions = ["secret provisioning"]
+authorized_privileged_actions = ["secret-provisioning"]
 wall_time_minutes = 120
 max_agent_steps = 24
 
@@ -156,7 +156,7 @@ commands = ["uvx ruff check", "uv run python -m unittest"]
 timeout_minutes = 30
 ```
 
-Keys that would widen eligibility, and `merge`, `release`, `deploy` or `mark ready` as authorized actions, are ignored with a warning. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
+`authorized_privileged_actions` names privileged-action kinds: `operator-trust`, `scratch-repository`, `secret-provisioning`, `network-access`, `external-write` or `permission-change`. Agents declare each action they need before merge as `KIND` or `KIND: description`, and only the kind is compared. An entry that is not a kind still matches an action declared with exactly that text, with a warning; replace it with a kind. Keys that would widen eligibility, and `merge`, `release`, `deploy`, `mark ready` or `other` as authorized actions, are ignored with a warning. A run keeps the policy it started with; after authorizing an action and running `ballast trust`, `ballast run resume RUN_ID --refresh-policy` applies it to a blocked run. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
 
 ### Chat runs
 

@@ -39,6 +39,7 @@ from test_autonomy import (
     ROOT,
     TOOLS,
     artifacts,
+    autonomy,
     isolate_operator_state,
     operator_state,
 )
@@ -279,6 +280,11 @@ class BriefStructureTests(DiscoveryCase):
     def test_changes_section_is_optional(self) -> None:
         change = "- 2026-10-05: a new comment [S: Issue comment bob 2026-10-05]"
         self.write_brief({"Changes": change})
+        self.ok(self.run_check("discovery"))
+
+    def test_changes_need_no_provenance_marker(self) -> None:
+        """#95: `## Changes` is the brief's history, not requirements."""
+        self.write_brief({"Changes": "- 2026-10-06: updated after a rerun"})
         self.ok(self.run_check("discovery"))
 
     def test_evidence_marker_and_authority_note(self) -> None:
@@ -774,6 +780,32 @@ class AutonomousBriefTests(RecorderCase):
     def test_human_gated_brief_fails(self) -> None:
         self.write_brief(mode="human-gated")
         self.failed(self.check("discovery"), "Mode")
+
+    def discover_step(self) -> None:
+        name = self.step({}, command="/speckit-ballast-discover")
+        step = autonomy.read_steps(self.root, "run42")[-1] | {"step": name}
+        feature = artifacts.resolve_feature(self.root, "run42", None)
+        artifacts.load_run(feature)
+        artifacts.check_step_drafts(
+            feature, "/speckit-ballast-discover autonomous", step
+        )
+
+    def test_brief_format_errors_are_retried(self) -> None:
+        """#95: the wrapper reruns the discover step on a brief it can correct."""
+        for sections, text in (
+            ({"Constraints": "- Standard library only"}, "## Constraints"),
+            ({}, None),
+        ):
+            with self.subTest(text=text):
+                self.write_brief(sections)
+                if text is None:
+                    self.discover_step()
+                    continue
+                with self.assertRaisesRegex(artifacts.DraftError, text):
+                    self.discover_step()
+        (self.feature / "discovery.md").unlink()
+        with self.assertRaisesRegex(artifacts.DraftError, "discovery.md is missing"):
+            self.discover_step()
 
     def test_approval_wording_fails_even_in_an_answer(self) -> None:
         self.write_brief({"Inferred": "- Human-approved scope [I]"})

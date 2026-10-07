@@ -181,7 +181,10 @@ RECOVERY = {
         "check {repo}'s branch rules for {branch} (protection, required "
         "signatures), then {rerun}"
     ),
-    "protected-input": "review these changes, then run ballast trust (operator only)",
+    "protected-input": (
+        "review these changes; after a pin change run ballast setup first, then "
+        "ballast trust (operator only)"
+    ),
     "internal-error": "report it with the run ID, then {rerun}",
     "no-committer": (
         "set user.name and user.email in your global Git configuration, then {rerun}"

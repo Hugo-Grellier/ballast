@@ -717,7 +717,8 @@ DISCOVERY_SECTIONS = (
     "Decisions",
     "Question metrics",
 )
-# Sections whose every list item carries a provenance marker.
+# Sections whose every list item carries a provenance marker. `## Changes`
+# is the brief's own dated history, not requirements, so it needs none (#95).
 MARKED_SECTIONS = (
     "Need",
     "Examples",
@@ -729,7 +730,6 @@ MARKED_SECTIONS = (
     "Edge, failure and permission cases",
     "Known",
     "Inferred",
-    "Changes",
 )
 MARKER_KINDS = {"Known": ("S", "O"), "Inferred": ("I", "P")}
 BRIEF_KINDS = ("S", "I", "O", "P")
@@ -1890,6 +1890,21 @@ def _string_list(value: object, name: str, limit: int = 20) -> list[str]:
     return sorted({" ".join(v.lower().split()) for v in value})
 
 
+def _privileged_list(value: object, name: str) -> list[str]:
+    """`KIND` or `KIND: description` entries, each kind from the vocabulary (#95)."""
+    actions = _string_list(value, name)
+    unknown = sorted(
+        {a for a in actions if autonomy.action_kind(a) not in autonomy.ACTION_KINDS}
+    )
+    if unknown:
+        message = (
+            f"{name} entries must be KIND or 'KIND: description' with KIND one of "
+            f"{', '.join(autonomy.ACTION_KINDS)}; {len(unknown)} entries name no kind"
+        )
+        raise DraftError(message)
+    return actions
+
+
 # speckit.ballast.review writes each kind's report here; spec reconciliation
 # writes the convergence report that the `convergence` check reads.
 REPORT_NAMES = {"spec-reconciliation": "convergence"}
@@ -1971,7 +1986,7 @@ def _validate_review(  # noqa: C901, PLR0912 - one field per rule
             raise DraftError(message)
         entry["required_kinds"] = sorted(set(required))
     if "privileged_actions" in review:
-        entry["privileged_actions"] = _string_list(
+        entry["privileged_actions"] = _privileged_list(
             review["privileged_actions"], "review privileged_actions"
         )
     return entry
@@ -2052,7 +2067,7 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
         },
         "material": material,
         "supersedes": supersedes,
-        "privileged_actions": _string_list(
+        "privileged_actions": _privileged_list(
             data["privileged_actions"], "privileged_actions"
         ),
         "risk": risk,
@@ -2975,7 +2990,7 @@ def step_points(prompt: str) -> tuple[str, ...]:
     return table.get(words[1] if len(words) > 1 else "", ())
 
 
-def check_step_drafts(  # noqa: C901 - the recorder's checks, in its order
+def check_step_drafts(  # noqa: C901, PLR0912 - the recorder's checks, in its order
     feature: Feature, prompt: str, step: dict, *, blocked: bool = False
 ) -> None:
     """Check one agent step's drafts with the recorder's own draft contract.
@@ -3023,6 +3038,24 @@ def check_step_drafts(  # noqa: C901 - the recorder's checks, in its order
         return
     for review in reviews:
         _check_dispositions(review, fixing=rule == "fixing")
+    if _step_command(prompt.split(maxsplit=1)[0]) == "speckit-ballast-discover":
+        _check_brief_draft(feature)
+
+
+def _check_brief_draft(feature: Feature) -> None:
+    """Check the discover step's brief as validate-discovery checks its form (#95).
+
+    A format or provenance error is the agent's to correct, so the wrapper
+    retries the step on it; what the recorded decisions and operator state
+    must match stays with validate-discovery.
+    """
+    try:
+        text = feature.read(DISCOVERY)
+        _check_brief(feature, text, _parse_discovery(text), "autonomous")
+    except DraftError:
+        raise
+    except ContractError as error:
+        raise DraftError(str(error)) from error
 
 
 def _step_draft(feature: Feature, step: dict, name: str) -> object:

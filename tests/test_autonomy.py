@@ -708,7 +708,7 @@ class PolicyTests(AutonomyCase):
         self.assertEqual(policy["risk"], ["R0", "R1"])
         self.assertEqual(policy["excluded_boundaries"], ["agent authority"])
         self.assertEqual(
-            policy["authorized_privileged_actions"], ["secret provisioning"]
+            policy["authorized_privileged_actions"], ["secret-provisioning"]
         )
         self.assertIn(
             "ignored [autonomous] allow_epics: cannot widen eligibility", warnings
@@ -716,6 +716,46 @@ class PolicyTests(AutonomyCase):
         self.assertTrue(any("'R3'" in w for w in warnings))
         self.assertTrue(any("'deploy'" in w for w in warnings))
         self.assertTrue(any("'merge'" in w for w in warnings))
+
+    def test_privileged_action_kinds(self) -> None:
+        """#95: a kind authorizes any wording; legacy free text only itself."""
+        policy, _, warnings = self.policy(
+            "[autonomous]\nauthorized_privileged_actions = "
+            '["operator-trust", "Scratch Repository", "the old free text", '
+            '"other", "Mark Ready"]\n'
+        )
+        self.assertEqual(
+            policy["authorized_privileged_actions"],
+            ["operator-trust", "scratch-repository", "the old free text"],
+        )
+        self.assertTrue(any("'the old free text' is free text" in w for w in warnings))
+        for name in ("'other'", "'mark ready'"):
+            self.assertTrue(
+                any(name in w and "cannot widen" in w for w in warnings), name
+            )
+        declared = [
+            "operator-trust: the operator runs ballast trust for the t047 check",
+            "operator-trust",
+            "Scratch-Repository: a disposable repository for the e2e check",
+            "the old free text",
+            "the old free text, reworded",
+            "secret-provisioning",
+            "other: operator-trust",
+            "deploy: operator-trust",
+            "mark ready",
+        ]
+        self.assertEqual(
+            autonomy.unauthorized_actions(declared, policy),
+            sorted(
+                [
+                    "the old free text, reworded",
+                    "secret-provisioning",
+                    "other: operator-trust",
+                    "deploy: operator-trust",
+                    "mark ready",
+                ]
+            ),
+        )
 
     def test_limit_precedence_and_ranges(self) -> None:
         _, defaults, _ = self.policy(

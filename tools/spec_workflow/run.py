@@ -9,8 +9,8 @@
         [-i integration=auto|claude|codex]
     ballast run resume RUN_ID [--local-fallback MODEL|off] \
         [-i integration=claude|codex]
-    ballast run resume RUN_ID [--local-fallback MODEL|off] [--ref TEXT]
-                                                  # an Autonomous run
+    ballast run resume RUN_ID [--local-fallback MODEL|off] [--ref TEXT] \
+        [--refresh-policy]                        # an Autonomous run
     ballast run continue RUN_ID --reason block-resolved|changes-requested \
         --ref TEXT [--mode chat|human-gated]
     ballast run publish RUN_ID
@@ -124,6 +124,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -703,7 +704,7 @@ def _number(value: str | None, name: str) -> int | None:
     return int(value)
 
 
-def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
+def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
     flags: dict[str, str], options: list[str], specify: str, local: str | None = None
 ) -> int:
     """Check eligibility, write the run record, run ballast-autonomous."""
@@ -724,6 +725,14 @@ def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
     if isinstance(integrations, str):
         return _refuse(integrations)
     integration, review = integrations
+    earlier = f"{feature}/autonomous/record.md"
+    if os.path.lexists(ROOT / earlier):
+        # #95: every check of the new run would read it as an edited record.
+        return _refuse(
+            f"{earlier} is the record of an earlier run; retire it with "
+            f"`git rm {earlier}` and commit (Git history keeps it), then start "
+            "the run again"
+        )
     try:
         config = autonomy.load_config(ROOT)
         policy, defaults, warnings = autonomy.parse_policy(config)
@@ -1647,6 +1656,8 @@ def _chat_resume_refusal(run_id: str, record: dict | None) -> str | None:
 
 
 RESUME_FLAGS = {"-i", "--input", "--mode", "--wall-time", "--max-agent-steps"}
+# Re-reads `[autonomous]` from the operator-trusted ballast.toml (#95).
+REFRESH_POLICY = "--refresh-policy"
 
 
 def _resume_options(options: list[str]) -> str | None:
@@ -1813,8 +1824,40 @@ def _interrupted(run_id: str, record: dict) -> dict:
     )
 
 
-def _resume_autonomous(options: list[str], specify: str) -> int:
-    """`ballast run resume RUN_ID [--ref TEXT]` for an Autonomous run (#21 R5)."""
+def _trusted_policy() -> tuple[dict, list[str]]:
+    """Read `[autonomous]` from the ballast.toml `ballast trust` recorded (#95).
+
+    Only a ballast.toml whose bytes equal the operator's own trust baseline
+    counts: a baseline setup recorded, or none, refuses.
+    """
+    launcher = branch_sync.launcher
+    path = ROOT / "ballast.toml"
+    refusal = (
+        "--refresh-policy reads only a ballast.toml recorded by `ballast trust`; "
+        "review it, run `ballast trust` (operator only), then resume again"
+    )
+    try:
+        data = path.read_bytes() if path.is_file() and not path.is_symlink() else b""
+        baseline = launcher.operator_baseline(launcher.state_dir(ROOT))
+    except OSError as error:
+        raise autonomy.AutonomyError(refusal) from error
+    if (
+        not data
+        or baseline is None
+        or baseline.get("ballast.toml") != hashlib.sha256(data).hexdigest()
+    ):
+        raise autonomy.AutonomyError(refusal)
+    try:
+        config = tomllib.loads(data.decode())
+    except ValueError as error:
+        message = f"ballast.toml is unreadable: {error}"
+        raise autonomy.AutonomyError(message) from error
+    policy, _, warnings = autonomy.parse_policy(config)
+    return policy, warnings
+
+
+def _resume_autonomous(options: list[str], specify: str, *, refresh: bool) -> int:
+    """`ballast run resume RUN_ID [--ref TEXT] [--refresh-policy]` (#21 R5, #95)."""
     ref = _resume_options(options)
     if ref is not None and ref.startswith("!"):
         return _refuse(ref[1:])
@@ -1831,13 +1874,20 @@ def _resume_autonomous(options: list[str], specify: str) -> int:
         return _refuse(f"run {run_id}'s pin names another feature than its record")
     try:
         with _invocation_lock(run_id):
-            return _resume_locked(run_id, ref or "", pin, specify)
+            return _resume_locked(run_id, ref or "", pin, specify, refresh=refresh)
     except LockHeld as held:
         return _refuse(str(held))
 
 
-def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:  # noqa: PLR0911
-    """Resume under the run's lock: sync, decide, reposition, run."""
+def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded resume
+    run_id: str, ref: str, pin: dict, specify: str, *, refresh: bool
+) -> int:
+    """Resume under the run's lock: sync, decide, reposition, run.
+
+    With `refresh`, the run's `[autonomous]` policy snapshot is replaced by
+    the one in the operator-trusted ballast.toml, after the synchronization
+    and before the block resolution is recorded (#95).
+    """
     try:
         record = autonomy.read_run(ROOT, run_id)
         if record["status"] == "active":
@@ -1890,6 +1940,14 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:  # no
             f"run {run_id} changed during branch synchronization; check it, then "
             "run the command that applies"
         )
+    policy = None
+    if refresh:
+        try:
+            policy, warnings = _trusted_policy()
+        except autonomy.AutonomyError as error:
+            return _refuse(f"run {run_id}: {error}")
+        for warning in warnings:
+            sys.stderr.write(f"ballast: {warning}\n")
     try:
         reentry, changed = _reentry(run_id, record, block)
         autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))
@@ -1908,19 +1966,21 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:  # no
             ),
             resolves="block",
         )
-        autonomy.resume_run(
-            ROOT,
-            record,
-            decision["id"],
-            {
-                "at": autonomy.now(),
-                "block_category": block["category"],
-                "block_step": block_step,
-                "reentry_step": reentry,
-                "changed_inputs": changed,
-            },
-            reset=reset,
-        )
+        entry = {
+            "at": autonomy.now(),
+            "block_category": block["category"],
+            "block_step": block_step,
+            "reentry_step": reentry,
+            "changed_inputs": changed,
+        }
+        if policy is not None:
+            entry["policy"] = {
+                "previous": record["eligibility"]["policy"],
+                "current": policy,
+            }
+            record["eligibility"]["policy"] = policy
+            record["eligibility"]["ignored_policy"] = warnings
+        autonomy.resume_run(ROOT, record, decision["id"], entry, reset=reset)
         autonomy.write_run(ROOT, record)
         autonomy.resolve_block(ROOT, run_id)
         _render_source_record(record)
@@ -1929,6 +1989,12 @@ def _resume_locked(run_id: str, ref: str, pin: dict, specify: str) -> int:  # no
     sys.stdout.write(
         f"Recorded {decision['id']} (block-resolution); run {run_id} resumes in "
         f"Autonomous at {reentry}\n"
+        + (
+            "Re-read [autonomous] from the trusted ballast.toml; authorized "
+            f"actions: {', '.join(policy['authorized_privileged_actions']) or 'none'}\n"
+            if policy is not None
+            else ""
+        )
         + (f"Changed during the block: {', '.join(changed)}\n" if changed else "")
     )
     return _resume_engine(run_id, reentry, pin, specify)
@@ -2010,7 +2076,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         local = None if local == "off" else local
         if mode != "autonomous" and _option_feature(options) is None:
             return _refuse("start needs one -i feature_directory=specs/<issue>-<slug>")
-    autonomous_resume = False
+    autonomous_resume = refresh = False
     if argv[0] == "resume":
         if options and RUN_ID.fullmatch(options[0]):
             split = _flags(options[1:], {LOCAL_FALLBACK})
@@ -2033,6 +2099,10 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         except autonomy.AutonomyError as error:
             return _refuse(f"run {options[0]}: {error}")
         autonomous_resume = found is not None and found["workflow"] == AUTONOMOUS
+        refresh = autonomous_resume and REFRESH_POLICY in options
+        if refresh:
+            options = [o for o in options if o != REFRESH_POLICY]
+            rest = options[1:]
         # Only the integration may change; the feature directory is fixed.
         if not autonomous_resume and (
             len(rest) % 2
@@ -2090,7 +2160,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         return 2
     if autonomous_resume:
         _set_local_fallback(options[0], local)
-        return _resume_autonomous(options, specify)
+        return _resume_autonomous(options, specify, refresh=refresh)
     if flags.get("--mode") == "autonomous":
         return _start_autonomous(flags, options, specify, local)
     if argv[0] == "start":
