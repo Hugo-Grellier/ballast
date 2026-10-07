@@ -840,6 +840,19 @@ class AgentWrapperTests(unittest.TestCase):
                 self.clear_marker()
                 (self.root / "BALLAST_TAMPERED").unlink(missing_ok=True)
 
+    def test_rewriting_a_linked_agent_configuration_fails_the_step(self) -> None:
+        """Review of #66: the CLI loads the link's target, so that is protected."""
+        target = self.root / "cfg/settings.json"
+        target.parent.mkdir()
+        target.write_text("{}\n")
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").symlink_to("../cfg/settings.json")
+        result = self.run_wrapper(
+            "codex", "exec", "$speckit-plan", FAKE_TAMPER=str(target)
+        )
+        self.assertEqual(result.returncode, 4)
+        self.assertIn(".claude/settings.json->", result.stderr)
+
     def test_a_setup_failure_before_the_agent_starts_leaves_no_marker(self) -> None:
         """Review of #96: nothing ran, so the marker must not strand the run."""
         sys.path.insert(0, str(ROOT / "tools/spec_workflow"))

@@ -162,7 +162,7 @@ TERMINAL_RESET = (
 # before they are flushed, so the operator's shell never reads them (#66).
 DRAIN_SECONDS = 0.2
 OSC52 = b"\x1b]52;"
-OSC_END = re.compile(rb"\x07|\x1b\\|\x9c")
+OSC_END = re.compile(rb"\x07|\x1b\\|\x9c|\x18|\x1a")  # BEL, ST; CAN, SUB abort
 
 
 def permission_args(integration: str, args: list[str]) -> list[str]:
@@ -284,10 +284,17 @@ def _protected_state(root: Path, own_log: Path) -> dict[str, str]:
     # agent step; no step may write them (#66 SEC-010).
     for name in AGENT_CONFIG:
         path = root / name
-        if path.is_symlink():
-            found[name] = "link:" + str(path.readlink())
-        else:
+        if not path.is_symlink():
             found.update(digests(root, [path], []))
+            continue
+        # A link is followed: its target is what the CLI loads.
+        found[name] = "link:" + str(path.readlink())
+        target = path.resolve()
+        files = sorted(target.rglob("*")) if target.is_dir() else [target]
+        for file in files:
+            if file.is_file():
+                key = f"{name}->{file.relative_to(target)}"
+                found[key] = hashlib.sha256(file.read_bytes()).hexdigest()
     return found
 
 
@@ -726,7 +733,8 @@ class _Clipboard:
     """Drop OSC 52 (clipboard) sequences from the relayed output (#66, SEC-006).
 
     A sequence may span reads: a possible start at the end of a read is held
-    until the next one, and `held()` releases it when no more output comes.
+    until the next read, however long that takes (a released `ESC` followed
+    later by `]52;` would still reach the terminal as one sequence).
     """
 
     def __init__(self) -> None:
@@ -756,13 +764,6 @@ class _Clipboard:
             shown += data[:start]
             data, self.dropping = data[start + len(OSC52) :], True
         return bytes(shown)
-
-    def held(self) -> bytes:
-        """Release a held partial start that no sequence followed."""
-        if self.dropping:
-            return b""
-        held, self.pending = self.pending, b""
-        return held
 
 
 def _restore_terminal(
@@ -951,8 +952,6 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
             held = escape.expired()
             if held:
                 _write_all(master, held)
-            if master not in ready:
-                _write_all(stdout_fd, clipboard.held())
             if process.poll() is not None and master not in ready:
                 break
     finally:

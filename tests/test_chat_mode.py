@@ -1620,7 +1620,12 @@ class TerminalFilterTests(unittest.TestCase):
                     clipboard.feed(data[i : i + size])
                     for i in range(0, len(data), size)
                 )
-                self.assertEqual(shown + clipboard.held(), b"abc\x1b")
+                # A trailing ESC is held: it may start the next sequence.
+                self.assertEqual(shown, b"abc")
+        # Review of #66: however long the pause after ESC, nothing leaks.
+        clipboard = agent._Clipboard()  # noqa: SLF001
+        self.assertEqual(clipboard.feed(b"\x1b"), b"")
+        self.assertEqual(clipboard.feed(b"]52;c;eA==\x07ok\x1b[0m"), b"ok\x1b[0m")
 
     def test_late_answers_are_flushed_after_the_drain(self) -> None:
         import threading  # noqa: PLC0415
