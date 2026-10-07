@@ -1325,7 +1325,7 @@ class AcceptanceChecksTests(AcceptanceCase):
             "'tests.test_accept', 'hidden.py')\n"
             "module = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(module)\n"
-            "sys.modules['tests.test_accept'] = module\n"
+            "sys.modules['tests.test_accept'] = test_accept = module\n"
         )
         self.freeze()
         self.ok(self.check("run-checks"))
