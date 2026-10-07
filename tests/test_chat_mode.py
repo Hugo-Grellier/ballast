@@ -3830,17 +3830,34 @@ class PublishTests(ChatCase):
             result = self.ballast("run", "checkpoint", run_id)
         self.assertEqual(result.code, 2, result.text)
         self.assertIn(f"run {run_id} is busy: step implement", result.text)
+        lock = autonomy.run_dir(self.root, run_id) / "invocation.lock"
+        with lock.open("w") as held:  # `ballast run demo` holds this one
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} has an active invocation", result.text)
         self.assertEqual(packets(), before + 2)
 
     def test_a_failed_packet_never_fails_publish(self) -> None:
         """#111: the checkpoint after publication never changes the exit."""
         run_id = self.start()
         self.through_final(run_id)
-        with patch.object(chat.draft_pr, "checkpoint", side_effect=RuntimeError):
+        before = self.ledger(run_id)
+        packet = chat.draft_pr.packet
+        with patch.object(packet, "publish", side_effect=RuntimeError):
             result = self.call(chat.publish, self.root, run_id)
         self.assertEqual(result.code, 0, result.text)
-        self.assertIn("Draft PR: failed-retryable (internal-error)", result.out)
+        self.assertIn(
+            "Acceptance packet: failed-retryable (internal-error)", result.out
+        )
         self.assertEqual(self.record(run_id).run["status"], "published")
+        recorded = [
+            e["data"]
+            for e in self.ledger(run_id)[len(before) :]
+            if e["kind"] == "acceptance_packet"
+        ]
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["outcome"], "failed-retryable")
 
     def test_checkpoint_without_a_pr_creates_nothing(self) -> None:
         """#111: a Chat refresh before publication refuses and writes nothing."""

@@ -77,7 +77,7 @@
 - **Observed during**: v1.0 qualification (#24), blank pilot; Issue #111
 - **Classification**: implementation bug (AC-016: the Draft PR carries "the same evidence a headless run provides")
 - **Observation**: `ballast run publish` for a Chat run opened the Draft PR with the Chat section only. The #17 checkpoint, which publishes the #19 acceptance packet, ran after every Chat step but not after publication, when the branch is usually first pushed. `ballast run checkpoint` refused Chat runs as "not an autonomous run", so no later refresh existed.
-- **Proposed decision**: Chat `publish` runs the same Draft PR checkpoint, and so the same packet builder, after a successful publication, as every Chat step does. `ballast run checkpoint RUN_ID` accepts a Chat run, under the Chat run's own lock (a running step refuses it), and never creates a PR. The packet's existing run line names the mode `chat`; `packet.py` is unchanged.
+- **Proposed decision**: Chat `publish` runs the same Draft PR checkpoint, and so the same packet builder, after a successful publication, as every Chat step does. `ballast run checkpoint RUN_ID` accepts a Chat run, under both the run's invocation lock (held by `demo`) and the Chat run's own lock (held by a running step), and never creates a PR. The packet's existing run line names the mode `chat`; `packet.py` is unchanged.
 - **Alternatives**: a documented Chat-only refresh such as a `step`; it would start an agent to refresh evidence.
 - **Affected artifacts**: `tools/spec_workflow/chat.py`, `tools/spec_workflow/run.py`, `templates/policies/spec-kit-workflow.md`, `README.md`
 - **Status**: resolved below

@@ -1342,16 +1342,18 @@ def _checkpoint_command(options: list[str]) -> int:
     if len(options) != 1:
         return _refuse("checkpoint needs exactly one RUN_ID")
     run_id = options[0]
+    chat_run = _chat_run(run_id)
+    if not chat_run:
+        record = _source_run(run_id)
+        if isinstance(record, str):
+            return _refuse(record)
     try:
-        if _chat_run(run_id):
-            # A Chat run's lock is its own (#111): a running step holds it.
-            lock = chat.Lock(chat.load(ROOT, run_id), "checkpoint")
-        else:
-            record = _source_run(run_id)
-            if isinstance(record, str):
-                return _refuse(record)
-            lock = _invocation_lock(run_id)
-        with lock:
+        with contextlib.ExitStack() as locks:
+            # `demo` holds the invocation lock for every mode; a Chat step
+            # holds the Chat run's own lock (#111). Take both.
+            locks.enter_context(_invocation_lock(run_id))
+            if chat_run:
+                locks.enter_context(chat.Lock(chat.load(ROOT, run_id), "checkpoint"))
             outcome = draft_pr.checkpoint(ROOT, run_id, create=False)
     except (LockHeld, chat.Refused) as held:
         return _refuse(str(held))
