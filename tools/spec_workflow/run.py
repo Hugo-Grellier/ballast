@@ -1369,6 +1369,13 @@ def _checkpoint_command(options: list[str]) -> int:
     except LockHeld as held:
         return _refuse(str(held))
     if outcome.state == "skipped" and outcome.reason == "no-draft-pr":
+        record = autonomy.find_run(ROOT, run_id)
+        if record is not None and record["status"] == "published":
+            # GitHub's PR list can lag a just-created PR (#111).
+            return _refuse(
+                f"GitHub does not list run {run_id}'s Draft PR yet; retry "
+                f"ballast run checkpoint {run_id} once it does"
+            )
         return _refuse(
             f"run {run_id} has no Draft PR yet; ballast run publish {run_id} opens "
             "it once the run completes"

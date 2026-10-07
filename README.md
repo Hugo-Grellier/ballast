@@ -170,7 +170,7 @@ ballast run approve RUN_ID GATE               # from your terminal; reject ... -
 ballast run resolve RUN_ID DEC-NNNN
 ballast run checks RUN_ID
 ballast run mode RUN_ID chat|human-gated --reason TEXT
-ballast run publish RUN_ID                    # Draft PR with the Chat section and acceptance packet
+ballast run publish RUN_ID                    # Draft PR with the Chat section, then the packet
 ballast run checkpoint RUN_ID                 # refresh the Draft PR and packet, no agent
 ```
 

@@ -518,7 +518,7 @@ in process, on the run's feature.
 | Close of a `step` | trusted `chat.py` | The agent's scope is confirmed stopped, protected inputs are unchanged, the phase's postcondition passes and the step changed only its write scope (`specs/<f>/` before `implement`, `specs/<f>/reviews/` for a review). |
 | `approve`, `reject`, `resolve` | the operator, from a terminal | No step is active, the gate's precondition passes, and the operator types the confirmation; the human decision is bound to the artifact's digest and is current only while it matches. |
 | `checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry runs and its result is recorded with the tree it ran on; no `[checks]` table is recorded as unavailable. |
-| `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR, then runs the Draft PR checkpoint, which publishes the acceptance packet. |
+| `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR, then runs the Draft PR checkpoint, which refreshes that PR and attempts the acceptance packet; a packet failure, or a PR that GitHub does not list yet, leaves the publication successful and names `ballast run checkpoint RUN` as the retry. |
 
 **Upstream candidates** (github/spec-kit; this workflow does not wait for them):
 per-step artifact postconditions and gate preconditions in the workflow schema;
@@ -857,7 +857,7 @@ each agent step is the only agent step of its invocation:
 | `ballast run checks RUN` | Runs the `[checks] commands`, confined, and records the result for the current tree. |
 | `ballast run mode RUN chat\|human-gated --reason TEXT` | Switches the run. In human-gated mode each `step` runs headless through the agent wrapper, with the same checks, gates and records. A paused `ballast-feature` engine run switched to chat continues as a linked Chat run. |
 | `ballast run continue RUN --reason block-resolved\|changes-requested --ref TEXT --mode chat` | Continues a stopped Autonomous run as a linked Chat run (see [Autonomous runs](#autonomous-runs)). |
-| `ballast run publish RUN` | After a current final approval, commits, pushes and writes the Chat section into the feature's single Draft PR, then publishes the [acceptance packet](#acceptance-packet) into it. |
+| `ballast run publish RUN` | After a current final approval, commits, pushes and writes the Chat section into the feature's single Draft PR, then attempts the [acceptance packet](#acceptance-packet) in it; when the packet is not published, `ballast run checkpoint RUN` retries it. |
 | `ballast run checkpoint RUN` | Refreshes the Draft PR checkpoint and the acceptance packet from the run's records, for example after `ballast ledger check`; it starts no agent and refuses while a step holds the run's lock. |
 
 **Preflight before every step.** The launcher refuses on a changed trust

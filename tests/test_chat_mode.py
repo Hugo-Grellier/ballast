@@ -3864,6 +3864,9 @@ class PublishTests(ChatCase):
             f"{run_id}` once GitHub lists the Draft PR",
             result.out,
         )
+        result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"GitHub does not list run {run_id}'s Draft PR yet", result.text)
 
     def test_checkpoint_refusals_write_nothing(self) -> None:
         """#111: no PR yet, or a busy run, refuses a Chat refresh."""
