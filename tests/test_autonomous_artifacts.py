@@ -14,7 +14,9 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from typing import TYPE_CHECKING
@@ -23,6 +25,7 @@ from test_autonomy import (
     FEATURE,
     TOOLS,
     AutonomyCase,
+    _bwrap_works,
     autonomy,
     isolate_operator_state,
     ledger,
@@ -1112,8 +1115,10 @@ PASSING = "tests.test_accept.Accept.test_pass"
 FAILING = "tests.test_accept.Accept.test_fail"
 
 
-class AcceptanceChecksTests(RecorderCase):
-    """#117: run-checks records each mapped test, runner-recorded."""
+class AcceptanceCase(RecorderCase):
+    """A frozen Autonomous run whose manifest maps tests/test_accept.py."""
+
+    tests_source = ACCEPT_TESTS
 
     def setUp(self) -> None:
         super().setUp()
@@ -1122,7 +1127,7 @@ class AcceptanceChecksTests(RecorderCase):
         tests = self.root / "tests"
         tests.mkdir()
         (tests / "__init__.py").write_text("")
-        (tests / "test_accept.py").write_text(ACCEPT_TESTS)
+        (tests / "test_accept.py").write_text(self.tests_source)
         python = self.root / ".venv/bin/python"
         python.parent.mkdir(parents=True)
         python.symlink_to(Path(sys.executable).resolve())
@@ -1163,6 +1168,63 @@ class AcceptanceChecksTests(RecorderCase):
 
     def record_text(self) -> str:
         return (self.feature / "autonomous/record.md").read_text()
+
+
+HOSTILE_TESTS = """import os
+import unittest
+
+
+class Accept(unittest.TestCase):
+    def test_pass(self):
+        pass
+
+    def test_fail(self):
+        with open("README.md", "w") as handle:
+            handle.write("rewritten by a test")
+
+    def test_secret(self):
+        with open(os.path.expanduser("~/.git-credentials")) as handle:
+            self.assertIn("planted", handle.read())
+        self.assertEqual(os.environ.get("GH_TOKEN"), "planted")
+"""
+
+
+@unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
+class RealAcceptanceConfinementTests(AcceptanceCase):
+    """#117 under real bubblewrap: a mapped test cannot write or read secrets."""
+
+    tests_source = HOSTILE_TESTS
+
+    def setUp(self) -> None:
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        super().setUp()
+        (self.bin / "bwrap").unlink()  # the real one, resolved from PATH
+        # /var/tmp, unlike /tmp, stays visible inside the sandbox.
+        home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
+        home.mkdir()
+        (home / ".git-credentials").write_text("https://u:planted@github.com\n")
+        self.enterContext(
+            patch.dict(os.environ, {"HOME": str(home), "GH_TOKEN": "planted"})
+        )
+
+    def test_hostile_tests_fail_closed_and_are_recorded(self) -> None:
+        reader = "tests.test_accept.Accept.test_secret"
+        self.manifest({"AC-001": [PASSING], "AC-002": [FAILING], "AC-003": [reader]})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(),
+            [
+                ("runner-recorded", "AC-001", PASSING, "passed"),
+                ("runner-recorded", "AC-002", FAILING, "failed"),
+                ("runner-recorded", "AC-003", reader, "failed"),
+            ],
+        )
+        self.assertEqual((self.root / "README.md").read_text(), "demo\n")
+
+
+class AcceptanceChecksTests(AcceptanceCase):
+    """#117: run-checks records each mapped test, runner-recorded."""
 
     def test_each_mapped_pair_is_recorded_runner_recorded(self) -> None:
         self.ok(self.check("run-checks"))
@@ -1244,13 +1306,44 @@ class AcceptanceChecksTests(RecorderCase):
         self.assertIn("no acceptance-evidence.json", self.record_text())
         self.assertEqual(self.checks(), [])
 
-    def test_too_many_tests_run_nothing(self) -> None:
+    def test_too_many_pairs_run_nothing(self) -> None:
+        """Distinct tests and reused ones alike count against the limit."""
         names = [f"tests.test_accept.Accept.test_{n}" for n in range(101)]
-        self.manifest({"AC-001": names, "AC-002": [], "AC-003": []})
-        self.ok(self.check("run-checks"))
-        self.assertEqual(self.acceptance(), {"status": "too-many"})
-        self.assertIn("maps more than 100 tests", self.record_text())
+        for criteria in (
+            {"AC-001": names, "AC-002": [], "AC-003": []},
+            {"AC-001": names[:51], "AC-002": names[:50], "AC-003": []},
+        ):
+            with self.subTest(pairs=sum(map(len, criteria.values()))):
+                self.manifest(criteria)
+                self.ok(self.check("run-checks"))
+                self.assertEqual(self.acceptance(), {"status": "too-many"})
+                self.assertIn("more than 100 criterion-test pairs", self.record_text())
         self.assertEqual(self.checks(), [])
+        # A test two criteria map records one result per pair.
+        self.manifest({"AC-001": [PASSING] * 1, "AC-002": [PASSING] * 1, "AC-003": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance()["status"], "recorded")
+        self.assertEqual(len(self.checks()), 2)
+
+    def test_boolean_schema_version_is_malformed(self) -> None:
+        self.manifest({"AC-001": [PASSING], "AC-002": [], "AC-003": []})
+        path = self.feature / "acceptance-evidence.json"
+        path.write_text(
+            path.read_text().replace('"schema_version": 1', '"schema_version": true')
+        )
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "malformed"})
+        self.assertEqual(self.checks(), [])
+
+    def test_unwritable_ledger_records_nothing_and_says_so(self) -> None:
+        """All or none: a refused ledger write leaves no partial evidence."""
+        path = ledger.ledger_path(self.root, "run42")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{broken\n")
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance()["status"], "ledger-unavailable")
+        self.assertIn("no result was recorded", self.record_text())
+        self.assertEqual(path.read_text(), "{broken\n")
 
     def test_failed_check_commands_run_no_acceptance_check(self) -> None:
         self.ok(self.check("run-checks"))

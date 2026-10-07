@@ -187,7 +187,7 @@ WALL_TIME = (1, 1440, 240)
 # raise (#21 R9).
 AGENT_STEPS = (1, 200, 40)
 CHECK_TIMEOUT = (1, 240, 30)
-# Distinct mapped tests the runner's acceptance checks run (#117).
+# Mapped (AC, test) pairs the runner's acceptance checks run at most (#117).
 ACCEPTANCE_TESTS = 100
 # Fix cycles per run, never reset by a resume, and correctable-draft retries
 # per agent step invocation (#21 R1, R4).
@@ -3494,10 +3494,14 @@ ACCEPTANCE_STATUS = {
         "was checked"
     ),
     "too-many": (
-        f"acceptance-evidence.json maps more than {ACCEPTANCE_TESTS} tests; no "
+        f"acceptance-evidence.json maps more than {ACCEPTANCE_TESTS} criterion-test "
+        "pairs; no "
         "criterion was checked"
     ),
     "no-python": "no .venv/bin/python to run the tests; no criterion was checked",
+    "snapshot-unavailable": (
+        "the implementation tree could not be fingerprinted; no criterion was checked"
+    ),
     "ledger-unavailable": "the run's ledger is unavailable; no result was recorded",
 }
 

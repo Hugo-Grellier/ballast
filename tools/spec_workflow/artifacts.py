@@ -3381,7 +3381,7 @@ def _acceptance_checks(  # noqa: C901, PLR0911 - every refusal is reported
         ac: list(dict.fromkeys(tests)) for ac, tests in manifest["criteria"].items()
     }
     tests = sorted({test for mapped in criteria.values() for test in mapped})
-    if len(tests) > autonomy.ACCEPTANCE_TESTS:
+    if sum(map(len, criteria.values())) > autonomy.ACCEPTANCE_TESTS:
         return {"status": "too-many"}, None, []
     results: list[dict] = [{"ac": ac} for ac in sorted(criteria) if not criteria[ac]]
     if not tests:
@@ -3389,7 +3389,10 @@ def _acceptance_checks(  # noqa: C901, PLR0911 - every refusal is reported
     python = root / ".venv/bin/python"
     if not python.is_file():
         return {"status": "no-python", "results": results}, None, []
-    snapshot = ledger.artifact_digests(root, relative)
+    try:
+        snapshot = ledger.artifact_digests(root, relative)
+    except (OSError, ValueError):
+        return {"status": "snapshot-unavailable", "results": results}, None, []
     ran: dict[str, dict] = {}
     exhausted = False
     for test in tests:

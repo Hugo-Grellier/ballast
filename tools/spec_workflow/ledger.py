@@ -937,6 +937,37 @@ def append(root: Path, event: dict[str, Any]) -> bool:
     return True
 
 
+def append_batch(root: Path, batch: list[dict[str, Any]]) -> None:
+    """Append new events of one run in one write: all of them or none."""
+    for event in batch:
+        validate(event)
+    if not batch or len({event["run_id"] for event in batch}) != 1:
+        fail("a batch holds events of one run")
+    path = ledger_path(root, batch[0]["run_id"])
+    with _lock(path, exclusive=True):
+        events, problems = _read_unlocked(path)
+        if problems:
+            fail("invalid existing ledger: " + "; ".join(problems))
+        ids = [event["event_id"] for event in [*events, *batch]]
+        if len(set(ids)) != len(ids):
+            fail("conflicting event ID")
+        batch = [
+            {**event, "sequence": len(events) + number}
+            for number, event in enumerate(batch, 1)
+        ]
+        semantic = _semantic_problems([*events, *batch])
+        if semantic:
+            fail("invalid event transition: " + "; ".join(semantic))
+        text = "".join(
+            json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+            for event in batch
+        )
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -1310,6 +1341,7 @@ def archive_manifest(  # noqa: C901 - shape, then staleness
     if (
         not isinstance(data, dict)
         or set(data) != {"schema_version", "spec_digest", "criteria"}
+        or type(data["schema_version"]) is not int
         or data["schema_version"] != 1
         or not isinstance(data["spec_digest"], str)
     ):
@@ -2942,29 +2974,34 @@ def record_runner_checks(
     """Append the runner's acceptance checks (#117, ADR-0018).
 
     One runner snapshot, then one `runner-recorded` verification per
-    `(ac_id, test, status, exit_code)`, bound to that snapshot. Only the
-    trusted Autonomous `run-checks` step calls this; no CLI command offers it.
+    `(ac_id, test, status, exit_code)`, bound to that snapshot, in one write:
+    all of them or none. Only the trusted Autonomous `run-checks` step calls
+    this; no CLI command offers it.
     """
-    append(root, new_event(run_id, feature, "snapshot", "runner", snapshot))
-    for ac_id, test, status, code in results:
-        append(
-            root,
-            new_event(
-                run_id,
-                feature,
-                "verification",
-                "runner-recorded",
-                {
-                    "check_id": test,
-                    "ac_id": ac_id,
-                    "status": status,
-                    "exit_code": code,
-                    "snapshot": snapshot["tree"],
-                    "spec_digest": snapshot["spec_digest"],
-                    "manifest_digest": snapshot["manifest_digest"],
-                },
+    append_batch(
+        root,
+        [
+            new_event(run_id, feature, "snapshot", "runner", snapshot),
+            *(
+                new_event(
+                    run_id,
+                    feature,
+                    "verification",
+                    "runner-recorded",
+                    {
+                        "check_id": test,
+                        "ac_id": ac_id,
+                        "status": status,
+                        "exit_code": code,
+                        "snapshot": snapshot["tree"],
+                        "spec_digest": snapshot["spec_digest"],
+                        "manifest_digest": snapshot["manifest_digest"],
+                    },
+                )
+                for ac_id, test, status, code in results
             ),
-        )
+        ],
+    )
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0915 - CLI branches.
