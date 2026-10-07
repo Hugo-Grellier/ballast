@@ -518,7 +518,7 @@ in process, on the run's feature.
 | Close of a `step` | trusted `chat.py` | The agent's scope is confirmed stopped, protected inputs are unchanged, the phase's postcondition passes and the step changed only its write scope (`specs/<f>/` before `implement`, `specs/<f>/reviews/` for a review). |
 | `approve`, `reject`, `resolve` | the operator, from a terminal | No step is active, the gate's precondition passes, and the operator types the confirmation; the human decision is bound to the artifact's digest and is current only while it matches. |
 | `checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry runs and its result is recorded with the tree it ran on; no `[checks]` table is recorded as unavailable. |
-| `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR. |
+| `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR, then runs the Draft PR checkpoint, which publishes the acceptance packet. |
 
 **Upstream candidates** (github/spec-kit; this workflow does not wait for them):
 per-step artifact postconditions and gate preconditions in the workflow schema;
@@ -743,7 +743,7 @@ continues it as a linked [Chat run](#chat-runs) instead. Raising a run to
 Autonomous after start is never possible.
 
 **Refresh.** `ballast run checkpoint RUN_ID` refreshes the Draft PR checkpoint
-and the acceptance packet of an Autonomous run from the current records, in any
+and the acceptance packet of an Autonomous or Chat run from the current records, in any
 status, `published` included, for example after `ballast ledger check`. It
 starts no agent and changes no decision, mode or status. Without a Draft PR it
 refuses and writes nothing; while another invocation of the run is active it
@@ -854,7 +854,8 @@ each agent step is the only agent step of its invocation:
 | `ballast run checks RUN` | Runs the `[checks] commands`, confined, and records the result for the current tree. |
 | `ballast run mode RUN chat\|human-gated --reason TEXT` | Switches the run. In human-gated mode each `step` runs headless through the agent wrapper, with the same checks, gates and records. A paused `ballast-feature` engine run switched to chat continues as a linked Chat run. |
 | `ballast run continue RUN --reason block-resolved\|changes-requested --ref TEXT --mode chat` | Continues a stopped Autonomous run as a linked Chat run (see [Autonomous runs](#autonomous-runs)). |
-| `ballast run publish RUN` | After a current final approval, commits, pushes and writes the Chat section into the feature's single Draft PR. |
+| `ballast run publish RUN` | After a current final approval, commits, pushes and writes the Chat section into the feature's single Draft PR, then publishes the [acceptance packet](#acceptance-packet) into it. |
+| `ballast run checkpoint RUN` | Refreshes the Draft PR checkpoint and the acceptance packet from the run's records, for example after `ballast ledger check`; it starts no agent and refuses while a step holds the run's lock. |
 
 **Preflight before every step.** The launcher refuses on a changed trust
 baseline, a tamper marker or an unfinished step, as for any `ballast run`; then
@@ -1168,8 +1169,9 @@ configure it. See ADR-0005 in the Ballast repository.
 
 At the end of every `ballast run start`, `resume` or `continue` invocation,
 whether the workflow completed, paused at a gate or failed, after an
-Autonomous run's own publication, and on `ballast run checkpoint RUN_ID` for
-an Autonomous run (which never creates a PR), the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
+Autonomous or Chat run's own publication, after every Chat step, and on
+`ballast run checkpoint RUN_ID` for an Autonomous or Chat run (which never
+creates a PR), the launcher runs a Draft PR checkpoint for an issue-linked feature (`specs/<issue>-<slug>/`). Once the
 feature branch as published on GitHub differs from the default branch outside
 `specs/<feature>/`, exactly one Draft PR shows it. Every later invocation reuses
 that PR, including one a human opened by hand from the same branch.
@@ -1295,10 +1297,11 @@ commit. `run-checks` runs whole suites, so an Autonomous run's packet shows its
 mapped criteria as `not run`. The packet is rebuilt only at a checkpoint, at
 the end of `ballast run start`, `resume` and `continue`, from that run's own
 ledger and records: record checks for a human-gated run under its run ID, then
-resume it. For an Autonomous run, record checks under its run ID, then
+resume it. For an Autonomous or Chat run, record checks under its run ID, then
 `ballast run checkpoint RUN_ID` rebuilds the packet and the Draft PR section
-from that run's ledger and records, in any status and without an agent;
-`ballast run publish` runs no checkpoint, and `ballast run continue` starts a
+from that run's ledger and records, in any status and without an agent; a
+Chat run's packet names its mode `chat`. An Autonomous run's `ballast run
+publish` retry runs no checkpoint, and `ballast run continue` starts a
 new run whose packet reads only the new run's ledger.
 
 Optional review sections come from the `[review]` table of `ballast.toml`,

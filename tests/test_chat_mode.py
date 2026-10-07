@@ -3775,6 +3775,63 @@ class PublishTests(ChatCase):
             any(b"sk-test-0000SECRET" in path.read_bytes() for path in logs)
         )
 
+    def test_publish_and_checkpoint_carry_the_acceptance_packet(self) -> None:
+        """#111 [AC-016]: a Chat Draft PR gets the #19 packet, and refreshes."""
+        run_id = self.start()
+        self.through_final(run_id)
+        self.gh_data("repos_acme_demo.json", {"default_branch": "main"})
+        served = self.gh_dir / "repos_acme_demo_pulls_7.json"
+
+        def serve_body(body: str | None = None) -> None:
+            """Serve PR #7 at the pushed head, with `body` when given."""
+            pr = json.loads(served.read_text())
+            head = self.git("rev-parse", "HEAD").strip()
+            pr["head"]["sha"] = head
+            pr["base"]["sha"] = self.git("rev-parse", "main").strip()
+            self.gh_data(
+                f"repos_acme_demo_commits_{head}_check-runs.json", {"check_runs": []}
+            )
+            if body is not None:
+                pr["body"] = body
+            served.write_text(json.dumps(pr))
+            self.gh_data("repos_acme_demo_pulls.json", [pr])
+
+        def packets() -> int:
+            return sum(e["kind"] == "acceptance_packet" for e in self.ledger(run_id))
+
+        real = autonomy.publish
+
+        def publish(root: Path, run: str) -> dict:
+            result = real(root, run)
+            serve_body()  # GitHub's view of the PR the publisher just opened
+            return result
+
+        before = packets()
+        with patch.object(autonomy, "publish", publish):
+            result = self.call(chat.publish, self.root, run_id)
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("Draft PR: reused", result.out)
+        self.assertIn("Acceptance packet: published #7", result.out)
+        body = self.body()
+        self.assertEqual(body.count("<!-- ballast:acceptance-packet:begin -->"), 1)
+        self.assertEqual(body.count(chat.CHAT_BEGIN), 1)
+        self.assertIn(f"- Run: `{run_id}` (chat)", body)
+        self.assertEqual(packets(), before + 1)
+
+        # `ballast run checkpoint` refreshes a Chat run's packet (#111).
+        serve_body(body)
+        result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("Acceptance packet:", result.out)
+        self.assertNotIn("not an autonomous run", result.text)
+        self.assertEqual(packets(), before + 2)
+        self.assertEqual(self.record(run_id).run["status"], "published")
+        with chat.Lock(self.chat_run(run_id), "step implement"):
+            result = self.ballast("run", "checkpoint", run_id)
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn(f"run {run_id} is busy: step implement", result.text)
+        self.assertEqual(packets(), before + 2)
+
     def through_final_after_scope(self, run_id: str) -> None:
         self.approve_in_process(run_id, "intent")
         self.feature_file("plan.md", PLAN)

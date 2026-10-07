@@ -1167,9 +1167,12 @@ def archive(run: Run) -> None:
 
 
 def checkpoint(run: Run) -> None:
-    """Run the Draft PR checkpoint (#17), last in the invocation; assign no status."""
+    """Run the Draft PR checkpoint (#17) and its packet (#19); assign no status."""
     try:
-        line = draft_pr.format_line(draft_pr.checkpoint(run.root, run.id))
+        outcome = draft_pr.checkpoint(run.root, run.id)
+        line = draft_pr.format_line(outcome)
+        if outcome.packet is not None:
+            line += "\n" + draft_pr.packet.format_line(outcome.packet)
     except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
         line = f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
     _out(line)
@@ -3160,4 +3163,6 @@ def publish(root: Path, run_id: str) -> int:
             f"Draft PR: {result['url']}\nThe PR's Chat section lists every human "
             "approval; merging stays your decision."
         )
+        # The acceptance packet (#19, #111), as after every Chat step.
+        checkpoint(run)
     return EXIT_OK
