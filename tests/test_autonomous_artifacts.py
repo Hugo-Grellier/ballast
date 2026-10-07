@@ -10,11 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import py_compile
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from typing import TYPE_CHECKING
@@ -23,8 +26,11 @@ from test_autonomy import (
     FEATURE,
     TOOLS,
     AutonomyCase,
+    _bwrap_works,
+    artifacts,
     autonomy,
     isolate_operator_state,
+    ledger,
 )
 
 if TYPE_CHECKING:
@@ -1089,6 +1095,447 @@ class RunChecksTests(RecorderCase):
         self.failed(self.check("run-checks"), "tamper block")
         self.assertEqual(self.block()["category"], "tamper")
         self.assertTrue((self.root / "BALLAST_TAMPERED").exists())
+
+
+ACCEPT_SPEC = (
+    "# Feature Specification: Demo run\n\n"
+    "1. **AC-001**: The first thing works.\n"
+    "2. **AC-002**: The second thing works.\n"
+    "3. **AC-003**: The page looks right.\n"
+)
+ACCEPT_TESTS = """import unittest
+
+
+class Accept(unittest.TestCase):
+    def test_pass(self):
+        pass
+
+    def test_fail(self):
+        self.fail("not yet")
+"""
+PASSING = "tests.test_accept.Accept.test_pass"
+FAILING = "tests.test_accept.Accept.test_fail"
+
+
+class AcceptanceCase(RecorderCase):
+    """A frozen Autonomous run whose manifest maps tests/test_accept.py."""
+
+    tests_source = ACCEPT_TESTS
+
+    def setUp(self) -> None:
+        super().setUp()
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write(".venv/\n__pycache__/\n")
+        tests = self.root / "tests"
+        tests.mkdir()
+        (tests / "__init__.py").write_text("")
+        (tests / "test_accept.py").write_text(self.tests_source)
+        python = self.root / ".venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.symlink_to(Path(sys.executable).resolve())
+        (self.feature / "spec.md").write_text(ACCEPT_SPEC)
+        digest = hashlib.sha256(ACCEPT_SPEC.encode()).hexdigest()
+        (self.feature / "intent.md").write_text(
+            f"- **Provisional spec digest**: sha256:{digest}\n"
+        )
+        self.manifest({"AC-001": [PASSING], "AC-002": [FAILING, PASSING], "AC-003": []})
+        self.freeze()
+
+    def manifest(self, criteria: object, **changes: object) -> None:
+        digest = hashlib.sha256(ACCEPT_SPEC.encode()).hexdigest()
+        data = {"schema_version": 1, "spec_digest": digest, "criteria": criteria}
+        (self.feature / "acceptance-evidence.json").write_text(
+            json.dumps({**data, **changes})
+        )
+
+    def events(self) -> list[dict]:
+        events, problems = ledger.read(self.root, "run42")
+        self.assertEqual(problems, [])
+        return events
+
+    def checks(self) -> list[tuple[str, str, str, str]]:
+        return [
+            (
+                e["source"],
+                e["data"]["ac_id"],
+                e["data"]["check_id"],
+                e["data"]["status"],
+            )
+            for e in self.events()
+            if e["kind"] == "verification"
+        ]
+
+    def acceptance(self) -> dict | None:
+        return autonomy.read_acceptance(self.root, "run42")
+
+    def record_text(self) -> str:
+        return (self.feature / "autonomous/record.md").read_text()
+
+
+HOSTILE_TESTS = """import os
+import unittest
+
+
+class Accept(unittest.TestCase):
+    def test_pass(self):
+        pass
+
+    def test_fail(self):
+        with open("README.md", "w") as handle:
+            handle.write("rewritten by a test")
+
+    def test_secret(self):
+        with open(os.path.expanduser("~/.git-credentials")) as handle:
+            self.assertIn("planted", handle.read())
+        self.assertEqual(os.environ.get("GH_TOKEN"), "planted")
+"""
+
+
+@unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
+class RealAcceptanceConfinementTests(AcceptanceCase):
+    """#117 under real bubblewrap: a mapped test cannot write or read secrets."""
+
+    tests_source = HOSTILE_TESTS
+
+    def setUp(self) -> None:
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        super().setUp()
+        (self.bin / "bwrap").unlink()  # the real one, resolved from PATH
+        # /var/tmp, unlike /tmp, stays visible inside the sandbox.
+        home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
+        home.mkdir()
+        (home / ".git-credentials").write_text("https://u:planted@github.com\n")
+        self.enterContext(
+            patch.dict(os.environ, {"HOME": str(home), "GH_TOKEN": "planted"})
+        )
+
+    def test_hostile_tests_fail_closed_and_are_recorded(self) -> None:
+        reader = "tests.test_accept.Accept.test_secret"
+        self.manifest({"AC-001": [PASSING], "AC-002": [FAILING], "AC-003": [reader]})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(),
+            [
+                ("runner-recorded", "AC-001", PASSING, "passed"),
+                ("runner-recorded", "AC-002", FAILING, "failed"),
+                ("runner-recorded", "AC-003", reader, "failed"),
+            ],
+        )
+        self.assertEqual((self.root / "README.md").read_text(), "demo\n")
+
+
+class AcceptanceChecksTests(AcceptanceCase):
+    """#117: run-checks records each mapped test, runner-recorded."""
+
+    def test_each_mapped_pair_is_recorded_runner_recorded(self) -> None:
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(),
+            [
+                ("runner-recorded", "AC-001", PASSING, "passed"),
+                ("runner-recorded", "AC-002", FAILING, "failed"),
+                ("runner-recorded", "AC-002", PASSING, "passed"),
+            ],
+        )
+        events = self.events()
+        snapshot = next(e for e in events if e["kind"] == "snapshot")
+        self.assertEqual(snapshot["source"], "runner")
+        self.assertEqual(snapshot["data"], ledger.artifact_digests(self.root, FEATURE))
+        for event in events:
+            if event["kind"] == "verification":
+                self.assertEqual(event["data"]["snapshot"], snapshot["data"]["tree"])
+                self.assertEqual(
+                    event["data"]["manifest_digest"],
+                    snapshot["data"]["manifest_digest"],
+                )
+        record = self.record_text()
+        self.assertIn("### Acceptance checks (runner-recorded)", record)
+        self.assertIn(f"- `AC-001` `{PASSING}`: passed", record)
+        self.assertIn(f"- `AC-002` `{FAILING}`: failed", record)
+        # [] stays missing: nothing runs or is recorded for it.
+        self.assertIn("- `AC-003` no test mapped (missing)", record)
+        self.assertNotIn("operator-attested", {c[0] for c in self.checks()})
+
+    def test_results_bind_to_the_commit_the_run_publishes(self) -> None:
+        """Not stale on arrival: the published commit has the checked tree."""
+        self.ok(self.check("run-checks"))
+        tree = next(e for e in self.events() if e["kind"] == "snapshot")["data"]
+        self.git("add", "--all")
+        self.git("commit", "-q", "-m", "publish")
+        self.assertEqual(ledger.commit_tree(self.root, "HEAD"), tree["tree"])
+
+    def test_tests_the_pr_would_not_carry_are_not_run(self) -> None:
+        """An ignored or missing test file is absent at PR head: no evidence."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("tests/test_local.py\n")
+        (self.root / "tests/test_local.py").write_text(ACCEPT_TESTS)
+        local = "tests.test_local.Accept.test_pass"
+        missing = "tests.test_gone.Accept.test_pass"
+        self.manifest({"AC-001": [local], "AC-002": [missing, PASSING], "AC-003": []})
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(), [("runner-recorded", "AC-002", PASSING, "passed")]
+        )
+        record = self.record_text()
+        self.assertIn(
+            f"- `AC-001` `{local}`: not run (its file is not in the published tree)",
+            record,
+        )
+        self.assertIn(f"- `AC-002` `{missing}`: not run (its file is not", record)
+
+    def test_a_published_symlink_to_an_ignored_file_is_not_run(self) -> None:
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("hidden.py\n")
+        (self.root / "hidden.py").write_text(ACCEPT_TESTS)
+        (self.root / "tests/test_link.py").symlink_to("../hidden.py")
+        linked = "tests.test_link.Accept.test_pass"
+        self.manifest({"AC-001": [linked], "AC-002": [], "AC-003": []})
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.checks(), [])
+        self.assertIn("not in the published tree", self.record_text())
+
+    def test_a_forged_bytecode_cache_is_never_executed(self) -> None:
+        """An ignored, unchecked-hash .pyc of a passing test_fail never runs."""
+        forged = ACCEPT_TESTS.replace('self.fail("not yet")', "pass")
+        source = self.base / "forged.py"
+        source.write_text(forged)
+        tag = sys.implementation.cache_tag
+        cache = self.root / f"tests/__pycache__/test_accept.{tag}.pyc"
+        cache.parent.mkdir(exist_ok=True)
+        py_compile.compile(
+            str(source),
+            cfile=str(cache),
+            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+        )
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertIn(("runner-recorded", "AC-002", FAILING, "failed"), self.checks())
+
+    def test_a_module_loaded_from_an_unpublished_file_is_refused(self) -> None:
+        """The import origin, not the file layout, decides (review SEC-002)."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("hidden.py\n")
+        (self.root / "hidden.py").write_text(ACCEPT_TESTS)
+        (self.root / "tests/__init__.py").write_text(
+            "import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location("
+            "'tests.test_accept', 'hidden.py')\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "sys.modules['tests.test_accept'] = test_accept = module\n"
+        )
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertIn(("runner-recorded", "AC-001", PASSING, "failed"), self.checks())
+
+    def test_an_exit_before_the_test_runs_is_failed(self) -> None:
+        """Review: an import-time exit 0 never reads as passed."""
+        for exit_call in ("sys.exit(0)", "os._exit(0)"):
+            with self.subTest(exit_call=exit_call):
+                (self.root / "tests/test_accept.py").write_text(
+                    f"import os, sys\n{exit_call}\n" + ACCEPT_TESTS
+                )
+                self.freeze()
+                self.ok(self.check("run-checks"))
+                self.assertNotIn("passed", {c[3] for c in self.checks()})
+
+    def test_undecodable_output_and_long_names_are_reported(self) -> None:
+        (self.root / "tests/test_accept.py").write_text(
+            "import os\nos.write(1, b'\\xff\\xfe')\n" + ACCEPT_TESTS
+        )
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertIn(("runner-recorded", "AC-001", PASSING, "passed"), self.checks())
+        long = "tests.test_accept.Accept.test_" + "x" * 300
+        self.manifest({"AC-001": [long], "AC-002": [], "AC-003": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "too-many"})
+        self.assertIn("a test name over 300 characters", self.record_text())
+
+    def test_a_test_in_a_published_package_init_runs(self) -> None:
+        (self.root / "tests/test_pkg").mkdir()
+        (self.root / "tests/test_pkg/__init__.py").write_text(ACCEPT_TESTS)
+        packaged = "tests.test_pkg.Accept.test_pass"
+        self.manifest({"AC-001": [packaged], "AC-002": [], "AC-003": []})
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(
+            self.checks(), [("runner-recorded", "AC-001", packaged, "passed")]
+        )
+
+    def test_a_published_lookalike_does_not_vouch_for_an_ignored_module(self) -> None:
+        """Review: tests/test_local/Accept.py published, tests/test_local.py not."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("tests/test_local.py\n")
+        (self.root / "tests/test_local.py").write_text(ACCEPT_TESTS)
+        (self.root / "tests/test_local").mkdir()
+        (self.root / "tests/test_local/Accept.py").write_text("")
+        local = "tests.test_local.Accept.test_pass"
+        self.manifest({"AC-001": [local], "AC-002": [], "AC-003": []})
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.checks(), [])
+        self.assertIn("not in the published tree", self.record_text())
+
+    def test_agent_written_manifest_cannot_inject_commands_or_results(self) -> None:
+        marker = self.base / "injected"
+        for criteria, changes in (
+            (
+                {"AC-001": [f"{PASSING}; touch {marker}"], "AC-002": [], "AC-003": []},
+                {},
+            ),
+            ({"AC-001": [PASSING], "AC-002": [], "AC-003": []}, {"results": {}}),
+            ({"AC-001": "passed", "AC-002": [], "AC-003": []}, {}),
+        ):
+            with self.subTest(criteria=criteria, changes=changes):
+                self.manifest(criteria, **changes)
+                self.ok(self.check("run-checks"))
+                self.assertEqual(self.acceptance(), {"status": "malformed"})
+                self.assertIn(
+                    "acceptance-evidence.json is malformed", self.record_text()
+                )
+        self.assertEqual(self.checks(), [])
+        self.assertFalse(marker.exists())
+
+    def test_stale_manifest_is_reported_and_runs_nothing(self) -> None:
+        self.manifest(
+            {"AC-001": [PASSING], "AC-002": [], "AC-003": []}, spec_digest="0" * 64
+        )
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "stale"})
+        self.assertIn("does not match the approved spec", self.record_text())
+        self.manifest({"AC-001": [PASSING], "AC-002": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "stale"})
+        self.assertEqual(self.checks(), [])
+
+    def test_missing_manifest_and_interpreter_are_reported(self) -> None:
+        (self.root / ".venv/bin/python").unlink()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance()["status"], "no-python")
+        self.assertIn("no .venv/bin/python", self.record_text())
+        (self.feature / "acceptance-evidence.json").unlink()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "no-manifest"})
+        self.assertIn("no acceptance-evidence.json", self.record_text())
+        self.assertEqual(self.checks(), [])
+
+    def test_too_many_pairs_run_nothing(self) -> None:
+        """Distinct tests and reused ones alike count against the limit."""
+        names = [f"tests.test_accept.Accept.test_{n}" for n in range(101)]
+        for criteria in (
+            {"AC-001": names, "AC-002": [], "AC-003": []},
+            {"AC-001": names[:51], "AC-002": names[:50], "AC-003": []},
+        ):
+            with self.subTest(pairs=sum(map(len, criteria.values()))):
+                self.manifest(criteria)
+                self.ok(self.check("run-checks"))
+                self.assertEqual(self.acceptance(), {"status": "too-many"})
+                self.assertIn("over the limit (more than 100", self.record_text())
+        self.assertEqual(self.checks(), [])
+        # A test two criteria map records one result per pair.
+        self.manifest({"AC-001": [PASSING] * 1, "AC-002": [PASSING] * 1, "AC-003": []})
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance()["status"], "recorded")
+        self.assertEqual(len(self.checks()), 2)
+
+    def test_oversized_manifest_is_refused_before_it_is_read(self) -> None:
+        path = self.feature / "acceptance-evidence.json"
+        path.write_text("[" + " " * autonomy.MAX_PUBLISHED_FILE + "]")
+        with patch.object(ledger, "archive_manifest") as archive:
+            feature = artifacts.resolve_feature(self.root, "run42", None)
+            run = autonomy.read_run(self.root, "run42")
+            summary, _, _ = artifacts._acceptance_checks(feature, run, 1)  # noqa: SLF001
+        self.assertEqual(summary, {"status": "too-many"})
+        archive.assert_not_called()
+
+    def test_ignored_manifest_runs_nothing(self) -> None:
+        """The PR head would not carry it: nothing binds to it."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("acceptance-evidence.json\n")
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "unpublished"})
+        self.assertIn("acceptance-evidence.json is git-ignored", self.record_text())
+        self.assertEqual(self.checks(), [])
+
+    def test_deeply_nested_manifest_is_malformed(self) -> None:
+        depth = 100_000
+        path = self.feature / "acceptance-evidence.json"
+        path.write_text("[" * depth + "]" * depth)
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "malformed"})
+        self.assertEqual(self.checks(), [])
+
+    def test_boolean_schema_version_is_malformed(self) -> None:
+        self.manifest({"AC-001": [PASSING], "AC-002": [], "AC-003": []})
+        path = self.feature / "acceptance-evidence.json"
+        path.write_text(
+            path.read_text().replace('"schema_version": 1', '"schema_version": true')
+        )
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance(), {"status": "malformed"})
+        self.assertEqual(self.checks(), [])
+
+    def test_timeout_and_exhausted_wall_time_are_explicit(self) -> None:
+        """A timed-out test is failed; tests past the wall time are not run."""
+        feature = artifacts.resolve_feature(self.root, "run42", None)
+        run = autonomy.read_run(self.root, "run42")
+        timed_out = {"command": "x", "exit": 124, "seconds": 60.0, "timed_out": True}
+        with patch.object(
+            artifacts,
+            "run_commands",
+            side_effect=[[timed_out], artifacts.ChecksExhaustedError()],
+        ) as ran:
+            summary, snapshot, recorded = artifacts._acceptance_checks(  # noqa: SLF001
+                feature, run, 1
+            )
+        self.assertEqual(ran.call_count, 2)
+        self.assertEqual(recorded, [("AC-002", FAILING, "failed", 124)])
+        self.assertTrue(summary["exhausted"])
+        self.assertEqual(
+            [(r["ac"], r.get("test"), r.get("status")) for r in summary["results"]],
+            [
+                ("AC-003", None, None),
+                ("AC-001", PASSING, "not run"),
+                ("AC-002", FAILING, "failed"),
+                ("AC-002", PASSING, "not run"),
+            ],
+        )
+        lines = "\n".join(autonomy._acceptance_lines(summary))  # noqa: SLF001
+        self.assertIn(f"- `AC-002` `{FAILING}`: failed (timed out)", lines)
+        self.assertIn(f"- `AC-001` `{PASSING}`: not run", lines)
+        self.assertIn("the wall-time limit ran out", lines)
+        self.assertEqual(snapshot, ledger.artifact_digests(self.root, FEATURE))
+
+    def test_unwritable_ledger_records_nothing_and_says_so(self) -> None:
+        """All or none: a refused ledger write leaves no partial evidence."""
+        path = ledger.ledger_path(self.root, "run42")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{broken\n")
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.acceptance()["status"], "ledger-unavailable")
+        self.assertIn("no result was recorded", self.record_text())
+        self.assertEqual(path.read_text(), "{broken\n")
+
+    def test_failed_check_commands_run_no_acceptance_check(self) -> None:
+        self.ok(self.check("run-checks"))
+        self.assertIsNotNone(self.acceptance())
+        (self.root / "ballast.toml").write_text('[checks]\ncommands = ["exit 3"]\n')
+        self.failed(self.check("run-checks"), "check commands failed")
+        self.assertIsNone(self.acceptance())
+        self.assertEqual(len(self.checks()), 3)
+
+    def test_feedback_checks_record_no_evidence(self) -> None:
+        record = autonomy.read_run(self.root, "run42")
+        del record["frozen_tree"]
+        autonomy.write_run(self.root, record)
+        self.ok(self.check("run-checks", "--feedback"))
+        self.assertIsNone(self.acceptance())
+        self.assertEqual(self.checks(), [])
 
 
 class FinalAcceptanceTests(RecorderCase):

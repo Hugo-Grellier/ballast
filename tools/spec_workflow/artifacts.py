@@ -37,6 +37,8 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -3244,6 +3246,8 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     *,
     remaining: object = None,
     keep_output: bool = False,
+    read_only: bool = False,
+    stdin: str | None = None,
 ) -> list[dict]:
     """Run trusted check commands, each confined; the mode-neutral core.
 
@@ -3251,15 +3255,13 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     exhausted deadline raises ChecksExhaustedError before the next command,
     and no command may run past it. Without it (a Chat run, #20) only each
     command's own timeout applies. With `keep_output` (#21 R3) a failed
-    command's result carries a bounded, printable `output_tail`.
+    command's result carries a bounded, printable `output_tail`. With
+    `read_only` (#117) the whole checkout is read-only to the command.
     """
     env = autonomy.confined_env(dict(os.environ), None)
     results = []
     with tempfile.TemporaryDirectory(prefix="ballast-checks-") as private:
         for command in commands:
-            left = remaining() if callable(remaining) else None
-            if left is not None and left <= 0:
-                raise ChecksExhaustedError
             argv = autonomy.confined_argv(
                 root,
                 ["sh", "-c", command],
@@ -3267,7 +3269,12 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                 feature=feature,
                 env=dict(os.environ),
                 integration=None,  # no agent CLI: neither login (#81)
+                writable_checkout=not read_only,
             )
+            # Measured after the sandbox is set up, just before the launch.
+            left = remaining() if callable(remaining) else None
+            if left is not None and left <= 0:
+                raise ChecksExhaustedError
             timeout = timeout_minutes * 60
             started = time.monotonic()
             timed_out = False
@@ -3278,6 +3285,8 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                     env=env,
                     capture_output=True,
                     text=True,
+                    errors="replace",
+                    input=stdin,
                     timeout=timeout if left is None else min(timeout, left),
                     check=False,
                 )
@@ -3350,7 +3359,233 @@ def _feedback_due(run: dict) -> bool:
     return state == "review-pending" or (state == "idle" and not run.get("frozen_tree"))
 
 
-def run_checks(feature: Feature, *, feedback: bool = False) -> None:
+def _acceptance_checks(  # noqa: C901, PLR0911, PLR0912 - every refusal is reported
+    feature: Feature, run: dict, timeout_minutes: int
+) -> tuple[dict, dict | None, list[tuple[str, str, str, int]]]:
+    """Run each test the agent-proposed manifest maps (#117, ADR-0018).
+
+    Each distinct test runs once, confined like the check commands but with
+    the whole checkout read-only, under the check timeout and the run's wall
+    time. Returns the record's summary, the snapshot the results bind to (None
+    when nothing ran) and one `(ac, test, status, exit)` per mapped pair that
+    ran. A missing, malformed, stale or oversized manifest runs nothing and
+    says so; nothing here writes the ledger.
+    """
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    root, relative = feature.root, feature.relative
+    path = root / relative / "acceptance-evidence.json"
+    if not os.path.lexists(path):
+        return {"status": "no-manifest"}, None, []
+    # Bounded before it is read: the manifest is agent-written.
+    if path.is_file() and path.stat().st_size > autonomy.MAX_PUBLISHED_FILE:
+        return {"status": "too-many"}, None, []
+    # A manifest the PR head will not carry binds nothing a reviewer can see.
+    manifest_path = f"{relative}/acceptance-evidence.json"
+    try:
+        if manifest_path not in _published_paths(root, {manifest_path}):
+            return {"status": "unpublished"}, None, []
+    except (OSError, ValueError):
+        return {"status": "snapshot-unavailable"}, None, []
+    try:
+        manifest = ledger.archive_manifest(root, run["run_id"], relative)
+    except ledger.StaleManifestError:
+        return {"status": "stale"}, None, []
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        return {"status": "malformed"}, None, []
+    criteria = {
+        ac: list(dict.fromkeys(tests)) for ac, tests in manifest["criteria"].items()
+    }
+    tests = sorted({test for mapped in criteria.values() for test in mapped})
+    if sum(map(len, criteria.values())) > autonomy.ACCEPTANCE_TESTS or any(
+        len(test) > TEST_NAME_LIMIT for test in tests
+    ):
+        return {"status": "too-many"}, None, []
+    results: list[dict] = [{"ac": ac} for ac in sorted(criteria) if not criteria[ac]]
+    if not tests:
+        return {"status": "recorded", "results": results}, None, []
+    python = root / ".venv/bin/python"
+    if not python.is_file():
+        return {"status": "no-python", "results": results}, None, []
+    try:
+        snapshot = ledger.artifact_digests(root, relative)
+        published = _published_tests(root, tests)
+        real = root.resolve()
+    except (OSError, ValueError):
+        return {"status": "snapshot-unavailable", "results": results}, None, []
+    ran: dict[str, dict] = {}
+    exhausted = False
+    for test in tests:
+        if test not in published:
+            continue
+        try:
+            code = secrets.choice(range(*DONE_CODES))
+            ran[test] = run_commands(
+                root,
+                relative,
+                [
+                    shlex.join(
+                        [
+                            str(python),
+                            "-X",
+                            "pycache_prefix=/tmp/ballast-acceptance-pyc",
+                            "-c",
+                            ACCEPTANCE_CHECK,
+                            test,
+                            str(real),
+                            json.dumps(sorted(str(real / p) for p in published[test])),
+                        ]
+                    )
+                ],
+                timeout_minutes,
+                remaining=lambda: autonomy.remaining_seconds(run),
+                read_only=True,
+                stdin=f"{code}\n",
+            )[0]
+            ran[test]["exit"] = (
+                0 if ran[test]["exit"] == code else ran[test]["exit"] or 1
+            )
+        except ChecksExhaustedError:
+            exhausted = True
+            break
+    recorded = []
+    for ac in sorted(criteria):
+        for test in criteria[ac]:
+            done = ran.get(test)
+            if done is None:
+                status = "not run" if test in published else "not published"
+                results.append({"ac": ac, "test": test, "status": status})
+                continue
+            status = "passed" if done["exit"] == 0 else "failed"
+            results.append(
+                {
+                    "ac": ac,
+                    "test": test,
+                    "status": status,
+                    "timed_out": done["timed_out"],
+                }
+            )
+            recorded.append((ac, test, status, abs(done["exit"])))
+    summary = {"status": "recorded", "results": results, "exhausted": exhausted}
+    return summary, snapshot, recorded
+
+
+# Load one mapped test, refuse it unless every module along its name came
+# from a published file of the checkout (argv: test, checkout, allowed files),
+# then run it as `ledger check` does. Bytecode comes only from a fresh cache
+# (`-X pycache_prefix`), never from an agent-writable __pycache__ (#117).
+TEST_NAME_LIMIT = 300  # characters of a mapped test name the runner runs
+ACCEPTANCE_CHECK = (
+    "import json,os,sys,unittest;"
+    "done=int(sys.stdin.readline());sys.stdin.close();"
+    "name,root,allowed=sys.argv[1],sys.argv[2],set(json.loads(sys.argv[3]));"
+    "suite=unittest.defaultTestLoader.loadTestsFromName(name);"
+    "parts=name.split('.');"
+    "mods=[sys.modules.get('.'.join(parts[:i])) for i in range(1,len(parts)+1)];"
+    "bad=[m for i,m in enumerate(mods) if m is not None and ("
+    "os.path.realpath(m.__file__) not in allowed if getattr(m,'__file__',None)"
+    " else [os.path.realpath(x) for x in getattr(m,'__path__',[])]"
+    "!=[os.path.join(root,*parts[:i+1])])];"
+    "bad and sys.exit(3);"
+    "result=unittest.TestResult();suite.run(result);"
+    "sys.exit(done if result.testsRun==1 and result.wasSuccessful() "
+    "and not result.skipped and not result.expectedFailures else 1)"
+)
+# A passed test exits with this run's code, read from stdin before any test
+# code is imported: an import-time `sys.exit(0)` or `os._exit(0)` is failed.
+# ponytail: in-process test code can still find it by introspection; it is
+# agent-written code either way, and the merge reviewer judges the tests.
+DONE_CODES = (10, 250)
+
+
+def _published_tests(root: Path, tests: list[str]) -> dict[str, set[str]]:
+    """Return the tests whose module file the run publishes (#117 review).
+
+    `git add --all` publishes tracked and unignored files; a test in an
+    ignored or missing file would pass here and be absent from the PR head.
+    Every file Python could import along the dotted name (each prefix's
+    `.py` module and package `__init__.py`) must be published, so whichever
+    one the import resolves to is in the PR. A symlink on the way (file or
+    directory) could lead to unpublished code, so it refuses the test.
+    """
+    real = root.resolve()
+    found: dict[str, set[str]] = {}
+    for test in tests:
+        parts = test.split(".")
+        candidates = {
+            path
+            for size in range(1, len(parts))
+            for path in (
+                "/".join(parts[:size]) + ".py",
+                "/".join(parts[:size]) + "/__init__.py",
+            )
+            if os.path.lexists(root / path)
+        }
+        # The test module itself (`tests.test_*` or deeper) must exist.
+        module = "/".join(parts[:2])
+        if any(
+            path in {f"{module}.py", f"{module}/__init__.py"}
+            or path.startswith(f"{module}/")
+            for path in candidates
+        ) and all((root / path).resolve() == real / path for path in candidates):
+            found[test] = candidates
+    listed = _published_paths(root, set().union(*found.values()))
+    return {test: paths for test, paths in found.items() if paths <= listed}
+
+
+def _published_paths(root: Path, paths: set[str]) -> set[str]:
+    """Return the paths `git add --all` publishes: tracked or unignored."""
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    if not paths:
+        return set()
+    return set(
+        ledger._git(  # noqa: SLF001 - the ledger's hardened Git
+            root,
+            "--literal-pathspecs",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            *sorted(paths),
+        ).split("\0")
+    )
+
+
+def _record_acceptance(
+    feature: Feature,
+    run: dict,
+    acceptance: tuple[dict, dict | None, list] | None,
+) -> None:
+    """Write the acceptance checks to the ledger and the operator records.
+
+    Called after the tamper and tree checks passed: the results bind to the
+    snapshot taken before the tests ran, which must still be current.
+    """
+    import ledger  # noqa: PLC0415 - ledger imports this module
+
+    path = autonomy.run_dir(feature.root, run["run_id"]) / "acceptance-checks.json"
+    if acceptance is None:
+        # Failed check commands: no acceptance check ran this time.
+        path.unlink(missing_ok=True)
+        return
+    summary, snapshot, recorded = acceptance
+    if recorded:
+        try:
+            if ledger.artifact_digests(feature.root, feature.relative) != snapshot:
+                ledger.fail("the feature changed while the tests ran")
+            ledger.record_runner_checks(
+                feature.root, run["run_id"], feature.relative, snapshot, recorded
+            )
+        except (OSError, ValueError) as error:
+            sys.stderr.write(f"acceptance checks not recorded: {error}\n")
+            summary = {**summary, "status": "ledger-unavailable"}
+    autonomy.write_json(path, summary)
+
+
+def run_checks(feature: Feature, *, feedback: bool = False) -> None:  # noqa: C901 - one step
     """Run the trusted [checks] commands, confined, and record their results.
 
     With `feedback` (#21 R3) the results feed the fix loop: no frozen tree is
@@ -3381,6 +3616,9 @@ def run_checks(feature: Feature, *, feedback: bool = False) -> None:
         )
     except ChecksExhaustedError:
         _block(feature, "limit", "wall-time limit exhausted before run-checks")
+    acceptance = None
+    if not feedback and all(r["exit"] == 0 for r in results):
+        acceptance = _acceptance_checks(feature, run, checks["timeout_minutes"])
     if feedback:
         fix = autonomy.fix_state(run)
         autonomy.append_feedback(
@@ -3414,6 +3652,8 @@ def run_checks(feature: Feature, *, feedback: bool = False) -> None:
             "a check command changed the working tree; checks must leave the "
             "reviewed tree as it is (only git-ignored outputs may change)",
         )
+    if not feedback:
+        _record_acceptance(feature, run, acceptance)
     write_record(feature)
     if feedback:
         return

@@ -644,6 +644,36 @@ class CriteriaTests(PacketCase):
         self.assertEqual(found["AC-001"][2], "stale")
         self.assertIn(": not run", found["AC-001"][3])
 
+    def test_runner_recorded_checks_count_under_their_own_label(self) -> None:
+        """#117: a runner check counts and is never shown as an operator's."""
+        one = self.verify("AC-001", T.format("one"), source="runner-recorded")
+        two = self.verify("AC-001", T.format("two"))
+        three = self.verify("AC-002", T.format("three"), "failed", "runner-recorded")
+        self.verify("AC-006", T.format("seven"), source="agent-reported")
+        _, text = self.packet()
+        found = rows(text)
+        self.assertEqual(found["AC-001"][2], "verified")
+        self.assertIn(
+            f"(runner-recorded, ledger event {one} of run {RUN})", found["AC-001"][3]
+        )
+        self.assertIn(f" (ledger event {two} of run {RUN})", found["AC-001"][3])
+        self.assertEqual(found["AC-002"][2], "failed")
+        self.assertIn(f"(runner-recorded, ledger event {three} ", found["AC-002"][3])
+        self.assertEqual(found["AC-003"][2], "missing")
+        self.assertEqual(found["AC-006"][2], "not run")
+        self.assertIn("labeled runner-recorded", text)
+        # Shortened packets keep the label where they drop test references.
+        sources = self.collect()
+        spec = f"{self.blob(f'{FEATURE}/spec.md')}?plain=1#L5"
+        self.assertIn(
+            f"Verified at head: [AC-001]({spec}) (runner-recorded)",
+            packet.render(sources, level=2),
+        )
+        self.assertIn(
+            "1 of 2 tests failed at head (runner-recorded)",
+            rows(packet.render(sources, level=4))["AC-002"][3],
+        )
+
     def test_test_name_without_a_safe_path_is_named_unlinked(self) -> None:
         # Both validators accept an empty dotted segment; it is no file path.
         names = ["tests.test_gone..test_x", "tests.test_" + "a" * 300 + ".test_x"]

@@ -1287,6 +1287,14 @@ class LedgerTests(unittest.TestCase):
         ledger.archive_manifest(self.root, "run_1", FEATURE)
         if check_source == "operator-attested":
             self.assertEqual(ledger._check(self.root, "run_1", "AC-001", check_id), 0)  # noqa: SLF001
+        elif check_source == "runner-recorded":
+            ledger.record_runner_checks(
+                self.root,
+                "run_1",
+                FEATURE,
+                ledger.artifact_digests(self.root, FEATURE),
+                [("AC-001", check_id, "passed", 0)],
+            )
         else:
             digests = ledger.artifact_digests(self.root, FEATURE)
             ledger.append(
@@ -1439,6 +1447,85 @@ class LedgerTests(unittest.TestCase):
         report = ledger.report(self.root, "run_1")
         self.assertEqual(report["outcome"]["ac_status"], {"AC-001": "missing"})
         self.assertEqual(report["workflow"]["compliance"], "incomplete_or_noncompliant")
+
+    def test_runner_recorded_check_counts_under_its_own_source(self) -> None:
+        """#117: the runner's check counts, never labeled an operator's."""
+        self._complete_evidence_run(check_source="runner-recorded")
+        outcome = ledger.report(self.root, "run_1")["outcome"]
+        self.assertEqual(outcome["ac_status"], {"AC-001": "passed"})
+        self.assertEqual(outcome["ac_sources"], {"AC-001": ["runner-recorded"]})
+        events, _ = ledger.read(self.root, "run_1")
+        checks = [e for e in events if e["kind"] == "verification"]
+        self.assertEqual([e["source"] for e in checks], ["runner-recorded"])
+
+    def test_operator_check_reports_operator_source(self) -> None:
+        self._complete_evidence_run()
+        outcome = ledger.report(self.root, "run_1")["outcome"]
+        self.assertEqual(outcome["ac_sources"], {"AC-001": ["operator-attested"]})
+
+    def test_no_agent_path_writes_runner_recorded_evidence(self) -> None:
+        """#117: only the trusted runner writes runner-recorded checks."""
+        self._complete_evidence_run(review=False, convergence=False)
+        digests = ledger.artifact_digests(self.root, FEATURE)
+        bound = {
+            "check_id": "tests.test_demo.DemoTests.test_one",
+            "ac_id": "AC-001",
+            "status": "passed",
+            "snapshot": digests["tree"],
+            "spec_digest": digests["spec_digest"],
+            "manifest_digest": digests["manifest_digest"],
+        }
+        stderr = io.StringIO()
+        with (
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            ledger.main(
+                [
+                    "record",
+                    "run_1",
+                    "verification",
+                    "--source",
+                    "runner-recorded",
+                    "--data",
+                    json.dumps(bound),
+                ]
+            )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice", stderr.getvalue())
+        with self.assertRaisesRegex(ledger.LedgerError, "check command"):
+            ledger._record(  # noqa: SLF001 - the CLI seam
+                self.root, "run_1", FEATURE, "verification", "agent-reported", bound
+            )
+        for kind, data in (
+            ("verification", {"check_id": "suite", "status": "passed"}),
+            ("verification", {k: v for k, v in bound.items() if k != "snapshot"}),
+            ("review", {"review_id": "r", "kind": "test", "verdict": "approved"}),
+        ):
+            with (
+                self.subTest(kind=kind, data=data),
+                self.assertRaisesRegex(ledger.LedgerError, "runner-recorded"),
+            ):
+                ledger.new_event("run_1", FEATURE, kind, "runner-recorded", data)
+
+    def test_failed_runner_write_leaves_the_ledger_as_it_was(self) -> None:
+        """#117: the runner's checks are recorded all or none."""
+        self._complete_evidence_run(review=False, convergence=False)
+        path = ledger.ledger_path(self.root, "run_1")
+        before = path.read_bytes()
+        with (
+            patch.object(ledger.os, "fsync", side_effect=OSError("disk full")),
+            self.assertRaisesRegex(OSError, "disk full"),
+        ):
+            ledger.record_runner_checks(
+                self.root,
+                "run_1",
+                FEATURE,
+                ledger.artifact_digests(self.root, FEATURE),
+                [("AC-001", "tests.test_demo.DemoTests.test_one", "passed", 0)],
+            )
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(ledger.read(self.root, "run_1")[1], [])
 
     def test_removed_worktree_labels_prior_evidence_unavailable(self) -> None:
         self._complete_evidence_run()
