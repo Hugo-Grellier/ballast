@@ -1284,6 +1284,20 @@ class AcceptanceChecksTests(AcceptanceCase):
         )
         self.assertIn(f"- `AC-002` `{missing}`: not run (its file is not", record)
 
+    def test_a_published_lookalike_does_not_vouch_for_an_ignored_module(self) -> None:
+        """Review: tests/test_local/Accept.py published, tests/test_local.py not."""
+        with (self.root / ".gitignore").open("a") as handle:
+            handle.write("tests/test_local.py\n")
+        (self.root / "tests/test_local.py").write_text(ACCEPT_TESTS)
+        (self.root / "tests/test_local").mkdir()
+        (self.root / "tests/test_local/Accept.py").write_text("")
+        local = "tests.test_local.Accept.test_pass"
+        self.manifest({"AC-001": [local], "AC-002": [], "AC-003": []})
+        self.freeze()
+        self.ok(self.check("run-checks"))
+        self.assertEqual(self.checks(), [])
+        self.assertIn("not in the published tree", self.record_text())
+
     def test_agent_written_manifest_cannot_inject_commands_or_results(self) -> None:
         marker = self.base / "injected"
         for criteria, changes in (

@@ -3450,17 +3450,26 @@ def _published_tests(root: Path, tests: list[str]) -> set[str]:
 
     `git add --all` publishes tracked and unignored files; a test in an
     ignored or missing file would pass here and be absent from the PR head.
+    Every file Python could import along the dotted name (each prefix's
+    `.py` module and package `__init__.py`) must be published, so whichever
+    one the import resolves to is in the PR.
     """
-    modules: dict[str, str] = {}
+    found: dict[str, set[str]] = {}
     for test in tests:
         parts = test.split(".")
-        for size in range(len(parts) - 1, 0, -1):
-            path = "/".join(parts[:size]) + ".py"
-            if (root / path).is_file() and not (root / path).is_symlink():
-                modules[test] = path
-                break
-    listed = _published_paths(root, set(modules.values()))
-    return {test for test, path in modules.items() if path in listed}
+        candidates = {
+            path
+            for size in range(1, len(parts))
+            for path in (
+                "/".join(parts[:size]) + ".py",
+                "/".join(parts[:size]) + "/__init__.py",
+            )
+            if os.path.lexists(root / path)
+        }
+        if any(Path(path).stem != "__init__" for path in candidates):
+            found[test] = candidates
+    listed = _published_paths(root, set().union(*found.values()))
+    return {test for test, paths in found.items() if paths <= listed}
 
 
 def _published_paths(root: Path, paths: set[str]) -> set[str]:
