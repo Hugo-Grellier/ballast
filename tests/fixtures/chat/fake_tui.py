@@ -11,6 +11,7 @@ list whose first item names the action:
 - ["try_write", PATH]: record "ok" or the errno of a failed write
 - ["run", [ARGV...]]: run a command, record its exit status and output
 - ["sleep", SECONDS]
+- ["close_terminal"]: close fds 0-2, as an agent does just before it exits
 - ["ignore", "SIGHUP"]: ignore a signal
 - ["wait_winch", SECONDS]: wait for a window-size change, record the size
 - ["swap_log_dir"]: replace this step's log directory with a symlink
@@ -125,7 +126,7 @@ def _order(text: str) -> None:
             handle.write(text + "\n")
 
 
-def main() -> int:  # noqa: C901, D103, PLR0912 - one branch per action
+def main() -> int:  # noqa: C901, D103, PLR0912, PLR0915 - one branch per action
     if sys.argv[1:2] == ["sandbox"]:
         return int(os.environ.get("FAKE_CODEX_NESTS", "0"))
     signal.signal(signal.SIGWINCH, _on_winch)
@@ -166,6 +167,10 @@ def main() -> int:  # noqa: C901, D103, PLR0912 - one branch per action
                 results.append(["run", args[0], None, str(error)])
         elif name == "sleep":
             time.sleep(float(args[0]))
+        elif name == "close_terminal":
+            null = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2):
+                os.dup2(null, fd)
         elif name == "ignore":
             signal.signal(getattr(signal, args[0]), signal.SIG_IGN)
         elif name == "wait_winch":
