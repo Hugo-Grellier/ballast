@@ -1411,7 +1411,8 @@ class TrustBoundaryTests(SyncCase):
         )
         self.assertEqual(
             outcome.recovery,
-            "review these changes, then run ballast trust (operator only)",
+            "review these changes; after a pin change run ballast setup first, then "
+            "ballast trust (operator only)",
         )
         # AC-016: the synchronization is kept, and the launcher now refuses.
         self.assertEqual(self.s.head(), outcome.head_after)

@@ -717,6 +717,64 @@ class PolicyTests(AutonomyCase):
         self.assertTrue(any("'deploy'" in w for w in warnings))
         self.assertTrue(any("'merge'" in w for w in warnings))
 
+    def test_privileged_action_kinds(self) -> None:
+        """#95: an exact kind authorizes any wording; other text only itself."""
+        policy, _, warnings = self.policy(
+            "[autonomous]\nauthorized_privileged_actions = "
+            '["operator-trust", "Scratch Repository", "the old free text", '
+            '"other", "Mark Ready", "deploy production", '
+            '"network-access: only for the e2e check"]\n'
+        )
+        self.assertEqual(
+            policy["authorized_privileged_actions"],
+            [
+                "network-access: only for the e2e check",
+                "operator-trust",
+                "scratch repository",
+                "the old free text",
+            ],
+        )
+        for legacy in ("the old free text", "scratch repository"):
+            self.assertTrue(
+                any(f"{legacy!r} is free text" in w for w in warnings), legacy
+            )
+        for name in ("'other'", "'mark ready'", "'deploy production'"):
+            self.assertTrue(
+                any(name in w and "cannot widen" in w for w in warnings), name
+            )
+        allowed = [
+            "operator-trust: the operator runs ballast trust for the t047 check",
+            "operator trust",
+            "scratch repository",
+            "the old free text",
+            "network-access: only for the e2e check",
+        ]
+        refused = [
+            "scratch-repository: a disposable repository for the e2e check",
+            "the old free text, reworded",
+            "secret-provisioning",
+            "other: operator-trust",
+            "deploy: operator-trust",
+            "deploy production",
+            "deploy.production",
+            "mark_ready now",
+            "mark ready",
+            "network-access: anything else",
+        ]
+        self.assertEqual(
+            autonomy.unauthorized_actions(allowed + refused, policy), sorted(refused)
+        )
+        # A legacy entry spelled like a forbidden action never matches it.
+        for text in ("deploy production", "deploy.production", "release/v1"):
+            legacy = {"authorized_privileged_actions": [text]}
+            self.assertEqual(autonomy.unauthorized_actions([text], legacy), [text])
+            _, _, warned = self.policy(
+                f'[autonomous]\nauthorized_privileged_actions = ["{text}"]\n'
+            )
+            self.assertTrue(any("cannot widen" in w for w in warned), text)
+        # Words that merely begin like one are not forbidden.
+        self.assertFalse(autonomy.never_authorized("merged-docs check"))
+
     def test_limit_precedence_and_ranges(self) -> None:
         _, defaults, _ = self.policy(
             "[autonomous]\nwall_time_minutes = 120\nmax_agent_steps = 24\n"

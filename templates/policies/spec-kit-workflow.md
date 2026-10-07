@@ -540,7 +540,21 @@ recorded scope comment (including `Privileged actions before merge:`), risk R0,
 R1 or R2, no unauthorized privileged action before merge, a feature branch
 with no open PR, a `[checks]` table and working confinement, narrowed by any
 `[autonomous]` table in `ballast.toml`. An ineligible start is refused before
-any agent step and names the human-gated command as the alternative.
+any agent step and names the human-gated command as the alternative. A start
+also refuses while `specs/<f>/autonomous/record.md` from an earlier run is
+present: retire it with `git rm` and a commit (Git history keeps it).
+
+**Privileged actions.** Agents declare every action needed before merge as
+`KIND` or `KIND: description`, with `KIND` one of `operator-trust`,
+`scratch-repository`, `secret-provisioning`, `network-access`,
+`external-write`, `permission-change`, `deploy`, `release`, `merge`,
+`mark-ready` or `other`; the recorder refuses a draft naming any other kind,
+and the step is retried. `[autonomous] authorized_privileged_actions` lists
+the kinds the project authorizes, spelled exactly, and only the kind is
+compared. `deploy`, `release`, `merge`, `mark-ready` and `other`, and any
+action starting with one of them, are never authorized. Any other entry is
+legacy: it still authorizes only an action with exactly its text, with a
+warning.
 
 Agents cannot call `gh`, so at an eligible start the runner writes the Issue as
 it read it (title, labels, body with the acceptance criteria, the intake scope
@@ -661,7 +675,19 @@ file outside the feature directory), the run re-enters at that input's
 validator instead, when it comes earlier, so no stale intent, baseline or
 review is trusted. The implementation baseline is never retaken. Resume keeps
 the mode, risk, limits, integrations and fix-cycle count recorded at start, and
-refuses `-i`, `--mode`, `--wall-time` and `--max-agent-steps`. A block
+refuses `-i`, `--mode`, `--wall-time` and `--max-agent-steps`.
+
+A run also keeps the `[autonomous]` policy it started with, so authorizing an
+action in `ballast.toml` does not reach a run blocked `ineligible`. After
+editing it and running `ballast trust`, resume with `--refresh-policy`: after
+the synchronization, the runner re-reads `[autonomous]` from `ballast.toml`
+only when its bytes equal the baseline `ballast trust` recorded (a baseline
+setup recorded, one without provenance, or none, refuses), replaces the run's
+policy snapshot, and
+records the previous and new policy with the block resolution, where the
+record shows it. A refreshed policy that no longer allows the run's risk,
+boundaries or declared actions refuses the resume and records nothing.
+Limits never change. A block
 resolution is not an approval of any provisional decision: every decision made
 after a resume stays agent-provisional, and merging the PR stays the single
 human approval.
@@ -1097,7 +1123,7 @@ your `ballast run continue` command.
 | `conflict` | a commit made after a pushed synchronization conflicts | git rebase --onto {new_head} {old_head} {branch}, resolve, then rerun |
 | `push-failed` | the push failed and a retry can succeed alone | rerun |
 | `push-failed` | the repository rejected the push | check {repo}'s branch rules for {branch} (protection, required signatures), then rerun |
-| `protected-input` | the update changed `ballast.toml`, `.ballast/`, `.specify/` or `.venv/` | review these changes, then run ballast trust (operator only) |
+| `protected-input` | the update changed `ballast.toml`, `.ballast/`, `.specify/` or `.venv/` | review these changes; after a pin change run ballast setup first, then ballast trust (operator only) |
 | `internal-error` | an unexpected failure, Ctrl-C, or the check could not be recorded | report it with the run ID, then rerun |
 | `internal-error` | no committer identity | set user.name and user.email in your global Git configuration, then rerun |
 | `internal-error` | invalid write-ahead record | report it with the run ID; Ballast keeps {record} until you check {branch} and its published branch and delete it |

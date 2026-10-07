@@ -1503,6 +1503,20 @@ class RunRefusalTests(RunCase):
             extra=("--wall-time", "2000"),
         )
 
+    def test_earlier_runs_record_refuses_the_start(self) -> None:
+        """#95: the recovery names how to retire an earlier run's record."""
+        record = self.root / FEATURE / "autonomous/record.md"
+        record.parent.mkdir(parents=True)
+        record.write_text("# Autonomous run record\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "earlier run")
+        code, _, err = self.start()
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"git rm {FEATURE}/autonomous/record.md", err)
+        self.assertIn("Git history keeps it", err)
+        self.assertEqual(self.launched, [])
+        self.assertEqual(self.run_ids(), [])
+
     def test_eligible_r0_starts_with_its_risk(self) -> None:
         self.eligible_issue(risk="R0")
         self.engine["scenario"] = self.publishable

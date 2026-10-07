@@ -532,6 +532,94 @@ class ResumeTests(StubCase):
             self.assertEqual(json.dumps(after[key]), json.dumps(before[key]), key)
         self.assertEqual(after["status"], "stopped")
 
+    def authorize(self) -> None:
+        """Authorize `operator-trust` in ballast.toml, as the operator would."""
+        path = self.root / "ballast.toml"
+        path.write_text(
+            path.read_text()
+            + '[autonomous]\nauthorized_privileged_actions = ["operator-trust"]\n'
+        )
+        self.git("commit", "-qam", "authorize operator-trust")
+
+    def trust_baseline(self, source: str | None) -> None:
+        """Record the checkout's current inputs as `source` (None: no baseline)."""
+        state = autonomy.state_dir(self.root)
+        state.mkdir(parents=True, exist_ok=True)
+        for name in (launcher.TRUSTED, launcher.TRUSTED_SOURCE):
+            (state / name).unlink(missing_ok=True)
+        if source is not None:
+            launcher.record_baseline(
+                state, launcher.trusted_inputs(self.root), source=source
+            )
+
+    def test_refresh_policy_applies_the_trusted_policy(self) -> None:
+        """#95: an authorization added after the block reaches the run."""
+        run_id = self.blocked_run()
+        policy = autonomy.read_run(self.root, run_id)["eligibility"]["policy"]
+        self.assertEqual(policy["authorized_privileged_actions"], [])
+        self.authorize()
+        self.trust_baseline("trust")
+        self.engine.update(status="failed", code=1, step="record-tasks")
+        code, out, err = self.main("resume", run_id, "--refresh-policy")
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("authorized actions: operator-trust", out)
+        record = autonomy.read_run(self.root, run_id)
+        self.assertEqual(
+            record["eligibility"]["policy"]["authorized_privileged_actions"],
+            ["operator-trust"],
+        )
+        (resume,) = record["resumes"]
+        self.assertEqual(
+            resume["policy"]["previous"]["authorized_privileged_actions"], []
+        )
+        text = autonomy.render_run_record(self.root, record)
+        self.assertIn("re-read [autonomous] from the trusted ballast.toml", text)
+
+    def test_narrowing_refresh_refuses_an_excluded_run(self) -> None:
+        """#95: a refresh that no longer allows the run records nothing."""
+        run_id = self.blocked_run()
+        before = self.frozen(run_id)
+        path = self.root / "ballast.toml"
+        path.write_text(path.read_text() + '[autonomous]\nrisk = ["R0"]\n')
+        self.git("commit", "-qam", "narrow to R0")
+        self.trust_baseline("trust")
+        code, _, err = self.main("resume", run_id, "--refresh-policy")
+        self.assertEqual(code, 2, err)
+        self.assertIn("refreshed [autonomous] policy does not allow it", err)
+        self.assertIn("risk R1 excluded", err)
+        self.assertEqual(self.frozen(run_id), before)
+        self.assertEqual(len(self.launched), 1)
+
+    def test_refresh_policy_needs_the_operators_trust(self) -> None:
+        """#95: a setup baseline, no baseline or other bytes refuse; nothing moves."""
+        run_id = self.blocked_run()
+        before = self.frozen(run_id)
+        self.authorize()
+        for source in (None, "setup", "legacy"):
+            with self.subTest(source=source):
+                self.trust_baseline("trust" if source == "legacy" else source)
+                if source == "legacy":
+                    # A baseline without provenance may be setup's.
+                    state = autonomy.state_dir(self.root)
+                    (state / launcher.TRUSTED_SOURCE).unlink()
+                code, _, err = self.main("resume", run_id, "--refresh-policy")
+                self.assertEqual(code, 2, err)
+                self.assertIn("recorded by `ballast trust`", err)
+        self.trust_baseline("trust")
+        path = self.root / "ballast.toml"
+        path.write_text(path.read_text() + "# edited after trust\n")
+        self.git("commit", "-qam", "edit after trust")
+        code, _, err = self.main("resume", run_id, "--refresh-policy")
+        self.assertEqual(code, 2, err)
+        self.assertIn("recorded by `ballast trust`", err)
+        self.assertEqual(self.frozen(run_id), before)
+        self.assertEqual(len(self.launched), 1)
+
+    def test_refresh_policy_is_autonomous_only(self) -> None:
+        """A human-gated resume rejects the flag like any other."""
+        code, _, err = self.main("resume", "nosuchrun", "--refresh-policy")
+        self.assertEqual(code, 2, err)
+
     def test_ref_must_not_read_as_an_approval(self) -> None:
         run_id = self.blocked_run()
         before = self.frozen(run_id)

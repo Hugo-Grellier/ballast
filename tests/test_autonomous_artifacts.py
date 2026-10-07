@@ -277,6 +277,10 @@ class RecordDecisionTests(RecorderCase):
             "parent path": ({"evidence": ["../outside"]}, "'..'"),
             "missing": ({"artifact": f"{FEATURE}/nope.md"}, "does not exist"),
             "no actions": ({"privileged_actions": None}, "privileged_actions"),
+            "free-text action": (
+                {"privileged_actions": ["operator runs ballast trust"]},
+                "name no kind",
+            ),
             "long": ({"summary": "x" * 501}, "1-500"),
         }
         for name, (changes, text) in cases.items():
@@ -1253,6 +1257,35 @@ class RiskRecheckTests(RecorderCase):
             self.record("plan"), "privileged action secret provisioning before merge"
         )
         self.assertEqual(self.block()["category"], "ineligible")
+
+    def test_authorized_kind_records_any_description(self) -> None:
+        """#95: the policy's kind matches however the agent words the action."""
+        record = autonomy.read_run(self.root, "run42")
+        record["eligibility"]["policy"]["authorized_privileged_actions"] = [
+            "operator-trust"
+        ]
+        autonomy.write_run(self.root, record)
+        action = "operator-trust: the operator runs ballast trust for the t047 check"
+        self.step({"plan.json": self.draft("plan", privileged_actions=[action])})
+        self.ok(self.record("plan"))
+        self.assertEqual(self.decisions()[0]["privileged_actions"], [action])
+
+    def test_refreshed_policy_clears_the_ineligible_block(self) -> None:
+        """#95: the recorder decides against the snapshot a refresh replaced."""
+        action = "secret-provisioning: a token for the e2e check"
+        self.step({"plan.json": self.draft("plan", privileged_actions=[action])})
+        self.failed(self.record("plan"), "privileged action")
+        self.assertEqual(self.block()["category"], "ineligible")
+        # What `resume --refresh-policy` writes before the re-entry.
+        record = autonomy.read_run(self.root, "run42")
+        record["eligibility"]["policy"]["authorized_privileged_actions"] = [
+            "secret-provisioning"
+        ]
+        autonomy.write_run(self.root, record)
+        autonomy.resolve_block(self.root, "run42")
+        autonomy.consume_steps(self.root, "run42")
+        self.step({"plan.json": self.draft("plan", privileged_actions=[action])})
+        self.ok(self.record("plan"))
 
     def test_review_declared_action_blocks(self) -> None:
         draft = self.review_draft("plan-review", "plan", privileged_actions=["deploy"])

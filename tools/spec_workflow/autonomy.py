@@ -269,6 +269,29 @@ AUTONOMOUS_SHELL_STEPS = frozenset(
 )
 RISKS = ("R0", "R1", "R2")
 NEVER_AUTHORIZED = ("merge", "release", "deploy", "mark ready")
+# The privileged-action kinds a draft names and `[autonomous]
+# authorized_privileged_actions` authorizes (#95): a draft entry is `KIND` or
+# `KIND: description`, and only the kind is compared. `other` names an action
+# no kind covers; it can never be authorized, so it always blocks the run.
+PRIVILEGED_KINDS = (
+    "operator-trust",
+    "scratch-repository",
+    "secret-provisioning",
+    "network-access",
+    "external-write",
+    "permission-change",
+)
+OTHER_ACTION = "other"
+ACTION_KINDS = (
+    *PRIVILEGED_KINDS,
+    OTHER_ACTION,
+    *("-".join(k.split()) for k in NEVER_AUTHORIZED),
+)
+LEGACY_ACTION = (
+    "[autonomous] authorized_privileged_actions {action!r} is free text: it "
+    "matches only an action declared with exactly that text; use one of the "
+    "kinds {kinds}"
+)
 POLICY_KEYS = (
     "risk",
     "excluded_boundaries",
@@ -1192,7 +1215,9 @@ RECOVERY = {
     "unfinished-step": "Review the checkout, discard the run state, then start again.",
     "permission": "Restore the missing permission or credential, then retry.",
     "ineligible": "Remove the cause, then resume, or run the feature human-gated "
-    "instead.",
+    "instead. A run keeps the [autonomous] policy it started with: after you "
+    "authorize an action in ballast.toml and run ballast trust, resume with "
+    "--refresh-policy.",
     "forge": "Fix forge access, then retry publication.",
     "interrupted": "Review the checkout, then resume, or continue human-gated.",
     "upstream-sync": "Remove the cause shown, then start the run again.",
@@ -1488,13 +1513,20 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
         )
         risk = [level for level in RISKS if level in values]
     authorized = []
-    for action in _strings(table.get("authorized_privileged_actions", []), "actions"):
-        if action in NEVER_AUTHORIZED:
+    for entry in _strings(table.get("authorized_privileged_actions", []), "actions"):
+        if never_authorized(entry):
             warnings.append(
-                WIDENING.format(key=f"authorized_privileged_actions {action!r}")
+                WIDENING.format(key=f"authorized_privileged_actions {entry!r}")
             )
-        elif action not in authorized:
-            authorized.append(action)
+            continue
+        # Only a kind spelled exactly authorizes the kind; any other text is
+        # legacy (#95): kept, so existing configurations still authorize what
+        # they named, but only by exact text, never a whole class.
+        if entry not in PRIVILEGED_KINDS:
+            kinds = ", ".join(PRIVILEGED_KINDS)
+            warnings.append(LEGACY_ACTION.format(action=entry, kinds=kinds))
+        if entry not in authorized:
+            authorized.append(entry)
     policy = {
         "risk": risk,
         "excluded_boundaries": sorted(
@@ -2828,10 +2860,42 @@ def _scope_problems(issue: dict, children: list, blockers: list) -> list[str]:
     return [f"{REFUSAL}scope gate: {problem}" for problem in problems]
 
 
+def action_kind(action: str) -> str:
+    """Return the kind of a declared privileged action: `KIND` or `KIND: ...`.
+
+    Case and spacing are folded, so `Secret provisioning` is
+    `secret-provisioning`.
+    """
+    return "-".join(action.partition(":")[0].lower().split())
+
+
+def never_authorized(action: str) -> bool:
+    """Tell whether an action is `other` or starts with a never-authorized one.
+
+    `deploy production` or `deploy.production` counts as `deploy`, so legacy
+    exact text can never authorize what FR-027 forbids (#95).
+    """
+    words = re.findall(r"[a-z0-9]+", action.lower())
+    forbidden = [k.split("-") for k in ACTION_KINDS if k not in PRIVILEGED_KINDS]
+    return any(words[: len(k)] == k for k in forbidden)
+
+
 def unauthorized_actions(actions: list[str], policy: dict) -> list[str]:
-    """Return declared privileged actions the narrowed policy does not authorize."""
+    """Return declared privileged actions the narrowed policy does not authorize.
+
+    A kind from PRIVILEGED_KINDS is authorized by that kind; any other action
+    only by a legacy entry with exactly its text. `other` and anything starting
+    with a NEVER_AUTHORIZED action never are.
+    """
     allowed = set(policy.get("authorized_privileged_actions", []))
-    return sorted({a for a in actions if a in NEVER_AUTHORIZED or a not in allowed})
+
+    def authorized(action: str) -> bool:
+        if never_authorized(action):
+            return False
+        kind = action_kind(action)
+        return (kind in PRIVILEGED_KINDS and kind in allowed) or action in allowed
+
+    return sorted({a for a in actions if not authorized(a)})
 
 
 def risk_reasons(level: str, boundaries: list[str], policy: dict) -> list[str]:
@@ -3404,12 +3468,32 @@ def _resolution_lines(run: dict, human: list[dict]) -> list[str]:
             # Recorded, then the resume stopped before the workflow restarted.
             where = "resolved the block; the run did not resume"
         changed = ", ".join(_code(p) for p in (resume or {}).get("changed_inputs", []))
+        refreshed = (resume or {}).get("policy")
+        if refreshed:
+            where += (
+                "; the operator re-read [autonomous] from the trusted ballast.toml: "
+                f"{_policy_text(refreshed['previous'])} became "
+                f"{_policy_text(refreshed['current'])}"
+            )
         lines.append(
             f"- {entry['id']} at {entry.get('at')} by {entry.get('by')}: {where}"
             + (f"; changed during the block: {changed}" if changed else "")
             + f"; reference: {neutralize(entry.get('ref', ''))}"
         )
     return [*lines, ""]
+
+
+def _policy_text(policy: dict) -> str:
+    """One line of a policy snapshot for the record."""
+
+    def listed(key: str) -> str:
+        return ", ".join(_code(v) for v in policy.get(key) or []) or "none"
+
+    return (
+        f"(risk {listed('risk')}; excluded boundaries "
+        f"{listed('excluded_boundaries')}; authorized actions "
+        f"{listed('authorized_privileged_actions')})"
+    )
 
 
 def _relative_link(record_dir: str) -> object:
