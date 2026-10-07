@@ -1173,6 +1173,13 @@ def checkpoint(run: Run, *, create: bool = True) -> None:
         line = draft_pr.format_line(outcome)
         if outcome.packet is not None:
             line += "\n" + draft_pr.packet.format_line(outcome.packet)
+        elif not create and outcome.reason == "no-draft-pr":
+            # ponytail: GitHub's PR list can lag a just-created PR; name the
+            # refresh instead of polling it.
+            line += (
+                "\nAcceptance packet: pending (no-pr): run `ballast run "
+                f"checkpoint {run.id}` once GitHub lists the Draft PR"
+            )
     except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
         line = f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
     _out(line)

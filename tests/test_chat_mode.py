@@ -3859,6 +3859,11 @@ class PublishTests(ChatCase):
         self.assertEqual(result.code, 0, result.text)
         creates = [c for c in self.gh_calls() if c[:2] == ["pr", "create"]]
         self.assertEqual(len(creates), 1)
+        self.assertIn(
+            f"Acceptance packet: pending (no-pr): run `ballast run checkpoint "
+            f"{run_id}` once GitHub lists the Draft PR",
+            result.out,
+        )
 
     def test_checkpoint_refusals_write_nothing(self) -> None:
         """#111: no PR yet, or a busy run, refuses a Chat refresh."""
