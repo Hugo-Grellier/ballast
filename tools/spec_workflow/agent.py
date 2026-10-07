@@ -830,6 +830,10 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
                 except OSError:
                     data = b""
                 if not data:
+                    # EOF comes as the agent closes its terminal, which can be
+                    # before it is reaped: give it a moment to exit by itself.
+                    with suppress(subprocess.TimeoutExpired):
+                        process.wait(HANGUP_GRACE_SECONDS)
                     break
                 _write_all(stdout_fd, data)
                 stdout_log.write(data)

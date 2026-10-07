@@ -1532,6 +1532,23 @@ class TerminalTests(ChatCase):
 class StepCloseTests(ChatCase):
     """T027 [AC-004, FR-008, FR-009, FR-010, FR-017]: closing a step."""
 
+    def test_agent_closing_its_terminal_before_exiting_is_not_interrupted(self) -> None:
+        # The pty reaches EOF the moment the agent closes it, which can be
+        # before the agent is reaped (always, under load): that is a normal end.
+        run_id = self.start()
+        self.approve(run_id, "scope")
+        result = self.step(
+            run_id,
+            "specify",
+            [
+                ["write", f"{FEATURE}/spec.md", SPEC],
+                ["close_terminal"],
+                ["sleep", 0.5],
+            ],
+        )
+        self.assertEqual(result.code, 0, result.text)
+        self.assertEqual(self.record(run_id).steps[-1]["outcome"], "completed")
+
     def test_valid_spec_completes_with_its_postcondition(self) -> None:
         run_id = self.start()
         self.approve(run_id, "scope")
@@ -1798,8 +1815,12 @@ class StepCloseTests(ChatCase):
         result = self.step(
             run_id,
             "specify",
-            [["write", f"{FEATURE}/spec.md", SPEC], ["run", ["sleep", "60"]]],
-            keys=(("sleep", 3), ("send", b"\x1d\x1d")),
+            [
+                ["write", f"{FEATURE}/spec.md", SPEC],
+                ["print", "running"],
+                ["run", ["sleep", "60"]],
+            ],
+            keys=(("wait", b"running"), ("send", b"\x1d\x1d")),
         )
         self.assertEqual(result.code, 130, result.text)
         close = self.record(run_id).steps[-1]
