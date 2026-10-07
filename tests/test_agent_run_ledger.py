@@ -2179,6 +2179,171 @@ class LedgerTests(unittest.TestCase):
             [False, False],
         )
 
+    def fallback_route(self, **data: object) -> dict[str, object]:
+        """Build a runner `route` for the local fallback (#23) with `data` merged."""
+        return self.event(
+            "route",
+            {
+                "stage": "speckit-plan",
+                "provider": "claude",
+                "route_source": "operator-choice",
+                "attempt": 1,
+                "cause_id": "plan",
+                "outcome": "mechanical-failure",
+                **data,
+            },
+        )
+
+    def test_fallback_route_values_are_accepted(self) -> None:
+        # AC-017: the new value and fields are labels, never free text.
+        for cause in (
+            "quota-exhausted",
+            "provider-unavailable",
+            "cli-unavailable",
+            "unrecognized",
+        ):
+            with self.subTest(cause=cause):
+                self.fallback_route(failure_cause=cause)
+        self.fallback_route(failure_cause="quota-exhausted", fallback="selected")
+        for reason in (
+            "unknown-free-status",
+            "privacy-exclusion",
+            "incompatible-capability",
+            "permission-mismatch",
+            "changed-state",
+        ):
+            with self.subTest(reason=reason):
+                self.fallback_route(
+                    failure_cause="quota-exhausted",
+                    fallback="refused",
+                    fallback_reason=reason,
+                )
+        fallback = self.fallback_route(
+            provider="ollama",
+            model="qwen3:4b",
+            route_source="fallback",
+            attempt=2,
+            outcome="success",
+        )
+        self.assertEqual(fallback["schema_version"], 1)
+        self.assertEqual(ledger.VERSION, 1)
+
+    def test_fallback_route_rejects_other_values_and_free_text(self) -> None:
+        for key, value in (
+            ("failure_cause", "rate-limited"),
+            ("failure_cause", "Your quota resets at 5pm"),
+            ("fallback", "maybe"),
+            ("route_source", "free-fallback"),
+        ):
+            with (
+                self.subTest(key=key, value=value),
+                self.assertRaisesRegex(ledger.LedgerError, f"(unknown|invalid) {key}"),
+            ):
+                self.fallback_route(**{key: value})
+        with self.assertRaisesRegex(ledger.LedgerError, "unknown fallback_reason"):
+            self.fallback_route(
+                failure_cause="quota-exhausted",
+                fallback="refused",
+                fallback_reason="too-slow",
+            )
+
+    def test_fallback_route_cross_field_rules(self) -> None:
+        # contracts/ledger.md: one rule set, repeated by data-model.md.
+        for data, message in (
+            (
+                {
+                    "failure_cause": "quota-exhausted",
+                    "fallback_reason": "changed-state",
+                },
+                "fallback_reason needs fallback refused",
+            ),
+            (
+                {
+                    "failure_cause": "quota-exhausted",
+                    "fallback": "selected",
+                    "fallback_reason": "changed-state",
+                },
+                "fallback_reason needs fallback refused",
+            ),
+            (
+                {"failure_cause": "quota-exhausted", "fallback": "refused"},
+                "fallback refused needs fallback_reason",
+            ),
+            (
+                {"route_source": "fallback", "failure_cause": "quota-exhausted"},
+                "fallback route has no failure_cause or fallback",
+            ),
+            (
+                {"route_source": "fallback", "fallback": "selected"},
+                "fallback route has no failure_cause or fallback",
+            ),
+        ):
+            with (
+                self.subTest(data=data),
+                self.assertRaisesRegex(ledger.LedgerError, message),
+            ):
+                self.fallback_route(**data)
+        # A recoverable cause on a draft-retry attempt: no fallback field.
+        retry = self.fallback_route(failure_cause="quota-exhausted", attempt=2)
+        self.assertNotIn("fallback", retry["data"])
+
+    def test_fallback_usage_event_validates(self) -> None:
+        usage = ledger.new_event(
+            "run_1",
+            FEATURE,
+            "usage",
+            "client-counter",
+            {
+                "invocation_id": "fallback:plan:2",
+                "stage": "speckit-plan",
+                "scope": "invocation",
+                "counter_source": "codex-exec-json",
+                "counter_digest": "b" * 64,
+                "input_tokens": 120,
+                "output_tokens": 40,
+                "cached_tokens": 0,
+                "complete": True,
+                "provider": "ollama",
+                "model": "qwen3:4b",
+                "attempt": 2,
+                "cause_id": "plan",
+            },
+            "fallback:plan:2:usage",
+        )
+        self.assertEqual(usage["data"]["counter_source"], "codex-exec-json")
+
+    def test_report_counts_fallback_routes_and_refusal_reasons(self) -> None:
+        self.write_run([], None)
+        ledger.import_run(self.root, "run_1")
+        primary = self.fallback_route(
+            failure_cause="quota-exhausted", fallback="selected"
+        )
+        ledger.append(self.root, {**primary, "event_id": "fallback:plan:1:route"})
+        fallback = self.fallback_route(
+            provider="ollama",
+            model="qwen3:4b",
+            route_source="fallback",
+            attempt=2,
+            outcome="success",
+        )
+        ledger.append(self.root, {**fallback, "event_id": "fallback:plan:2:route"})
+        refused = self.fallback_route(
+            stage="speckit-tasks",
+            cause_id="tasks",
+            failure_cause="provider-unavailable",
+            fallback="refused",
+            fallback_reason="privacy-exclusion",
+        )
+        ledger.append(self.root, {**refused, "event_id": "fallback:tasks:1:route"})
+        routing = ledger.report(self.root, "run_1")["routing"]
+        self.assertEqual(
+            routing["route_sources"], {"operator-choice": 2, "fallback": 1}
+        )
+        self.assertIn(
+            "privacy-exclusion",
+            [route.get("fallback_reason") for route in routing["actual_routes"]],
+        )
+
     def test_real_policy_row_punctuation_is_recordable(self) -> None:
         policy = self.root / "docs/policies/model-routing.md"
         policy.parent.mkdir(parents=True)

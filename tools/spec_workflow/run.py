@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Start or resume a Ballast feature workflow with bounded headless agents.
 
-    ballast run start -i idea="Issue #N: ..." \
+    ballast run start [--local-fallback MODEL] -i idea="Issue #N: ..." \
         -i feature_directory=specs/N-slug [-i integration=claude|codex]
     ballast run start --mode autonomous [--wall-time MINUTES] \
-        [--max-agent-steps N] -i issue=N -i idea="Issue #N: ..." \
-        -i feature_directory=specs/N-slug [-i integration=auto|claude|codex]
-    ballast run resume RUN_ID [-i integration=claude|codex]
-    ballast run resume RUN_ID [--ref TEXT]        # an Autonomous run
+        [--max-agent-steps N] [--local-fallback MODEL] -i issue=N \
+        -i idea="Issue #N: ..." -i feature_directory=specs/N-slug \
+        [-i integration=auto|claude|codex]
+    ballast run resume RUN_ID [--local-fallback MODEL|off] \
+        [-i integration=claude|codex]
+    ballast run resume RUN_ID [--local-fallback MODEL|off] [--ref TEXT]
+                                                  # an Autonomous run
     ballast run continue RUN_ID --reason block-resolved|changes-requested \
         --ref TEXT [--mode chat|human-gated]
     ballast run publish RUN_ID
@@ -65,6 +68,15 @@ most 120 s (none with `--no-wait`) and refreshes the packet; it starts no
 agent and refuses while the tamper or in-progress marker exists. One
 invocation at a time holds a run's lock (start, resume, continue, publish,
 checkpoint, demo).
+
+`--local-fallback MODEL` (#23, fallback.py) lets a headless step of this
+human-gated or Autonomous run fall back once to the operator's local Ollama
+model through Codex's `--oss` mode at 127.0.0.1:11434, when its first
+attempt failed on quota, provider availability or a missing CLI and changed
+nothing; every other case, and every check that cannot be established,
+refuses. The setting lives in the run's operator directory; `resume RUN
+--local-fallback off` turns it off, and `status RUN` shows it. Chat runs
+refuse the option.
 
 Branch sync: before the first agent step of every `start`, `resume` and
 `continue`, the check in branch_sync.py (imported here before any agent
@@ -137,6 +149,7 @@ import branch_sync  # noqa: E402
 import chat  # noqa: E402
 import demo  # noqa: E402
 import draft_pr  # noqa: E402
+import fallback  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
 BIN = ROOT / ".ballast/spec_workflow/bin"
@@ -556,9 +569,56 @@ def _archive_operator(run_id: str) -> None:
         sys.stderr.write(f"{target} archive failed: {error}\n")
 
 
+LOCAL_FALLBACK = "--local-fallback"
+CHAT_FALLBACK = (
+    "--local-fallback is not available in Chat runs; the operator chooses in Chat"
+)
+NO_ENDPOINT = (
+    "--local-fallback-endpoint is not an option: the local fallback always uses "
+    "Ollama's default endpoint 127.0.0.1:11434"
+)
+
+
+def _endpoint_option(options: list[str]) -> bool:
+    """Whether options name an endpoint for the local fallback (DEC-0003)."""
+    return any(
+        option.partition("=")[0] == "--local-fallback-endpoint"
+        and (index == 0 or options[index - 1] not in {"-i", "--input"})
+        for index, option in enumerate(options)
+    )
+
+
+def _local_fallback(value: str | None) -> str | None:
+    """Check a --local-fallback value: None, "off" or a model; a refusal raises."""
+    if value is None or value == "off":
+        return value
+    return fallback.validate_model(value)
+
+
+def _set_local_fallback(run_id: str, value: str | None) -> None:
+    """Write the operator's setting before the engine starts, and say so."""
+    if value is None:
+        return
+    digest = None if value == "off" else fallback.served_digest(value)
+    fallback.write_setting(ROOT, run_id, None if value == "off" else value, digest)
+    if value == "off":
+        sys.stdout.write("Local fallback: off\n")
+        return
+    endpoint = fallback.OLLAMA_ENDPOINT.removeprefix("http://")
+    sys.stdout.write(
+        f"Local fallback: on ({fallback.PROVIDER} {value} at {endpoint}); turn it "
+        f"off with ballast run resume {run_id} {LOCAL_FALLBACK} off\n"
+    )
+    if digest is None:
+        sys.stdout.write(
+            f"Local fallback: model {value} is not served, so it is not pinned and "
+            f"the fallback will refuse; serve it, then resume with {LOCAL_FALLBACK}\n"
+        )
+
+
 def _split_mode(options: list[str]) -> tuple[dict[str, str], list[str]] | str:
-    """Take --mode, --wall-time and --max-agent-steps out of start options."""
-    flags = {"--mode", "--wall-time", "--max-agent-steps"}
+    """Take --mode, --wall-time, --max-agent-steps and --local-fallback out."""
+    flags = {"--mode", "--wall-time", "--max-agent-steps", LOCAL_FALLBACK}
     found: dict[str, str] = {}
     rest: list[str] = []
     index = 0
@@ -644,7 +704,7 @@ def _number(value: str | None, name: str) -> int | None:
 
 
 def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
-    flags: dict[str, str], options: list[str], specify: str
+    flags: dict[str, str], options: list[str], specify: str, local: str | None = None
 ) -> int:
     """Check eligibility, write the run record, run ballast-autonomous."""
     inputs = _inputs(options)
@@ -719,6 +779,7 @@ def _start_autonomous(  # noqa: C901, PLR0911 - one guarded start
         record["integration_fallback"] = fallback
     record["issue_title"] = result["issue_title"]
     autonomy.write_run(ROOT, record)
+    _set_local_fallback(run_id, local)
     with _invocation_lock(run_id):
         return _run_autonomous(run_id, record, result, inputs, specify, snapshot)
 
@@ -1169,6 +1230,10 @@ def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR09
     if command in {"status", "checks"}:
         if rest:
             return _refuse(f"{command} takes only a RUN_ID")
+        if command == "status" and not _chat_run(run_id):
+            local = fallback.describe(ROOT, run_id)
+            if local is not None:
+                return _status_with_fallback(run_id, local)
         return _chat(chat.status if command == "status" else chat.checks, ROOT, run_id)
     if command == "approve":
         if len(rest) != 1:
@@ -1193,6 +1258,30 @@ def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR09
     if len(rest) != 1:
         return _refuse("mode needs RUN_ID chat|human-gated --reason TEXT")
     return _chat(chat.change_mode, ROOT, run_id, rest[0], flags.get("--reason"))
+
+
+def _status_with_fallback(run_id: str, local: str) -> int:
+    """`ballast run status` of a run with a local fallback setting (#23 AC-020).
+
+    An Autonomous run's status, or a human-gated run's engine position, then
+    the `Local fallback:` line.
+    """
+    try:
+        record = autonomy.find_run(ROOT, run_id)
+    except autonomy.AutonomyError as error:
+        return _refuse(f"run {run_id}: {error}")
+    if record is not None:
+        code = _chat(chat.status, ROOT, run_id)
+        if code != 0:
+            return code
+    else:
+        state = _engine_state(run_id)
+        sys.stdout.write(
+            f"Human-gated run {run_id}: {state.get('status', 'unknown')} at step "
+            f"{state.get('current_step_id', 'unknown')}\n"
+        )
+    sys.stdout.write(f"Local fallback: {local}\n")
+    return 0
 
 
 def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity inherent to one guarded flow
@@ -1899,6 +1988,9 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         return 2
     options = argv[1:]
     flags: dict[str, str] = {}
+    local: str | None = None
+    if argv[0] in {"start", "resume"} and _endpoint_option(options):
+        return _refuse(NO_ENDPOINT)
     if argv[0] == "start":
         split = _split_mode(options)
         if isinstance(split, str):
@@ -1907,12 +1999,31 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         mode = flags.get("--mode", "human-gated")
         if mode not in autonomy.MODES:
             return _refuse("--mode must be human-gated, autonomous or chat")
-        if mode != "autonomous" and len(flags) > ("--mode" in flags):
+        if mode != "autonomous" and set(flags) & {"--wall-time", "--max-agent-steps"}:
             return _refuse("--wall-time and --max-agent-steps need --mode autonomous")
+        if LOCAL_FALLBACK in flags and mode == "chat":
+            return _refuse(CHAT_FALLBACK)
+        try:
+            local = _local_fallback(flags.get(LOCAL_FALLBACK))
+        except fallback.SettingError as error:
+            return _refuse(str(error))
+        local = None if local == "off" else local
         if mode != "autonomous" and _option_feature(options) is None:
             return _refuse("start needs one -i feature_directory=specs/<issue>-<slug>")
     autonomous_resume = False
     if argv[0] == "resume":
+        if options and RUN_ID.fullmatch(options[0]):
+            split = _flags(options[1:], {LOCAL_FALLBACK})
+            if isinstance(split, str):
+                return _refuse(split)
+            if LOCAL_FALLBACK in split[0]:
+                if _chat_run(options[0]) or chat.continued_by(ROOT, options[0]):
+                    return _refuse(CHAT_FALLBACK)
+                try:
+                    local = _local_fallback(split[0][LOCAL_FALLBACK])
+                except fallback.SettingError as error:
+                    return _refuse(str(error))
+            options = [options[0], *split[1]]
         rest = options[1:]
         if not options or not RUN_ID.fullmatch(options[0]):
             sys.stderr.write("resume needs a valid RUN_ID\n")
@@ -1978,9 +2089,10 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         )
         return 2
     if autonomous_resume:
+        _set_local_fallback(options[0], local)
         return _resume_autonomous(options, specify)
     if flags.get("--mode") == "autonomous":
-        return _start_autonomous(flags, options, specify)
+        return _start_autonomous(flags, options, specify, local)
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]
         command = [specify, "workflow", "run", WORKFLOW, *options]
@@ -2005,6 +2117,7 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
     )
     if refusal is not None:
         return refusal
+    _set_local_fallback(run_id, local)
     try:
         return _launch(command, run_id, start=argv[0] == "start")
     finally:

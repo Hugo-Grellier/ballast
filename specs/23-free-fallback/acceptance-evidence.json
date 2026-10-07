@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "spec_digest": "4b4c64af8d96787aa43cd1219d2b44683305c4cb557fec3b3cc243abcedfb5d8",
+  "criteria": {
+    "AC-001": [
+      "tests.test_fallback.WrapperFallbackTests.test_quota_failure_completes_on_fallback",
+      "tests.test_fallback.ClassifyTests.test_recoverable",
+      "tests.test_fallback.ProbeTests.test_eligible_model_passes"
+    ],
+    "AC-002": [
+      "tests.test_fallback.WrapperFallbackTests.test_provider_unavailable_completes_on_fallback",
+      "tests.test_fallback.WrapperFallbackTests.test_cli_missing_completes_on_fallback",
+      "tests.test_fallback.ClassifyTests.test_recoverable"
+    ],
+    "AC-003": [
+      "tests.test_fallback.WrapperFallbackTests.test_setting_off_matches_today",
+      "tests.test_fallback.SettingTests.test_wrapper_treats_invalid_as_off",
+      "tests.test_autonomous_run.LocalFallbackRecordTests.test_record_shows_the_setting"
+    ],
+    "AC-004": [
+      "tests.test_fallback.WrapperFallbackTests.test_fallback_argv_is_primary_codex_profile",
+      "tests.test_fallback.InvocationTests.test_fallback_argv_is_primary_codex_profile",
+      "tests.test_fallback.InvocationTests.test_fallback_argv_literal_tokens",
+      "tests.test_fallback.InvocationTests.test_fallback_env",
+      "tests.test_fallback.WrapperFallbackTests.test_fallback_runs_under_same_confinement",
+      "tests.test_fallback.WrapperFallbackTests.test_user_codex_config_not_read",
+      "tests.test_fallback.ConfinementCompositionTests.test_fallback_step_shows_the_private_home_and_hides_claude"
+    ],
+    "AC-005": [
+      "tests.test_fallback.ProbeTests.test_model_missing_refuses_unknown_free_status",
+      "tests.test_fallback.RefusalTests.test_probe_refusal_returns_primary_code"
+    ],
+    "AC-006": [
+      "tests.test_fallback.ProbeTests.test_cloud_model_refuses_privacy",
+      "tests.test_fallback.ProbeTests.test_remote_host_refuses_privacy",
+      "tests.test_fallback.SettingTests.test_setting_has_no_endpoint",
+      "tests.test_fallback.SettingTests.test_validate_model",
+      "tests.test_fallback.PermissionTests.test_endpoint_override_env_refused",
+      "tests.test_fallback.ProbeTests.test_proxy_does_not_redirect",
+      "tests.test_fallback.InvocationTests.test_fallback_env"
+    ],
+    "AC-007": [
+      "tests.test_fallback.ProbeTests.test_server_down_refuses_capability",
+      "tests.test_fallback.ProbeTests.test_codex_without_oss_refuses_capability",
+      "tests.test_fallback.ProbeTests.test_codex_skill_missing_refuses_capability",
+      "tests.test_fallback.ProbeTests.test_sandbox_not_nesting_refuses_capability",
+      "tests.test_fallback.ProbeTests.test_probe_deadline_refuses",
+      "tests.test_fallback.ProbeContextTests.test_served_context",
+      "tests.test_fallback.ProbeContextTests.test_old_ollama_refuses_capability"
+    ],
+    "AC-008": [
+      "tests.test_fallback.PermissionTests.test_wider_argv_refused",
+      "tests.test_fallback.PermissionTests.test_extra_env_refused",
+      "tests.test_fallback.PermissionTests.test_endpoint_override_env_refused",
+      "tests.test_fallback.LayerTests.test_other_codex_config_layer_refuses",
+      "tests.test_fallback.LayerTests.test_user_skills_dir_refuses",
+      "tests.test_fallback.ProbeContextTests.test_context_check_runs_after_layers_and_skills"
+    ],
+    "AC-009": [
+      "tests.test_fallback.StateTests.test_ignored_digest_sees_every_change",
+      "tests.test_fallback.StateTests.test_ignored_digest_leaves_out_protected_and_logs",
+      "tests.test_fallback.StateTests.test_ignored_digest_never_follows_a_link_out",
+      "tests.test_fallback.StateTests.test_ignored_digest_unknown",
+      "tests.test_fallback.StateTests.test_refs_digest",
+      "tests.test_fallback.StateTests.test_state_evidence",
+      "tests.test_fallback.RefusalTests.test_changed_tree_refuses",
+      "tests.test_fallback.RefusalTests.test_created_draft_refuses",
+      "tests.test_fallback.RefusalTests.test_changed_reviews_refuses",
+      "tests.test_fallback.RefusalTests.test_ignored_path_change_refuses",
+      "tests.test_fallback.RefusalTests.test_primary_commit_refuses",
+      "tests.test_fallback.RefusalTests.test_unverifiable_state_refuses"
+    ],
+    "AC-010": [
+      "tests.test_fallback.ClassifyTests.test_non_recoverable",
+      "tests.test_fallback.ClassifyTests.test_exit_codes_match_the_wrapper",
+      "tests.test_fallback.RefusalTests.test_non_recoverable_never_falls_back"
+    ],
+    "AC-011": [
+      "tests.test_fallback.LedgerFallbackTests.test_selected_records_both_routes_and_usage"
+    ],
+    "AC-012": [
+      "tests.test_fallback.LedgerFallbackTests.test_refusal_recorded_with_reason"
+    ],
+    "AC-013": [
+      "tests.test_fallback.WrapperFallbackTests.test_failed_fallback_stops",
+      "tests.test_fallback.WrapperFallbackTests.test_failed_fallback_timeout_is_incomplete",
+      "tests.test_fallback.WrapperFallbackTests.test_refused_fallback_draft_not_retried",
+      "tests.test_fallback.WrapperFallbackTests.test_unparsable_stream_fails",
+      "tests.test_fallback.WrapperFallbackTests.test_blocked_status_in_events_fails",
+      "tests.test_fallback.RefusalTests.test_retry_attempt_never_falls_back"
+    ],
+    "AC-014": [
+      "tests.test_fallback.LedgerFallbackTests.test_repeated_record_is_idempotent",
+      "tests.test_fallback.LedgerFallbackTests.test_retried_step_single_effect"
+    ],
+    "AC-015": [
+      "tests.test_fallback.WrapperFallbackTests.test_step_limit_blocks_fallback",
+      "tests.test_fallback.WrapperFallbackTests.test_fallback_counts_a_step",
+      "tests.test_fallback.WrapperFallbackTests.test_cli_missing_records_not_run"
+    ],
+    "AC-016": [
+      "tests.test_fallback.ArtifactsFallbackTests.test_review_by_fallback_not_cross_provider",
+      "tests.test_fallback.LedgerFallbackTests.test_human_gated_review_by_fallback_not_cross_provider"
+    ],
+    "AC-017": [
+      "tests.test_agent_run_ledger.LedgerTests.test_fallback_route_values_are_accepted",
+      "tests.test_agent_run_ledger.LedgerTests.test_fallback_route_rejects_other_values_and_free_text",
+      "tests.test_agent_run_ledger.LedgerTests.test_fallback_route_cross_field_rules",
+      "tests.test_agent_run_ledger.LedgerTests.test_fallback_usage_event_validates",
+      "tests.test_agent_run_ledger.LedgerTests.test_report_counts_fallback_routes_and_refusal_reasons",
+      "tests.test_fallback.LedgerFallbackTests.test_no_account_text_recorded"
+    ],
+    "AC-018": [
+      "tests.test_governance.LocalFallbackDocumentTests.test_evaluation_and_adr",
+      "tests.test_governance.LocalFallbackDocumentTests.test_links_resolve"
+    ],
+    "AC-019": [
+      "tests.test_governance.LocalFallbackDocumentTests.test_policy_subsection",
+      "tests.test_fallback.RunCliTests.test_start_and_resume_flags"
+    ],
+    "AC-020": [
+      "tests.test_fallback.RunCliTests.test_setting_outside_checkout",
+      "tests.test_fallback.RunCliTests.test_refusals_write_nothing",
+      "tests.test_fallback.RunCliTests.test_status_shows_setting",
+      "tests.test_fallback.SettingTests.test_invalid_setting_is_off",
+      "tests.test_fallback.SettingTests.test_write_and_read",
+      "tests.test_fallback.HumanGatedMetaTests.test_human_gated_meta_records_setting",
+      "tests.test_autonomous_run.LocalFallbackRecordTests.test_record_shows_the_setting"
+    ],
+    "AC-021": [
+      "tests.test_fallback.WrapperFallbackTests.test_chat_step_never_falls_back",
+      "tests.test_fallback.RunCliTests.test_chat_refuses_flag"
+    ]
+  }
+}

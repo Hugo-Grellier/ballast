@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1770,6 +1771,120 @@ def checked_digest(root: Path, feature: str) -> str:
     return tree_digest(root, (f"{feature}/autonomous",))
 
 
+# The ignored-path walk of the local fallback's state evidence (#23 R3).
+IGNORED_LIMIT = 200_000
+IGNORED_SECONDS = 10.0
+
+
+def _protected_ignored(relative: str) -> bool:
+    """Whether a path is a protected input that is not a writable Spec Kit path."""
+    writable = tuple(f".specify/{name}" for name in SPECIFY_WRITABLE)
+    if any(relative == path or relative.startswith(path + "/") for path in writable):
+        return False
+    return any(
+        relative == path or relative.startswith(path + "/") for path in PROTECTED
+    )
+
+
+def _holds_writable(relative: str) -> bool:
+    """Whether a writable Spec Kit path lies under a protected directory."""
+    return any(
+        f".specify/{name}".startswith(relative + "/") for name in SPECIFY_WRITABLE
+    )
+
+
+def _entry_line(root: Path, relative: str) -> bytes:
+    """Return one ignored entry's metadata, from lstat; never follows a link."""
+    path = root / relative
+    status = path.lstat()
+    link = str(path.readlink()) if path.is_symlink() else ""
+    fields = (
+        relative,
+        oct(status.st_mode),
+        status.st_size,
+        status.st_mtime_ns,
+        status.st_ctime_ns,
+        status.st_ino,
+        link,
+    )
+    return "\0".join(str(field) for field in fields).encode() + b"\n"
+
+
+def _raise(error: OSError) -> None:
+    raise error
+
+
+def ignored_digest(root: Path) -> str | None:  # noqa: C901 - one bounded walk
+    """Hash every git-ignored path's metadata; None when it cannot be established.
+
+    Protected inputs are left out (a change there is already tampering) except
+    the Spec Kit paths agents may write. Each entry contributes its path, mode,
+    size, mtime, ctime, inode and link target, so a write, chmod, rename or
+    creation changes the digest without reading contents. More than
+    IGNORED_LIMIT entries, more than IGNORED_SECONDS, an unreadable entry or a
+    failing Git make it None (#23 R3).
+    """
+    deadline = time.monotonic() + IGNORED_SECONDS
+    try:
+        listing = git(
+            root,
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ).stdout
+    except (AutonomyError, OSError):
+        return None
+    digest = hashlib.sha256()
+    count = 0
+    try:
+        for item in sorted(filter(None, listing.split("\0"))):
+            relative = item.rstrip("/")
+            if _protected_ignored(relative) and not _holds_writable(relative):
+                continue
+            found = [relative]
+            top = root / relative
+            if top.is_dir() and not top.is_symlink():
+                for parent, directories, files in os.walk(top, onerror=_raise):
+                    base = Path(parent).relative_to(root).as_posix()
+                    directories[:] = sorted(
+                        name
+                        for name in directories
+                        if not _protected_ignored(f"{base}/{name}")
+                        or _holds_writable(f"{base}/{name}")
+                    )
+                    found += [f"{base}/{name}" for name in directories]
+                    found += [f"{base}/{name}" for name in sorted(files)]
+                    if len(found) > IGNORED_LIMIT or time.monotonic() > deadline:
+                        return None
+            for path in found:
+                if _protected_ignored(path):
+                    continue
+                count += 1
+                if count > IGNORED_LIMIT or time.monotonic() > deadline:
+                    return None
+                digest.update(_entry_line(root, path))
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def refs_digest(root: Path) -> str | None:
+    """Hash HEAD and every ref; None when Git fails (#23 R3)."""
+    try:
+        head = git(root, "rev-parse", "-q", "--verify", "HEAD", check=False)
+        symbolic = git(root, "symbolic-ref", "-q", "HEAD", check=False)
+        refs = git(root, "for-each-ref", "--format=%(refname) %(objectname)")
+    except (AutonomyError, OSError):
+        return None
+    if head.returncode not in {0, 1} or symbolic.returncode not in {0, 1}:
+        return None
+    text = f"{head.stdout}\0{symbolic.stdout}\0{refs.stdout}"
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 def effective_config(root: Path) -> list[tuple[str, str, str, str]]:
     """Every effective Git setting as (scope, origin, key, value)."""
     # check=True: a failed listing must never read as "nothing configured".
@@ -2226,7 +2341,11 @@ def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
 
 
 def _agent_home_binds(
-    home: Path, env: dict[str, str], private: Path, integration: str | None
+    home: Path,
+    env: dict[str, str],
+    private: Path,
+    integration: str | None,
+    with_login: bool = True,  # noqa: FBT001, FBT002 - from confined_argv
 ) -> list[str]:
     """Show a step only its own CLI's homes and login; empty the others (#81).
 
@@ -2246,7 +2365,7 @@ def _agent_home_binds(
         "claude": (".credentials.json", "credentials"),
         "codex": ("auth.json", "codex-auth"),
     }.get(integration or "", ("", ""))
-    for index, path in enumerate(own):
+    for index, path in enumerate(own if with_login else ()):
         if os.path.lexists(path / login):
             agent = _agent_login(path / login, private / f"{copy}-{index}.json")
             args += ["--ro-bind", agent, str(path / login)]
@@ -2302,6 +2421,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     interactive_pty: bool = False,
     readonly_extra: tuple[str, ...] = (),
     integration: str | None,
+    with_login: bool = True,
 ) -> list[str]:
     """Bwrap argv: read-only host, writable worktree minus protected inputs.
 
@@ -2320,6 +2440,9 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     Chat step whose stdio is a wrapper-owned pty, already its controlling
     terminal, passes it (#20 D-3): TIOCSTI then reaches only the agent's own
     pty. Every other caller keeps `--new-session`.
+
+    `with_login=False` keeps the overlays but copies no login: the local
+    fallback (`codex exec --oss`) needs none (#23 SEC2-001).
     """
     if integration is not None and integration not in AGENT_HOMES:
         message = f"unknown integration {integration!r}"
@@ -2377,7 +2500,7 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         path = home / name
         if os.path.lexists(path):
             args += ["--ro-bind", "/dev/null", str(path)]
-    args += _agent_home_binds(home, env, private, integration)
+    args += _agent_home_binds(home, env, private, integration, with_login)
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature)
     args += _installed_skill_binds(root)
@@ -2495,17 +2618,8 @@ CODEX_FALLBACK = (
 )
 
 
-def codex_sandbox_nests(root: Path, *, env: dict[str, str] | None = None) -> bool:
-    """Whether Codex's workspace-write sandbox starts inside Ballast's bwrap.
-
-    Runs `true` under `codex sandbox` in a confined, network-less step, once
-    per run start. Any failure, including a missing codex, is False.
-    """
-    codex = shutil.which("codex")
-    if codex is None:
-        return False
-    env = dict(os.environ if env is None else env)
-    command = [
+def _codex_sandbox_command(codex: str) -> list[str]:
+    return [
         codex,
         "sandbox",
         "-c",
@@ -2515,6 +2629,27 @@ def codex_sandbox_nests(root: Path, *, env: dict[str, str] | None = None) -> boo
         "--",
         "true",
     ]
+
+
+def codex_sandbox_nests(
+    root: Path,
+    *,
+    env: dict[str, str] | None = None,
+    codex: str | None = None,
+    timeout: float = 60,
+) -> bool:
+    """Whether Codex's workspace-write sandbox starts inside Ballast's bwrap.
+
+    Runs `true` under `codex sandbox` in a confined, network-less step, once
+    per run start (and before a local fallback, #23, with the trusted `codex`
+    and the remaining probe budget). Any failure, including a missing codex,
+    is False.
+    """
+    codex = codex or shutil.which("codex")
+    if codex is None:
+        return False
+    env = dict(os.environ if env is None else env)
+    command = _codex_sandbox_command(codex)
     with tempfile.TemporaryDirectory(prefix="ballast-confine-") as private:
         try:
             argv = confined_argv(
@@ -2525,12 +2660,36 @@ def codex_sandbox_nests(root: Path, *, env: dict[str, str] | None = None) -> boo
                 argv,
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
-                timeout=60,
+                timeout=timeout,
                 check=False,
                 env=confined_env(env, None),
             )
         except (AutonomyError, OSError, subprocess.TimeoutExpired):
             return False
+    return result.returncode == 0
+
+
+def codex_sandbox_starts(
+    root: Path, codex: str, *, env: dict[str, str], timeout: float = 60
+) -> bool:
+    """Whether Codex's workspace-write sandbox starts without Ballast's bwrap.
+
+    The same `codex sandbox` probe as `codex_sandbox_nests`, for a human-gated
+    step, which runs under its systemd scope and Codex's own sandbox (#23).
+    Any failure is False.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 - trusted codex, argument list
+            _codex_sandbox_command(codex),
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return result.returncode == 0
 
 
@@ -3001,7 +3160,7 @@ def _intent_pd(decisions: list[dict]) -> str:
     return "none recorded yet"
 
 
-def _mode_lines(run: dict) -> list[str]:
+def _mode_lines(run: dict, local_fallback: str | None = None) -> list[str]:
     lines = ["## Mode and risk", ""]
     for change in run["mode_history"]:
         extra = ""
@@ -3034,6 +3193,8 @@ def _mode_lines(run: dict) -> list[str]:
     )
     if run.get("integration_fallback"):
         lines.append(f"- Integration fallback: {run['integration_fallback']}")
+    if local_fallback is not None:
+        lines.append(f"- Local fallback: {neutralize(local_fallback)}")
     return [*lines, ""]
 
 
@@ -3274,9 +3435,10 @@ def _sections(  # noqa: PLR0913 - one rendering, every input explicit
     short: bool = False,
     human: list[dict] | None = None,
     feedback: list[dict] | None = None,
+    local_fallback: str | None = None,
 ) -> list[str]:
     material = [e for e in current_decisions(decisions) if e.get("material")]
-    lines = [*_mode_lines(run), *_r2_lines(run, decisions)]
+    lines = [*_mode_lines(run, local_fallback), *_r2_lines(run, decisions)]
     lines += ["## Material provisional changes", ""]
     lines += [
         f"- {e['id']} ({e['point']}, agent-provisional): {neutralize(e['summary'])}"
@@ -3313,15 +3475,20 @@ def record_path(feature: str) -> str:
     return f"{feature}/autonomous/record.md"
 
 
-def render_record(
+def render_record(  # noqa: PLR0913 - one rendering, every input explicit
     run: dict,
     decisions: list[dict],
     checks: list[dict] | None,
     *,
     human: list[dict] | None = None,
     feedback: list[dict] | None = None,
+    local_fallback: str | None = None,
 ) -> str:
-    """Deterministic bytes of specs/<f>/autonomous/record.md."""
+    """Deterministic bytes of specs/<f>/autonomous/record.md.
+
+    `local_fallback` is the run's local fallback setting (#23), `on (...)` or
+    `off`; None when the operator never set one, which adds no line.
+    """
     record_dir = str(Path(record_path(run["feature"])).parent)
     lines = [
         "# Autonomous run record",
@@ -3341,6 +3508,7 @@ def render_record(
             _relative_link(record_dir),
             human=human,
             feedback=feedback,
+            local_fallback=local_fallback,
         ),
     ]
     return "\n".join(lines).rstrip("\n") + "\n"
@@ -3348,6 +3516,8 @@ def render_record(
 
 def render_run_record(root: Path, run: dict) -> str:
     """render_record from everything the operator records hold for the run."""
+    import fallback  # noqa: PLC0415 - fallback imports this module
+
     run_id = run["run_id"]
     return render_record(
         run,
@@ -3355,6 +3525,7 @@ def render_run_record(root: Path, run: dict) -> str:
         read_checks(root, run_id),
         human=read_human_decisions(root, run_id),
         feedback=read_feedback(root, run_id),
+        local_fallback=fallback.describe(root, run_id),
     )
 
 

@@ -191,6 +191,7 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
             "human-override",
             "escalation",
             "operator-choice",
+            "fallback",
         },
         "outcome": {
             "success",
@@ -198,6 +199,21 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
             "mechanical-failure",
             "rejected",
             "incomplete",
+        },
+        # The local zero-cost fallback (#23): normalized labels, never CLI text.
+        "failure_cause": {
+            "quota-exhausted",
+            "provider-unavailable",
+            "cli-unavailable",
+            "unrecognized",
+        },
+        "fallback": {"selected", "refused"},
+        "fallback_reason": {
+            "unknown-free-status",
+            "privacy-exclusion",
+            "incompatible-capability",
+            "permission-mismatch",
+            "changed-state",
         },
     },
     "escalation": {
@@ -287,6 +303,9 @@ FIELDS: dict[str, dict[str, str]] = {
         "outcome?": "label",
         "alternate_available?": "bool",
         "author_provider?": "label",
+        "failure_cause?": "label",
+        "fallback?": "label",
+        "fallback_reason?": "label",
     },
     "classifier": {"stage": "label", "invocation_id": "id"},
     "escalation": {
@@ -671,6 +690,8 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
             fail(f"{data['outcome']} needs reason")
         if "reason" in data and data["reason"] not in PR_REASONS[data["outcome"]]:
             fail(f"reason does not apply to {data['outcome']}")
+    if event["kind"] == "route":
+        _validate_fallback(data)
     if event["kind"] == "branch_sync":
         _validate_branch_sync(data)
     if event["kind"] == "acceptance_packet":
@@ -690,6 +711,18 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
     }.get(event["kind"])
     if required_source and event["source"] != required_source:
         fail(f"{event['kind']} requires {required_source} source")
+
+
+def _validate_fallback(data: dict[str, Any]) -> None:
+    """Apply the local fallback's cross-field rules (#23 contracts/ledger.md)."""
+    if "fallback_reason" in data and data.get("fallback") != "refused":
+        fail("fallback_reason needs fallback refused")
+    if data.get("fallback") == "refused" and "fallback_reason" not in data:
+        fail("fallback refused needs fallback_reason")
+    if data["route_source"] == "fallback" and (
+        "failure_cause" in data or "fallback" in data
+    ):
+        fail("fallback route has no failure_cause or fallback")
 
 
 def _validate_branch_sync(data: dict[str, Any]) -> None:
@@ -2424,12 +2457,14 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
             and result["workflow"]["compliance"] == "compliant"
         ):
             result["workflow"]["compliance"] = "unavailable"
+        fallback_reviews = _fallback_reviews(events)
         cross = [
             event
             for event in independent
             if event["data"].get("author_provider")
             and event["data"].get("reviewer_provider")
             and event["data"]["author_provider"] != event["data"]["reviewer_provider"]
+            and not fallback_reviews
         ]
         routes = [
             event
@@ -2460,6 +2495,7 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
             "underpowered_signals": underpowered,
             "independent_reviews": len(independent),
             "cross_provider_reviews": len(cross),
+            "fallback_reviews": fallback_reviews,
             "review_provider_availability": [
                 {
                     "review_id": event["data"]["review_id"],
@@ -2497,6 +2533,23 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
         result["problems"].append(str(error))
         result["status"] = "invalid"
     return result
+
+
+def _fallback_reviews(events: list[dict[str, Any]]) -> int:
+    """Successful local fallback routes on a review stage (#23 contracts/ledger.md).
+
+    Any such route makes every review of the run not cross-provider: the
+    rule is run-wide and conservative, never claiming independence on the
+    fallback's basis.
+    """
+    return sum(
+        event["kind"] == "route"
+        and event["source"] == "runner"
+        and event["data"].get("route_source") == "fallback"
+        and event["data"].get("outcome") == "success"
+        and "ballast-review" in event["data"]["stage"]
+        for event in events
+    )
 
 
 def _chat_report(
@@ -2579,7 +2632,8 @@ def _chat_report(
                 "verdict": event["data"]["verdict"],
                 "reviewer_provider": event["data"].get("reviewer_provider"),
                 "cross_provider": event["data"].get("reviewer_provider")
-                != event["data"].get("author_provider"),
+                != event["data"].get("author_provider")
+                and not _fallback_reviews(events),
             }
             for event in reviews
         ],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -302,6 +303,67 @@ class DemoPolicyTests(unittest.TestCase):
         ):
             with self.subTest(state=state):
                 self.assertIn(f"| `{state}` |", section)
+
+
+class LocalFallbackDocumentTests(unittest.TestCase):
+    """#23 T028 to T033 [AC-018, AC-019]: the fallback's evidence and documents."""
+
+    DOCUMENTS = (
+        "specs/23-free-fallback/evaluation.md",
+        "docs/adr/0014-local-zero-cost-fallback.md",
+        "templates/policies/spec-kit-workflow.md",
+        "templates/policies/model-routing.md",
+        "README.md",
+        "specs/TECHNICAL-SPEC.md",
+    )
+
+    def test_policy_subsection(self) -> None:
+        spec_kit = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
+        section = spec_kit[spec_kit.index("## Local fallback") :]
+        section = " ".join(section[: section.index("\n## ")].split())
+        for text in (
+            "--local-fallback MODEL",
+            "ballast run resume RUN_ID --local-fallback MODEL|off",
+            "127.0.0.1:11434",
+            "at least 16384 tokens",
+            "0.13.4 or newer",
+            "Spec Kit's Codex integration",
+            "Only after the step's first attempt",
+            "`changed-state`",
+            "`privacy-exclusion`",
+            "`unknown-free-status`",
+            "`incompatible-capability`",
+            "`permission-mismatch`",
+            "`~/.agents/skills` is not empty",
+            "never available in Chat runs",
+            "never loosens a sandbox",
+            "ballast run status RUN_ID",
+            "ballast ledger report --run RUN_ID",
+            "closed local port",
+            "not a network boundary",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, section)
+
+    def test_evaluation_and_adr(self) -> None:
+        evaluation = (ROOT / self.DOCUMENTS[0]).read_text()
+        for heading in ("## Summary", "### Alternatives", "## Pilot", "## Workflow"):
+            self.assertIn(heading, evaluation)
+        adr = (ROOT / self.DOCUMENTS[1]).read_text()
+        self.assertIn("- Status: proposed", adr)
+        for text in ("first** primary attempt", "200,000", "16384", "exact allowlist"):
+            self.assertIn(text, adr)
+
+    def test_links_resolve(self) -> None:
+        link = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+        # Policy templates link from where setup installs them, docs/policies/.
+        for name in (n for n in self.DOCUMENTS if not n.startswith("templates/")):
+            path = ROOT / name
+            for target in link.findall(path.read_text()):
+                if "://" in target or target.startswith("mailto:"):
+                    continue
+                with self.subTest(document=name, target=target):
+                    self.assertTrue((path.parent / target).exists())
 
 
 if __name__ == "__main__":

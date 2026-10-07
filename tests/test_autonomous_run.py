@@ -1746,5 +1746,39 @@ class HumanGatedUnchangedTests(WrapperCase):
         self.assertNotIn("skipped", result.stdout)
 
 
+class LocalFallbackRecordTests(WrapperCase):
+    """#23 T025 [AC-003, AC-020]: record.md shows the local fallback setting."""
+
+    def mode_section(self, text: str) -> str:
+        return text.split("## Mode and risk\n", 1)[1].split("\n## ", 1)[0]
+
+    def test_record_shows_the_setting(self) -> None:
+        record = self.make_run()
+        plain = autonomy.render_run_record(self.root, record)
+        self.assertNotIn("Local fallback", plain)
+        # Without a setting the record is exactly what it was before #23.
+        self.assertEqual(
+            plain,
+            autonomy.render_record(
+                record,
+                autonomy.read_decisions(self.root, "run42"),
+                autonomy.read_checks(self.root, "run42"),
+                human=autonomy.read_human_decisions(self.root, "run42"),
+                feedback=autonomy.read_feedback(self.root, "run42"),
+            ),
+        )
+        run.fallback.write_setting(self.root, "run42", "qwen3:4b-16k")
+        section = self.mode_section(autonomy.render_run_record(self.root, record))
+        self.assertTrue(
+            section.rstrip().endswith("- Local fallback: on (ollama qwen3:4b-16k)")
+        )
+        run.fallback.write_setting(self.root, "run42", None)
+        section = self.mode_section(autonomy.render_run_record(self.root, record))
+        self.assertIn("- Local fallback: off\n", section)
+        run.fallback.setting_path(self.root, "run42").write_text("{")
+        section = self.mode_section(autonomy.render_run_record(self.root, record))
+        self.assertIn("- Local fallback: off\n", section)
+
+
 if __name__ == "__main__":
     unittest.main()

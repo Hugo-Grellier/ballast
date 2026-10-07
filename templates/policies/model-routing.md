@@ -91,6 +91,8 @@ For significant features:
 
 The review model is selected by the review's difficulty/risk, not automatically one tier above the author.
 
+The local fallback (`ballast run --local-fallback MODEL`) is a zero-cost availability route, not a routing profile: it runs a headless step once more on an operator-named local model only when the primary failed on quota or availability, and it is never chosen for capability. A review the fallback completes never counts as cross-provider review, even when its local model comes from another vendor; the run report and record show it as `cross_provider: false`.
+
 ## Bounded escalation
 
 Escalation is local to the task:

@@ -22,6 +22,16 @@ limits (EXIT_LIMIT), runs the agent under bubblewrap (autonomy.confined_argv),
 and records which drafts the step created, so a recorder attributes each draft
 to the step that wrote it. Human-gated runs keep the argv above unchanged.
 
+Local fallback (#23, fallback.py): only when the operator turned it on for the
+run (`fallback.json` in its operator directory), a step whose first attempt
+failed on quota, provider availability or a missing CLI, and changed nothing
+(tree, reviews, drafts, ignored paths, refs), runs once more on
+`codex exec --oss --local-provider ollama` with the operator's local model.
+Probes refuse before any prompt is sent; the attempt uses the same scope,
+confinement and checks, a private empty CODEX_HOME, and is never retried.
+Every decision is a ledger `route` event. With the setting off, nothing of
+this runs.
+
 Artifact validation steps remain the primary postcondition; this wrapper only
 adds evidence and an early stop.
 """
@@ -55,6 +65,7 @@ sys.pycache_prefix = os.devnull
 
 import artifacts  # noqa: E402
 import autonomy  # noqa: E402
+import fallback  # noqa: E402
 from launcher import (  # noqa: E402
     EXIT_REFUSED,
     IN_PROGRESS,
@@ -223,12 +234,13 @@ def _open_log(log_fd: int, name: str) -> BinaryIO:
 
 
 def _tee(
-    source: BinaryIO, sink: BinaryIO, handle: BinaryIO, captured: list[bytes]
+    source: BinaryIO, sink: BinaryIO | None, handle: BinaryIO, captured: list[bytes]
 ) -> None:
     with handle:
         for chunk in iter(lambda: source.read1(65536), b""):
-            sink.write(chunk)
-            sink.flush()
+            if sink is not None:
+                sink.write(chunk)
+                sink.flush()
             handle.write(chunk)
             handle.flush()
             captured.append(chunk)
@@ -969,7 +981,9 @@ def _move_refused(root: Path, record: dict, step: str, attempt: int) -> None:
         shutil.move(str(path), str(target / path.name))
 
 
-def _refuse_step(root: Path, run_id: str, refusal: Refusal) -> int:
+def _refuse_step(
+    root: Path, run_id: str, refusal: Refusal, *, local_fallback: bool = False
+) -> int:
     """Report a refusal before any agent started, with a step entry when possible."""
     sys.stderr.write(f"spec workflow agent wrapper: refusing: {refusal}\n")
     with suppress(autonomy.AutonomyError, OSError):
@@ -983,19 +997,92 @@ def _refuse_step(root: Path, run_id: str, refusal: Refusal) -> int:
             }
             if refusal.limit:
                 entry["limit"] = refusal.limit
+            if local_fallback:
+                entry["local_fallback"] = True
             autonomy.append_step(root, run_id, entry)
     return refusal.code
 
 
-def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
+def _fallback_setting(root: Path, run_id: str) -> fallback.Setting | None:
+    """Return the run's local fallback setting (#23); None if absent, off or Chat.
+
+    An invalid setting prints one line and counts as off: it never enables
+    anything.
+    """
+    if not RUN_ID.fullmatch(run_id):
+        return None
+    try:
+        if not os.path.lexists(fallback.setting_path(root, run_id)):
+            return None
+        setting = fallback.read_setting(root, run_id)
+        record = autonomy.find_run(root, run_id)
+    except (fallback.SettingError, autonomy.AutonomyError, OSError) as error:
+        sys.stderr.write(f"spec workflow agent wrapper: local fallback off: {error}\n")
+        return None
+    if record is not None and record["workflow"] == autonomy.CHAT:
+        return None
+    return setting
+
+
+def _step_name(integration: str, prompt: str) -> str:
+    """Return a step ID in the log directory's format, for a primary never run."""
+    command = re.sub(r"[^a-z0-9.-]", "", prompt.split(maxsplit=1)[0].lower())
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{stamp}-{command or 'agent'}-{integration}"
+
+
+def _route(  # noqa: PLR0913 - the route event's every field
+    stage: str,
+    provider: str,
+    step: str,
+    attempt: int,
+    cause: str,
+    *,
+    decision: fallback.Refused | str | None = None,
+) -> tuple[str, dict, str]:
+    """Return a failed primary's ledger `route` record (contracts/ledger.md)."""
+    data = {
+        "stage": stage,
+        "provider": provider,
+        "route_source": "operator-choice",
+        "attempt": attempt,
+        "cause_id": step,
+        "outcome": "mechanical-failure",
+        "failure_cause": cause,
+    }
+    if isinstance(decision, fallback.Refused):
+        data |= {"fallback": "refused", "fallback_reason": decision.reason}
+    elif decision == "selected":
+        data["fallback"] = "selected"
+    return "route", data, fallback.event_id(step, attempt, "route")
+
+
+def _write_records(
+    root: Path, run_id: str, feature: str | None, events: list[tuple[str, dict, str]]
+) -> None:
+    for problem in fallback.record(root, run_id, feature, events):
+        sys.stderr.write(
+            f"spec workflow agent wrapper: local fallback record failed: {problem}\n"
+        )
+
+
+def main() -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded step, its attempts
     """Run the real agent CLI with bounded permissions and persistent logs."""
     integration = Path(sys.argv[0]).name
     if integration not in {"claude", "codex"}:
         sys.stderr.write("invoke through .ballast/spec_workflow/bin/{claude,codex}\n")
         return EXIT_USAGE
     args = sys.argv[1:]
+    run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "")
+    setting = _fallback_setting(Path.cwd(), run_id)
+    real: str | None = None
     try:
-        real = _real_executable(integration)
+        try:
+            real = _real_executable(integration)
+        except FileNotFoundError:
+            # With the local fallback on, a missing CLI is a recoverable cause.
+            if setting is None:
+                raise
         permission_args(integration, args)
         systemd_run, scope_options = _containment(Path.cwd())
     except (ValueError, OSError) as error:
@@ -1003,7 +1090,6 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
         return EXIT_USAGE
 
     root = Path.cwd()
-    run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "")
     prompt = args[1]
     try:
         found = _autonomous_record(root, run_id) if RUN_ID.fullmatch(run_id) else None
@@ -1015,6 +1101,21 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
         if skipped is not None:
             sys.stdout.write(f"spec workflow agent wrapper: {skipped}\n")
             return 0
+    scope = (systemd_run, scope_options)
+    feature = found["feature"] if found is not None else None
+    if setting is not None and feature is None:
+        feature = _feature_directory(root, run_id)
+    if real is None:
+        assert setting is not None  # noqa: S101 - only then is a missing CLI kept
+        return _without_cli(
+            root,
+            integration,
+            prompt,
+            setting,
+            found=found,
+            scope=scope,
+            feature=feature,
+        )
     refusals: list[str] = []
     attempt = 1
     while True:
@@ -1028,16 +1129,62 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
                     f"{label} exhausted after a refused draft: {refusals[-1]}",
                     refusal.limit,
                 )
-            return _refuse_step(root, run_id, refusal)
+            return _refuse_step(
+                root, run_id, refusal, local_fallback=setting is not None
+            )
         argv = [real, *permission_args(integration, [args[0], prompt, *args[2:]])]
+        first = attempt == 1 and not refusals
+        observe = (
+            {"evidence": first, "feature": feature} if setting is not None else None
+        )
         exit_code, entry = _attempt(
             root,
             integration=integration,
             argv=argv,
-            scope=(systemd_run, scope_options),
+            scope=scope,
             record=record,
             prompt=prompt,
+            observe=observe,
         )
+        if observe is not None:
+            assert setting is not None  # noqa: S101 - observe exists only then
+            cause = fallback.classify(
+                integration,
+                exit_code,
+                observe["blocked"],
+                observe["contained"],
+                observe["tail"],
+                cli_found=True,
+            )
+            if cause in fallback.RECOVERABLE and first:
+                return _fallback_step(
+                    root,
+                    integration,
+                    prompt,
+                    setting,
+                    found=found,
+                    scope=scope,
+                    feature=feature,
+                    primary=(exit_code, entry, observe),
+                    cause=cause,
+                )
+            if cause in fallback.RECOVERABLE:
+                # A draft-retry attempt never falls back; its cause is recorded.
+                entry["failure_cause"] = cause
+                _write_records(
+                    root,
+                    run_id,
+                    feature,
+                    [
+                        _route(
+                            _command(prompt)[0],
+                            integration,
+                            observe["step"],
+                            attempt,
+                            cause,
+                        )
+                    ],
+                )
         if record is None:
             return exit_code
         refused = (
@@ -1073,6 +1220,212 @@ def main() -> int:  # noqa: C901, PLR0911 - one guarded step, its attempts
         attempt += 1
 
 
+def _without_cli(  # noqa: PLR0913 - the step's every input
+    root: Path,
+    integration: str,
+    prompt: str,
+    setting: fallback.Setting,
+    *,
+    found: dict | None,
+    scope: tuple[str, list[str]],
+    feature: str | None,
+) -> int:
+    """Handle a missing primary CLI with the fallback on: not run, not counted."""
+    sys.stderr.write(
+        f"spec workflow agent wrapper: {integration} CLI not found on PATH\n"
+    )
+    step = _step_name(integration, prompt)
+    entry: dict = {}
+    if found is not None:
+        entry = {
+            "step": None,
+            "ran": False,
+            "command": prompt.split(maxsplit=1)[0],
+            "integration": integration,
+            "role": _role(prompt),
+            "exit_code": EXIT_USAGE,
+            "reason": f"{integration} CLI not found on PATH",
+            "local_fallback": True,
+            "at": autonomy.now(),
+        }
+    # Nothing ran, so nothing changed: the evidence is trivially equal.
+    observe = {"step": step, "before": {}, "after": {}}
+    return _fallback_step(
+        root,
+        integration,
+        prompt,
+        setting,
+        found=found,
+        scope=scope,
+        feature=feature,
+        primary=(EXIT_USAGE, entry, observe),
+        cause=fallback.CLI_MISSING,
+    )
+
+
+def _fallback_step(  # noqa: C901, PLR0913 - one decision, one attempt
+    root: Path,
+    integration: str,
+    prompt: str,
+    setting: fallback.Setting,
+    *,
+    found: dict | None,
+    scope: tuple[str, list[str]],
+    feature: str | None,
+    primary: tuple[int, dict, dict],
+    cause: str,
+) -> int:
+    """Decide on the local fallback after a recoverable first attempt (#23).
+
+    Refuses (stderr line, `route` event, primary entry, primary exit code)
+    or runs exactly one Codex `--oss` attempt, counted as an agent step and
+    never retried.
+    """
+    exit_code, entry, observe = primary
+    run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "")
+    stage, step = _command(prompt)[0], observe["step"]
+    if found is not None:
+        entry |= {"attempt": 1, "refusals": [], "failure_cause": cause}
+    with tempfile.TemporaryDirectory(
+        prefix="ballast-agent-", ignore_cleanup_errors=True
+    ) as private_name:
+        private = Path(private_name)
+        codex_home = private / "codex-home"
+        codex_home.mkdir(mode=0o700)
+        codex, _ = autonomy.trusted_program("codex", root)
+        translated = fallback.codex_prompt(prompt)
+        env = fallback.fallback_env(_base_env(root), codex_home)
+        argv = fallback.fallback_argv(codex or "codex", translated, setting.model)
+        refused = fallback.changed_state(observe.get("before"), observe.get("after"))
+        if refused is None:
+            refused = fallback.probe(
+                setting,
+                root=root,
+                autonomous=found is not None,
+                codex=codex,
+                prompt=prompt,
+                env=env,
+            )
+        if refused is None and fallback.permission_mismatch(
+            argv,
+            env,
+            codex_home,
+            codex=codex or "codex",
+            prompt=translated,
+            model=setting.model,
+        ):
+            refused = fallback.Refused(
+                fallback.PERMISSION, "fallback argv or environment differs"
+            )
+        decision = refused or "selected"
+        _write_records(
+            root,
+            run_id,
+            feature,
+            [_route(stage, integration, step, 1, cause, decision=decision)],
+        )
+        if found is not None:
+            entry["fallback"] = {
+                "decision": "refused" if refused else "selected",
+                "reason": refused.reason if refused else None,
+            }
+            autonomy.append_step(root, found["run_id"], entry)
+        if refused is not None:
+            sys.stderr.write(
+                "spec workflow agent wrapper: local fallback refused: "
+                f"{refused.reason}: {refused.detail}\n"
+            )
+            return exit_code
+        try:
+            record = _autonomous_run(root, run_id) if found is not None else None
+        except Refusal as refusal:
+            return _refuse_step(root, run_id, refusal, local_fallback=True)
+        sys.stderr.write(
+            "spec workflow agent wrapper: local fallback: running this step once on "
+            f"{fallback.PROVIDER} {setting.model} ({cause})\n"
+        )
+        result: dict = {}
+        exit_code, entry = _attempt_in(
+            root,
+            private=private,
+            integration="codex",
+            argv=argv,
+            scope=scope,
+            record=record,
+            prompt=prompt,
+            observe=result,
+            route={"setting": setting, "env": env, "codex_home": codex_home},
+        )
+    outcome = "success"
+    if record is not None and exit_code in {0, EXIT_BLOCKED}:
+        refused_draft = _check_drafts(root, record, prompt, entry)
+        if refused_draft is not None:
+            reason = autonomy.limit_condition(
+                "retries", f"draft refused after the local fallback: {refused_draft}"
+            )
+            entry |= {
+                "refused": refused_draft,
+                "exit_code": EXIT_LIMIT,
+                "reason": reason,
+                "limit": "retries",
+            }
+            sys.stderr.write(f"spec workflow agent wrapper: {reason}\n")
+            exit_code = EXIT_LIMIT
+            outcome = "rejected"
+    if outcome == "success" and exit_code != 0:
+        outcome = (
+            "incomplete"
+            if result.get("limit_hit") or exit_code == EXIT_INTERRUPTED
+            else "mechanical-failure"
+        )
+    records = [
+        (
+            "route",
+            {
+                "stage": stage,
+                "provider": fallback.PROVIDER,
+                "model": setting.model,
+                "route_source": "fallback",
+                "attempt": 2,
+                "cause_id": step,
+                "outcome": outcome,
+            },
+            fallback.event_id(step, 2, "route"),
+        )
+    ]
+    if result.get("usage") is not None:
+        records.append(
+            (
+                "usage",
+                fallback.usage_data(
+                    result["usage"],
+                    stage=stage,
+                    step=result["step"],
+                    model=setting.model,
+                    attempt=2,
+                    cause_id=step,
+                ),
+                fallback.event_id(step, 2, "usage"),
+            )
+        )
+    _write_records(root, run_id, feature, records)
+    if record is not None:
+        entry |= {"attempt": 2, "refusals": []}
+        autonomy.append_step(root, record["run_id"], entry)
+    return exit_code
+
+
+def _base_env(root: Path) -> dict[str, str]:
+    """Return the operator environment every attempt starts from, with git guarded."""
+    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
+    # Every `git` the agent runs goes through guard/git first (#34).
+    git, _ = autonomy.trusted_program("git", root)
+    if git is not None:
+        env["BALLAST_GIT"] = git
+        env["PATH"] = os.pathsep.join((str(GUARD), env.get("PATH", "")))
+    return env
+
+
 def _attempt(root: Path, **kwargs: object) -> tuple[int, dict]:
     """Run `_attempt_in` with a private directory that never outlives it.
 
@@ -1094,19 +1447,25 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
     scope: tuple[str, list[str]],
     record: dict | None,
     prompt: str,
+    observe: dict | None = None,
+    route: dict | None = None,
 ) -> tuple[int, dict]:
     """Run the agent once; return its exit code and, for Autonomous, its step entry.
 
     The entry is not appended here: the caller first checks the drafts.
+
+    With the local fallback on, `observe` receives what the decision needs
+    (step ID, output tail, blocking, containment) and, when it asks for
+    `evidence`, the worktree state before and after. `route` makes this the
+    fallback attempt (#23): its argv, environment and private CODEX_HOME,
+    closed stdin, `--json` output and the fallback timeout.
     """
     systemd_run, scope_options = scope
     log_dir, key = _log_dir(root, integration, prompt)
-    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
-    # Every `git` the agent runs goes through guard/git first (#34).
-    git, _ = autonomy.trusted_program("git", root)
-    if git is not None:
-        env["BALLAST_GIT"] = git
-        env["PATH"] = os.pathsep.join((str(GUARD), env.get("PATH", "")))
+    env = _base_env(root)
+    if route is not None:
+        # Names the private home to the confinement's agent-home overlay.
+        env["CODEX_HOME"] = str(route["codex_home"])
     step_record: dict = {}
     if record is not None:
         feature = record["feature"]
@@ -1135,8 +1494,12 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             feature=feature,
             env=env,
             integration=integration,
+            with_login=route is None,  # `--oss` needs no login (SEC2-001)
         )
         env = autonomy.confined_env(env, integration)
+    if route is not None:
+        # Exactly the environment the permission comparison checked.
+        env = route["env"]
     meta = {
         "run_id": key,
         "feature_directory": _feature_directory(root, key),
@@ -1145,6 +1508,24 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         "argv": [Path(argv[0]).name, *argv[1:]],
         "started_at": datetime.now(UTC).isoformat(),
     }
+    if observe is not None or route is not None:
+        meta["local_fallback"] = True
+        step_record = step_record and {**step_record, "local_fallback": True}
+    if route is not None:
+        meta |= {
+            "route": "fallback",
+            "provider": fallback.PROVIDER,
+            "model": route["setting"].model,
+        }
+        step_record = step_record and {
+            **step_record,
+            "route": "fallback",
+            "provider": fallback.PROVIDER,
+            "model": route["setting"].model,
+        }
+    if observe is not None and observe.get("evidence"):
+        # After earlier drafts were set aside, before the agent starts.
+        observe["before"] = fallback.state_evidence(root, observe.get("feature"))
     unit = f"ballast-agent-{key}-{log_dir.name}.scope"
     if not SCOPE.fullmatch(unit):
         message = f"invalid agent scope name {unit!r}"
@@ -1163,7 +1544,8 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         log_fd = os.open(log_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         logs = {name: _open_log(log_fd, name) for name in LOG_FILES}
         meta_file = logs["meta.json"]
-        os.close(log_fd)
+        if route is None:
+            os.close(log_fd)
         argv = [
             systemd_run,
             "--user",
@@ -1177,8 +1559,22 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         ]
         stdout: list[bytes] = []
         stderr: list[bytes] = []
+        if route is not None:
+            # The last look before the model runs: close the probes' TOCTOU.
+            refused = fallback.recheck(
+                route["setting"], root=root, codex_home=Path(route["codex_home"])
+            )
+            if refused is not None:
+                sys.stderr.write(
+                    "spec workflow agent wrapper: local fallback not started: "
+                    f"{refused.reason}: {refused.detail}\n"
+                )
+                in_progress.unlink(missing_ok=True)
+                return 1, {}
         process = subprocess.Popen(  # noqa: S603 - resolved CLI, argument list
             argv,
+            # `codex exec` reads a prompt addition from an open stdin (pilot).
+            stdin=subprocess.DEVNULL if route is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -1192,7 +1588,13 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
     threads = [
         threading.Thread(
             target=_tee,
-            args=(process.stdout, sys.stdout.buffer, logs["stdout.log"], stdout),
+            # The fallback's JSON events are logged; its messages shown below.
+            args=(
+                process.stdout,
+                sys.stdout.buffer if route is None else None,
+                logs["stdout.log"],
+                stdout,
+            ),
             daemon=True,
         ),
         threading.Thread(
@@ -1207,13 +1609,20 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
     timeout = (
         max(autonomy.remaining_seconds(record), 0.0) if record is not None else None
     )
+    if route is not None and record is None:
+        timeout = fallback.HUMAN_GATED_SECONDS
     limit_hit = False
     try:
         exit_code = process.wait(timeout)
     except subprocess.TimeoutExpired:
         sys.stderr.write(
-            "spec workflow agent wrapper: wall-time limit exhausted during the "
-            "step; stopping the agent\n"
+            "spec workflow agent wrapper: "
+            + (
+                "the local fallback timed out"
+                if route is not None and record is None
+                else "wall-time limit exhausted during the step"
+            )
+            + "; stopping the agent\n"
         )
         limit_hit = True
         exit_code = EXIT_LIMIT
@@ -1236,13 +1645,46 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
         thread.join(None if contained else 1.0)
 
     reason = "wall-time limit exhausted during the step" if limit_hit else None
+    if limit_hit and route is not None and record is None:
+        reason = "the local fallback timed out"
     if exit_code not in {0, EXIT_LIMIT, EXIT_INTERRUPTED} and AUTH_FAILURES[
         integration
     ].search(b"".join(stdout + stderr)):
         reason = AUTH_REASONS[integration]
         sys.stderr.write(f"spec workflow agent wrapper: {reason}\n")
         exit_code = EXIT_AUTH
-    blocked = BLOCKING.findall(b"".join(stdout).decode("utf-8", "replace"))
+    shown = b"".join(stdout).decode("utf-8", "replace")
+    usage = None
+    if route is not None:
+        try:
+            events = fallback.parse_events(b"".join(stdout).splitlines())
+        except fallback.EventError as error:
+            # Fail closed: a BLOCKED_* status could hide in an unparsed stream.
+            sys.stderr.write(f"spec workflow agent wrapper: {error}\n")
+            shown = ""
+            if exit_code == 0:
+                exit_code = 1
+                reason = str(error)
+        else:
+            shown = events.text
+            sys.stdout.write(shown)
+            sys.stdout.flush()
+            usage = fallback.usage_file(
+                events, exited=not limit_hit and exit_code != EXIT_INTERRUPTED
+            )
+    if (
+        route is not None
+        and exit_code == 0
+        and fallback.model_changed(route["setting"])
+    ):
+        sys.stderr.write(
+            "spec workflow agent wrapper: the local model changed during the step; "
+            "its result is untrusted, failing this step\n"
+        )
+        shown = ""
+        exit_code = 1
+        reason = "model changed during the step"
+    blocked = BLOCKING.findall(shown)
     if exit_code == 0 and blocked:
         sys.stderr.write(
             f"spec workflow agent wrapper: agent reported {blocked[0]}; "
@@ -1292,6 +1734,25 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             entry["limit"] = "wall-time"
     with meta_file:
         meta_file.write((json.dumps(meta, indent=2) + "\n").encode())
+    if route is not None:
+        if usage is not None:
+            with _open_log(log_fd, "usage.json") as usage_log:
+                usage_log.write(usage)
+        os.close(log_fd)
+    if observe is not None:
+        observe |= {
+            "step": log_dir.name,
+            "tail": (
+                b"".join(stdout)[-fallback.TAIL_BYTES :],
+                b"".join(stderr)[-fallback.TAIL_BYTES :],
+            ),
+            "blocked": bool(blocked),
+            "contained": contained and not tampered,
+            "limit_hit": limit_hit,
+            "usage": usage,
+        }
+        if observe.get("evidence"):
+            observe["after"] = fallback.state_evidence(root, observe.get("feature"))
     return exit_code, entry
 
 

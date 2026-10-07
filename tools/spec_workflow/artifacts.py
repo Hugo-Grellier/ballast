@@ -1956,7 +1956,9 @@ def _validate_review(  # noqa: C901, PLR0912 - one field per rule
         "kind": kind,
         "verdict": review["verdict"],
         "report": report,
-        "cross_provider": step.get("integration") != run["integration"],
+        # A local fallback's review is never cross-provider (#23 AC-016).
+        "cross_provider": step.get("route") != "fallback"
+        and step.get("integration") != run["integration"],
         "author_provider": run["integration"],
         "findings": checked,
     }
@@ -2013,6 +2015,11 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
     elif not isinstance(model, str) or not MODEL.fullmatch(model):
         message = "model must be a short model name"
         raise DraftError(message)
+    provider = step.get("integration", "runner")
+    if step.get("route") == "fallback":
+        # The wrapper knows the local fallback's model; the agent's report
+        # of its own model is ignored (#23 AC-016).
+        provider, model = step.get("provider", "ollama"), step.get("model", model)
     material = data.get("material", False)
     supersedes = data.get("supersedes")
     if not isinstance(material, bool) or (
@@ -2035,7 +2042,7 @@ def _validate_draft(  # noqa: C901, PLR0912, PLR0915 - one field per rule
         "evidence": _evidence(feature, data.get("evidence")),
         "artifact": {"path": artifact, "sha256": autonomy.sha256_file(artifact_path)},
         "agent": {
-            "provider": step.get("integration", "runner"),
+            "provider": provider,
             "model": model,
             "role": step.get("role", "runner"),
             "step_id": step.get("step", "runner"),

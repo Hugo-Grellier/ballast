@@ -1810,6 +1810,8 @@ providers:
 
 The default mode SHOULD prefer `subscription` when requested by the user.
 
+The `local` billing mode exists as one qualified backend (#23, [ADR-0014](../docs/adr/0014-local-zero-cost-fallback.md)): a zero-cost availability fallback, not a routing profile. When the operator turns it on for a run, a step whose subscription quota or provider failed on its first attempt runs once on a local Ollama model through Codex's `--oss` mode; it is recorded as `route_source: fallback` and never counts as cross-provider review.
+
 ---
 
 # 65. Paid API guard
@@ -1831,6 +1833,8 @@ BLOCK
 ```
 
 rather than a silent fallback to a billed API.
+
+The local fallback (#23) keeps this guard: it routes only to a local model on loopback that its checks prove installed, non-remote and non-cloud, and refuses with a recorded reason otherwise; it never falls back to a paid or remote backend.
 
 ---
 
@@ -2404,6 +2408,8 @@ Autonomous makes intermediate intent, plan and implementation decisions provisio
 **Status (#13, project-adapted init):** the global CLI's commands are `init`, `setup`, `preview`, `trust`, `run`, `ledger`, `intake`, `discard-runs`, `doctor`, `self-install` and `--version`. `ballast init [--ref REF] [--description TEXT] [--stack python|node|rust|go|neutral]` is the only one that runs before a pin: the CLI chooses the ref (the existing pin, which init keeps and a different `--ref` cannot move; without a pin, `--ref`, else its own release), fetches that version and runs its `tools/init` under `/usr/bin/python3 -IS`. A standard version declares the tool in its manifest `tools/cli.toml` with `[init] supported = true`, read as data next to `[cli] minimum`, `[doctor] probes`, `[setup] recoverable`/`prepare` and `[runs] format`/`resumes`; the CLI refuses a version without it, or one whose minimum exceeds the CLI, before writing in the project. `tools/init` inspects a fixed, bounded evidence list as data, creates only absent project-owned files (`ballast.toml`, the constitution, `AGENTS.md` with its `CLAUDE.md` link, an evidence-backed `docs/policies/project/testing.md`) from `templates/init/` and `templates/AGENTS.md`, appends setup's ignore block when missing, proposes every other change as the ignored `.ballast/init/proposed.patch`, installs through `tools/setup` and reports readiness; it never runs detected commands, records trust, commits or pushes. Contracts: [`specs/13-adaptive-init/`](13-adaptive-init/spec.md); decision: [ADR-0012](../docs/adr/0012-init-before-pin.md) (proposed).
 
 One compatible zero-cost execution backend must be qualified as an opt-in fallback when the existing Claude/Codex route is unavailable or its quota is exhausted. Free-only and privacy/permission constraints apply before selection; fallback attempts are bounded and recorded. Paid overflow and broad provider support are later work.
+
+**Status (#23, local zero-cost fallback):** the qualified backend is Codex CLI's local-provider mode (`codex exec --oss --local-provider ollama -m MODEL --json`) against the operator's Ollama at its fixed default endpoint `127.0.0.1:11434`. The operator turns it on per human-gated or Autonomous run with `ballast run start|resume --local-fallback MODEL|off`, stored as `fallback.json` in the run's operator directory; Chat refuses it. The wrapper runs the step once on it only when the first attempt failed on quota, provider availability or a missing CLI and changed nothing (tree, reviews, drafts, git-ignored paths, refs). Before any prompt is sent it refuses, with one of `changed-state`, `privacy-exclusion`, `unknown-free-status`, `incompatible-capability` or `permission-mismatch`, anything it cannot establish: an endpoint override, Ollama older than 0.13.4, a model not installed, remote or cloud, a served context below 16384 tokens, a Codex without `--oss` or without the step's skill, a Codex sandbox that does not start under the step's confinement, a Codex configuration layer or user skill outside the fallback's private `CODEX_HOME`, or an argv or environment that is not exactly the canonical headless Codex profile (no secret, endpoint override or operator proxy; every proxy-aware request is pointed at a closed local port because Codex contacts its own hosts at start-up). The attempt runs under the same scope and confinement, counts as an agent step, is never retried, and is recorded as additive ledger `route` and `usage` events; a review it completes is never cross-provider. On the qualified host Autonomous steps refuse it because Codex's sandbox does not nest in bubblewrap. Contracts: [`specs/23-free-fallback/`](23-free-fallback/spec.md); decision: [ADR-0014](../docs/adr/0014-local-zero-cost-fallback.md) (proposed).
 
 A UI demo video is captured **on request** from a project-supplied reproducible scenario and linked to the existing PR with its commit and scenario. Routine UI PRs do not require automatic capture. The PR also carries concise, source-linked acceptance evidence, checks and unresolved decisions.
 

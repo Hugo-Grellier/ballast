@@ -1,0 +1,93 @@
+# Decisions
+
+## DEC-0001 — Proposal
+
+- **Found during**: the tasks gate (`decide-tasks`) of the Autonomous run `f200c320`, 2026-10-06. The run blocked as a contradiction: plan decision PD-0009 required the gate to refuse tasks that leave plan-review findings F-001, F-002 and F-004 open, and the analyze report confirmed all three.
+- **Conflict**:
+  1. Analyze F1 (HIGH), plan-review F-002: research.md R9 let a primary that failed during a draft-retry attempt fall back. That gives three attempts, while spec.md SC-005 says no step makes more than two (one primary, one fallback) and FR-006 says the fallback comes after one failed primary attempt.
+  2. Analyze F2 (HIGH), an R2 boundary: AC-009 and FR-003 promise that the fallback runs only when the primary left the worktree, drafts and protected state unchanged. Research R3, plan ADR-0012 and tasks T014/T029 instead accepted a residual risk: `tree_digest` does not see git-ignored paths, so a partial mutation there would be replayed. The spec lists replaying a partial mutation as a non-goal.
+  3. Coverage gaps the gate also refused: F-001 (no task pins or refuses the Codex user `config.toml` `mcp_servers`, `notify` and `profiles`, so a fallback could be wider than a Claude primary, AC-008, and send content off loopback through an MCP server or a notify program, AC-006); F-004 and analyze C1 (no human-gated run record for AC-020, no human-gated review provenance for AC-016); analyze F3 (missing explicit task dependencies); plan-review F-003 (the `route_source: fallback` cross-field rule differs between data-model.md and contracts/ledger.md).
+- **Label**: spec violation (items 1 and 2: the plan contradicts the spec) and missing test (item 3).
+- **Options**:
+  1. Keep the spec as written. Regenerate the tasks so that no fallback runs after a draft-retry attempt, extend changed-state detection to git-ignored paths the step could write (or refuse when they cannot be checked), and add the F-001, F-004/C1 and F3 tasks. No spec change. The fallback becomes rarer and the changed-state check costs more. tasks.md and research.md R3/R9 are revised, and the tasks gate is rerun.
+  2. Amend the spec. SC-005 and FR-006 would count a draft retry and allow a final fallback after it. AC-009 and FR-003 would cover only tracked and protected state, and the spec and ADR-0012 would name the ignored-path residual risk. Then add the F-001, F-004/C1 and F3 tasks. This is a material change to the intent on an R2 boundary, so it would be recorded as a superseding provisional decision, shown at merge, and the spec, plan and tasks would be updated before the run continues.
+  3. Close only F-001, F-004/C1 and F3 now. Record items 1 and 2 as open discoveries to resolve before implementation reaches the wrapper tasks. The tasks could proceed, but implementation would stop at the conflict and the contradictions would stay open until someone decides them.
+- **Needs**: a resolution before the tasks gate is rerun.
+
+## DEC-0001 — Resolution
+
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. Option 1.
+- **Resolution**: The spec stands unchanged.
+  - The fallback is considered only after the step's first primary attempt. A primary that fails on a draft-retry attempt never falls back, and a fallback is never followed by a draft retry or another fallback. A step that falls back therefore makes exactly two attempts (SC-005, FR-006). A step that never considers the fallback keeps the existing draft-retry loop unchanged.
+  - Changed-state evidence covers more than the tracked tree, the feature's reviews and drafts:
+    - every git-ignored path in the worktree outside the protected inputs, plus the Spec Kit paths agents may write inside `.specify/`;
+    - `HEAD` and the refs, so a commit or branch the primary made is caught.
+  - When that evidence cannot be established (an unreadable entry, a Git failure, more than 200,000 ignored entries, or a 10 s budget exceeded), the fallback is refused as `changed-state` (AC-009, FR-003). Writes outside the worktree are not part of AC-009's state. An Autonomous attempt's private temporary directory is discarded, and the fallback gets a fresh one.
+- **Rationale**: Option 1 is the narrower choice and matches the recorded intent decisions (PD-0002: eligibility from evidence that nothing changed, never replaying a partial mutation; PD-0004: one fallback attempt). Option 2 would widen an R2 boundary only to keep the fallback available more often. Option 3 would leave a known contradiction in the path of implementation.
+- **Changed now**:
+  - research.md: R3 rewritten (ignored-path and ref digests, fail-closed budget; the residual risk removed). R9 rewritten (first-attempt-only fallback; the human-gated bound without a step limit, analyze U2). R6 adds a private, wrapper-owned `CODEX_HOME` and a refusal when another Codex config layer exists (F-001). R5 adds the config-layer check and a 10 s overall probe deadline (analyze E1). R2 names where signatures come from and what happens when one cannot be captured (analyze U1). R10 says the sandbox probes run from the operator's terminal (analyze U3).
+  - plan.md: summary lists checks and reasons separately (analyze A1). The ADR-0012 residual risks and the repository impact are updated.
+  - data-model.md: the cross-field rule matches contracts/ledger.md (`route_source: fallback` forbids `failure_cause` and `fallback`, F-003). Adds the worktree-state evidence and the human-gated run record: `ballast run status` line, the step's `meta.json` `local_fallback` field, and ledger `route` events (F-004).
+  - contracts: wrapper-fallback.md gets the first-attempt rule, the state evidence, the private `CODEX_HOME` and config-layer refusal, and human-gated review provenance. ledger.md: the report never counts a review as cross-provider in a run whose review step the fallback completed (C1, AC-016). operator-cli.md: `ballast run status` shows the setting.
+  - quickstart.md: test map updated with the new tests.
+  - tasks.md: regenerated with the Spec Kit tasks template and the explicit-task-dependencies preset. Every task lists its dependencies (F3). New tasks cover the state evidence, the Codex config pinning and refusal, human-gated run record and review provenance, the draft-retry rule, the probe deadline, and a stdlib-only/no-model-list test (analyze E2). Workflow-owned steps (full local gate, reviews, converge, reconciliation, the pilot runs through `ballast run`) have no task.
+  - Unchanged: spec.md, intent.md, autonomous/record.md.
+- **Tests**: `tests/test_fallback.py` (`StateTests`, `WrapperFallbackTests.test_retry_attempt_never_falls_back`, `test_ignored_path_change_refuses`, `test_primary_commit_refuses`, `test_unverifiable_state_refuses`, `test_user_codex_config_not_read`, `PermissionTests.test_other_codex_config_layer_refuses`, `ProbeTests.test_probe_deadline_refuses`, `LedgerFallbackTests.test_human_gated_review_by_fallback_not_cross_provider`, `RunCliTests.test_status_shows_setting`, `test_human_gated_meta_records_setting`, `ModuleTests.test_stdlib_only_no_model_list`), as mapped in tasks.md and quickstart.md.
+
+## DEC-0002 — Proposal
+
+- **Found during**: the implement step of the Autonomous run `f200c320`, 2026-10-06, at task T001 (the host pilot of research R10).
+- **Conflict**: T001 requires every pilot probe to run "from the operator's terminal, not from inside a confined agent step". The implement step is a confined agent step. Its tool permissions refuse every command that needs approval, including version and help probes (`codex --version`, `ollama --version`), and its home directory is read-only, so `uvx` and the test modules' operator-state setup also fail. T001's own stop rule applies: "the host cannot run the probes". Every task from T002 on depends on the pilot's results: the `--config` key that pins the base URL, the `codex exec --json` event shape, the Codex configuration layers, the Codex Spec Kit skill path and the quota and availability signatures. Coding them without the pilot would mean guessing at host facts on an R2 boundary, which the tasks forbid ("Never switch backend silently"; "A pilot result that contradicts research R1 to R10 is a discovery").
+- **Done before stopping**: the tasks that do not depend on the pilot. T003 (ledger tests in `tests/test_agent_run_ledger.py`), T004 (additive ledger values and cross-field rules in `tools/spec_workflow/ledger.py`), T005 (the `ledger-schema.md` paragraph) and T030 (the `templates/policies/model-routing.md` paragraph). The new ledger tests could not be run in this step: the test module's `setUpModule` creates its operator state under the read-only home. run-checks, or the operator, must run them.
+- **Label**: spec ambiguity (the tasks put an operator-terminal step inside the agent's implement phase).
+- **Options**:
+  1. The operator runs the T001 probes from their terminal and records the results in a "Pilot" section of `specs/23-free-fallback/evaluation.md`. Then the run resumes the implement step at T002. No spec, plan or task change.
+  2. The operator grants the implement step the probe commands (read-only `codex`, `ollama` and loopback `curl` probes), and the step reruns T001 itself. The pilot record must then say that the probes ran inside a confined step, which T001 forbids. Changing that would be a task change on an R2 boundary.
+  3. Implement T002 to T036 against placeholder host facts that fail closed: an unknown config key, event shape or layer list always refuses. The fallback could never be selected until a later pilot fills them in. AC-001 to AC-004 and AC-018 would stay unproven, so the feature would not meet its intent.
+- **Needs**: an operator resolution before the implement step continues. Option 1 is the narrowest and keeps the tasks as written.
+
+## DEC-0002 — Resolution
+
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. Option 1.
+- **Resolution**: The operator ran the T001 probes from the host shell and the results are in the Pilot section of `evaluation.md` (items 1 to 10). No spec, plan or task change from this decision.
+## DEC-0003 — Proposal
+
+- **Found during**: task T001, the host pilot, run on 2026-10-06 from the operator side under DEC-0002 option 1. Evidence is in [evaluation.md](evaluation.md#pilot).
+- **Conflict**:
+  1. Candidate rejected on this host as it stands. `codex exec --oss --local-provider ollama -m qwen3:4b --json` exits 1 before sending any model request: `OSS setup failed: Ollama 0.6.8 is too old. Codex requires Ollama 0.13.4 or newer.` (Codex 0.155.1). The model cannot answer through the candidate, so T001's stop rule applies. The `--json` shape of a real `--oss` run, and whether `--oss` needs a login, also stay unproven. The event shape was observed only with a loopback stub provider.
+  2. Research R6 and contracts/wrapper-fallback.md expect a `--config` key that pins the Ollama provider's base URL. No such key exists. `-c model_providers.ollama.*` is refused ("reserved built-in provider IDs … cannot be overridden"). The only overrides are the environment variables `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, which R6 removes and the permission comparison forbids. Without one of them, `--oss` uses the default `127.0.0.1:11434`, so a non-default `--local-fallback-endpoint` could not be honoured.
+  3. Smaller findings for the plan, none blocking on its own:
+     - R5 check 6 should also refuse an Ollama older than the minimum Codex requires;
+     - `/api/show` carries no `size` or `digest`, so check 7 uses the `/api/tags` entry;
+     - in `--json` mode, request failures are printed on stdout and a successful run can emit an `item.completed` of type `error`;
+     - `codex exec` has more widening flags than the plan lists: `--ignore-user-config`, `--enable/--disable`, `--approve-for-me`, `--dangerously-bypass-hook-trust`, `--worktree`;
+     - skills also load from `~/.agents/skills` outside `CODEX_HOME`.
+- **Label**: spec ambiguity (item 1: the host cannot run the qualified candidate) and architecture issue (item 2: R6's pinning mechanism does not exist).
+- **Options**:
+  1. The operator upgrades Ollama on the host to 0.13.4 or newer, and keeps the endpoint fixed at the default `http://127.0.0.1:11434`. `--local-fallback-endpoint` is dropped, or limited to that default, and `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT` stay removed. The pilot's item 4 is then rerun and T001 is completed. Contracts/operator-cli.md and R4, R5 and R6 change, and the operator-visible option shrinks.
+  2. The operator upgrades Ollama. The wrapper sets `CODEX_OSS_BASE_URL` itself from the operator setting, as the one allowed value beside `CODEX_HOME`, and the permission comparison accepts exactly that value. This widens the environment allowlist on an R2 boundary.
+  3. Replace `--oss` with a wrapper-defined custom provider: `-c model_provider=NAME -c 'model_providers.NAME={…base_url=…}'` against Ollama's OpenAI-compatible endpoint. The base URL is then pinned by `--config` as R6 intended, but the candidate in R1 changes and Ollama's Responses API support needs its own pilot. It also needs the Ollama upgrade.
+  4. Reject the candidate for now. Record that no zero-cost fallback qualifies on this host and close the feature with evidence (SC-004 "refused with a recorded cause" does not cover a candidate that never runs).
+- **Needs**: an operator resolution, and the Ollama upgrade for options 1 to 3, before T001 is completed and the implement step continues. Upgrading a host package is outside an agent's authority.
+
+## DEC-0003 — Resolution
+
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The operator then did the host action this decision needs, the Ollama upgrade to 0.35.1, on 2026-10-06. Option 1.
+- **Resolution**: The fallback talks only to Ollama's default loopback endpoint `127.0.0.1:11434`; `--local-fallback-endpoint` is dropped, and the wrapper keeps stripping `CODEX_OSS_BASE_URL` and `CODEX_OSS_PORT`, so nothing an agent or the checkout controls can redirect the provider. No boundary widens. The pilot's `--oss` run (and whether it needs a login) is repeated after the upgrade, before T001 is ticked.
+
+## DEC-0004 — Proposal
+
+- **Found during**: task T001, the host pilot rerun on 2026-10-06 from the operator side, after the Ollama upgrade to 0.35.1. Evidence is in [evaluation.md](evaluation.md#9-rerun-on-ollama-0351-2026-10-06-operator-host-outside-confinement).
+- **Conflict**: DEC-0003 option 1 is met (Ollama 0.35.1, default endpoint, no login needed), but `codex exec --oss --local-provider ollama -m qwen3:4b --json` still fails on a trivial prompt. Codex sends about 7.7k tokens of instructions, and the host's Ollama serves the model with a 4096-token context, so the server returns `exceed_context_size_error` (HTTP 400) and Codex retries five times, then emits `turn.failed`. T001's stop rule applies: the model cannot answer through the candidate. R1 and R5 assume a model that runs under Codex, and none of them states a minimum context length. The `--oss` provider offers no per-run way to raise the context (Ollama's context comes from the server setting, the model's `num_ctx` or the Modelfile, not from Codex). An agent can't change it without changing host state.
+- **Label**: spec ambiguity (no requirement on the model's served context length) and architecture issue (R5's checks 7 and 8 judge the model by size and digest, so a model the server cannot run for Codex passes them).
+- **Options**:
+  1. The operator raises the host's served context (the `OLLAMA_CONTEXT_LENGTH` server setting, or a local model variant with a larger `num_ctx`) to at least 16k tokens, restarts Ollama, and the pilot's item 4 is rerun. The plan then adds an R5 check that refuses a model whose served context is below a recorded minimum, if `/api/show` or `/api/ps` exposes it. This changes the host, not the spec, and is an operator action.
+  2. Qualify a different, larger-context local model. The operator pulls it, and the pilot reruns with that tag. R1 and the quickstart name the new tag.
+  3. Reject the candidate for now: record that no zero-cost fallback qualifies on this host and close the feature with evidence.
+- **Needs**: an operator resolution and a host change (options 1 or 2) before T001 is ticked. T001 stays open and the implement step does not continue.
+
+## DEC-0004 — Resolution
+
+- **Status**: resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review. The driving agent created the `qwen3:4b-16k` variant on 2026-10-06 (a local model variant, not a server setting). Option 1, adapted.
+- **Resolution**: The driving agent created `qwen3:4b-16k` (`FROM qwen3:4b`, `PARAMETER num_ctx 16384`) rather than changing the server setting. It answers under Codex ([evaluation.md](evaluation.md#10-qwen34b-16k-a-16k-context-local-variant-2026-10-06)). The qualified candidate is a local model variant whose served context is at least 16384 tokens. Research R5 gains check 11a, which reads `num_ctx` from `/api/show` `parameters` and refuses a model below the minimum or with no `num_ctx`. Tasks T037 (tests first) and T013 add it. No boundary widens.
+
