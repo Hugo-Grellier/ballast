@@ -877,10 +877,12 @@ class AgentWrapperTests(unittest.TestCase):
         tree.mkdir()
         for name in ("a", "b", "c"):
             (tree / name).write_text(name)
-        found: dict[str, str] = {}
-        agent._followed(tree, ".codex", found, set(), [3])  # noqa: SLF001
-        self.assertEqual(found[".codex/c"], "truncated")
-        self.assertEqual(len(found), 4)
+        with self.assertRaisesRegex(OSError, "more than"):
+            agent._followed(tree, ".codex", {}, set(), [3])  # noqa: SLF001
+        (self.root / ".codex").symlink_to(tree)
+        with patch.object(agent, "CONFIG_ENTRIES", 3):
+            after = agent._protected_after(self.root, self.root / "log")  # noqa: SLF001
+        self.assertIn("unreadable", after["(protected state)"])
 
     def test_retargeting_a_link_inside_linked_codex_fails_the_step(self) -> None:
         """Review of #66: a nested link is recorded by target, not only content."""

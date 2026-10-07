@@ -147,7 +147,6 @@ LOG_FILES = ("stdout.log", "stderr.log", "meta.json")
 # Agent CLI configuration a checkout can carry (Claude settings, Codex config).
 AGENT_CONFIG = (".claude/settings.json", ".claude/settings.local.json", ".codex")
 CONFIG_ENTRIES = 2000
-CONFIG_FILE_BYTES = 1024 * 1024
 REAP_SECONDS = 10.0
 INTERRUPT_GRACE_SECONDS = 5.0
 # The operator ends an interactive step with Ctrl-] twice within a second.
@@ -296,14 +295,14 @@ def _followed(
     """Record `path` as the agent CLI reads it: every link followed (#66).
 
     A link keeps its text and also records what it resolves to, so neither a
-    retarget nor a change of a linked file or directory goes unnoticed. The
-    walk is bounded: a link to a huge tree records `truncated` (which differs
-    from any earlier state, so the step fails) instead of stalling the check.
+    retarget nor a change of a linked file or directory goes unnoticed. A
+    tree past CONFIG_ENTRIES raises OSError instead of stalling the check:
+    before the step that refuses it, after the step it reads as a change.
     """
     budget[0] -= 1
     if budget[0] < 0:
-        found[key] = "truncated"
-        return
+        message = f"agent configuration has more than {CONFIG_ENTRIES} entries"
+        raise OSError(message)
     link = f" link:{path.readlink()}" if path.is_symlink() else ""
     if path.is_dir():
         real = path.resolve()
@@ -313,14 +312,18 @@ def _followed(
             for child in sorted(path.iterdir()):
                 _followed(child, f"{key}/{child.name}", found, seen, budget)
     elif path.is_file():
-        info = path.stat()
-        found[key] = (
-            hashlib.sha256(path.read_bytes()).hexdigest()
-            if info.st_size <= CONFIG_FILE_BYTES
-            else f"large:{info.st_size}:{info.st_mtime_ns}"
-        ) + link
+        with path.open("rb") as handle:
+            found[key] = hashlib.file_digest(handle, "sha256").hexdigest() + link
     elif link:
         found[key] = "dangling" + link
+
+
+def _protected_after(root: Path, own_log: Path) -> dict[str, str]:
+    """Return the protected state after a step; unreadable state reads as changed."""
+    try:
+        return _protected_state(root, own_log)
+    except OSError as error:
+        return {"(protected state)": f"unreadable: {error}"}
 
 
 def _installed_skills(root: Path) -> dict[str, str]:
@@ -1818,7 +1821,7 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             "failing this step\n"
         )
         exit_code = EXIT_BLOCKED
-    after = _protected_state(root, log_dir)
+    after = _protected_after(root, log_dir)
     tampered = sorted(
         name
         for name in protected.keys() | after.keys()

@@ -2122,7 +2122,7 @@ def _finish(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917 - steps 9 to 12, 
         return EXIT_TAMPERED
     tampered: list[str] = []
     if interactive:
-        after = agent._protected_state(root, log_dir)  # noqa: SLF001
+        after = agent._protected_after(root, log_dir)  # noqa: SLF001
         tampered = sorted(
             path
             for path in protected.keys() | after.keys()
