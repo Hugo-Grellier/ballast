@@ -1523,6 +1523,9 @@ class ConfinementTests(AutonomyCase):
             {"CODEX_HOME": str(home / "ssh-link")},
             {"CODEX_HOME": str(home / ".config")},
             {"CLAUDE_CONFIG_DIR": str(home)},
+            {"CODEX_HOME": "/run"},
+            {"CLAUDE_CONFIG_DIR": "/tmp"},  # noqa: S108
+            {"CODEX_HOME": str(home / "rt"), "XDG_RUNTIME_DIR": str(home / "rt/1")},
         ):
             for integration in ("claude", "codex", None):
                 with (

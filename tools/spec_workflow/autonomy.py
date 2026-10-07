@@ -2371,12 +2371,15 @@ def _hidden_credentials(home: Path, env: dict[str, str]) -> list[Path]:
 def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
     """Refuse a home of one CLI inside the other's: one mount would reveal it.
 
-    Likewise a home that is, or contains, a hidden credential path (#97): a
-    step's overlay of its own home comes after the hiding mounts.
+    Likewise a home that is, or contains, a hidden path (#97): a step's
+    overlay of its own home comes after the hiding mounts.
     """
     claude, codex = (homes(home, env) for homes in AGENT_HOMES.values())
+    hidden_paths = [*_hidden_credentials(home, env), *TMPFS_HIDDEN, Path("/var/run")]
+    if env.get("XDG_RUNTIME_DIR"):
+        hidden_paths.append(Path(env["XDG_RUNTIME_DIR"]))
     for path in claude + codex:
-        for hidden in _hidden_credentials(home, env):
+        for hidden in hidden_paths:
             if hidden.resolve().is_relative_to(path):
                 message = (
                     f"agent home {path} contains {hidden}, which a step must "
