@@ -1085,11 +1085,11 @@ class ConfinementTests(AutonomyCase):
             ({"GIT_CONFIG_GLOBAL": "custom-gitconfig"}, [dotfile, xdg, custom]),
             ({"GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}, [dotfile, xdg]),
             # Both XDG files: the step's git falls back to the default one,
-            # which an agent home of ~/.config would overlay back into view.
+            # which an agent home of ~/.config/git would overlay back into view.
             (
                 {
                     "XDG_CONFIG_HOME": str(elsewhere.parent.parent),
-                    "CLAUDE_CONFIG_DIR": str(home / ".config"),
+                    "CLAUDE_CONFIG_DIR": str(home / ".config/git"),
                 },
                 [dotfile, xdg, elsewhere],
             ),
@@ -1500,6 +1500,39 @@ class ConfinementTests(AutonomyCase):
                 (home / name).symlink_to(target)
                 with self.assertRaisesRegex(autonomy.AutonomyError, "worktree"):
                     self.confined(home, {}, "codex")
+
+    def test_a_runtime_directory_inside_the_worktree_is_refused(self) -> None:
+        """#97 review: the worktree bind would restore its sockets."""
+        home = self.credential_home()
+        (self.root / "run").mkdir()
+        (self.base / "run-link").symlink_to(self.root / "run")
+        for runtime in (self.root / "run", self.base / "run-link"):
+            with (
+                self.subTest(runtime=runtime),
+                self.assertRaisesRegex(autonomy.AutonomyError, "worktree"),
+            ):
+                self.confined(home, {"XDG_RUNTIME_DIR": str(runtime)}, "claude")
+
+    def test_an_agent_home_holding_a_hidden_credential_is_refused(self) -> None:
+        """#97 review: a step's own overlay would show what the tmpfs hid."""
+        home = self.credential_home()
+        (home / ".ssh").mkdir()
+        (home / ".config").mkdir()
+        (home / "ssh-link").symlink_to(home / ".ssh")
+        for env in (
+            {"CODEX_HOME": str(home / "ssh-link")},
+            {"CODEX_HOME": str(home / ".config")},
+            {"CLAUDE_CONFIG_DIR": str(home)},
+        ):
+            for integration in ("claude", "codex", None):
+                with (
+                    self.subTest(env=env, integration=integration),
+                    self.assertRaisesRegex(autonomy.AutonomyError, "contains"),
+                ):
+                    self.confined(home, env, integration)
+        # A home inside a hidden directory stays allowed: only its subtree shows.
+        (home / ".config/codex").mkdir()
+        self.confined(home, {"CODEX_HOME": str(home / ".config/codex")}, "codex")
 
     def test_an_absolutely_linked_agent_home_is_mounted_on_its_target(self) -> None:
         """#97 R2: bwrap cannot mount on a link; every mount names the target."""
@@ -2509,11 +2542,11 @@ class RealConfinementTests(AutonomyCase):
             (
                 ({}, [home / ".gitconfig", dotfile, xdg]),
                 ({"GIT_CONFIG_GLOBAL": str(custom)}, [custom, dotfile, xdg]),
-                # A custom XDG directory, and an agent home overlaying ~/.config.
+                # A custom XDG directory, and an agent home overlaying ~/.config/git.
                 (
                     {
                         "XDG_CONFIG_HOME": str(custom.parent),
-                        "CLAUDE_CONFIG_DIR": str(home / ".config"),
+                        "CLAUDE_CONFIG_DIR": str(home / ".config/git"),
                     },
                     [home / ".config/git/config", xdg],
                 ),

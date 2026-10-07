@@ -2361,9 +2361,28 @@ def _visible_binds(root: Path, command: list[str]) -> list[str]:
     return args
 
 
+def _hidden_credentials(home: Path, env: dict[str, str]) -> list[Path]:
+    """Every credential path the sandbox hides before its later binds."""
+    names = (".claude.json", *CREDENTIAL_FILES, *CREDENTIAL_DIRS)
+    paths = [home / name for name in names]
+    return paths + [Path(env[n]) for n in CREDENTIAL_LOCATIONS if env.get(n)]
+
+
 def _refuse_nested_agent_homes(home: Path, env: dict[str, str]) -> None:
-    """Refuse a home of one CLI inside the other's: one mount would reveal it."""
+    """Refuse a home of one CLI inside the other's: one mount would reveal it.
+
+    Likewise a home that is, or contains, a hidden credential path (#97): a
+    step's overlay of its own home comes after the hiding mounts.
+    """
     claude, codex = (homes(home, env) for homes in AGENT_HOMES.values())
+    for path in claude + codex:
+        for hidden in _hidden_credentials(home, env):
+            if hidden.resolve().is_relative_to(path):
+                message = (
+                    f"agent home {path} contains {hidden}, which a step must "
+                    "not read: give the CLI its own home directory"
+                )
+                raise AutonomyError(message, "ineligible")
     for path in claude:
         for other in codex:
             if path.is_relative_to(other) or other.is_relative_to(path):
@@ -2462,15 +2481,15 @@ def _refuse_credentials_in_worktree(
 ) -> None:
     """Refuse a credential path inside the worktree: `--bind root root` exposes it.
 
-    Every path the sandbox hides before that bind (#97). The global Git files
-    need no refusal: they are emptied after it.
+    Every path the sandbox hides before that bind (#97), and the runtime
+    directory. The global Git files need no refusal: they are emptied after it.
     """
     inside = Path(root).resolve()
-    names = (".claude.json", *CREDENTIAL_FILES, *CREDENTIAL_DIRS)
-    paths = [home, *(home / name for name in names)]
+    paths = [home, *_hidden_credentials(home, env)]
     for homes in AGENT_HOMES.values():
         paths += homes(home, env)
-    paths += [Path(env[name]) for name in CREDENTIAL_LOCATIONS if env.get(name)]
+    if env.get("XDG_RUNTIME_DIR"):
+        paths.append(Path(env["XDG_RUNTIME_DIR"]))
     for path in paths:
         if path.resolve().is_relative_to(inside):
             message = (
