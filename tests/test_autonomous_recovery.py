@@ -702,6 +702,32 @@ class ResumeTests(StubCase):
                     run._continue_refusal(source, "block-resolved", "chat")  # noqa: SLF001
                 )
 
+    def test_dead_invocation_after_discard_reaches_chat(self) -> None:
+        """#114 review: a wrapper killed mid-step leaves an active run, no block."""
+        run_id = self.blocked_run(step="decide-tasks")
+        autonomy.resolve_block(self.root, run_id)
+        record = autonomy.read_run(self.root, run_id)
+        record["status"] = "active"
+        autonomy.write_json(autonomy.run_file(self.root, run_id), record)
+        for name in (".specify/workflows/runs", ".specify/workflow-state"):
+            shutil.rmtree(self.root / name / run_id, ignore_errors=True)
+        argv = ("continue", run_id, "--mode", "chat", "--reason", "block-resolved")
+        code, _, err = self.main(*argv, "--ref", "x")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"ballast run resume {run_id} stops it", err)
+        code, _, err = self.main("resume", run_id)
+        self.assertEqual(code, 2, err)
+        self.assertIn(autonomy.chat_continue_command(run_id), err)
+        source = autonomy.read_run(self.root, run_id)
+        self.assertEqual(source["status"], "stopped")
+        self.assertEqual(
+            autonomy.read_block(self.root, run_id)["category"], "interrupted"
+        )
+        self.assertIsNone(
+            run._continue_refusal(source, "block-resolved", "chat")  # noqa: SLF001
+        )
+        self.assertEqual(len(self.launched), 1)
+
     def test_start_time_sync_block_restarts(self) -> None:
         offline.UpstreamSyncRunTests.conflict(self)  # type: ignore[arg-type]
         code, _, _ = self.start()

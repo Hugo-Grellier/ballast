@@ -336,8 +336,8 @@ refuse, before executing any checkout code, if those inputs changed since
 `trust` (or since the baseline setup recorded), if `BALLAST_TAMPERED` exists, or if an agent step never finished its
 check (for example because the agent killed the wrapper). Saved run state is
 not in the baseline, so after an unfinished step `trust` also refuses: review
-the checkout, run `ballast discard-runs`, then `trust` and start a
-fresh run. `discard-runs` first kills the unfinished step's agent scope (see
+the checkout, run `ballast discard-runs`, then `trust`; continue the stopped
+run in Chat (see below) or start a fresh run. `discard-runs` first kills the unfinished step's agent scope (see
 below) and refuses unless systemd confirms it is gone, so no surviving agent
 process can rewrite state afterwards; only then does it delete the local run
 state (the archived copy in the Git common directory remains). It never follows

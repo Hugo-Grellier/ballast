@@ -1461,6 +1461,13 @@ def _continue_refusal(source: dict, reason: str, mode: str) -> str | None:  # no
         return (
             f"run {run_id} is {source['status']}; only a stopped, completed or "
             "published autonomous run can be continued"
+            + (
+                # #114: a dead invocation is stopped as interrupted by resume.
+                f". If its invocation is gone, ballast run resume {run_id} stops "
+                "it and names the next command"
+                if source["status"] == "active"
+                else ""
+            )
         )
     try:
         block = autonomy.read_block(ROOT, run_id)
@@ -1736,6 +1743,11 @@ def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibili
     """Why an Autonomous run cannot be resumed, naming the command that applies."""
     run_id, status = record["run_id"], record["status"]
     if status == "continued":
+        if autonomy.effective_mode(record) == "chat":
+            return (
+                f"run {run_id} was lowered and continues in a linked Chat run; "
+                "drive that run with ballast run step, not resume"
+            )
         return (
             f"run {run_id} was lowered and continues in a ballast-continue run; "
             "resume that run instead"

@@ -541,10 +541,44 @@ def _setup_refusal(root: Path, state: Path) -> str | None:
 
 
 # `uv run` and `uv sync` create or sync the project's .venv, a protected
-# input; `--no-project` and `--isolated` leave it alone (#114).
-UV_SYNCS = re.compile(r"(?<![\w./-])uv\s+(?:run|sync)\b")
-UV_NO_VENV = ("--no-project", "--isolated")
+# input (#114).
 VENV_REMEDY = "run `uv sync --locked` before `ballast trust`"
+
+
+def creates_venv(command: str) -> bool:
+    """Whether a command (or a `Bash(...)` rule) runs `uv run` or `uv sync` (#114).
+
+    Global options may precede the subcommand. `--no-project`, `--isolated`
+    and, for sync, `--dry-run` leave .venv alone, but only among uv's own
+    options: scanning stops at the first word that is neither an option nor
+    the value of the option before it.
+    """
+    # ponytail: a word after a flag option reads as its value, so a flag
+    # followed by the program can over-exempt; .venv still fails closed.
+    tokens = command.replace("(", " ").split()
+    for index, part in enumerate(tokens):
+        if part != "uv" and not part.endswith("/uv"):
+            continue
+        rest = iter(tokens[index + 1 :])
+        sub = next((t for t in rest if not t.startswith("-")), None)
+        if sub not in {"run", "sync"}:
+            continue
+        exempt = {"--no-project", "--isolated"} | (
+            {"--dry-run"} if sub == "sync" else set()
+        )
+        value = False
+        for word in rest:
+            if word.startswith("-"):
+                if word.partition("=")[0] in exempt:
+                    break
+                value = "=" not in word
+            elif value:
+                value = False
+            else:
+                return True
+        else:
+            return True
+    return False
 
 
 def _strings(table: object, key: str) -> list[str]:
@@ -571,9 +605,7 @@ def venv_warning(root: Path) -> str | None:
         "extra_allow",
     )
     for command in commands:
-        if UV_SYNCS.search(command) and not any(
-            flag in command.split() for flag in UV_NO_VENV
-        ):
+        if creates_venv(command):
             return (
                 f"{command!r} creates .venv, a protected input, on an agent's first "
                 f"run, and this checkout has none; {VENV_REMEDY}"

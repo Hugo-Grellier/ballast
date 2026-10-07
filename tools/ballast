@@ -896,10 +896,47 @@ PROJECT_GATES = {
     "checks-venv": ("agents running [checks]",),
 }
 # Same rule as the launcher's venv_warning (#114): `uv run` and `uv sync`
-# create .venv, a protected input; `--no-project` and `--isolated` do not.
-UV_SYNCS = re.compile(r"(?<![\w./-])uv\s+(?:run|sync)\b")
-UV_NO_VENV = ("--no-project", "--isolated")
+# create .venv, a protected input. The CLI runs any pinned version, so it
+# keeps its own copy of the launcher's creates_venv.
 VENV_REMEDY = "run `uv sync --locked` before `ballast trust`"
+
+
+def creates_venv(command: str) -> bool:
+    """Whether a command (or a `Bash(...)` rule) runs `uv run` or `uv sync` (#114).
+
+    Global options may precede the subcommand. `--no-project`, `--isolated`
+    and, for sync, `--dry-run` leave .venv alone, but only among uv's own
+    options: scanning stops at the first word that is neither an option nor
+    the value of the option before it.
+    """
+    # ponytail: a word after a flag option reads as its value, so a flag
+    # followed by the program can over-exempt; .venv still fails closed.
+    tokens = command.replace("(", " ").split()
+    for index, part in enumerate(tokens):
+        if part != "uv" and not part.endswith("/uv"):
+            continue
+        rest = iter(tokens[index + 1 :])
+        sub = next((t for t in rest if not t.startswith("-")), None)
+        if sub not in {"run", "sync"}:
+            continue
+        exempt = {"--no-project", "--isolated"} | (
+            {"--dry-run"} if sub == "sync" else set()
+        )
+        value = False
+        for word in rest:
+            if word.startswith("-"):
+                if word.partition("=")[0] in exempt:
+                    break
+                value = "=" not in word
+            elif value:
+                value = False
+            else:
+                return True
+        else:
+            return True
+    return False
+
+
 CHECKS_REMEDY = (
     'add a rule such as "Bash(<command> *)" to [agents.permissions] extra_allow'
     " in ballast.toml, then rerun `ballast setup`"
@@ -981,9 +1018,7 @@ def _checks_venv(root: Path) -> Outcome:
             [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
         )
     for command in commands:
-        if UV_SYNCS.search(command) and not any(
-            flag in command.split() for flag in UV_NO_VENV
-        ):
+        if creates_venv(command):
             detail = (
                 f"{command} creates .venv, a protected input, on an agent's first "
                 "run, and this checkout has none: the run would stop as tampered"

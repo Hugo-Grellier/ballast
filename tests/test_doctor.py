@@ -556,6 +556,33 @@ class ProjectTests(DoctorCase):
         )
         self.assertEqual(check["remedy"], shim.CHECKS_REMEDY)
 
+    def test_creates_venv_reads_uv_options(self) -> None:
+        # #114 review: only uv's own options exempt a command, global options
+        # may precede the subcommand, and the CLI's copy matches the launcher's.
+        loader = SourceFileLoader(
+            "launcher_for_doctor", str(ROOT / "tools/spec_workflow/launcher.py")
+        )
+        launcher = module_from_spec(spec_from_loader("launcher_for_doctor", loader))
+        loader.exec_module(launcher)
+        for command, creates in (
+            ("uv run --locked pytest", True),
+            ("uv sync --locked", True),
+            ("Bash(uv run pytest *)", True),
+            ("uv --quiet run pytest", True),
+            ("/usr/bin/uv run x", True),
+            ("uv run echo --no-project", True),
+            ("uv run --python=3.13 x --isolated", True),
+            ("uv run --python 3.13 --no-project x", False),
+            ("uv run --isolated x", False),
+            ("uv sync --dry-run", False),
+            ("uvx ruff check", False),
+            ("uv pip list", False),
+            ("make test", False),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(shim.creates_venv(command), creates)
+                self.assertEqual(launcher.creates_venv(command), creates)
+
     def test_uv_check_without_venv_is_reported(self) -> None:
         # Issue #114: an agent's first `uv run` creates .venv, a protected
         # input, so the run stops as tampered; doctor says so beforehand.
