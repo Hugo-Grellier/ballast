@@ -1866,12 +1866,16 @@ def _interrupted(run_id: str, record: dict) -> dict:
     autonomy.close_crashed_invocation(record, autonomy.latest_recorded(ROOT, record))
     autonomy.set_status(record, "stopped")
     autonomy.write_run(ROOT, record)
+    discarded = not _engine_exists(run_id)
     block = autonomy.make_block(
         "interrupted",
         "the run's last invocation ended without finishing (the runner was "
         "killed or the host stopped)",
         run_id=run_id,
         step_id=_engine_state(run_id).get("current_step_id"),
+        # #114: without engine state only Chat continues it.
+        recovery=autonomy.DISCARDED_RECOVERY if discarded else None,
+        command=autonomy.chat_continue_command(run_id) if discarded else None,
     )
     autonomy.record_block(ROOT, run_id, block)
     return autonomy.set_block_inputs(

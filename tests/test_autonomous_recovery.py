@@ -720,9 +720,10 @@ class ResumeTests(StubCase):
         self.assertIn(autonomy.chat_continue_command(run_id), err)
         source = autonomy.read_run(self.root, run_id)
         self.assertEqual(source["status"], "stopped")
-        self.assertEqual(
-            autonomy.read_block(self.root, run_id)["category"], "interrupted"
-        )
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(block["category"], "interrupted")
+        self.assertEqual(block["command"], autonomy.chat_continue_command(run_id))
+        self.assertEqual(block["recovery"], autonomy.DISCARDED_RECOVERY)
         self.assertIsNone(
             run._continue_refusal(source, "block-resolved", "chat")  # noqa: SLF001
         )

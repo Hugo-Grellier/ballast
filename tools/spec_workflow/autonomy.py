@@ -1249,6 +1249,11 @@ RESTART_RECOVERY = (
     "Review the evidence so far, then start a new run with a larger limit; "
     "resume never raises a limit and nothing exists yet to continue."
 )
+# A run whose engine state `discard-runs` dropped (#114).
+DISCARDED_RECOVERY = (
+    "The run's workflow state was discarded, so it cannot resume in Autonomous "
+    "or continue human-gated; review the checkout and continue it in Chat."
+)
 SYNC_RESUME_RECOVERY = "Remove the cause shown, then resume again."
 # The class each category belongs to (FR-023); derived, never stored.
 BLOCK_CLASSES = {
