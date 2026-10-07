@@ -2424,6 +2424,37 @@ def _claude_state_bind(home: Path, private: Path, integration: str | None) -> li
     return ["--bind", str(private / "claude.json"), str(settings)]
 
 
+def _global_git_config_binds(
+    root: Path, home: Path, env: dict[str, str], private: Path
+) -> list[str]:
+    """Empty every global Git configuration file a step could read (#90).
+
+    One can carry a token (`http.*.extraheader`, a URL with credentials), and
+    a step needs none of it: its Git directory is read-only, so it never
+    commits or pushes. The caller adds these binds last, so no directory
+    bound later (the worktree, an agent-home overlay) shows a file again,
+    and the XDG file is emptied even through a link out of `~/.config`.
+    An empty regular file, not /dev/null: git refuses to run when it cannot
+    open a config file, and a device on a bwrap bind cannot be opened.
+    bwrap cannot mount over a link: bind over the file it resolves to, and
+    nothing for a dangling or non-regular target.
+    """
+    # The default XDG file too: the step's git falls back to it, since
+    # confined_env() drops XDG_CONFIG_HOME.
+    paths = [home / ".gitconfig", home / ".config/git/config"]
+    if env.get("XDG_CONFIG_HOME"):
+        paths.append(Path(env["XDG_CONFIG_HOME"]) / "git/config")
+    if env.get("GIT_CONFIG_GLOBAL"):
+        # Relative to the step's working directory, where its git starts.
+        paths.append(root / env["GIT_CONFIG_GLOBAL"])
+    targets = [t for t in dict.fromkeys(p.resolve() for p in paths) if t.is_file()]
+    if not targets:
+        return []
+    empty = private / "empty-gitconfig"
+    empty.write_bytes(b"")
+    return [arg for t in targets for arg in ("--ro-bind", str(empty), str(t))]
+
+
 def _refuse_credentials_in_worktree(
     root: Path, home: Path, env: dict[str, str]
 ) -> None:
@@ -2551,6 +2582,8 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
     for path in keep_visible:
         if path.is_file() and not path.is_symlink():
             args += ["--ro-bind", str(path), str(path)]
+    # Last: a later directory bind would show a global Git file again.
+    args += _global_git_config_binds(root, home, env, private)
     for path in hidden:
         args += ["--remount-ro", str(path)]
     args += ["--unshare-pid", "--unshare-ipc"]
