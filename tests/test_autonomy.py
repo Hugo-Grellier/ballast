@@ -1065,23 +1065,28 @@ class ConfinementTests(AutonomyCase):
         self.assertEqual(argv[-2:], ["--", "true"])
 
     def test_global_git_config_is_hidden(self) -> None:
-        """#90: ~/.gitconfig, through a link, and $GIT_CONFIG_GLOBAL read empty."""
+        """#90: every global Git file reads empty, through links, binds last."""
         home = self.base / "home"
-        home.mkdir()
-        dotfile = self.base / "dotfiles/gitconfig"
-        dotfile.parent.mkdir()
-        dotfile.write_text("[http]\n\textraheader = AUTHORIZATION: bearer x\n")
+        (home / ".config/git").mkdir(parents=True)
+        dotfile = self.root / "dotfiles/gitconfig"  # in the writable worktree
+        xdg = self.base / "dotfiles/xdg-gitconfig"  # linked out of ~/.config
+        custom = self.root / "custom-gitconfig"
+        for path in (dotfile, xdg, custom):
+            path.parent.mkdir(exist_ok=True)
+            path.write_text("[http]\n\textraheader = AUTHORIZATION: bearer x\n")
         (home / ".gitconfig").symlink_to(dotfile)
-        custom = self.base / "custom-gitconfig"
-        custom.write_text("[user]\n\tname = t\n")
-        private = self.base / "private"
-        private.mkdir()
+        (home / ".config/git/config").symlink_to(xdg)
         for env, hidden in (
-            ({}, [dotfile]),
-            ({"GIT_CONFIG_GLOBAL": str(custom)}, [dotfile, custom]),
-            ({"GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}, [dotfile]),
+            ({}, [dotfile, xdg]),
+            ({"GIT_CONFIG_GLOBAL": str(custom)}, [dotfile, xdg, custom]),
+            # Relative to the step's working directory, the worktree.
+            ({"GIT_CONFIG_GLOBAL": "custom-gitconfig"}, [dotfile, xdg, custom]),
+            ({"GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}, [dotfile, xdg]),
+            ({"XDG_CONFIG_HOME": str(self.base / "elsewhere")}, [dotfile]),
         ):
             with self.subTest(env=env):
+                private = self.base / f"private-{len(list(self.base.iterdir()))}"
+                private.mkdir()
                 argv = autonomy.confined_argv(
                     self.root,
                     ["true"],
@@ -1096,9 +1101,12 @@ class ConfinementTests(AutonomyCase):
                 triples = list(zip(argv, argv[1:], argv[2:], strict=False))
                 masked = [t[2] for t in triples if t[:2] == bind]
                 self.assertEqual(masked, [str(path) for path in hidden])
-                # Before the writable worktree bind, which a later mount beats.
-                index = triples.index((*bind, str(dotfile)))
-                self.assertLess(index, argv.index("--bind"))
+                # After every other bind: a later directory mount would win.
+                first = triples.index((*bind, str(dotfile)))
+                last = max(
+                    i for i, a in enumerate(argv) if a.startswith("--") and "bind" in a
+                )
+                self.assertEqual(last, first + 3 * (len(hidden) - 1))
 
     def test_step_gets_throwaway_state_and_uv_tool_directories(self) -> None:
         """#79: tests and uvx write state a step owns, never the operator's."""
@@ -2370,12 +2378,15 @@ class RealConfinementTests(AutonomyCase):
         if not os.access("/var/tmp", os.W_OK):  # noqa: S108
             self.skipTest("needs a writable /var/tmp")
         home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
-        dotfile = home / "dotfiles/gitconfig"
+        dotfile = self.root / "dotfiles/gitconfig"  # the worktree is bound later
+        xdg = home / "xdg/gitconfig"  # linked out of the hidden ~/.config
         custom = home / "custom/gitconfig"
-        for path in (dotfile, custom):
+        for path in (dotfile, xdg, custom):
             path.parent.mkdir(parents=True)
             path.write_text("[http]\n\textraheader = SYNTHETIC-header\n")
+        (home / ".config/git").mkdir(parents=True)
         (home / ".gitconfig").symlink_to(dotfile)
+        (home / ".config/git/config").symlink_to(xdg)
         code = (
             "import subprocess, sys\n"
             "for path in sys.argv[1:]:\n"
@@ -2389,8 +2400,8 @@ class RealConfinementTests(AutonomyCase):
         env.pop("GIT_CONFIG_GLOBAL", None)
         for index, (extra, paths) in enumerate(
             (
-                ({}, [home / ".gitconfig", dotfile]),
-                ({"GIT_CONFIG_GLOBAL": str(custom)}, [custom, dotfile]),
+                ({}, [home / ".gitconfig", dotfile, xdg]),
+                ({"GIT_CONFIG_GLOBAL": str(custom)}, [custom, dotfile, xdg]),
             )
         ):
             with self.subTest(env=extra):
