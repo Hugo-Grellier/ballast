@@ -756,6 +756,8 @@ class PolicyTests(AutonomyCase):
             "other: operator-trust",
             "deploy: operator-trust",
             "deploy production",
+            "deploy.production",
+            "mark_ready now",
             "mark ready",
             "network-access: anything else",
         ]
@@ -763,11 +765,15 @@ class PolicyTests(AutonomyCase):
             autonomy.unauthorized_actions(allowed + refused, policy), sorted(refused)
         )
         # A legacy entry spelled like a forbidden action never matches it.
-        legacy = {"authorized_privileged_actions": ["deploy production"]}
-        self.assertEqual(
-            autonomy.unauthorized_actions(["deploy production"], legacy),
-            ["deploy production"],
-        )
+        for text in ("deploy production", "deploy.production", "release/v1"):
+            legacy = {"authorized_privileged_actions": [text]}
+            self.assertEqual(autonomy.unauthorized_actions([text], legacy), [text])
+            _, _, warned = self.policy(
+                f'[autonomous]\nauthorized_privileged_actions = ["{text}"]\n'
+            )
+            self.assertTrue(any("cannot widen" in w for w in warned), text)
+        # Words that merely begin like one are not forbidden.
+        self.assertFalse(autonomy.never_authorized("merged-docs check"))
 
     def test_limit_precedence_and_ranges(self) -> None:
         _, defaults, _ = self.policy(

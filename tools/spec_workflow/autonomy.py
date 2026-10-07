@@ -2872,12 +2872,12 @@ def action_kind(action: str) -> str:
 def never_authorized(action: str) -> bool:
     """Tell whether an action is `other` or starts with a never-authorized one.
 
-    `deploy production` counts as `deploy`, so legacy exact text can never
-    authorize what FR-027 forbids (#95).
+    `deploy production` or `deploy.production` counts as `deploy`, so legacy
+    exact text can never authorize what FR-027 forbids (#95).
     """
-    kind = action_kind(action)
-    forbidden = [k for k in ACTION_KINDS if k not in PRIVILEGED_KINDS]
-    return any(kind == k or kind.startswith(k + "-") for k in forbidden)
+    words = re.findall(r"[a-z0-9]+", action.lower())
+    forbidden = [k.split("-") for k in ACTION_KINDS if k not in PRIVILEGED_KINDS]
+    return any(words[: len(k)] == k for k in forbidden)
 
 
 def unauthorized_actions(actions: list[str], policy: dict) -> list[str]:

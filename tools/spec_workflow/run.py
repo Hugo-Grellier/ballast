@@ -1952,6 +1952,24 @@ def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded resum
             return _refuse(f"run {run_id}: {error}")
         for warning in warnings:
             sys.stderr.write(f"ballast: {warning}\n")
+        # A narrowing refresh must not resume a run it no longer allows.
+        try:
+            decisions = autonomy.read_decisions(ROOT, run_id)
+        except autonomy.AutonomyError as error:
+            return _refuse(f"run {run_id}: {error}")
+        reasons = autonomy.risk_reasons(
+            record["risk"]["level"], record["risk"].get("boundaries", []), policy
+        ) + [
+            f"{autonomy.REFUSAL}privileged action {action} before merge"
+            for action in autonomy.unauthorized_actions(
+                autonomy.privileged_union(record, decisions), policy
+            )
+        ]
+        if reasons:
+            return _refuse(
+                f"run {run_id}: the refreshed [autonomous] policy does not allow "
+                f"it: {'; '.join(reasons)}"
+            )
     try:
         reentry, changed = _reentry(run_id, record, block)
         autonomy.seed_active_time(record, autonomy.latest_recorded(ROOT, record))

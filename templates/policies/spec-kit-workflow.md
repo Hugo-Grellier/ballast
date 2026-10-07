@@ -685,7 +685,9 @@ only when its bytes equal the baseline `ballast trust` recorded (a baseline
 setup recorded, one without provenance, or none, refuses), replaces the run's
 policy snapshot, and
 records the previous and new policy with the block resolution, where the
-record shows it. Limits never change. A block
+record shows it. A refreshed policy that no longer allows the run's risk,
+boundaries or declared actions refuses the resume and records nothing.
+Limits never change. A block
 resolution is not an approval of any provisional decision: every decision made
 after a resume stays agent-provisional, and merging the PR stays the single
 human approval.

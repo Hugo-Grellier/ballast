@@ -575,6 +575,21 @@ class ResumeTests(StubCase):
         text = autonomy.render_run_record(self.root, record)
         self.assertIn("re-read [autonomous] from the trusted ballast.toml", text)
 
+    def test_narrowing_refresh_refuses_an_excluded_run(self) -> None:
+        """#95: a refresh that no longer allows the run records nothing."""
+        run_id = self.blocked_run()
+        before = self.frozen(run_id)
+        path = self.root / "ballast.toml"
+        path.write_text(path.read_text() + '[autonomous]\nrisk = ["R0"]\n')
+        self.git("commit", "-qam", "narrow to R0")
+        self.trust_baseline("trust")
+        code, _, err = self.main("resume", run_id, "--refresh-policy")
+        self.assertEqual(code, 2, err)
+        self.assertIn("refreshed [autonomous] policy does not allow it", err)
+        self.assertIn("risk R1 excluded", err)
+        self.assertEqual(self.frozen(run_id), before)
+        self.assertEqual(len(self.launched), 1)
+
     def test_refresh_policy_needs_the_operators_trust(self) -> None:
         """#95: a setup baseline, no baseline or other bytes refuse; nothing moves."""
         run_id = self.blocked_run()
