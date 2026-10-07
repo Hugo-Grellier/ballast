@@ -2424,6 +2424,31 @@ def _claude_state_bind(home: Path, private: Path, integration: str | None) -> li
     return ["--bind", str(private / "claude.json"), str(settings)]
 
 
+def _global_git_config_binds(
+    home: Path, env: dict[str, str], private: Path
+) -> list[str]:
+    """Empty the operator's global Git files outside `~/.config` (#90).
+
+    One can carry a token (`http.*.extraheader`, a URL with credentials), and
+    a step needs none of it: its Git directory is read-only, so it never
+    commits or pushes. `~/.config/git/config` is hidden with `~/.config`.
+    An empty regular file, not /dev/null: git refuses to run when it cannot
+    open a config file, and a device on a bwrap bind cannot be opened.
+    bwrap cannot mount over a link: bind over the file it resolves to, and
+    nothing for a dangling or non-regular target.
+    """
+    paths = [home / ".gitconfig"]
+    if env.get("GIT_CONFIG_GLOBAL"):
+        paths.append(Path(env["GIT_CONFIG_GLOBAL"]))
+    empty = private / "empty-gitconfig"
+    empty.write_bytes(b"")
+    args: list[str] = []
+    for target in dict.fromkeys(path.resolve() for path in paths):
+        if target.is_file():
+            args += ["--ro-bind", str(empty), str(target)]
+    return args
+
+
 def _refuse_credentials_in_worktree(
     root: Path, home: Path, env: dict[str, str]
 ) -> None:
@@ -2539,6 +2564,8 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         if os.path.lexists(path):
             args += ["--ro-bind", "/dev/null", str(path)]
     args += _agent_home_binds(home, env, private, integration, with_login)
+    # After the agent-home overlays, which would show a file inside one again.
+    args += _global_git_config_binds(home, env, private)
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature)
     args += _installed_skill_binds(root)

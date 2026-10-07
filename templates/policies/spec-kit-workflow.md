@@ -611,6 +611,9 @@ treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude` for Claude, `$CODEX_HOME` and
 credentials: the other CLI's homes are empty, its API-key variables are
 dropped, and only a Claude step sees `~/.claude.json`; `[checks]` commands
 see neither CLI's. A Codex API-key login has no refresh token and keeps working.
+No confined step reads the operator's global Git configuration (`~/.gitconfig`,
+`$GIT_CONFIG_GLOBAL`, `~/.config/git/config`), which can carry a token; its Git
+directory is read-only, so it never commits and needs no identity.
 A human-gated or Chat step that hits the same error fails with
 `Blocked (credential)` and the same remedy.
 

@@ -1064,6 +1064,42 @@ class ConfinementTests(AutonomyCase):
         )
         self.assertEqual(argv[-2:], ["--", "true"])
 
+    def test_global_git_config_is_hidden(self) -> None:
+        """#90: ~/.gitconfig, through a link, and $GIT_CONFIG_GLOBAL read empty."""
+        home = self.base / "home"
+        home.mkdir()
+        dotfile = self.base / "dotfiles/gitconfig"
+        dotfile.parent.mkdir()
+        dotfile.write_text("[http]\n\textraheader = AUTHORIZATION: bearer x\n")
+        (home / ".gitconfig").symlink_to(dotfile)
+        custom = self.base / "custom-gitconfig"
+        custom.write_text("[user]\n\tname = t\n")
+        private = self.base / "private"
+        private.mkdir()
+        for env, hidden in (
+            ({}, [dotfile]),
+            ({"GIT_CONFIG_GLOBAL": str(custom)}, [dotfile, custom]),
+            ({"GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}, [dotfile]),
+        ):
+            with self.subTest(env=env):
+                argv = autonomy.confined_argv(
+                    self.root,
+                    ["true"],
+                    private=private,
+                    home=home,
+                    env=env,
+                    integration="claude",
+                )
+                empty = private / "empty-gitconfig"
+                self.assertEqual(empty.read_bytes(), b"")
+                bind = ("--ro-bind", str(empty))
+                triples = list(zip(argv, argv[1:], argv[2:], strict=False))
+                masked = [t[2] for t in triples if t[:2] == bind]
+                self.assertEqual(masked, [str(path) for path in hidden])
+                # Before the writable worktree bind, which a later mount beats.
+                index = triples.index((*bind, str(dotfile)))
+                self.assertLess(index, argv.index("--bind"))
+
     def test_step_gets_throwaway_state_and_uv_tool_directories(self) -> None:
         """#79: tests and uvx write state a step owns, never the operator's."""
         argv = self.argv()
@@ -2328,6 +2364,52 @@ class RealConfinementTests(AutonomyCase):
                 self.assertEqual(
                     "SYNTHETIC-state" in result.stdout, integration == "claude"
                 )
+
+    def test_global_git_config_unreadable(self) -> None:
+        """#90, under real bwrap: no global Git setting reaches a step."""
+        if not os.access("/var/tmp", os.W_OK):  # noqa: S108
+            self.skipTest("needs a writable /var/tmp")
+        home = Path(self.enterContext(TemporaryDirectory(dir="/var/tmp"))) / "home"
+        dotfile = home / "dotfiles/gitconfig"
+        custom = home / "custom/gitconfig"
+        for path in (dotfile, custom):
+            path.parent.mkdir(parents=True)
+            path.write_text("[http]\n\textraheader = SYNTHETIC-header\n")
+        (home / ".gitconfig").symlink_to(dotfile)
+        code = (
+            "import subprocess, sys\n"
+            "for path in sys.argv[1:]:\n"
+            "    print(open(path).read())\n"
+            "subprocess.run(['git', 'config', '--global', '--list'])\n"
+            "subprocess.run(['git', 'status', '--short'], check=True)\n"
+        )
+        env = autonomy.confined_env(dict(os.environ), None)
+        env["PATH"] = self.real_path
+        env["HOME"] = str(home)
+        env.pop("GIT_CONFIG_GLOBAL", None)
+        for index, (extra, paths) in enumerate(
+            (
+                ({}, [home / ".gitconfig", dotfile]),
+                ({"GIT_CONFIG_GLOBAL": str(custom)}, [custom, dotfile]),
+            )
+        ):
+            with self.subTest(env=extra):
+                step = {**env, **extra}
+                private = self.base / f"private-{index}"
+                private.mkdir()
+                argv = autonomy.confined_argv(
+                    self.root,
+                    ["python3", "-I", "-S", "-c", code, *map(str, paths)],
+                    private=private,
+                    home=home,
+                    env=step,
+                    integration="claude",
+                )
+                result = subprocess.run(  # noqa: S603
+                    argv, capture_output=True, text=True, check=False, env=step
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("SYNTHETIC", result.stdout)
 
     def test_operator_processes_bus_and_credentials_unreachable(self) -> None:
         code = (
