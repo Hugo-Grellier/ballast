@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-07
 
-**Status**: Evidence recorded; see [qualification.md](qualification.md)
+**Status**: Evidence recorded (first pass v0.9.0, final pass v0.10.0); see [qualification.md](qualification.md)
 
 **Input**: Issue #24: "Demonstrate the complete 1.0 promise before tagging a release. Run the full local gate on the qualified Linux/systemd host and pilot blank plus established repositories through init, update/worktree, discovery, Chat and Autonomous, sync, PR, packet, on-demand video and free fallback. Record recovery drills and exact checks."
 

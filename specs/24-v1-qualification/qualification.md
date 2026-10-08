@@ -1,17 +1,97 @@
 # Qualification evidence: Ballast 1.0 request-to-PR path (#24)
 
-Raw logs and pty transcripts were kept on the operator's host (scratch directory of this session), not in the repository. Every excerpt below is copied from them. Run on 2026-10-07 (times UTC) by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05). The released `ballast` v0.9.0 ran from the operator's `~/.local/bin`, and the standard was pinned at `v0.9.0`. Host: Linux with a systemd user session (`systemctl --user is-system-running`: `degraded`, user manager up), bubblewrap with user namespaces (restricted unprivileged namespaces), Git 2.53, Spec Kit CLI 1.0.11, codex-cli 0.155.1, Claude Code 2.1.290, Ollama 0.35.1 serving `qwen3:4b-16k`. `ballast doctor` reported "Everything Ballast needs is in place" before the pilots.
+This qualification ran in two passes on the qualified host: Linux with a systemd user session (`systemctl --user is-system-running`: `degraded`, user manager up), bubblewrap with user namespaces (restricted unprivileged namespaces), Git 2.53, Spec Kit CLI 1.0.11, codex-cli 0.155.1, Claude Code 2.1.290 and Ollama 0.35.1 serving `qwen3:4b-16k`. The driving agent ran both under the operator's standing authority for v1.0 issues (2026-10-05). Raw logs and pty transcripts stay on the operator's host, in this session's scratch directory, not in the repository. Every excerpt below is copied from them.
 
-## Summary
+- **First pass, 2026-10-07, v0.9.0** (the CLI and pin): the full path on a blank repository and LoreForge, the UI demo, the fallback and seven recovery drills. It found four v1.0 defects (#111, #112, #114, #117), recorded from [Pilot resources](#pilot-resources) onward.
+- **Final pass, 2026-10-07 22:00 to 2026-10-08 01:30 UTC, v0.10.0** (the CLI and pin): it re-ran what those fixes change. The results are in [Final pass on v0.10.0](#final-pass-on-v0100). Where the two passes differ, the final pass is the result.
 
-| AC | Verdict | Blockers |
+## Summary (final)
+
+| AC | Verdict | Evidence |
 | --- | --- | --- |
-| AC-001 blank + LoreForge reach a PR ready for human merge, both modes, one UI demo | **Blocked.** All three pilot features reached a Draft PR. The UI demo was captured and linked (#22 SC-001). The promise was not met unattended. #22 SC-004 (reproduce from the packet's command) was not met as written, and LoreForge#127's browser test never ran. | [#111](https://github.com/Hugo-Grellier/ballast/issues/111), [#112](https://github.com/Hugo-Grellier/ballast/issues/112), [#114](https://github.com/Hugo-Grellier/ballast/issues/114) (all milestone v1.0) |
-| AC-002 seven recovery drills recorded | **Pass.** Every drill is recorded. The partial-agent-failure drill found a recovery loop. | [#114](https://github.com/Hugo-Grellier/ballast/issues/114) (the defect it found) |
-| AC-003 full local gate on the qualified host | **Pass.** 1591 tests, 0 skipped, 0 failures. Ruff is clean. | none |
-| AC-004 release checklist | **Blocked.** The checklist is written. Reading the configuration shows that no required checks are enforced on `main`. | Operator action: a ruleset (R2), [release-checklist.md §3](release-checklist.md#3-github-required-checks) |
+| AC-001 blank + LoreForge reach a PR ready for human merge, both modes, one UI demo | **Pass.** | v0.10.0: blank Autonomous UI feature to Draft PR [#8](https://github.com/Hugo-Grellier/ballast-qual-blank-20261007/pull/8) with no human decision. The operator-only browser check was deferred and shows in the packet. 4 of 7 criteria were `verified` by runner-recorded checks; the 3 page criteria are `missing`, citing the deferred task. A demo was captured and linked. Blank Chat feature to Draft PR [#9](https://github.com/Hugo-Grellier/ballast-qual-blank-20261007/pull/9) with an acceptance packet, 6 of 6 criteria `verified` after `checkpoint`. LoreForge on v0.10.0: an Autonomous run of LoreForge#128 to Draft PR [LoreForge#129](https://github.com/Hugo-Grellier/LoreForge/pull/129), 5 of 5 criteria `verified` (runner-recorded). It had one safe block that resumed cleanly: verification tasks used a test command outside the allowlist ([#124](https://github.com/Hugo-Grellier/ballast/issues/124), not a 1.0 blocker). |
+| AC-002 seven recovery drills recorded | **Pass.** | All seven are in the first pass. In the final pass, the tamper drill on a uv project shows the `checks-venv` warning in `doctor`, in setup and at Autonomous eligibility before any agent ran. After an induced tamper, the printed recovery command (`continue --mode chat`) works. |
+| AC-003 full local gate on the qualified host | **Pass.** | `e764321` (release 0.10.0; the code is identical to `origin/main` `e7a4e8f`, which only re-pins `ballast.toml`): 1643 tests OK, **0 skipped**. Ruff check and format clean. |
+| AC-004 release checklist | **Pass**, with one operator-accepted release exception. | [release-checklist.md](release-checklist.md): ruleset 24660402 is active on the default branch with no bypass. It requires `lint`, `test`, `dogfood` and `PR title`, and blocks deletion and non-fast-forward. Read with `gh api`. ADR-0001 to ADR-0016 are accepted; ADR-0017 and ADR-0018 were accepted by merge. Merge, tag and release are left to the operator. The checklist names one exception for the operator to confirm at merge: gate item 6, the free fallback ([DEC-0003](decisions.md#dec-0003-release-gate-item-6-met-as-a-qualified-mechanism-with-a-known-model-limit)). |
 
-Whether a gate was answered by a human: every gate answered in this qualification was answered by the driving agent after it read the artifact. That covers the `approve` commands in Chat, the gate-driver answers and Autonomous block resolutions. The Chat PR bodies say "approved by the operator" because Ballast records the terminal user as the operator. Read them as agent answers under standing authority. Merging stays the human decision.
+Each AC passes by its own wording. The independent reviewer (Codex, round 3) disagrees on two points that go beyond the wording, so #115 says `Refs #24` and leaves closing #24 to the operator: (a) gate item 6 is met only through the operator's exception DEC-0003; (b) the Chat PR bodies attribute agent-answered gates to "the operator". A comment on each pilot PR corrects (b), but Ballast's generated body is unchanged. In real use the human is at the terminal, so the attribution is right by design.
+
+Known limits the operator accepted (2026-10-07), not blockers:
+
+- **Free fallback (gate item 6), [DEC-0003](decisions.md#dec-0003-release-gate-item-6-met-as-a-qualified-mechanism-with-a-known-model-limit):** the gate is read as "the mechanism is qualified", not "a local model completes a step here". The mechanism works live: quota is recognized, the refusal or selection is recorded, and the attempt is confined. The selected 4B local model wrote no usable artifact. The fallback is refused while the operator's `~/.agents/skills` is not empty. See drill D6.
+- **#113** (Chat step friction, PR titles) stays out of 1.0. Both v0.10.0 pilot PR titles still show it: #8 is `feat: feat(web): ...` and #9 is `feat: 5-start-value`.
+- #22 SC-004 (reproduce from the packet's command) failed only because of the pilot project's own demo script (see the first pass).
+
+Whether a gate was answered by a human: every gate answered in this qualification was answered by the driving agent after it read the artifact. That covers the `approve` commands in Chat, the gate-driver answers and the block resolutions. The Chat PR bodies say "approved by the operator" because Ballast records the terminal user as the operator. Read them as agent answers under standing authority. A comment saying so was added to each pilot PR (blank #3, #4, #9; LoreForge #127, #129). Merging stays the human decision.
+
+## Final pass on v0.10.0
+
+The blank repository's `main` is still pinned at v0.9.0, because the agent may not push to it. A local branch `pin-0.10` (commit `630bba3`, "chore: pin Ballast v0.10.0") carries the pin. Every final-pass feature branch was cut from it, so pilot PRs #8 and #9 include that commit. `ballast preview v0.10.0` listed the changed protected inputs, and `ballast setup` then `ballast trust` on `pin-0.10` recorded the repository as reviewed. Each feature worktree got a `.venv` (`uv venv .venv`) before `ballast trust`, because runner-recorded checks run tests with `.venv/bin/python`. `ballast doctor` reported `checks-venv: no .venv to create` there, since the blank project's checks do not use uv.
+
+Blank-repository issues: [#5](https://github.com/Hugo-Grellier/ballast-qual-blank-20261007/issues/5) Chat, [#6](https://github.com/Hugo-Grellier/ballast-qual-blank-20261007/issues/6) Autonomous UI and [#7](https://github.com/Hugo-Grellier/ballast-qual-blank-20261007/issues/7) tamper drill. Intake `preflight` returned `eligible_leaf: true` for each, and `prepare` returned scope and ready.
+
+### Autonomous UI feature: Issue #6, run `52a74c91`, Draft PR #8
+
+- **First attempt, run `21b05eed`:** blocked correctly at `decide-scope`. The Issue as first written said "+1 and -1 keep working", but `main` has no -1 (it is in unmerged PR #3). The block was `Autonomous run blocked (conflict: contradiction): Issue #6 assumes the counter page already has +1 and -1 controls ...` and it offered three options. The cause was the Issue text, so the operator narrowed the criterion (option 1) and started a clean run from a fresh worktree (`6-reset-counter`).
+- **Clean run:** `ballast run start --mode autonomous --wall-time 180 -i issue=6 -i idea=... -i feature_directory=specs/6-reset-counter -i integration=claude`. Every step from `preflight` through `record-final` ran with no prompt and no block, including `fix-1` to `fix-3` (idle), `converge`, `reconcile-spec` and `run-checks`. The run ended with `Draft PR: https://github.com/Hugo-Grellier/ballast-qual-blank-20261007/pull/8` and `Acceptance packet: published #8 head 931093ff2e3b`.
+- **Deferral (#112, PR #121):** `speckit.tasks` tagged the browser check T002 `[DEFERRED-TO-PR]`. The run record and the PR show a `Deferred to the PR` section, and the packet's criteria rows AC-001 to AC-003 read `missing · no test named in acceptance-evidence.json · deferred to the PR: T002`.
+- **Per-criterion evidence (#117, PR #122):** the record has an `Acceptance checks (runner-recorded)` section. The packet header reads `Criteria: 7 · verified 4 · failed 0 · not run 0 · stale 0 · missing 3` and `Provisional decisions: 13 · Human decisions: 0`. AC-004 to AC-007 are `verified`, "1/1 tests passed at head".
+- **Reviews:** engineering, documentation, security and test were all approved, with 0 of 3 fix cycles used. GitHub checks on #8 are `PR title` and `test`, both passed. They were read with `gh pr checks 8` after the demo.
+- **Demo:** `ballast run demo 52a74c91 counter-page` returned `Demo capture: captured counter-page at 931093ff2e3b: .../actions/runs/37711703693/artifacts/11522295084` and `Acceptance packet: updated #8`. The refreshed packet line reads `counter-page (Chromium 1280x720, no data): captured at 931093ff2e3b · [video](.../actions/runs/37711703693/artifacts/11522295084) · reproduce: bash demo/record.sh`.
+- **Open for the human reviewer:** the deferred browser check T002, the operator's own task before merge.
+
+### Chat feature: Issue #5, run `4b1dbb97`, Draft PR #9
+
+Driven in a pty (private `tmux` server):
+
+- **Gates and steps:** `approve scope` (HD-0001), `step specify`, `approve intent` (HD-0002), `step plan`, `approve plan` (HD-0003), `step tasks`, `approve tasks` (HD-0004), `step implement`, `checks` (E-0032, exit 0), `step review --kind implementation` (`Verdict: approved`), `approve implementation` (HD-0005), `step review --kind spec-reconciliation` (`Verdict: CONVERGED`), `approve spec-reconciliation` (HD-0006), `approve final` (HD-0007).
+- **Operator interventions:** one message during `implement`. The agent first stopped without trying a shell command, and the operator told it to run `python3 -m unittest` as a single command. As in the first pass, the agent could not read the Issue (#113 item 2).
+- **Manifest:** the agent wrote `acceptance-evidence.json`, mapping AC-001 to AC-006 to 7 unittest cases.
+- **Publish (#111, PR #119):** `ballast run publish 4b1dbb97` returned `Draft PR: .../pull/9` and `Acceptance packet: published #9 head 110dc0f7e968`. The body has both the Chat section and the packet (`Run: 4b1dbb97 (chat)`).
+- **Per-criterion checks:** the operator ran `ballast ledger check 4b1dbb97 AC-NNN tests...` once for each of the 7 mappings on the clean pushed checkout. Then `ballast run checkpoint 4b1dbb97` returned `Acceptance packet: updated #9 head 110dc0f7e968`, and the header reads `Criteria: 6 · verified 6 · failed 0 · not run 0 · stale 0 · missing 0`. On v0.9.0, `checkpoint` refused Chat runs.
+- **CI:** GitHub checks on #9 are `PR title` and `test`, both passed.
+
+### LoreForge (established repository): Issue #128, run `9135e30d`, Draft PR LoreForge#129
+
+- **Re-pin**: `chore/adopt-ballast` (LoreForge#124) gained commit `4b14fe9` "chore(engineering): pin Ballast v0.10.0", pushed as a fast-forward. Then `ballast setup` and `ballast trust` ran on the adoption checkout, and `doctor` reported everything in place.
+- **Intake**: Issue [LoreForge#128](https://github.com/Hugo-Grellier/LoreForge/issues/128) ("report each vault validation problem once, in a stable order"). `preflight` returned `eligible_leaf: true`, and `prepare` returned scope and ready (`Autonomous: yes`).
+- **Fresh worktree** (`128-vault-issues` from `chore/adopt-ballast`): before any agent ran, `ballast doctor` reported a real-world `checks-venv` warning: `missing checks-venv uv run --locked ruff check ... creates .venv, a protected input, on an agent's first run, and this checkout has none ... fix: run uv sync --locked before ballast trust`. After `uv sync --locked`, the first `ballast run` prepared the installation (`Prepared the v0.10.0 installation ... nothing downloaded`), and `ballast trust` (2321 inputs) brought `doctor` to `Everything Ballast needs is in place`. The tamper that ended the first pass's LoreForge run did not recur.
+- **Start**: `ballast run start --mode autonomous --wall-time 240 -i issue=128 ... -i integration=claude` → `Branch sync: synchronized 128-vault-issues onto main (5ca7e8724c6f..60a668c88d6b)`.
+- **One block**: `validate-implementation` → `Autonomous run blocked (unsafe uncertainty: postcondition): implementation: specs/128-vault-issues/tasks.md has pending tasks: T004, T005`. The code and tests were written. The agent's verification commands (`uv run python -m unittest ...` without `--locked`, and `git diff main -- ...`) were outside the project's `extra_allow` and were denied. The operator ran `uv run --locked python -m unittest tests.test_vault` (22 tests, OK) and checked that the test diff only adds lines, ticked T004 and T005, then ran `ballast run resume 9135e30d --ref "..."`. Filed as [#124](https://github.com/Hugo-Grellier/ballast/issues/124), without a milestone: the block is safe, names its cause and resumed cleanly.
+- **End**: `Run 9135e30d: completed at step record-final` · `Draft PR: https://github.com/Hugo-Grellier/LoreForge/pull/129` · `Acceptance packet: published #129 head 6f4790f27587`. The packet reads `Criteria: 5 · verified 5 · failed 0 · not run 0 · stale 0 · missing 0` and `Provisional decisions: 12 · Human decisions: 1`; the human decision is the block resolution HD-0001. Fix cycles used: 0 of 3. GitHub checks on #129 all passed: `PR title`, `Shell and Docker lint`, `check`, and `acceptance` (LoreForge's browser and PostgreSQL acceptance job, 4m59s). #129 targets LoreForge `main`, so its diff (91 files) carries the adoption commits until LoreForge#124 merges, as in the first pass.
+
+### Tamper drill on a uv project: Issue #7, runs `25a0408c` and `57dbb5bf`
+
+The branch `7-uv-tests` adds `pyproject.toml` and `uv.lock` and changes `[checks]` to `uv run --locked python -m unittest discover -s tests`, with a matching `extra_allow`. It is a fresh worktree with no `.venv`.
+
+| Step | Command | Output excerpt |
+| --- | --- | --- |
+| Warning in doctor | `ballast doctor` | `missing checks-venv uv run --locked python -m unittest discover -s tests creates .venv, a protected input, on an agent's first run, and this checkout has none: the run would stop as tampered` · `fix: run uv sync --locked before ballast trust` |
+| Warning in setup | `ballast setup` | `warning: 'uv run --locked python -m unittest discover -s tests' creates .venv, a protected input, on an agent's first run, and this checkout has none; run uv sync --locked before ballast trust` |
+| Eligibility | `ballast run start --mode autonomous -i issue=7 ...` | `ballast: refusing: not eligible for autonomous: '...' creates .venv ...; run uv sync --locked before ballast trust`, exit 2, no agent started |
+| Fix | `uv sync --locked`, `ballast doctor`, `ballast trust` | `ok checks-venv no .venv to create`; 152 inputs trusted |
+| Tamper | Autonomous start. 20 s into the first agent step (`decide-scope`), the operator appended a line to `.venv/pyvenv.cfg`. The warning now prevents the natural case, so the tamper was induced. | `Autonomous run blocked (unsafe uncertainty: tamper): an agent step changed protected workflow files` · `Recovery: ... delete and recreate .venv (uv sync --locked), delete BALLAST_TAMPERED, run ballast discard-runs and ballast trust. The discarded run cannot resume in Autonomous; continue it in Chat with ballast run continue RUN_ID --mode chat --reason block-resolved --ref TEXT.` · `BALLAST_TAMPERED`: `.venv/pyvenv.cfg` |
+| Recovery | `rm -rf .venv`, `uv sync --locked`, `rm BALLAST_TAMPERED`, `ballast discard-runs`, `ballast trust` | `discarded local run state: removed .specify/workflows/runs (runs: 25a0408c) ... stopped the unfinished agent step and removed its marker ... A stopped Autonomous run cannot resume after this; continue it in Chat with ballast run continue RUN_ID --mode chat ...` |
+| Wrong paths now name the right one | `ballast run resume 25a0408c`; `ballast run continue 25a0408c --reason block-resolved --ref ...` | Both exit 2: `... cannot resume in Autonomous ... continue it in Chat: ballast run continue 25a0408c --mode chat ...` and `... after ballast discard-runs and ballast trust only Chat continues it: ballast run continue 25a0408c --mode chat ...`. The v0.9.0 loop is gone. |
+| Named command | `ballast run continue 25a0408c --mode chat --reason block-resolved --ref "..."` | `Recorded HD-0001 (block-resolution); run 25a0408c is lowered to chat and continues as Chat run 57dbb5bf.` |
+
+### Full local gate (final)
+
+```text
+$ uv run --isolated --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py   # at e764321
+Ran 1643 tests in 2553.555s
+OK
+$ uvx ruff check          # on this branch, rebased on e7a4e8f
+All checks passed!        (exit 0)
+$ uvx ruff format --check
+458 files already formatted   (exit 0)
+```
+
+`OK` with no `(skipped=N)` means that no test skipped. The `skipUnless` guards listed under the first pass's AC-003 (systemd, bwrap, Codex, Spec Kit, Git ≥ 2.41) all ran.
+
+## First pass on v0.9.0 (2026-10-07)
+
+The first pass's verdicts were AC-001 blocked (#111, #112, #114), AC-002 pass, AC-003 pass (1591 tests, 0 skipped) and AC-004 blocked (no ruleset). The final pass supersedes them. What follows is the first pass's record.
 
 ## Pilot resources
 
@@ -144,12 +224,14 @@ Rerun before the PR, on the branch with this feature directory: `uvx ruff check`
 
 ## Issues filed
 
-| Issue | Milestone | Found in |
-| --- | --- | --- |
-| [#111](https://github.com/Hugo-Grellier/ballast/issues/111) Chat publish has no acceptance packet and checkpoint refuses Chat runs | v1.0 | P2, P4 |
-| [#112](https://github.com/Hugo-Grellier/ballast/issues/112) Autonomous UI features block on operator-only tasks and packets carry no per-criterion evidence | v1.0 | P1 |
-| [#113](https://github.com/Hugo-Grellier/ballast/issues/113) Chat step friction (hook remedy, no Issue text or discovery, start-up prompts, discard message, PR titles) | none (operator may promote item 2) | P2, drills |
-| [#114](https://github.com/Hugo-Grellier/ballast/issues/114) A tamper block has no working recovery path, and uv projects hit it on their first agent test run | v1.0 | P4 |
+| Issue | Milestone | Found in | State (2026-10-08) |
+| --- | --- | --- | --- |
+| [#111](https://github.com/Hugo-Grellier/ballast/issues/111) Chat publish has no acceptance packet and checkpoint refuses Chat runs | v1.0 | P2, P4 | closed by [PR #119](https://github.com/Hugo-Grellier/ballast/pull/119); re-verified on #9 |
+| [#112](https://github.com/Hugo-Grellier/ballast/issues/112) Autonomous UI features block on operator-only tasks and packets carry no per-criterion evidence | v1.0 | P1 | closed by [PR #121](https://github.com/Hugo-Grellier/ballast/pull/121) (ADR-0017); re-verified on #8 |
+| [#113](https://github.com/Hugo-Grellier/ballast/issues/113) Chat step friction (hook remedy, no Issue text or discovery, start-up prompts, discard message, PR titles) | none | P2, drills | open; out of 1.0 by the operator's decision (2026-10-07) |
+| [#114](https://github.com/Hugo-Grellier/ballast/issues/114) A tamper block has no working recovery path, and uv projects hit it on their first agent test run | v1.0 | P4 | closed by [PR #120](https://github.com/Hugo-Grellier/ballast/pull/120); re-drilled on #7 |
+| [#117](https://github.com/Hugo-Grellier/ballast/issues/117) Autonomous runs record per-criterion checks from the agent-proposed manifest (split from #112 by the coordinator, not filed here) | v1.0 | P1 | closed by [PR #122](https://github.com/Hugo-Grellier/ballast/pull/122) (ADR-0018); re-verified on #8 |
+| [#124](https://github.com/Hugo-Grellier/ballast/issues/124) Tasks name test commands the agent allowlist does not cover | none | final pass, LoreForge | open; not a 1.0 blocker |
 
 Observed and not filed (minor): the ledger marks a resumed Autonomous run `out_of_order` and does not count its block resolution as manual recovery. The ledger does not join a Chat continuation to its Autonomous parent. An ignored `.specify/.workflow-install.lock` left by v0.1.0 stops setup from recording a baseline after the upgrade. `ballast init` infers `pytest` for a stdlib-unittest project. The failed-setup "Next" line mentions network for a missing tool.
 
@@ -163,4 +245,4 @@ Observed and not filed (minor): the ledger marks a resumed Autonomous run `out_o
 
 ## Pilot side effects to clean up (operator)
 
-The private repository `Hugo-Grellier/ballast-qual-blank-20261007` holds the drill branch `main-next` and PRs #3 and #4. Its default branch is `main` again. LoreForge holds Issue #126, PR #127 and the pin commit on `chore/adopt-ballast`. The local checkouts are in the operator's pilot directory and the LoreForge adoption worktree. The agent deleted nothing.
+The private repository `Hugo-Grellier/ballast-qual-blank-20261007` holds the drill branch `main-next`, the first-pass PRs #3 and #4, the final-pass PRs #8 and #9, and Issues #5 to #7 (plus the unpushed local branches `pin-0.10`, `6-reset-page` and `7-uv-tests` with the Chat run `57dbb5bf`). Its default branch is `main` again. LoreForge holds Issues #126 and #128, PRs #127 and #129, and the pin commits `441933c` (v0.9.0) and `4b14fe9` (v0.10.0) on `chore/adopt-ballast`. The local checkouts are in the operator's pilot directory and the LoreForge adoption worktree. The agent deleted nothing.

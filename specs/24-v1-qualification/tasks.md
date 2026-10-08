@@ -27,3 +27,12 @@
 - [X] T012 Write the release checklist: v1.0 issues, specs, ADRs, required checks read with `gh api`, operator-only steps (depends on T011) (AC-004)
 - [X] T013 Get an independent review of the evidence and fix its findings (depends on T001 to T012)
 - [X] T014 Open the PR, with `Refs #24` and blockers unless every AC passes (depends on T013): #115
+
+## Final pass on v0.10.0 (2026-10-08)
+
+- [X] T015 Rebase the branch onto `origin/main`; read ruleset 24660402, the ADR statuses and the issue and PR states with `gh api` (AC-004)
+- [X] T016 Blank repository: one Autonomous UI feature to a Draft PR with no human decision, the operator-only task deferred and runner-recorded per-criterion evidence; request its demo (AC-001)
+- [X] T017 Blank repository: one Chat feature to a Draft PR with its acceptance packet, refreshed by `checkpoint` after per-criterion ledger checks (AC-001)
+- [X] T018 Tamper drill on a uv project: the `checks-venv` warning before any agent, then the printed recovery command (AC-002)
+- [X] T019 Re-run the full local gate and ruff on the release commit (AC-003)
+- [X] T020 Update qualification.md and the release checklist; independent review; update #115 (depends on T015 to T019)

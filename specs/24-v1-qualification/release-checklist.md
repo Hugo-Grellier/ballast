@@ -1,24 +1,28 @@
 # Ballast 1.0 release checklist
 
-Prepared 2026-10-07 by the driving agent for #24, against `main` at `69f5602` (release 0.9.0). Merging, tagging `v1.0.0` and publishing the release are the operator's alone; nothing below was done by an agent unless it says "done".
+Prepared by the driving agent for #24. First pass: 2026-10-07 on `69f5602` (0.9.0). Updated 2026-10-08 against `main` at `e7a4e8f` (release 0.10.0, standard pinned at v0.10.0). Merging, tagging `v1.0.0` and publishing the release are the operator's alone. Nothing below was done by an agent unless it says "done".
 
-## 1. Open blockers
+## 1. Blockers
 
-| Item | State | Owner |
-| --- | --- | --- |
-| [#111](https://github.com/Hugo-Grellier/ballast/issues/111) Chat publish has no acceptance packet; `checkpoint` refuses Chat runs | open, milestone v1.0 | fix before 1.0, or the operator accepts it as a known gap |
-| [#112](https://github.com/Hugo-Grellier/ballast/issues/112) Autonomous UI features block on operator-only tasks; packets carry no per-criterion evidence | open, milestone v1.0 | fix before 1.0, or the operator accepts it as a known gap |
-| [#114](https://github.com/Hugo-Grellier/ballast/issues/114) A tamper block has no working recovery path; uv projects hit it on their first agent test run | open, milestone v1.0 | fix before 1.0, or the operator accepts it as a known gap |
-| Roadmap gate item 6 (free fallback) has no live completion on the qualified host: with the operator's home the fallback is refused (`~/.agents/skills` not empty), and the selected `qwen3:4b-16k` did not write the step's artifact ([qualification.md D6](qualification.md#ac-002-recovery-drills)) | qualified by #23 as "completes or is refused with a recorded cause" | operator decides whether that is enough for 1.0 |
-| #22 SC-004: the packet's reproduce command failed on this host because of the pilot project's script ([qualification.md](qualification.md#ui-demo-on-pr-3-22-sc-001-and-sc-004)) | Ballast behaved as specified | operator notes it, or reruns with a portable scenario |
-| Required checks are not enforced on `main` (section 3) | not configured | operator (R2) |
-| [#115](https://github.com/Hugo-Grellier/ballast/pull/115) (#24 evidence) | open | operator review and merge |
+No open defect blocks 1.0. One **release exception** remains for the operator to confirm at merge: gate item 6 is not met as worded. The operator decided on 2026-10-07 to accept the fallback as a qualified mechanism with a known model limit ([DEC-0003](decisions.md#dec-0003-release-gate-item-6-met-as-a-qualified-mechanism-with-a-known-model-limit)). The independent reviewer holds that this is an exception, not a demonstration. Everything else the first pass found is closed or decided:
 
-[#113](https://github.com/Hugo-Grellier/ballast/issues/113) (Chat step friction) is filed without a milestone. Its item 2, Chat has no `discover` step and cannot read the Issue, touches roadmap gate item 2. The operator may move it to v1.0.
+| Item | State |
+| --- | --- |
+| [#111](https://github.com/Hugo-Grellier/ballast/issues/111) Chat publish had no acceptance packet | closed by [PR #119](https://github.com/Hugo-Grellier/ballast/pull/119); verified on pilot PR #9 ([qualification.md](qualification.md#final-pass-on-v0100)) |
+| [#112](https://github.com/Hugo-Grellier/ballast/issues/112) Autonomous UI features blocked on operator-only tasks | closed by [PR #121](https://github.com/Hugo-Grellier/ballast/pull/121) (ADR-0017); verified on pilot PR #8 |
+| [#114](https://github.com/Hugo-Grellier/ballast/issues/114) tamper recovery loop; uv `.venv` | closed by [PR #120](https://github.com/Hugo-Grellier/ballast/pull/120); re-drilled on a uv project |
+| [#117](https://github.com/Hugo-Grellier/ballast/issues/117) per-criterion checks in Autonomous runs | closed by [PR #122](https://github.com/Hugo-Grellier/ballast/pull/122) (ADR-0018); verified on pilot PR #8 |
+| Required checks on `main` | met: ruleset 24660402 (section 3) |
+| ADR status | ADR-0001 to ADR-0016 accepted ([PR #116](https://github.com/Hugo-Grellier/ballast/pull/116) for 0006 to 0016); ADR-0017 and ADR-0018 accepted by the merges of #121 and #122 (section 2) |
+| Gate item 6, free fallback | **accepted known limit** (operator decision 2026-10-07, [DEC-0003](decisions.md#dec-0003-release-gate-item-6-met-as-a-qualified-mechanism-with-a-known-model-limit); this narrows how the gate is read, so confirm it at merge): the mechanism works live (quota recognized, refusal or selection recorded, confined attempt, ledger evidence); the 4B local model `qwen3:4b-16k` wrote no usable artifact; the fallback is refused while the operator's `~/.agents/skills` is not empty ([drill D6](qualification.md#ac-002-recovery-drills)) |
+| [#113](https://github.com/Hugo-Grellier/ballast/issues/113) Chat step friction, PR titles | open, out of 1.0 (operator, 2026-10-07) |
+| [#124](https://github.com/Hugo-Grellier/ballast/issues/124) tasks name test commands outside the allowlist (one safe block in the LoreForge pilot) | open, no milestone; not a 1.0 blocker unless the operator decides otherwise |
+| #22 SC-004 local reproduction | the pilot project's demo script failed on this host; Ballast behaved as specified; noted, not a Ballast blocker |
+| [#115](https://github.com/Hugo-Grellier/ballast/pull/115) (this evidence) | open: operator review and merge |
 
 ## 2. Milestone v1.0: issues, specs and decisions
 
-Read with `gh api "repos/Hugo-Grellier/ballast/issues?milestone=*&state=all&per_page=100"` on 2026-10-07.
+Read with `gh api "repos/Hugo-Grellier/ballast/issues?milestone=*&state=all&per_page=100"` on 2026-10-07, and the issue states again on 2026-10-08.
 
 | Issue | State | Spec | Decision records |
 | --- | --- | --- | --- |
@@ -39,38 +43,36 @@ Read with `gh api "repos/Hugo-Grellier/ballast/issues?milestone=*&state=all&per_
 | [#55](https://github.com/Hugo-Grellier/ballast/issues/55) setup-recorded trust | closed | [55-setup-trust](../55-setup-trust/spec.md) | [ADR-0015](../../docs/adr/0015-setup-recorded-trust-baseline.md) |
 | [#58](https://github.com/Hugo-Grellier/ballast/issues/58), [#65](https://github.com/Hugo-Grellier/ballast/issues/65), [#66](https://github.com/Hugo-Grellier/ballast/issues/66), [#74](https://github.com/Hugo-Grellier/ballast/issues/74), [#76](https://github.com/Hugo-Grellier/ballast/issues/76), [#79](https://github.com/Hugo-Grellier/ballast/issues/79), [#81](https://github.com/Hugo-Grellier/ballast/issues/81), [#83](https://github.com/Hugo-Grellier/ballast/issues/83), [#90](https://github.com/Hugo-Grellier/ballast/issues/90), [#94](https://github.com/Hugo-Grellier/ballast/issues/94), [#95](https://github.com/Hugo-Grellier/ballast/issues/95), [#97](https://github.com/Hugo-Grellier/ballast/issues/97) | closed | fixes (bug workflow) | [ADR-0016](../../docs/adr/0016-privileged-action-kinds-and-policy-refresh.md) (#95) |
 | [#24](https://github.com/Hugo-Grellier/ballast/issues/24) this qualification | open | [24-v1-qualification](spec.md) | n/a |
-| [#111](https://github.com/Hugo-Grellier/ballast/issues/111), [#112](https://github.com/Hugo-Grellier/ballast/issues/112), [#114](https://github.com/Hugo-Grellier/ballast/issues/114) | open | filed from this qualification | n/a |
+| [#111](https://github.com/Hugo-Grellier/ballast/issues/111), [#112](https://github.com/Hugo-Grellier/ballast/issues/112), [#114](https://github.com/Hugo-Grellier/ballast/issues/114) (filed by this qualification), [#117](https://github.com/Hugo-Grellier/ballast/issues/117) | closed | fixes: PR #119, #121, #120, #122 | [ADR-0017](../../docs/adr/0017-deferred-operator-tasks-and-unmapped-criteria.md) (#112), [ADR-0018](../../docs/adr/0018-runner-recorded-acceptance-checks.md) (#117) |
 
-**ADR status (operator review):** ADR-0001 to ADR-0005 read `accepted`. ADR-0006 to ADR-0016 still read `proposed` or `Proposed` with "accepted when its PR merges", although every one of those PRs has merged. Before tagging, the operator should either accept them, which is a one-line status edit per ADR in a docs PR, or record which of them stay open.
+**ADR status (read 2026-10-08):** ADR-0001 to ADR-0016 read `accepted`; ADR-0006 to ADR-0016 were accepted by the operator for the 1.0 release in PR #116. ADR-0017 and ADR-0018 still read `proposed ... accepted when the PR merges`, and their PRs (#121, #122) are merged, so they are accepted by merge as the operator decided; editing their status line is optional.
 
 ## 3. GitHub required checks
 
-Read on 2026-10-07:
+Read on 2026-10-08:
 
 ```text
-$ gh api repos/Hugo-Grellier/ballast/rulesets
-[]
+$ gh api repos/Hugo-Grellier/ballast/rulesets/24660402
+id 24660402, name "main: required checks", enforcement "active", bypass_actors [],
+conditions.ref_name.include ["~DEFAULT_BRANCH"],
+rules: deletion; non_fast_forward; required_status_checks
+  [lint, test, dogfood, PR title] (strict policy false)
 $ gh api repos/Hugo-Grellier/ballast/rules/branches/main
-[]
-$ gh api repos/Hugo-Grellier/ballast/branches/main/protection
-{"message":"Branch not protected", ... "status":"404"}
+types: deletion, non_fast_forward, required_status_checks
 ```
 
-**Not met.** Roadmap gate item 5 requires that "GitHub branch protection or rulesets enforce required checks at merge". `main` has no ruleset and no branch protection, so nothing GitHub-side enforces the checks. The check runs on `main` at `69f5602` are `lint`, `test`, `dogfood` (workflow `CI`), `release-please` and `publish-cli`. `PR title` runs on pull requests.
-
-**Operator action (R2, not done by the agent):** add a ruleset for the default branch that requires the status checks `lint`, `test`, `dogfood` and `PR title`, requires a pull request before merging, and blocks force pushes and deletion. Then re-read it with `gh api repos/Hugo-Grellier/ballast/rules/branches/main` and paste the output here. Decide whether the Release Please bot needs a bypass for its release PR (it runs CI through `RELEASE_PLEASE_TOKEN`, so the checks run on it).
+**Met.** Roadmap gate item 5 ("GitHub branch protection or rulesets enforce required checks at merge") holds: the four checks CI and the PR-title workflow report must pass to merge into the default branch, with no bypass actor. The operator created the ruleset (R2); the agent only read it.
 
 ## 4. Local gate on the qualified host
 
-Done. See [qualification.md §AC-003](qualification.md#ac-003-full-local-gate-on-the-qualified-host): 1591 tests, 0 skipped, 0 failed; ruff check and format clean.
+Done. 1643 tests at `e764321` (release 0.10.0; the code is the same as `e7a4e8f`), OK, 0 skipped; ruff check and format clean. See [qualification.md](qualification.md#full-local-gate-final).
 
 ## 5. Release steps (operator only)
 
-1. Resolve or explicitly accept #111, #112 and #114 (section 1), and decide on #113 item 2.
-2. Configure the ruleset (section 3).
-3. Settle the ADR statuses (section 2).
-4. Review and merge this PR.
-5. Re-run the full local gate (§4) on the commit to be released if anything merged after `69f5602`.
-6. Release Please: release v1.0.0 per README "Releases" by adding a `Release-As: 1.0.0` footer or the repository's chosen mechanism, then merge the release PR. That tags `v1.0.0` and publishes the release and the CLI asset.
-7. Close #24 and Epic #11.
-8. Optional clean-up of the pilot resources, which the agent may not delete: the private repository `Hugo-Grellier/ballast-qual-blank-20261007` with its drill branch `main-next`, and the LoreForge pilot PR and Issue #126 if they are not wanted.
+1. Review and merge [#115](https://github.com/Hugo-Grellier/ballast/pull/115) (it closes #24), then close Epic #11.
+2. If anything other than #115 merges after `e7a4e8f`, re-run the full local gate (section 4) on the commit to be released.
+3. Release v1.0.0 per README "Releases": add a `Release-As: 1.0.0` footer, or use the repository's chosen mechanism, then merge the Release Please PR. That tags `v1.0.0` and publishes the release and the CLI asset.
+4. Optional cleanup, which the agent may not do:
+   - the private repository `Hugo-Grellier/ballast-qual-blank-20261007` with its drill branch `main-next`, PRs #3, #4, #8 and #9 and Issues #1, #2 and #5 to #7;
+   - LoreForge Issues #126 and #128, and Draft PRs #127 and #129. #127's `health.spec.ts` is not wired into Playwright; see the PR comment.
+   - LoreForge's adoption PR #124 (`chore/adopt-ballast`) now pins v0.10.0 (commit `4b14fe9`).
