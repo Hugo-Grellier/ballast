@@ -1072,9 +1072,20 @@ class ConfinementTests(AutonomyCase):
         (home / ".claude.json").write_text(
             json.dumps({"projects": {str(self.root): {"allowedTools": ["x"]}}})
         )
-        joined = " ".join(self.argv(home))
-        self.assertIn(f"--ro-bind /dev/null {home / '.claude/CLAUDE.md'}", joined)
-        self.assertIn(f"--tmpfs {home / '.claude/rules'}", joined)
+        rules = self.base / "dotfiles/rules"  # a linked rules/ is hidden too
+        rules.mkdir(parents=True)
+        (home / ".claude/rules").rmdir()
+        (home / ".claude/rules").symlink_to(rules)
+        argv = self.argv(home)
+        joined = " ".join(argv)
+        empty = self.base / "private/empty-memory"
+        self.assertEqual(empty.read_bytes(), b"")
+        self.assertIn(f"--ro-bind {empty} {home / '.claude/CLAUDE.md'}", joined)
+        self.assertIn(f"--tmpfs {rules}", joined)
+        # After the worktree binds, so none shows the files again.
+        self.assertGreater(
+            joined.index(f"--tmpfs {rules}"), joined.index(f"--bind {self.root}")
+        )
         copy = json.loads((self.base / "private/claude.json").read_text())
         self.assertEqual(
             copy["projects"][str(self.root)],
@@ -1088,7 +1099,7 @@ class ConfinementTests(AutonomyCase):
         # The operator's own file is untouched, and a Codex step sees no memory.
         self.assertNotIn("hasTrustDialogAccepted", (home / ".claude.json").read_text())
         joined = " ".join(self.argv(home, integration="codex"))
-        self.assertNotIn(f"/dev/null {home / '.claude/CLAUDE.md'}", joined)
+        self.assertNotIn(f"empty-memory {home / '.claude/CLAUDE.md'}", joined)
         self.assertIn(f"--tmpfs {home / '.claude'}", joined)
 
     def test_global_git_config_is_hidden(self) -> None:

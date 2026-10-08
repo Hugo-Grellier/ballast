@@ -2450,8 +2450,6 @@ def _agent_home_binds(
         if os.path.lexists(path / login):
             agent = _agent_login(path / login, private / f"{copy}-{index}.json")
             args += ["--ro-bind", agent, str(path / login)]
-    if integration == "claude":
-        args += _user_memory_binds(own)
     for homes in AGENT_HOMES.values():
         for path in homes(home, env):
             if path not in own and path.is_dir():
@@ -2459,19 +2457,28 @@ def _agent_home_binds(
     return args
 
 
-def _user_memory_binds(homes: list[Path]) -> list[str]:
-    """Empty the operator's user memory, `CLAUDE.md` and `rules/`, in each home.
+def _user_memory_binds(
+    home: Path, env: dict[str, str], private: Path, integration: str | None
+) -> list[str]:
+    """Empty a Claude step's user memory, `CLAUDE.md` and `rules/` (#113).
 
-    A step follows the project's instructions, not the operator's (#113).
+    A step follows the project's instructions, not the operator's. Added
+    last, like the Git files, and an empty regular file rather than
+    /dev/null, which a bwrap bind cannot open. bwrap cannot mount over a
+    link: hide what it resolves to.
     """
+    if integration != "claude":
+        return []  # Every Claude home is already an empty tmpfs.
+    empty = private / "empty-memory"
     args: list[str] = []
-    for path in homes:
-        # bwrap cannot mount over a link: hide the file it resolves to.
+    for path in claude_homes(home, env):
         memory = (path / "CLAUDE.md").resolve()
         if memory.is_file():
-            args += ["--ro-bind", "/dev/null", str(memory)]
-        if (path / "rules").is_dir() and not (path / "rules").is_symlink():
-            args += ["--tmpfs", str(path / "rules")]
+            empty.write_bytes(b"")
+            args += ["--ro-bind", str(empty), str(memory)]
+        rules = (path / "rules").resolve()
+        if rules.is_dir():
+            args += ["--tmpfs", str(rules)]
     return args
 
 
@@ -2683,7 +2690,10 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         if path.is_file() and not path.is_symlink():
             args += ["--ro-bind", str(path), str(path)]
     # Last: a later directory bind would show a global Git file again.
-    args += _global_git_config_binds(root, home, env, private)
+    args += [
+        *_global_git_config_binds(root, home, env, private),
+        *_user_memory_binds(home, env, private, integration),
+    ]
     for path in hidden:
         args += ["--remount-ro", str(path)]
     args += ["--unshare-pid", "--unshare-ipc"]
