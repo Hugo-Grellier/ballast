@@ -2432,7 +2432,7 @@ def _agent_home_binds(
 
     Its homes and the caches get a throwaway overlay and its login a copy
     without refresh tokens; only a Claude step gets a copy of
-    `~/.claude.json`, which can hold an API key.
+    `~/.claude.json` (`_claude_state_bind`), which can hold an API key.
     """
     args: list[str] = []
     _refuse_nested_agent_homes(home, env)
@@ -2450,15 +2450,39 @@ def _agent_home_binds(
         if os.path.lexists(path / login):
             agent = _agent_login(path / login, private / f"{copy}-{index}.json")
             args += ["--ro-bind", agent, str(path / login)]
+    if integration == "claude":
+        args += _user_memory_binds(own)
     for homes in AGENT_HOMES.values():
         for path in homes(home, env):
             if path not in own and path.is_dir():
                 args += ["--tmpfs", str(path)]
-    return args + _claude_state_bind(home, private, integration)
+    return args
 
 
-def _claude_state_bind(home: Path, private: Path, integration: str | None) -> list:
-    """Give a Claude step a throwaway `~/.claude.json`; hide it from the rest."""
+def _user_memory_binds(homes: list[Path]) -> list[str]:
+    """Empty the operator's user memory, `CLAUDE.md` and `rules/`, in each home.
+
+    A step follows the project's instructions, not the operator's (#113).
+    """
+    args: list[str] = []
+    for path in homes:
+        # bwrap cannot mount over a link: hide the file it resolves to.
+        memory = (path / "CLAUDE.md").resolve()
+        if memory.is_file():
+            args += ["--ro-bind", "/dev/null", str(memory)]
+        if (path / "rules").is_dir() and not (path / "rules").is_symlink():
+            args += ["--tmpfs", str(path / "rules")]
+    return args
+
+
+def _claude_state_bind(
+    root: Path, home: Path, private: Path, integration: str | None
+) -> list:
+    """Give a Claude step a throwaway `~/.claude.json`; hide it from the rest.
+
+    The copy marks the checkout trusted and its external imports declined, so
+    an interactive step opens without either start-up dialog (#113).
+    """
     settings = home / ".claude.json"
     if integration != "claude":
         # bwrap cannot mount over a link: bind the file it resolves to, and
@@ -2470,6 +2494,21 @@ def _claude_state_bind(home: Path, private: Path, integration: str | None) -> li
     if not settings.is_file() or settings.is_symlink():
         return []
     shutil.copyfile(settings, private / "claude.json")
+    try:
+        state = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = None
+    if isinstance(state, dict):
+        projects = state.setdefault("projects", {})
+        if isinstance(projects, dict):
+            entry = projects.get(str(root))
+            projects[str(root)] = {
+                **(entry if isinstance(entry, dict) else {}),
+                "hasTrustDialogAccepted": True,
+                "hasClaudeMdExternalIncludesApproved": False,
+                "hasClaudeMdExternalIncludesWarningShown": True,
+            }
+            (private / "claude.json").write_text(json.dumps(state), encoding="utf-8")
     return ["--bind", str(private / "claude.json"), str(settings)]
 
 
@@ -2627,7 +2666,10 @@ def confined_argv(  # noqa: C901, PLR0912, PLR0913 - every input is explicit
         path = home / name
         if os.path.lexists(path):
             args += ["--ro-bind", "/dev/null", str(path)]
-    args += _agent_home_binds(home, env, private, integration, with_login)
+    args += [
+        *_agent_home_binds(home, env, private, integration, with_login),
+        *_claude_state_bind(root, home, private, integration),
+    ]
     args += _visible_binds(root, command)
     args += _binds_for_worktree(root, feature, writable=writable_checkout)
     args += _installed_skill_binds(root)
@@ -3133,6 +3175,7 @@ def check_eligibility(  # noqa: C901, PLR0912, PLR0913 - one list of independent
 
 ISSUE_SNAPSHOT_LIMIT = 60_000
 ISSUE_SNAPSHOT_DIR = ".specify/workflow-state/issues"
+CONVENTIONAL = re.compile(r"[a-z]+(\([^()\s]+\))?!?: \S")
 TRUNCATED = "\n\n[truncated by Ballast]\n"
 
 
@@ -3242,6 +3285,38 @@ def write_unavailable_snapshot(root: Path, number: int, reason: str) -> Path:
         "body": f"Issue #{number} could not be read: {reason}",
     }
     return write_issue_snapshot(root, issue, "")
+
+
+def snapshot_issue(root: Path, number: int) -> str | None:
+    """Write the Issue snapshot a run's first agent step reads; return its title.
+
+    An unreadable Issue (no gh, no network, no pin) does not stop the run:
+    the snapshot says so, and the agent lists the Issue as unavailable.
+    """
+    try:
+        issue, scope, comments = read_issue(root, number)
+        write_issue_snapshot(root, issue, scope, comments)
+    except (AutonomyError, OSError, ValueError, KeyError) as error:
+        reason = str(error) or type(error).__name__
+        try:
+            write_unavailable_snapshot(root, number, reason)
+        except (AutonomyError, OSError) as failure:
+            sys.stderr.write(f"ballast: cannot write the Issue snapshot: {failure}\n")
+            return None
+        sys.stdout.write(
+            f"Issue #{number} could not be read ({reason}); the run lists it "
+            "as unavailable.\n"
+        )
+        return None
+    sys.stdout.write(f"Issue snapshot: {issue_snapshot_path(number)}\n")
+    title = issue.get("title")
+    return str(title)[:200] if title else None
+
+
+def pr_title(issue_title: str | None, fallback: str) -> str:
+    """Return the Issue's Conventional Commit title, else it after `feat: ` (#113)."""
+    title = issue_title or fallback
+    return (title if CONVENTIONAL.match(title) else f"feat: {title}")[:100]
 
 
 def read_issue(root: Path, number: int) -> tuple[dict, str, list[dict]]:
@@ -3995,7 +4070,7 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: PLR0911
         )
         # The record is rendered by trusted recorders, so it is always publishable.
         allowed.add(record_path(run["feature"]))
-        title = f"feat: {run.get('issue_title') or 'autonomous change'}"[:100]
+        title = pr_title(run.get("issue_title"), "autonomous change")
         staged = _commit_and_push(
             root,
             head,
@@ -4117,7 +4192,7 @@ def _publish_chat(root: Path, run: dict) -> dict:
         ]
         if findings:
             return refuse("postcondition", "; ".join(findings))
-        title = f"feat: {run.get('issue_title') or Path(run['feature']).name}"[:100]
+        title = pr_title(run.get("issue_title"), Path(run["feature"]).name)
         _commit_and_push(
             root,
             run["start_head"],
