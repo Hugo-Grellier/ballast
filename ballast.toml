@@ -26,6 +26,6 @@ timeout_minutes = 30
 # checkouts it set up and uses the disposable scratch repository for live checks).
 [autonomous]
 authorized_privileged_actions = [
-  "operator runs ballast trust in the networked end-to-end check",
-  "scratch github repository for the networked end-to-end check",
+  "operator-trust",
+  "scratch-repository",
 ]
