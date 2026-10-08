@@ -213,3 +213,7 @@ Release Please opens a release PR from Conventional Commit titles on `main`; mer
 ## Status
 
 Draft, backported from LoreForge. The [backport plan](docs/plans/2026-09-28-loreforge-backport.md) tracks parity before the first release; profiles are not yet defined.
+
+## License
+
+[MIT](LICENSE). Copied Spec Kit templates and excerpts keep their upstream MIT notice; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

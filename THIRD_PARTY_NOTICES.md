@@ -1,6 +1,6 @@
 # Third-party notices
 
-Modifications in this repository remain under its own license. The following
+Modifications in this repository remain under its own license ([MIT](LICENSE)). The following
 upstream notices apply to the copied Spec Kit templates and the upstream excerpts in the Spec Kit patches.
 
 ## GitHub Spec Kit
