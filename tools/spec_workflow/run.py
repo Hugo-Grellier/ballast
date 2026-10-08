@@ -894,23 +894,7 @@ def _snapshot_issue(options: list[str]) -> None:
     match = autonomy.FEATURE.fullmatch(_input(options, "feature_directory") or "")
     if match is None:
         return  # The preflight's feature check reports it.
-    number = int(match.group(1))
-    try:
-        issue, scope, comments = autonomy.read_issue(ROOT, number)
-        autonomy.write_issue_snapshot(ROOT, issue, scope, comments)
-    except (autonomy.AutonomyError, OSError, ValueError, KeyError) as error:
-        reason = str(error) or type(error).__name__
-        try:
-            autonomy.write_unavailable_snapshot(ROOT, number, reason)
-        except (autonomy.AutonomyError, OSError) as failure:
-            sys.stderr.write(f"ballast: cannot write the Issue snapshot: {failure}\n")
-            return
-        sys.stdout.write(
-            f"Issue #{number} could not be read ({reason}); discovery lists it "
-            "as unavailable.\n"
-        )
-        return
-    sys.stdout.write(f"Issue snapshot: {autonomy.issue_snapshot_path(number)}\n")
+    autonomy.snapshot_issue(ROOT, int(match.group(1)))
 
 
 def _engine_state(run_id: str) -> dict:

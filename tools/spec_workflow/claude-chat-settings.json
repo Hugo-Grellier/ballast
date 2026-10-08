@@ -3,7 +3,6 @@
   "permissions": {
     "allow": [
       "Edit(./**)",
-      "Write(./**)",
       "Bash(python3 .specify/scripts/python/*)",
       "Bash(mkdir -p specs/*)",
       "Bash(git status)",
