@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0](https://github.com/Hugo-Grellier/ballast/compare/v0.10.0...v1.0.0) (2026-10-08)
+
+
+### Documentation
+
+* **adr:** accept ADR-0017 and ADR-0018 for the 1.0 release ([#125](https://github.com/Hugo-Grellier/ballast/issues/125)) ([47f2ad6](https://github.com/Hugo-Grellier/ballast/commit/47f2ad67ba06e9706343958456b2df3caa657656))
+* license Ballast under MIT ([#129](https://github.com/Hugo-Grellier/ballast/issues/129)) ([f5ca1f4](https://github.com/Hugo-Grellier/ballast/commit/f5ca1f443059dbb7458f6bb85bf78476a59979cc))
+
+
+### Maintenance
+
+* release 1.0.0 ([#128](https://github.com/Hugo-Grellier/ballast/issues/128)) ([b7dfdb0](https://github.com/Hugo-Grellier/ballast/commit/b7dfdb0f41b8adda793de4c7bb2ca10dc9d40672))
+
 ## [0.10.0](https://github.com/Hugo-Grellier/ballast/compare/v0.9.0...v0.10.0) (2026-10-07)
 
 
