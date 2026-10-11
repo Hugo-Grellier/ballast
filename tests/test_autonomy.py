@@ -1064,6 +1064,44 @@ class ConfinementTests(AutonomyCase):
         )
         self.assertEqual(argv[-2:], ["--", "true"])
 
+    def test_claude_step_opens_without_dialogs_or_user_memory(self) -> None:
+        """#113: trusted checkout, declined imports, operator memory empty."""
+        home = self.base / "home"
+        (home / ".claude/rules").mkdir(parents=True)
+        (home / ".claude/CLAUDE.md").write_text("@RTK.md\n")
+        (home / ".claude.json").write_text(
+            json.dumps({"projects": {str(self.root): {"allowedTools": ["x"]}}})
+        )
+        rules = self.base / "dotfiles/rules"  # a linked rules/ is hidden too
+        rules.mkdir(parents=True)
+        (home / ".claude/rules").rmdir()
+        (home / ".claude/rules").symlink_to(rules)
+        argv = self.argv(home)
+        joined = " ".join(argv)
+        empty = self.base / "private/empty-memory"
+        self.assertEqual(empty.read_bytes(), b"")
+        self.assertIn(f"--ro-bind {empty} {home / '.claude/CLAUDE.md'}", joined)
+        self.assertIn(f"--tmpfs {rules}", joined)
+        # After the worktree binds, so none shows the files again.
+        self.assertGreater(
+            joined.index(f"--tmpfs {rules}"), joined.index(f"--bind {self.root}")
+        )
+        copy = json.loads((self.base / "private/claude.json").read_text())
+        self.assertEqual(
+            copy["projects"][str(self.root)],
+            {
+                "allowedTools": ["x"],
+                "hasTrustDialogAccepted": True,
+                "hasClaudeMdExternalIncludesApproved": False,
+                "hasClaudeMdExternalIncludesWarningShown": True,
+            },
+        )
+        # The operator's own file is untouched, and a Codex step sees no memory.
+        self.assertNotIn("hasTrustDialogAccepted", (home / ".claude.json").read_text())
+        joined = " ".join(self.argv(home, integration="codex"))
+        self.assertNotIn(f"empty-memory {home / '.claude/CLAUDE.md'}", joined)
+        self.assertIn(f"--tmpfs {home / '.claude'}", joined)
+
     def test_global_git_config_is_hidden(self) -> None:
         """#90: every global Git file reads empty, through links, binds last."""
         home = self.base / "home"
@@ -4227,3 +4265,19 @@ class RecoveryRenderTests(unittest.TestCase):
             "| PD-0005 | tasks | accept (agent-provisional, after 2 retries)", text
         )
         self.assertNotIn("@x", text)
+
+
+class PrTitleTests(unittest.TestCase):
+    """#113: a Conventional Issue title is not prefixed a second time."""
+
+    def test_titles(self) -> None:
+        for issue_title, expected in (
+            ("feat(web): let people undo", "feat(web): let people undo"),
+            ("fix!: drop x", "fix!: drop x"),
+            ("Let people undo", "feat: Let people undo"),
+            (None, "feat: 2-counter-text"),
+        ):
+            with self.subTest(issue_title=issue_title):
+                self.assertEqual(
+                    autonomy.pr_title(issue_title, "2-counter-text"), expected
+                )

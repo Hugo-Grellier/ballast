@@ -775,7 +775,9 @@ def _discard(root: Path, state: Path) -> int:
         "records in your state directory.\nNext: review the checkout, then run "
         "`ballast trust`. A stopped Autonomous run cannot resume after this; "
         "continue it in Chat with `ballast run continue RUN_ID --mode chat "
-        "--reason block-resolved --ref TEXT`, or start a fresh run.\n"
+        "--reason block-resolved --ref TEXT`, or start a fresh run. A Chat run "
+        "is not discarded: `ballast run status RUN_ID` shows it, and `ballast run "
+        "step` runs its interrupted step again.\n"
     )
     return 0
 

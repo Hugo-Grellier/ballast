@@ -1008,10 +1008,14 @@ class StartTests(ChatCase):
         prompt = chat._prompt(self.chat_run(run_id), "specify", None, "claude")  # noqa: SLF001
         self.assertTrue(
             prompt.startswith(
-                f"/speckit-specify Issue #{ISSUE}. "
+                f"/speckit-specify Issue #{ISSUE}. Read the Issue in "
+                f".specify/workflow-state/issues/{ISSUE}.md first. "
                 f"Set SPECIFY_FEATURE_DIRECTORY={FEATURE}"
             )
         )
+        # #113: the confined step cannot run `gh`, so start snapshots the Issue.
+        snapshot = self.root / f".specify/workflow-state/issues/{ISSUE}.md"
+        self.assertTrue(snapshot.is_file())
 
     def refused(self, *args: str, reason: str, code: int = 2) -> SimpleNamespace:
         result = self.ballast("run", "start", "--mode", "chat", *args)
@@ -1333,7 +1337,7 @@ class StepEntryTests(ChatCase):
         self.assertLessEqual(set(headless["allow"]), set(chat_settings["allow"]))
         self.assertEqual(
             set(chat_settings["allow"]) - set(headless["allow"]),
-            {"Edit(./**)", "Write(./**)"},
+            {"Edit(./**)"},
         )
         self.assertEqual(chat_settings["disableBypassPermissionsMode"], "disable")
         self.assertEqual(chat_settings["disableAutoMode"], "disable")
@@ -1415,7 +1419,8 @@ class StepEntryTests(ChatCase):
                 )
                 self.assertEqual(done.returncode, code, done.stderr)
                 if code:
-                    self.assertIn("Shift+Tab", done.stderr)
+                    self.assertIn("(`/exit`)", done.stderr)
+                    self.assertNotIn("Shift+Tab", done.stderr)
 
     @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
     def test_real_bwrap_keeps_installed_skills_read_only(self) -> None:

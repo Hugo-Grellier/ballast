@@ -806,7 +806,7 @@ class HumanGatedSnapshotTests(RunCase):
         self.assertEqual(len(self.launched), 1)
         self.assertIn("Issue #27 could not be read: ", self.snapshot())
         self.assertIn("HTTP 503", self.snapshot())
-        self.assertIn("discovery lists it as unavailable", out)
+        self.assertIn("the run lists it as unavailable", out)
 
     def test_missing_gh_is_recorded_and_the_start_goes_on(self) -> None:
         missing = autonomy.AutonomyError("gh not found outside working trees")

@@ -876,7 +876,7 @@ each agent step is the only agent step of its invocation:
 
 | Command | What it does |
 |---|---|
-| `ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: ..."] [-i integration=auto\|claude\|codex] [-i model=NAME]` | Records the run in operator state, synchronizes and pins the branch, archives the `ballast-feature` definition, prints the handoff summary and runs the Draft PR checkpoint. No agent runs. |
+| `ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: ..."] [-i integration=auto\|claude\|codex] [-i model=NAME]` | Records the run in operator state, synchronizes and pins the branch, archives the `ballast-feature` definition, writes the Issue snapshot the `specify` step reads, prints the handoff summary and runs the Draft PR checkpoint. No agent runs. |
 | `ballast run step RUN PHASE [--kind KIND]` | Runs one phase: `specify`, `clarify`, `plan`, `tasks`, `analyze`, `implement`, `reconcile-intent`, `converge`, or `review --kind plan\|implementation\|security\|test\|documentation\|spec-reconciliation`. |
 | `ballast run status RUN` | Prints the handoff summary from the run record: mode and history, feature identity, completed steps, failed checks, gates (current, stale, rejected, pending), open decisions, changes made outside agent steps, and the allowed next actions. It needs no conversation log. |
 | `ballast run approve RUN GATE`, `ballast run reject RUN GATE --reason TEXT` | Records a human decision for `scope`, `intent`, `plan`, `tasks`, `implementation`, `spec-reconciliation` or `final`, bound to the artifact's digest. `approve intent` writes the registered approval block in `intent.md`; `approve tasks` records the implementation baseline. |
@@ -908,7 +908,8 @@ rules, inside the same bubblewrap confinement and systemd scope as an Autonomous
 step, plus read-only `.claude/` and `.codex/` in the checkout: anything the rules
 do not allow is denied without a prompt, and nothing granted inside the session
 gets past bubblewrap. If a Claude session leaves `dontAsk` (Shift+Tab), a hook
-denies every tool call until it is back, so no step ever asks for a permission.
+denies every tool call, so no step ever asks for a permission; Shift+Tab
+does not cycle back to `dontAsk`, so end the step (`/exit`) and run it again.
 Codex has no such hook: an operator's own `/approvals` in a Codex step can widen
 that session up to the bubblewrap bound, so leave it at `never`.
 The installed workflow skills are read-only for every confined step. `bwrap` with user namespaces is therefore a Chat

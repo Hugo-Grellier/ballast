@@ -1424,6 +1424,9 @@ def start(root: Path, options: list[str]) -> int:
     if outcome.outcome == "blocked":
         archive(run)
         return EXIT_INTERRUPTED if outcome.interrupted else EXIT_BLOCKED
+    # After synchronization, which would count the new file as a change; the
+    # specify step reads it, since a confined step cannot run `gh` (#113).
+    run.record["issue_title"] = autonomy.snapshot_issue(root, run.issue)
     run.record["last_manifest"] = current_manifest(run)
     run.save()
     _out(summary(run))
@@ -1742,8 +1745,10 @@ def _prompt(run: Run, phase: str, kind: str | None, integration: str) -> str:
     if phase == "specify":
         idea = run.record.get("idea") or f"Issue #{run.issue}"
         return (
-            f"{sigil}{command} {idea}. Set SPECIFY_FEATURE_DIRECTORY={feature} before "
-            "creating spec.md; keep this path for the feature's later artifacts."
+            f"{sigil}{command} {idea}. Read the Issue in "
+            f"{autonomy.issue_snapshot_path(run.issue)} first. Set "
+            f"SPECIFY_FEATURE_DIRECTORY={feature} before creating spec.md; keep "
+            "this path for the feature's later artifacts."
         )
     return f"{sigil}{command} {feature}"
 

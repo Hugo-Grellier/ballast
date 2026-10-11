@@ -1628,6 +1628,8 @@ class TrustedLauncherTests(unittest.TestCase):
             "ballast run continue RUN_ID --mode chat --reason block-resolved",
             result.stdout,
         )
+        # #113: a Chat run's records survive; its interrupted step reruns.
+        self.assertIn("A Chat run is not discarded", result.stdout)
         again = self.launch("discard-runs")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertIn("nothing to discard", again.stdout)
