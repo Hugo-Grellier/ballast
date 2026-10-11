@@ -684,7 +684,8 @@ class InstallTests(unittest.TestCase):
 
     def test_io_failures_change_nothing(self) -> None:
         self.bin.mkdir(parents=True)
-        self.target.write_bytes(release_build("1.0.0"))
+        # An older release: never the current VERSION, which installs as a no-op.
+        self.target.write_bytes(release_build("0.0.1"))
         before = self.target.read_bytes()
         failures = {
             "rename": patch.object(os, "replace", side_effect=OSError("disk full")),
