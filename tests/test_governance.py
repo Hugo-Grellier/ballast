@@ -112,6 +112,13 @@ class TasksTemplateTests(unittest.TestCase):
             self.assertIn(step, text)
         self.assertNotIn("Run quickstart.md validation", text)
 
+    def test_template_names_allowed_verification_commands(self) -> None:
+        """#124: verification tasks use commands the step allowlist covers."""
+        text = (ROOT / "templates/spec-kit/templates/tasks-template.md").read_text()
+        self.assertIn("**Verification commands**:", text)
+        self.assertIn("`[checks] commands`", text)
+        self.assertIn("`[agents.permissions] extra_allow`", text)
+
     def test_installed_template_carries_the_task_guidance(self) -> None:
         """#112: the preset's tasks template replaces Ballast's copy at runtime.
 
@@ -139,6 +146,7 @@ class TasksTemplateTests(unittest.TestCase):
             "Acceptance evidence",
             "Operator-only checks",
             "Workflow-owned steps",
+            "Verification commands",
         ):
             start = template.index(f"**{name}**:")
             self.assertIn(template[start : template.index("\n", start)], installed)
