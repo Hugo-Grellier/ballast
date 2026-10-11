@@ -212,7 +212,7 @@ Release Please opens a release PR from Conventional Commit titles on `main`; mer
 
 ## Status
 
-Draft, backported from LoreForge. The [backport plan](docs/plans/2026-09-28-loreforge-backport.md) tracks parity before the first release; profiles are not yet defined.
+1.0: the request-to-PR workflow of [Epic #11](https://github.com/Hugo-Grellier/ballast/issues/11) is complete and was qualified on a blank repository and an established one ([#24](https://github.com/Hugo-Grellier/ballast/issues/24); evidence and release checklist in [`specs/24-v1-qualification/`](specs/24-v1-qualification/)). Known limit: the zero-cost local fallback is selected and confined as specified, but small local models may not produce a usable artifact. Ballast started as a backport of LoreForge's agent-first profile ([backport plan](docs/plans/2026-09-28-loreforge-backport.md)); profiles are not yet defined.
 
 ## License
 
