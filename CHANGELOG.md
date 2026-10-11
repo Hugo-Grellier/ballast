@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0](https://github.com/Hugo-Grellier/ballast/compare/v0.10.0...v1.0.0) (2026-10-11)
+
+
+### Bug Fixes
+
+* **run:** remove Chat step friction found in the 1.0 pilot ([#132](https://github.com/Hugo-Grellier/ballast/issues/132)) ([7bbe966](https://github.com/Hugo-Grellier/ballast/commit/7bbe9661b729aec3a2736b272a97b241b08a6e87))
+* **workflow:** name the allowed verification commands in the tasks template ([#131](https://github.com/Hugo-Grellier/ballast/issues/131)) ([7a93146](https://github.com/Hugo-Grellier/ballast/commit/7a931469e03fd56bab80e213be342c65a40d1719))
+
+
+### Documentation
+
+* **adr:** accept ADR-0017 and ADR-0018 for the 1.0 release ([#125](https://github.com/Hugo-Grellier/ballast/issues/125)) ([47f2ad6](https://github.com/Hugo-Grellier/ballast/commit/47f2ad67ba06e9706343958456b2df3caa657656))
+* describe the 1.0 status in the README ([#130](https://github.com/Hugo-Grellier/ballast/issues/130)) ([7ee95a4](https://github.com/Hugo-Grellier/ballast/commit/7ee95a41335992d459cc975e64e4c4e981f04f4b))
+* license Ballast under MIT ([#129](https://github.com/Hugo-Grellier/ballast/issues/129)) ([f5ca1f4](https://github.com/Hugo-Grellier/ballast/commit/f5ca1f443059dbb7458f6bb85bf78476a59979cc))
+
+
+### Maintenance
+
+* release 1.0.0 ([#128](https://github.com/Hugo-Grellier/ballast/issues/128)) ([b7dfdb0](https://github.com/Hugo-Grellier/ballast/commit/b7dfdb0f41b8adda793de4c7bb2ca10dc9d40672))
+
 ## [0.10.0](https://github.com/Hugo-Grellier/ballast/compare/v0.9.0...v0.10.0) (2026-10-07)
 
 
