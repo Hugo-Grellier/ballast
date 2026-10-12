@@ -25,7 +25,7 @@ The Draft PR checkpoint (#17) is the only place Ballast uses GitHub authority. F
 - No new program: the same resolved `git` and `gh`.
 - No fetch, push or commit; nothing is downloaded or executed.
 - No GitHub write other than the PR body; no title, base, label, reviewer, draft or ready change.
-- No agent authority: agents keep every denial, and the packet's configuration lives in the protected `ballast.toml`.
+- No agent authority: agents keep every denial, and the packet's configuration lives in the protected `ballast.toml`. *Amended by [ADR-0019](0019-feature-local-ui-states.md): criterion-linked UI states are declared in the feature's own agent-writable `ui-states.toml`, labeled agent-declared.*
 
 ## Consequences
 

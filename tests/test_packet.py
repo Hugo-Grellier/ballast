@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -99,6 +100,30 @@ def rows(text: str) -> dict[str, list[str]]:
         if match:
             found[match.group(1)] = cells(line)
     return found
+
+
+def ui_entry(
+    name: str,
+    criteria: list[str] | None = None,
+    table: str = "ui_states",
+    **keys: str,
+) -> str:
+    """One `[[ui_states]]` (or `[[review.ui_states]]`) TOML entry."""
+    lines = [f"[[{table}]]", f"name = {json.dumps(name)}"]
+    if criteria is not None:
+        lines.append(f"criteria = {json.dumps(criteria)}")
+    lines += [f"{key} = {json.dumps(value)}" for key, value in keys.items()]
+    return "\n".join(lines) + "\n\n"
+
+
+def repo_entry(name: str, **keys: str) -> str:
+    """One criterion-less `[[review.ui_states]]` entry of ballast.toml."""
+    return ui_entry(name, table="review.ui_states", **keys)
+
+
+def ui_section(text: str) -> str:
+    """Return the lines of a packet's UI states section, without its heading."""
+    return text.split("### UI states\n\n", 1)[1].split("\n\n### ", 1)[0]
 
 
 class PacketCase(CheckpointCase):
@@ -220,6 +245,21 @@ class PacketCase(CheckpointCase):
         outcome = self.check()
         body = self.body
         return outcome, section_of(body) if BEGIN in body else ""
+
+    def declare(self, text: str | bytes | None, repository: str = "") -> None:
+        """Commit the feature's ui-states.toml (None: absent); set ballast.toml."""
+        path = self.feature / "ui-states.toml"
+        if text is None:
+            path.unlink(missing_ok=True)
+        elif isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text)
+        (self.root / "ballast.toml").write_text(
+            '[github]\nrepository = "o/r"\n\n' + repository
+        )
+        self.head = self.commit()
+        self.open_pr(self.body)
 
     def packet_events(self) -> list[dict[str, Any]]:
         events, problems = ledger.read(self.root, RUN)
@@ -1357,30 +1397,37 @@ class ReviewConfigTests(PacketCase):
         self.assertEqual(self.fake.gh_calls("contents"), [])
 
     def test_invalid_configuration_names_a_fixed_reason(self) -> None:
-        state = (
-            '[[review.ui_states]]\nname = "x"\ncriteria = ["AC-001"]\npath = "a.png"\n'
-        )
+        state = '[[review.ui_states]]\nname = "x"\npath = "a.png"\n'
+        invalid = "UI states: configuration invalid (ballast.toml: "
+        # Cases sharing a reason are not adjacent: an identical body would
+        # leave the packet unchanged.
         cases = {
             '[review]\nopenapi = "../x"\n': (
                 "API: configuration invalid (openapi is not a safe repository path)."
             ),
-            '[[review.ui_states]]\nname = "x"\ncriteria = ["AC-1"]\npath = "a.png"\n': (
-                "UI states: configuration invalid (UI state criteria must be "
-                "AC-NNN IDs)."
+            '[review]\nui_states = "x"\n': (
+                invalid + "ui_states is not a list of tables)."
             ),
             state + 'check = "c"\n': (
-                "UI states: configuration invalid (UI state needs exactly one of path "
-                "or check)."
+                invalid + "UI state needs exactly one of path or check)."
+            ),
+            state + 'other = "y"\n': invalid + "UI state has an unknown key).",
+            '[[review.ui_states]]\nname = "x"\n': (
+                invalid + "UI state needs exactly one of path or check)."
+            ),
+            state.replace('"x"', '"' + "n" * 81 + '"'): (
+                invalid + "UI state name must be 1-80 characters)."
+            ),
+            state.replace("a.png", "../a.png"): (
+                invalid + "UI state path is not a safe repository path)."
+            ),
+            state.replace('"x"', '""'): (
+                invalid + "UI state name must be 1-80 characters)."
+            ),
+            '[[review.ui_states]]\nname = "x"\ncheck = "' + "c" * 101 + '"\n': (
+                invalid + "UI state check must be 1-100 characters)."
             ),
             state * 51: "UI states: configuration invalid (more than 50 UI states).",
-            state.replace('"x"', '"' + "n" * 81 + '"'): (
-                "UI states: configuration invalid (UI state name must be 1-80 "
-                "characters)."
-            ),
-            state.replace("AC-001", "AC-099"): (
-                "UI states: configuration invalid (UI state names a criterion the spec "
-                "does not define)."
-            ),
         }
         for config, expected in cases.items():
             with self.subTest(config=config[:50]):
@@ -1603,17 +1650,15 @@ class UiStateTests(PacketCase):
     def test_results_appear_beside_their_criteria(self) -> None:
         (self.root / "docs").mkdir()
         (self.root / "docs/login.png").write_bytes(b"\x89PNG")
-        self.head = self.commit()
-        self.open_pr()
-        (self.root / "ballast.toml").write_text(
-            '[github]\nrepository = "o/r"\n\n'
-            '[[review.ui_states]]\nname = "Login"\ncriteria = ["AC-001"]\n'
+        # #142: criterion-linked entries live in the feature's ui-states.toml.
+        self.declare(
+            '[[ui_states]]\nname = "Login"\ncriteria = ["AC-001"]\n'
             'path = "docs/login.png"\n\n'
-            '[[review.ui_states]]\nname = "Checkout"\ncriteria = ["AC-002"]\n'
+            '[[ui_states]]\nname = "Checkout"\ncriteria = ["AC-002"]\n'
             'check = "ui / checkout"\n\n'
-            '[[review.ui_states]]\nname = "Cart"\ncriteria = ["AC-003"]\n'
+            '[[ui_states]]\nname = "Cart"\ncriteria = ["AC-003"]\n'
             'check = "ui / cart"\n\n'
-            '[[review.ui_states]]\nname = "Gone"\ncriteria = ["AC-006"]\n'
+            '[[ui_states]]\nname = "Gone"\ncriteria = ["AC-006"]\n'
             'path = "docs/gone.png"\n'
         )
         self.fake.check_pages = [
@@ -1634,21 +1679,389 @@ class UiStateTests(PacketCase):
         ]
         _, text = self.packet()
         found = rows(text)
+        label = f"({packet.AGENT_LABEL})"
         self.assertIn(
-            f"UI Login: [present at head]({self.blob('docs/login.png')})",
+            f"UI Login {label}: [present at head]({self.blob('docs/login.png')})",
             found["AC-001"][3],
         )
         self.assertIn(
-            "UI Checkout: [passed](https://github.com/o/r/runs/31)", found["AC-002"][3]
+            f"UI Checkout {label}: [passed](https://github.com/o/r/runs/31)",
+            found["AC-002"][3],
         )
         self.assertIn(
-            "UI Cart: [not run (in progress)](https://github.com/o/r/runs/32)",
+            f"UI Cart {label}: [not run (in progress)](https://github.com/o/r/runs/32)",
             found["AC-003"][3],
         )
-        self.assertIn("UI Gone: missing", found["AC-006"][3])
+        self.assertIn(f"UI Gone {label}: missing", found["AC-006"][3])
         self.assertEqual(found["AC-003"][2], "missing")
         self.assertEqual(found["AC-002"][2], "not run")
-        self.assertIn("- Login (AC-001): [present at head](", text)
+        self.assertIn(
+            f"- Login (AC-001, {packet.AGENT_LABEL}): [present at head](", text
+        )
+
+
+class FeatureUiStateTests(PacketCase):
+    """#142 US1: a feature's own UI states (AC-001 to AC-006)."""
+
+    def published(self) -> str:
+        outcome, text = self.packet()
+        self.assertIn(outcome.packet.state, {"published", "updated"})
+        self.assertIn("### Criteria", text)
+        self.assertEqual(len(rows(text)), 6)
+        self.assertIn("### Sources", text)
+        return text
+
+    def test_valid_entries_appear_beside_their_criteria(self) -> None:
+        (self.root / "docs").mkdir()
+        (self.root / "docs/login.png").write_bytes(b"\x89PNG")
+        self.fake.check_pages = [
+            [
+                {
+                    "id": 31,
+                    "name": "ui / checkout",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        ]
+        self.declare(
+            ui_entry("Login", ["AC-001"], path="docs/login.png")
+            + ui_entry("Checkout", ["AC-002"], check="ui / checkout")
+            + ui_entry("Gone", ["AC-006"], path="docs/gone.png")
+        )
+        text = self.published()
+        label = packet.AGENT_LABEL
+        login = f"[present at head]({self.blob('docs/login.png')})"
+        checkout = "[passed](https://github.com/o/r/runs/31)"
+        self.assertEqual(
+            ui_section(text).splitlines(),
+            [
+                f"- Login (AC-001, {label}): {login}",
+                f"- Checkout (AC-002, {label}): {checkout}",
+                f"- Gone (AC-006, {label}): missing",
+            ],
+        )
+        found = rows(text)
+        self.assertIn(f"UI Login ({label}): {login}", found["AC-001"][3])
+        self.assertIn(f"UI Checkout ({label}): {checkout}", found["AC-002"][3])
+        self.assertIn(f"UI Gone ({label}): missing", found["AC-006"][3])
+
+    def test_undefined_criterion_invalidates_only_the_ui_section(self) -> None:
+        self.declare(ui_entry("x", ["AC-099"], path="a.png"))
+        outcome, text = self.packet()
+        self.assertPacket(outcome, "published")
+        self.assertEqual(
+            ui_section(text),
+            "UI states: configuration invalid (ui-states.toml: UI state names a "
+            "criterion the spec does not define).",
+        )
+        self.assertEqual(len(rows(text)), 6)
+        for heading in ("### Criteria", "### API changes", "### Sources"):
+            self.assertIn(heading, text)
+
+    def test_each_entry_rule_names_the_feature_file(self) -> None:
+        valid = ui_entry("x", ["AC-001"], path="a.png")
+        cases = {
+            ui_entry("x", ["AC-001"], path="a.png", other="y"): (
+                "UI state has an unknown key"
+            ),
+            ui_entry("n" * 81, ["AC-001"], path="a.png"): (
+                "UI state name must be 1-80 characters"
+            ),
+            ui_entry("x", ["AC-1"], path="a.png"): (
+                "UI state criteria must be AC-NNN IDs"
+            ),
+            ui_entry("x", path="a.png"): "UI state criteria must be AC-NNN IDs",
+            ui_entry("x", [], path="a.png"): "UI state criteria must be AC-NNN IDs",
+            ui_entry("x", ["AC-001"], path="a.png", check="c"): (
+                "UI state needs exactly one of path or check"
+            ),
+            ui_entry("x", ["AC-001"]): "UI state needs exactly one of path or check",
+            ui_entry("x", ["AC-001"], path="../x"): (
+                "UI state path is not a safe repository path"
+            ),
+            ui_entry("x", ["AC-001"], check="c" * 101): (
+                "UI state check must be 1-100 characters"
+            ),
+            'ui_states = "x"\n': "ui_states is not a list of tables",
+            'title = "x"\n\n' + valid: "has a top-level key other than ui_states",
+        }
+        for text, reason in cases.items():
+            with self.subTest(reason=reason, text=text[:60]):
+                self.declare(text)
+                self.assertEqual(
+                    ui_section(self.published()),
+                    f"UI states: configuration invalid (ui-states.toml: {reason}).",
+                )
+
+    def test_unreadable_file_names_the_feature_file(self) -> None:
+        cases = {
+            "[[ui_states]\n": "not valid TOML",
+            b"\xff\xfe[[ui_states]]\n": "not UTF-8 text",
+            "x" * (packet.FILE_LIMIT + 1): "larger than 1 MiB",
+        }
+        for text, reason in cases.items():
+            with self.subTest(reason=reason):
+                self.declare(text)
+                self.assertEqual(
+                    ui_section(self.published()),
+                    f"UI states: configuration invalid (ui-states.toml: {reason}).",
+                )
+
+    def test_other_features_files_never_reach_this_packet(self) -> None:
+        other = self.root / "specs/18-other"
+        other.mkdir(parents=True)
+        (other / "spec.md").write_text(
+            "1. **AC-003**: **Given** another, **When** checked, **Then** shown.\n"
+        )
+        (other / "ui-states.toml").write_text(
+            ui_entry("Other screen", ["AC-003"], path="docs/other.png")
+            + ui_entry("Broken", ["AC-099"], path="docs/broken.png")
+        )
+        self.declare(ui_entry("Cart", ["AC-003"], check="ui / cart"))
+        text = self.published()
+        self.assertEqual(
+            ui_section(text), f"- Cart (AC-003, {packet.AGENT_LABEL}): missing"
+        )
+        self.assertIn(
+            f"UI Cart ({packet.AGENT_LABEL}): missing", rows(text)["AC-003"][3]
+        )
+        self.assertNotIn("Other screen", text)
+        self.assertNotIn("Broken", text)
+        self.assertNotIn("configuration invalid", text)
+
+    def test_file_is_read_at_the_head_commit(self) -> None:
+        self.declare(ui_entry("Committed", ["AC-001"], path="a.png"))
+        (self.feature / "ui-states.toml").write_text(
+            ui_entry("Working tree", ["AC-001"], path="a.png")
+        )
+        text = self.published()
+        self.assertIn("Committed", ui_section(text))
+        self.assertNotIn("Working tree", text)
+
+
+class FeatureIsolationTests(PacketCase):
+    """#142 US2: one feature never invalidates another (AC-007 to AC-009)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        other = self.root / "specs/18-other"
+        other.mkdir(parents=True)
+        (other / "spec.md").write_text(
+            "1. **AC-007**: **Given** another, **When** checked, **Then** shown.\n"
+        )
+        (other / "ui-states.toml").write_text(
+            ui_entry("Other", ["AC-007"], path="docs/other.png")
+            + ui_entry("Broken", ["AC-099"], path="docs/broken.png")
+        )
+
+    def test_no_file_and_no_table_is_not_configured(self) -> None:
+        cases = {
+            None: "UI states: not configured.",
+            "# No UI states yet.\n": "UI states: not configured.",
+            "ui_states = []\n": "None (0).",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.declare(text)
+                _, packet_text = self.packet()
+                self.assertEqual(ui_section(packet_text), expected)
+
+    def test_repository_entries_alone_are_listed_without_criteria(self) -> None:
+        self.fake.check_pages = [
+            [
+                {
+                    "id": 41,
+                    "name": "ui / home",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        ]
+        self.declare(None, repo_entry("Home", check="ui / home"))
+        _, text = self.packet()
+        self.assertEqual(
+            ui_section(text), "- Home: [passed](https://github.com/o/r/runs/41)"
+        )
+        self.assertNotIn(packet.AGENT_LABEL, text)
+        for row in rows(text).values():
+            self.assertNotIn("UI ", row[3])
+
+    def test_repository_table_is_valid_for_every_feature(self) -> None:
+        self.assertEqual(
+            list(inspect.signature(packet.review_config).parameters), ["root"]
+        )
+        self.declare(None, repo_entry("Home", path="docs/home.png"))
+        _, text = self.packet()
+        # The same table on a feature whose spec defines other criteria.
+        self.write_feature(SPEC.replace("AC-00", "AC-01"), criteria=None)
+        self.head = self.commit()
+        self.open_pr(self.body)
+        _, other = self.packet()
+        self.assertEqual(set(rows(other)), {f"AC-01{n}" for n in range(1, 7)})
+        self.assertEqual(ui_section(other), ui_section(text))
+        self.assertEqual(ui_section(text), "- Home: missing")
+        config = packet.review_config(self.root)
+        self.assertIsNone(config.ui_error)
+
+
+class MergedUiStateTests(PacketCase):
+    """#142 US3: repository-wide screens merge with the feature's (AC-010 to AC-013)."""
+
+    def test_repository_then_feature_entries(self) -> None:
+        self.declare(
+            ui_entry("Login", ["AC-001"], path="docs/login.png"),
+            repo_entry("Home", check="ui / home"),
+        )
+        _, text = self.packet()
+        self.assertEqual(
+            ui_section(text).splitlines(),
+            ["- Home: missing", f"- Login (AC-001, {packet.AGENT_LABEL}): missing"],
+        )
+        details = {ac: row[3] for ac, row in rows(text).items()}
+        self.assertIn(f"UI Login ({packet.AGENT_LABEL}): missing", details["AC-001"])
+        self.assertEqual([ac for ac, d in details.items() if "UI " in d], ["AC-001"])
+        self.assertNotIn("UI Home", text)
+
+    def test_repository_criteria_give_the_move_reason(self) -> None:
+        for criteria in (["AC-001"], []):
+            with self.subTest(criteria=criteria):
+                self.declare(
+                    ui_entry("Login", ["AC-001"], path="docs/login.png"),
+                    ui_entry("Home", criteria, "review.ui_states", check="ui / home"),
+                )
+                outcome, text = self.packet()
+                self.assertIn(outcome.packet.state, {"published", "updated"})
+                self.assertEqual(
+                    ui_section(text),
+                    "UI states: configuration invalid (ballast.toml: UI state "
+                    "criteria belong in the feature's ui-states.toml).",
+                )
+
+    def test_more_than_fifty_in_total(self) -> None:
+        def entries(repository: int, feature: int) -> tuple[str | None, str]:
+            return (
+                "".join(
+                    ui_entry(f"F{n}", ["AC-001"], check=f"f{n}") for n in range(feature)
+                )
+                or None,
+                "".join(repo_entry(f"R{n}", check=f"r{n}") for n in range(repository)),
+            )
+
+        for repository, feature in ((30, 21), (51, 0), (0, 51)):
+            with self.subTest(repository=repository, feature=feature):
+                self.declare(*entries(repository, feature))
+                outcome, text = self.packet()
+                self.assertIn(outcome.packet.state, {"published", "updated"})
+                self.assertEqual(
+                    ui_section(text),
+                    "UI states: configuration invalid (more than 50 UI states).",
+                )
+                self.assertEqual(len(rows(text)), 6)
+        self.declare(*entries(30, 20))
+        _, text = self.packet()
+        lines = ui_section(text).splitlines()
+        self.assertEqual(len([n for n in lines if n.startswith("- R")]), 30)
+        self.assertEqual(len([n for n in lines if n.startswith("- F")]), 20)
+        self.assertTrue(lines[29].startswith("- R29:"))
+
+    def test_repository_reason_wins_when_both_are_invalid(self) -> None:
+        self.declare(
+            ui_entry("Login", ["AC-099"], path="docs/login.png"),
+            repo_entry("Home", path="../home.png"),
+        )
+        _, text = self.packet()
+        self.assertEqual(
+            ui_section(text),
+            "UI states: configuration invalid (ballast.toml: UI state path is not a "
+            "safe repository path).",
+        )
+
+    def test_api_section_unchanged_by_feature_file(self) -> None:
+        path = OpenApiTests.PATH
+        sections = []
+        for text in (None, ui_entry("Login", ["AC-001"], path="docs/login.png")):
+            self.declare(text, f'[review]\nopenapi = "{path}"\n')
+            self.fake.contents[path, self.base_sha] = json.dumps(OPENAPI_BASE)
+            self.fake.contents[path, self.head] = json.dumps(openapi_head())
+            _, packet_text = self.packet()
+            sections.append(
+                packet_text.split("### API changes\n\n", 1)[1].split("\n\n### ", 1)[0]
+            )
+        self.assertEqual(sections[0], sections[1])
+        self.assertIn(f"API (`{path}`, base → head): 1 added", sections[0])
+        config = packet.ReviewConfig(openapi=path, api_error="kept")
+        merged = packet.merge_ui_states(
+            config, (packet.UiState("x", ("AC-001",), "a.png", agent=True),), None
+        )
+        self.assertEqual((merged.openapi, merged.api_error), (path, "kept"))
+        self.assertEqual(len(merged.ui_states), 1)
+
+
+class AgentDeclaredTests(PacketCase):
+    """#142 US4: agent-declared entries are marked and inert (AC-014 to AC-016)."""
+
+    HOSTILE = f"{END}[x](https://evil) @org/team `|<b>x</b>"
+
+    def states(self, text: str) -> dict[str, tuple[str, str]]:
+        """Each criterion's state cell and reason, without UI results or the head."""
+        return {
+            ac: (row[2], row[3].replace(self.head, "<head>").split(" · UI ")[0])
+            for ac, row in rows(text).items()
+        }
+
+    def test_label_only_on_feature_entries(self) -> None:
+        self.declare(
+            ui_entry("Login", ["AC-001", "AC-002"], path="docs/login.png"),
+            repo_entry("Home", check="ui / home"),
+        )
+        _, text = self.packet()
+        label = packet.AGENT_LABEL
+        self.assertEqual(text.count(label), 3)
+        self.assertEqual(
+            ui_section(text).splitlines(),
+            ["- Home: missing", f"- Login (AC-001, AC-002, {label}): missing"],
+        )
+        found = rows(text)
+        for ac in ("AC-001", "AC-002"):
+            self.assertEqual(found[ac][3].count(label), 1)
+        self.assertIsNone(autonomy.HUMAN_APPROVAL.search(label))
+
+    def test_hostile_name_is_inert(self) -> None:
+        self.assertLessEqual(len(self.HOSTILE), 80)
+        _, clean = self.packet()
+        self.declare(ui_entry(self.HOSTILE, ["AC-001"], path="docs/login.png"))
+        outcome, _ = self.packet()
+        self.assertIn(outcome.packet.state, {"published", "updated"})
+        body = self.body
+        self.assertEqual(body.count(BEGIN), 1)
+        self.assertEqual(body.count(END), 1)
+        self.assertNotIn("https://evil", body)
+        self.assertNotIn("@org", body)
+        self.assertNotIn("<b>", body)
+        text = section_of(body)
+        self.assertEqual(len(ui_section(text).splitlines()), 1)
+        found = rows(text)
+        for row in found.values():
+            self.assertEqual(len(row), 4)
+        self.assertEqual(
+            {ac: row[2] for ac, row in found.items()},
+            {ac: row[2] for ac, row in rows(clean).items()},
+        )
+
+    def test_evidence_states_ignore_the_file(self) -> None:
+        results = []
+        for text in (
+            None,
+            ui_entry("Login", ["AC-001", "AC-004"], path="docs/login.png"),
+            ui_entry("Login", ["AC-099"], path="docs/login.png"),
+        ):
+            self.declare(text)
+            _, packet_text = self.packet()
+            results.append(self.states(packet_text))
+        self.assertEqual(len(results[0]), 6)
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0], results[2])
 
 
 class FailureTests(PacketCase):
