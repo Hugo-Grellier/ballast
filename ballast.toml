@@ -5,9 +5,9 @@ ref = "v1.0.0"
 
 [agents.permissions]
 extra_allow = [
-  "Bash(uvx ruff check*)",
-  "Bash(uvx ruff format*)",
-  "Bash(uv run --no-project --python 3.13 --with pyyaml python -m unittest *)",
+  "Bash(uv run --locked ruff check*)",
+  "Bash(uv run --locked ruff format*)",
+  "Bash(uv run --locked python -m unittest *)",
 ]
 
 [github]
@@ -15,9 +15,9 @@ repository = "Hugo-Grellier/ballast"
 
 [checks]
 commands = [
-  "uvx ruff check",
-  "uvx ruff format --check",
-  "uv run --no-project --python 3.13 --with pyyaml python -m unittest tests/test_*.py",
+  "uv run --locked ruff check",
+  "uv run --locked ruff format --check",
+  "uv run --locked python -m unittest tests/test_*.py",
 ]
 timeout_minutes = 30
 
