@@ -1,4 +1,16 @@
-# Lint and format configuration only; this repository ships no Python package.
+# The gate's pinned tools and lint configuration; this repository ships no
+# Python package and the shipped tools stay standard-library-only.
+[project]
+name = "ballast-gate"
+version = "0"
+requires-python = ">=3.11"
+
+[dependency-groups]
+dev = ["pyyaml==6.0.3", "ruff==0.17.0"]
+
+[tool.uv]
+package = false
+
 [tool.ruff]
 target-version = "py311"
 # Extension-less entry points are Python scripts too.

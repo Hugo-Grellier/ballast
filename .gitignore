@@ -1,4 +1,5 @@
 __pycache__/
+.venv/
 
 # Installed by Ballast (tools/setup)
 .ballast/
