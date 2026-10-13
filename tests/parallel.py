@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 RAN = re.compile(r"^Ran (\d+) tests? in", re.MULTILINE)
+SKIPPED = re.compile(r"skipped=(\d+)")
 
 
 def test_classes(paths: list[str]) -> list[tuple[int, str]]:
@@ -37,8 +38,8 @@ def test_classes(paths: list[str]) -> list[tuple[int, str]]:
     return found
 
 
-def run(name: str) -> tuple[str, int, int, str, float]:
-    """Run one class in its own process: name, exit, tests run, output, seconds."""
+def run(name: str) -> tuple[str, int, int, int, str, float]:
+    """Run one class in its own process: name, exit, run, skipped, output, seconds."""
     started = time.monotonic()
     done = subprocess.run(  # noqa: S603 - this interpreter, a discovered class
         [sys.executable, "-m", "unittest", name],
@@ -48,10 +49,12 @@ def run(name: str) -> tuple[str, int, int, str, float]:
         check=False,
     )
     ran = RAN.search(done.stderr)
+    skipped = SKIPPED.search(done.stderr)
     return (
         name,
         done.returncode,
         int(ran.group(1)) if ran else 0,
+        int(skipped.group(1)) if skipped else 0,
         done.stdout + done.stderr,
         time.monotonic() - started,
     )
@@ -62,10 +65,11 @@ def main(paths: list[str]) -> int:
     # Most tests first, so the long classes start before the short ones.
     classes = [name for _, name in sorted(test_classes(paths), reverse=True)]
     started = time.monotonic()
-    failed, total = [], 0
+    failed, total, skips = [], 0, 0
     with ThreadPoolExecutor(os.cpu_count() or 1) as pool:
-        for name, code, ran, output, seconds in pool.map(run, classes):
+        for name, code, ran, skipped, output, seconds in pool.map(run, classes):
             total += ran
+            skips += skipped
             if code:
                 failed.append(name)
                 sys.stdout.write(f"\n=== {name} (exit {code}) ===\n{output}")
@@ -73,7 +77,8 @@ def main(paths: list[str]) -> int:
                 sys.stdout.write(f"slow: {name} {seconds:.0f}s\n")
     elapsed = time.monotonic() - started
     sys.stdout.write(
-        f"\nRan {total} tests in {len(classes)} classes in {elapsed:.0f}s: "
+        f"\nRan {total} tests ({skips} skipped) in {len(classes)} classes "
+        f"in {elapsed:.0f}s: "
         + (f"FAILED ({', '.join(failed)})\n" if failed else "OK\n")
     )
     return 1 if failed or not classes else 0
