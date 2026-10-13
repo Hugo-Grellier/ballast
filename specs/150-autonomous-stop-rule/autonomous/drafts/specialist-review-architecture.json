@@ -1,0 +1,33 @@
+{
+  "point": "specialist-review",
+  "decision": "accept-finding",
+  "summary": "Architecture recheck after fix cycle 3: the ADR-0019 condition (11) gap is fixed; only low observations remain. Approved.",
+  "basis": "Reviewed the whole change against d215a63 (commit 1e0a1fe plus working tree). Fix cycle 3 added to ADR-0020 Self-resume that a self-resume counts as a block resolved during the run for ADR-0019 condition (11), so the PR stays a Draft; this matches ADR-0019's condition and Consequences and links the right 0019 file. Every new publish-instead-of-block path now fails at least one of ADR-0019 conditions (6)-(11). ADR-0004/0010 notes, ADR-0009 unedited, policy and technical spec only link ADR-0020. FR-012 holds: no tools/, .agents/ or .github/ change. tests.test_governance ran 38 tests OK in this step; the full suite timed out in the runner (D-001), and trusted run-checks has not run, so AC-012 stays unverified.",
+  "evidence": [
+    "specs/150-autonomous-stop-rule/reviews/architecture.md",
+    "docs/adr/0020-autonomous-stop-rule.md",
+    "docs/adr/0019-autonomous-pr-completion.md",
+    "docs/adr/0004-autonomous-provisional-decisions.md",
+    "docs/adr/0010-autonomous-resume-and-bounded-recovery.md",
+    "specs/150-autonomous-stop-rule/decisions.md",
+    "specs/150-autonomous-stop-rule/autonomous/record.md"
+  ],
+  "artifact": "docs/adr/0020-autonomous-stop-rule.md",
+  "model": "claude-opus-5-5",
+  "material": false,
+  "supersedes": null,
+  "privileged_actions": [],
+  "review": {
+    "kind": "architecture",
+    "verdict": "approved",
+    "report": "specs/150-autonomous-stop-rule/reviews/architecture.md",
+    "findings": [
+      {"id": "F-003", "severity": "low", "label": "spec-ambiguity", "disposition": "open", "reason": "Unchanged: ADR-0014's local fallback also triggers on quota failure and ADR-0020 does not order self-resume against it. #154 can settle it without changing the stop rule.", "evidence": ["docs/adr/0014-local-zero-cost-fallback.md"]},
+      {"id": "F-004", "severity": "low", "label": "spec-ambiguity", "disposition": "open", "reason": "Unchanged: 'A failed [checks] command is not a postcondition' reads as present fact while today's runner still blocks a failed final command as postcondition; 'is no longer treated as' would be clearer.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md"]},
+      {"id": "F-005", "severity": "low", "label": "spec-ambiguity", "disposition": "open", "reason": "Unchanged: no sibling leaf is named for making plan review, spec reconciliation and a failed final run-checks publish instead of block; #153 is the natural owner and the Delivery bullet covers the interim.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md"]},
+      {"id": "F-006", "severity": "medium", "label": "architecture-issue", "disposition": "resolved", "reason": "Fix cycle 3 added to Self-resume that a self-resume counts as a block resolved during the run for ADR-0019 condition (11), so the PR stays a Draft; test_self_resume checks the phrases.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md", "tests/test_governance.py"]}
+    ],
+    "required_kinds": []
+  },
+  "assumption": null
+}
