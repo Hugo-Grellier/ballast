@@ -1,46 +1,39 @@
-# Architecture review: 150-autonomous-stop-rule (recheck after fix cycle 1)
+# Architecture review: 150-autonomous-stop-rule (specialists recheck after fix cycle 3)
 
 - Review: specialists-recheck (architecture, agent-provisional), using the engineering review skill focused on the accepted ADRs and architecture sections the change touches
 - Reviewer: claude/claude-opus-5-5, fresh context, not the author of the change
-- Run: Autonomous `1d0a2143`, R2
-- Fix input: cycle 1, engineering findings PD-0009 F-001 (R6 mapping cases) and F-002 (ADR-0010 Consequences note)
-- Diff reviewed: the whole working tree against `09fb427` (`git diff`, `git status`)
-- Read against: `spec.md`, `intent.md`, `plan.md`, `research.md`, `contracts/adr-0020.md`, `tasks.md`, `autonomous/record.md`, the previous `reviews/architecture.md` (PD-0010), `AGENTS.md`, `docs/policies/workflow.md`, `docs/policies/engineering.md`, `docs/policies/project/workflow.md`, ADR-0004, ADR-0009, ADR-0010, ADR-0014, ADR-0016, `specs/TECHNICAL-SPEC.md` around the Autonomous status text, the template's Autonomous-runs block table, and `tools/spec_workflow/artifacts.py` `run_checks`. `decisions.md` does not exist.
+- Run: Autonomous `1d0a2143`, R2, fix cycles used 3 of 3, so no cycle remains after this review
+- Diff reviewed: the whole change against the branch base `d215a63` (#155, ADR-0019), meaning commit `1e0a1fe` plus the working tree (`git diff`, `git status`). Fix cycle 3 changed one sentence of `docs/adr/0020-autonomous-stop-rule.md`, two expected phrases in `test_self_resume` in `tests/test_governance.py` and added T016 to `tasks.md`; the rest of the working tree is the run record and review reports.
+- Read against: `spec.md`, `intent.md`, `plan.md`, `tasks.md`, `decisions.md` (D-001), `autonomous/record.md` (Fix loop, Block resolutions), `.specify/workflow-state/fix-input/150-autonomous-stop-rule.json` (cycle 3, engineering F-001), `.specify/workflow-state/required-reviews/150-autonomous-stop-rule.json`, the previous architecture report, `CLAUDE.md`, `docs/policies/workflow.md`, `docs/policies/engineering.md`, `docs/policies/project/workflow.md`, ADR-0004, ADR-0009, ADR-0010, ADR-0014, ADR-0019 (`0019-autonomous-pr-completion.md`) and `specs/TECHNICAL-SPEC.md` around the Autonomous status text.
 
-## Form and lineage
+## What changed in fix cycle 3
 
-ADR-0020 keeps the repository's form (Status, Risk, Feature, Amends, then Context, Decision, Consequences, Rejected alternatives). Amendment by inline italic note follows the precedent in ADR-0004, ADR-0006 and ADR-0010. ADR-0009 is unedited. The status line describes the merge as the future acceptance, matching ADR-0004 and ADR-0010.
+The Self-resume bullet now ends: a self-resume counts as a block resolved during the run for ADR-0019 condition (11), so the run's PR stays a Draft. I checked ADR-0019's condition (11) ("no block resolved during the run") and its Consequences ("Every resume records a `block-resolution` human decision, so condition (11) keeps a resumed run's PR a Draft"). The new sentence keeps that outcome for an unattended usage-limit resume. It does so without making the runner event a human decision, because condition (11) is about a resolved block, not about who resolved it. The link points at `0019-autonomous-pr-completion.md`, the right one of the two files numbered 0019. #154 no longer has to choose, which meets SC-003.
 
-## Fix-cycle items
+## Whole change, re-checked
 
-**Mapping completeness (PD-0010 F-001, PD-0009 F-001).** The *Limit outcome instead of a block* sub-bullet now covers a high or critical finding or non-approved verdict at plan review and spec reconciliation ("their cycles count as spent at once") and a failed final `run-checks`. With `review-finding`, `limit` and the material-provisional group, every block category in the template's table now has a stated outcome, so #151 and #153 can implement without a new decision (SC-003). Resolved.
+- Form and lineage: ADR-0020 keeps the repository's ADR form and amends ADR-0004 and ADR-0010 with inline italic notes. ADR-0009 is not edited. The technical spec and the policy template only point to ADR-0020.
+- Mapping against ADR-0019: limit-outcome PRs fail (9), leftover findings fail (7), a non-approved plan review or reconciliation fails (6), a failed final `run-checks` fails (8), a material provisional decision fails (10), and now a self-resume fails (11). None of the new publish-instead-of-block paths can reach ready for review.
+- FR-012: no file under `tools/`, `.agents/` or `.github/` changed. The change is documentation and document tests only.
+- The ADR-0019 Consequences sentence "Every resume records a `block-resolution` human decision" is literally no longer true once #154 ships, but ADR-0020's new sentence keeps its effect, and ADR-0020 is the later, linked record. This is a wording observation, not a conflict.
 
-**ADR-0010 Consequences (PD-0010 F-002).** The sentence "a run that runs out blocks and continues human-gated" now carries an ADR-0020 note saying the run publishes a Draft PR instead. ADR-0010 has no remaining unannotated limit rule. `test_adr_0010_notes` pins three notes. Resolved.
+## Earlier observations, re-checked
 
-## Remaining and new observations
-
-**Postcondition wording.** The mapping says "A failed `[checks]` command is not a `postcondition`". Today `run_checks` in `artifacts.py` blocks a failed final command with category `postcondition`, and the template table lists `postcondition` under unsafe uncertainty. The ADR is reclassifying it, which is a legitimate decision, but the sentence reads as a description of the present. The Delivery bullet keeps today's blocks until the siblings ship, so there is no live contradiction. Rewording it as a reclassification would make the change clearer to #153.
-
-**Ownership of the new cases.** The Limit outcome bullet names #153 for rendering `unverified`. It does not say which leaf makes plan review, spec reconciliation and failed final `run-checks` publish instead of block. #153 is the natural owner, and the Delivery bullet covers the gap until then, so this is low.
-
-**Self-resume and local fallback (PD-0010 F-003).** Still unstated: ADR-0014's local fallback also triggers on quota failure, and ADR-0020 does not order self-resume against it. #154 can settle it without changing the stop rule.
-
-**Technical spec placement.** The status paragraph sits after "may still block a run." and points to ADR-0020 without restating the rule, so there is no second source of truth.
+The three low items from earlier reviews are unchanged because their text is unchanged: the order of self-resume and the ADR-0014 local fallback is unstated; "A failed `[checks]` command is not a `postcondition`" reads as present fact; no leaf is named for making plan review, spec reconciliation and a failed final `run-checks` publish instead of block. None changes a boundary or requirement, and each can be settled by #153 or #154.
 
 ## Checks
 
-`uv run --locked python -m unittest tests.test_governance` (38 tests), `uv run --locked ruff check` and `ruff format --check` pass locally. The full-suite feedback check timed out in cycles 0 and 1 (run record); the trusted `run-checks` has not run yet.
+The run record's Fix loop shows `ruff check` and `ruff format --check` exited 0 after cycle 3, and the full unittest command timed out again. `decisions.md` D-001 traces this to the ledger tests' operator-attestation guard inside an agent step, which this diff does not touch. In this review step, `uv run --locked python -m unittest tests.test_governance` ran 38 tests, OK. Trusted `run-checks` has not run, so AC-012 is still unverified. Because no fix cycle remains, the runner treats the timed-out check as an exhausted limit. That decision belongs to the runner, not to this review.
 
 ## Verdict basis
 
-The fix closed both architecture gaps, so the mapping is complete and ADR-0010 has no stale limit rule. What remains is wording and ownership detail that changes no boundary, requirement or risk class. Approved.
+The architecture gap I accepted provisionally in the last review is fixed by the sentence that review asked for. The change is consistent with ADR-0004, ADR-0010 and ADR-0019 and keeps one source of truth. Only low observations remain. Approved.
 
 <!-- ballast-findings: begin -->
 ## Findings (recorded from the review draft)
 
-- F-001 (medium, spec-ambiguity, resolved): The Limit outcome sub-bullet now covers a high finding or non-approved verdict at plan review and spec reconciliation and a failed final run-checks.
-- F-002 (low, architecture-issue, resolved): ADR-0010's Consequences sentence now carries an ADR-0020 note; test_adr_0010_notes expects three notes.
-- F-003 (low, spec-ambiguity, open): ADR-0014's local fallback also triggers on quota failure; ADR-0020 does not order self-resume against it. #154 can settle it without changing the stop rule.
-- F-004 (low, spec-ambiguity, open): 'A failed [checks] command is not a postcondition' reads as present fact, while run_checks in artifacts.py blocks a failed final command as postcondition today. Reword it as a reclassification ('is no longer treated as').
-- F-005 (low, spec-ambiguity, open): No sibling leaf is named for making plan review, spec reconciliation and failed final run-checks publish instead of block; #153 is the natural owner and the Delivery bullet covers the interim.
+- F-003 (low, spec-ambiguity, open): Unchanged: ADR-0014's local fallback also triggers on quota failure and ADR-0020 does not order self-resume against it. #154 can settle it without changing the stop rule.
+- F-004 (low, spec-ambiguity, open): Unchanged: 'A failed [checks] command is not a postcondition' reads as present fact while today's runner still blocks a failed final command as postcondition; 'is no longer treated as' would be clearer.
+- F-005 (low, spec-ambiguity, open): Unchanged: no sibling leaf is named for making plan review, spec reconciliation and a failed final run-checks publish instead of block; #153 is the natural owner and the Delivery bullet covers the interim.
+- F-006 (medium, architecture-issue, resolved): Fix cycle 3 added to Self-resume that a self-resume counts as a block resolved during the run for ADR-0019 condition (11), so the PR stays a Draft; test_self_resume checks the phrases.
 <!-- ballast-findings: end -->

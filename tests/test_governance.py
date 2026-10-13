@@ -645,6 +645,8 @@ class AutonomousStopRuleDocumentTests(unittest.TestCase):
                 "runner event",
                 "never a human decision",
                 "mode, risk, limits and integrations",
+                "condition (11)",
+                "stays a Draft",
                 "#154",
             ),
         )
