@@ -300,7 +300,13 @@ POLICY_KEYS = (
     "authorized_privileged_actions",
     "wall_time_minutes",
     "max_agent_steps",
+    "completion",
+    "completion_max_severity",
 )
+# #141: the operator's opt-in to PR completion (ADR-0019) and the open-finding
+# threshold it allows. An unknown value keeps the first, narrowest, entry.
+COMPLETIONS = ("draft", "ready")
+COMPLETION_SEVERITIES = ("low", "info", "none")
 # AC-007: no agent text or rendered record may claim a human approval.
 HUMAN_APPROVAL = re.compile(
     r"(?i)\b(human[- ]approved|approved by (the )?(human|operator|user))\b"
@@ -1512,6 +1518,8 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
     """Return (policy snapshot, project limit defaults, warnings).
 
     The table can only narrow the standard: R0-R2, no privileged action.
+    `completion` is the one exception (#141, ADR-0019): an operator opt-in
+    to the runner marking an eligible PR ready, never a wider eligibility.
     """
     table = config.get("autonomous", {})
     if not isinstance(table, dict):
@@ -1554,6 +1562,7 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
         ),
         "authorized_privileged_actions": sorted(authorized),
     }
+    policy.update(_completion_fields(table, warnings))
     defaults = {}
     if "wall_time_minutes" in table:
         defaults["wall_time_minutes"] = _bounded(
@@ -1564,6 +1573,31 @@ def parse_policy(config: dict) -> tuple[dict, dict, list[str]]:
             table["max_agent_steps"], "[autonomous] max_agent_steps", AGENT_STEPS
         )
     return policy, defaults, warnings
+
+
+def _completion_fields(table: dict, warnings: list[str]) -> dict:
+    # #141: stored only when set, so a policy without them is unchanged.
+    fields = {}
+    for key, field, allowed in (
+        ("completion", "completion_configured", COMPLETIONS),
+        ("completion_max_severity", "completion_max_severity", COMPLETION_SEVERITIES),
+    ):
+        if key not in table:
+            continue
+        value = table[key]
+        if not isinstance(value, str) or value not in allowed:
+            warnings.append(WIDENING.format(key=f"{key} {value!r}"))
+            value = allowed[0]
+        fields[field] = value
+    return fields
+
+
+def completion_policy(configured: str | None, flag: str | None) -> str:
+    """Return the effective completion policy: the start flag only narrows (#141).
+
+    `ready` only when ballast.toml says `ready` and the flag, if any, agrees.
+    """
+    return "ready" if configured == "ready" and flag in {None, "ready"} else "draft"
 
 
 def parse_checks(config: dict) -> dict:
@@ -3750,10 +3784,19 @@ def _policy_text(policy: dict) -> str:
     def listed(key: str) -> str:
         return ", ".join(_code(v) for v in policy.get(key) or []) or "none"
 
+    # #141: the completion policy and threshold, only when the snapshot has them.
+    extra = "".join(
+        f"; {label} {_code(policy[key])}"
+        for key, label in (
+            ("completion", "completion"),
+            ("completion_max_severity", "severity threshold"),
+        )
+        if policy.get(key) is not None
+    )
     return (
         f"(risk {listed('risk')}; excluded boundaries "
         f"{listed('excluded_boundaries')}; authorized actions "
-        f"{listed('authorized_privileged_actions')})"
+        f"{listed('authorized_privileged_actions')}{extra})"
     )
 
 
@@ -4031,7 +4074,10 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: PLR0911
     """Commit, push and open one Draft PR as the operator.
 
     Returns {"ok": bool, "category": str|None, "message": str, "url": str|None}.
-    Never merges, marks ready, releases, deploys or force-pushes.
+    A success also names the PR for the runner's completion step (#141):
+    `repo`, `number`, `commit` (the pushed HEAD), `base` and `branch`.
+    Publication itself never merges, marks ready, releases, deploys or
+    force-pushes; only run.py's completion step may mark the PR ready.
     """
 
     def refuse(category: str, message: str) -> dict:
@@ -4101,11 +4147,13 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: PLR0911
             acceptance=read_acceptance(root, run_id),
         )
         _guard_body(body)
+        commit = git(root, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
         if adopted is not None:
+            number = adopted[0]
             url = _adopt_pr(
                 root,
                 repo,
-                adopted[0],
+                number,
                 current,
                 body,
                 base=default_branch,
@@ -4115,9 +4163,20 @@ def publish(root: Path, run_id: str) -> dict:  # noqa: PLR0911
             url = _create_verified(
                 root, repo, base=default_branch, head=branch, title=title, body=body
             )
+            number = int(url.rstrip("/").rpartition("/")[2])
     except AutonomyError as error:
         return refuse(error.category, str(error))
-    return {"ok": True, "category": None, "message": "published", "url": url}
+    return {
+        "ok": True,
+        "category": None,
+        "message": "published",
+        "url": url,
+        "repo": repo,
+        "number": number,
+        "commit": commit,
+        "base": default_branch,
+        "branch": branch,
+    }
 
 
 def _commit_and_push(  # noqa: PLR0913, PLR0917 - the publishers' shared tail

@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "spec_digest": "c44ea11876db9abe358df3e834eb79d0ed84d4aafbe8eb6d8ab0ede004bc5ca8",
+  "criteria": {
+    "AC-001": [
+      "tests.test_autonomous_run.CompletionReadyTests.test_start_marks_an_eligible_run_ready_once",
+      "tests.test_completion.CompleteTests.test_eligible_run_is_marked_ready_once_and_verified"
+    ],
+    "AC-002": [
+      "tests.test_autonomous_run.CompletionReadyTests.test_start_marks_an_eligible_run_ready_once",
+      "tests.test_completion.CompleteTests.test_eligible_run_is_marked_ready_once_and_verified",
+      "tests.test_agent_run_ledger.LedgerTests.test_pr_completion_events_accept_each_outcome"
+    ],
+    "AC-003": [
+      "tests.test_autonomous_run.CompletionReadyTests.test_checkpoint_after_ready_reuses_the_pr",
+      "tests.test_autonomous_run.CompletionReadyTests.test_publish_of_the_published_run_refuses_without_a_forge_call"
+    ],
+    "AC-004": [
+      "tests.test_completion.EvaluateTests.test_risk",
+      "tests.test_autonomous_run.CompletionDraftTests.test_r2_stays_a_draft"
+    ],
+    "AC-005": [
+      "tests.test_completion.EvaluateTests.test_mode",
+      "tests.test_completion.EvaluateTests.test_policy_draft",
+      "tests.test_completion.EvaluateTests.test_privileged_action",
+      "tests.test_completion.EvaluateTests.test_no_final_acceptance",
+      "tests.test_completion.EvaluateTests.test_not_converged",
+      "tests.test_completion.EvaluateTests.test_open_finding",
+      "tests.test_completion.EvaluateTests.test_checks",
+      "tests.test_completion.EvaluateTests.test_packet",
+      "tests.test_completion.EvaluateTests.test_material_change",
+      "tests.test_completion.EvaluateTests.test_block_resolved",
+      "tests.test_completion.EvaluateTests.test_pr_read_back",
+      "tests.test_completion.CompleteTests.test_ineligible_run_reads_once_and_never_marks_ready",
+      "tests.test_autonomous_run.CompletionDraftTests.test_no_final_acceptance_stays_a_draft",
+      "tests.test_autonomous_run.CompletionDraftTests.test_skipped_checkpoint_reports_the_missing_packet"
+    ],
+    "AC-006": [
+      "tests.test_completion.EvaluateTests.test_several_failures_in_condition_order"
+    ],
+    "AC-007": [
+      "tests.test_completion.EvaluateTests.test_pr_read_back",
+      "tests.test_autonomous_run.CompletionDraftTests.test_moved_head_stays_a_draft"
+    ],
+    "AC-008": [
+      "tests.test_completion.CompleteTests.test_forge_failure_keeps_the_draft_with_its_cause",
+      "tests.test_completion.CompleteTests.test_missing_trusted_gh_is_an_unreadable_pr",
+      "tests.test_autonomous_run.CompletionDraftTests.test_forge_refusal_keeps_the_runs_result",
+      "tests.test_completion.CompleteTests.test_a_failed_request_the_forge_applied_is_unverified",
+      "tests.test_completion.CompleteTests.test_a_failed_read_after_the_request_is_unverified",
+      "tests.test_completion.CompleteTests.test_untrusted_gh_never_runs",
+      "tests.test_autonomous_run.CompletionDraftTests.test_forge_applied_a_failed_request_is_ready"
+    ],
+    "AC-009": [
+      "tests.test_completion.EvaluateTests.test_severity_thresholds",
+      "tests.test_completion.EvaluateTests.test_superseded_and_unknown_findings"
+    ],
+    "AC-010": [
+      "tests.test_autonomous_run.CompletionUnconfiguredTests.test_no_table_or_no_key_adds_nothing",
+      "tests.test_autonomous_run.CompletionReadyTests.test_publish_retry_without_the_opt_in_is_unchanged",
+      "tests.test_autonomy.PolicyTests.test_no_completion_key_leaves_the_snapshot_unchanged",
+      "tests.test_completion.CompleteTests.test_unreported_run_prints_and_records_nothing"
+    ],
+    "AC-011": [
+      "tests.test_autonomous_run.CompletionUnconfiguredTests.test_draft_is_the_same_as_no_configuration"
+    ],
+    "AC-012": [
+      "tests.test_autonomous_run.CompletionUnconfiguredTests.test_chat_publication_never_marks_ready",
+      "tests.test_autonomous_run.CompletionUnconfiguredTests.test_human_gated_run_never_marks_ready",
+      "tests.test_autonomous_run.CompletionUnconfiguredTests.test_lowered_run_never_marks_ready",
+      "tests.test_autonomous_run.CompletionUnconfiguredTests.test_checkpoint_never_marks_ready",
+      "tests.test_completion.EvaluateTests.test_mode"
+    ],
+    "AC-013": [
+      "tests.test_autonomous_run.CompletionFlagTests.test_checkout_ballast_toml_never_changes_the_policy",
+      "tests.test_completion.CompleteTests.test_checkout_ballast_toml_is_never_the_policy"
+    ],
+    "AC-014": [
+      "tests.test_autonomous_run.CompletionFlagTests.test_agent_claims_never_change_the_result"
+    ],
+    "AC-015": [
+      "tests.test_autonomous_run.CompletionFlagTests.test_flag_cannot_widen_ballast_toml",
+      "tests.test_autonomy.PolicyTests.test_completion_policy_only_narrows"
+    ],
+    "AC-016": [
+      "tests.test_autonomous_run.CompletionFlagTests.test_flag_narrows_a_ready_policy",
+      "tests.test_autonomy.PolicyTests.test_completion_policy_only_narrows",
+      "tests.test_completion.EvaluateTests.test_policy_draft"
+    ],
+    "AC-017": [
+      "tests.test_autonomy.PolicyTests.test_mark_ready_is_never_authorizable",
+      "tests.test_autonomy.PublisherTests.test_a_declared_mark_ready_refuses_publication"
+    ],
+    "AC-018": [
+      "tests.test_autonomous_run.CompletionFlagTests.test_refresh_keeps_the_start_flag",
+      "tests.test_autonomous_run.CompletionFlagTests.test_refresh_applies_the_new_opt_in_without_a_flag"
+    ],
+    "AC-019": [
+      "tests.test_completion.CompleteTests.test_unverified_ready_never_claims_a_draft",
+      "tests.test_agent_run_ledger.LedgerTests.test_pr_completion_events_accept_each_outcome",
+      "tests.test_completion.CompleteTests.test_a_failed_request_the_forge_applied_is_unverified",
+      "tests.test_completion.CompleteTests.test_a_failed_read_after_the_request_is_unverified"
+    ]
+  }
+}
