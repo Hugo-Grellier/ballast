@@ -1748,6 +1748,27 @@ class ConfinementTests(AutonomyCase):
         env = run.call_args.kwargs["env"]
         self.assertFalse(set(secrets) & set(env))
 
+    def test_run_checks_runs_like_ci(self) -> None:
+        """#146: no run marker, no trusted git and no agent git guard."""
+        ran = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        guard = str(self.root / ".ballast/spec_workflow/guard")
+        run_env = {
+            "BALLAST_GIT": "/usr/bin/git",
+            "BALLAST_SPEC_WORKFLOW": "1",
+            "SPECKIT_WORKFLOW_RUN_ID": "run42",
+            "PATH": os.pathsep.join((guard, "/usr/bin", "/opt/guard")),
+            "GH_TOKEN": "t",
+        }
+        with (
+            patch.dict(os.environ, run_env),
+            patch.object(artifacts.subprocess, "run", return_value=ran) as run,
+        ):
+            artifacts.run_commands(self.root, FEATURE, ["true"], 1)
+        env = run.call_args.kwargs["env"]
+        self.assertFalse(set(artifacts.CHECK_UNSET) & set(env))
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertEqual(env["PATH"], os.pathsep.join(("/usr/bin", "/opt/guard")))
+
     def test_deadline_spent_during_sandbox_setup_launches_nothing(self) -> None:
         """#117 review: the time left is measured just before each launch."""
         left = [5.0]
@@ -4089,7 +4110,7 @@ class RecoveryBlockTests(AutonomyCase):
                 )
                 self.assertEqual(block["command"], resume)
                 self.assertIn("resume", block["recovery"])
-        for limit in ("fix-cycles", "retries"):
+        for limit in ("fix-cycles", "retries", "check-timeout"):
             block = autonomy.make_block("limit", "x", run_id="run42", limit=limit)
             self.assertEqual((block["command"], block["limit"]), (resume, limit))
         for limit in ("agent-steps", "wall-time", None):

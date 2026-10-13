@@ -2676,18 +2676,28 @@ def _open_to_fix(reviews: list[dict]) -> list[str]:
 def review_rule(feature: Feature, point: str, reviews: list[dict]) -> tuple[str, list]:
     """How a review point's recorder treats these reviews.
 
-    Returns ("block", reasons) for #27's review-finding stop, ("limit",
-    reasons) when the fix cycles are spent, ("fixing", []) while a cycle
-    remains (the relaxed disposition rule) or ("strict", []).
+    Returns ("block", reasons) for #27's review-finding stop, ("timeout",
+    reasons) when only timed-out checks are left, which no fix cycle can
+    shorten (#146), ("limit", reasons) when the fix cycles are spent,
+    ("fixing", []) while a cycle remains (the relaxed disposition rule) or
+    ("strict", []).
     """
     blocking = _blocking(reviews)
     if point not in {"implementation-review", "specialist-review"} or not fix_loop(
         feature
     ):
         return ("block", blocking) if blocking else ("strict", [])
+    results = _failed_feedback(feature)
+    if (
+        results
+        and all(r.get("timed_out") for r in results)
+        and not blocking
+        and not _open_to_fix(reviews)
+    ):
+        return "timeout", [_check_text(r) for r in results]
     if autonomy.fix_state(_require_run(feature))["cycles"] < autonomy.FIX_CYCLES:
         return "fixing", []
-    failed = [_check_text(r) for r in _failed_feedback(feature)]
+    failed = [_check_text(r) for r in results]
     if blocking or failed:
         return "limit", blocking + failed
     return "strict", []
@@ -2900,6 +2910,16 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
             "reviews block the run (high or critical findings, or a verdict "
             "other than approved): " + ", ".join(reasons),
             evidence=evidence,
+        )
+    if rule == "timeout":
+        _block(
+            feature,
+            "limit",
+            autonomy.limit_condition(
+                "check-timeout", "no finding is open: " + ", ".join(reasons)
+            ),
+            evidence=evidence,
+            limit="check-timeout",
         )
     if rule == "limit":
         _block(
@@ -3128,7 +3148,7 @@ def check_step_drafts(  # noqa: C901, PLR0912 - the recorder's checks, in its or
         _check_narrative(feature, review)
     _check_recheck(feature, reviews)
     rule, _ = review_rule(feature, points[0], reviews)
-    if rule in {"block", "limit"}:
+    if rule in {"block", "timeout", "limit"}:
         return
     for review in reviews:
         _check_dispositions(review, fixing=rule == "fixing")
@@ -3238,6 +3258,31 @@ class ChecksExhaustedError(Exception):
     """The time left ran out before the next check command."""
 
 
+# A run's own markers and the agent git guard (#34) are for agent steps; a
+# check command runs like CI without them (#146, ADR-0021).
+CHECK_UNSET = ("BALLAST_GIT", "BALLAST_SPEC_WORKFLOW", "SPECKIT_WORKFLOW_RUN_ID")
+
+
+def check_env(env: dict[str, str]) -> dict[str, str]:
+    """Return the environment a check command runs with (#146, ADR-0021).
+
+    Secrets are filtered as for every confined command; the run variables and
+    every `spec_workflow/guard` directory on PATH are dropped.
+    """
+    env = {
+        name: value
+        for name, value in autonomy.confined_env(env, None).items()
+        if name not in CHECK_UNSET
+    }
+    if "PATH" in env:
+        env["PATH"] = os.pathsep.join(
+            entry
+            for entry in env["PATH"].split(os.pathsep)
+            if Path(entry).parts[-2:] != ("spec_workflow", "guard")
+        )
+    return env
+
+
 def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     root: Path,
     feature: str,
@@ -3258,7 +3303,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     command's result carries a bounded, printable `output_tail`. With
     `read_only` (#117) the whole checkout is read-only to the command.
     """
-    env = autonomy.confined_env(dict(os.environ), None)
+    env = check_env(dict(os.environ))
     results = []
     with tempfile.TemporaryDirectory(prefix="ballast-checks-") as private:
         for command in commands:

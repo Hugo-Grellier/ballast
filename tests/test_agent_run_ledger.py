@@ -29,6 +29,13 @@ sys.path.pop(0)
 
 def setUpModule() -> None:  # noqa: D103
     isolate_operator_state()
+    # Run from inside a run's step, the operator attestations these tests
+    # record would be refused (#146); each refusal test sets its own marker.
+    patcher = patch.dict(os.environ)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+    for name in ("BALLAST_SPEC_WORKFLOW", "SPECKIT_WORKFLOW_RUN_ID"):
+        os.environ.pop(name, None)
 
 
 FEATURE = "specs/93-agent-run-ledger"

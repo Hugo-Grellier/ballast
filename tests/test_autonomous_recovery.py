@@ -943,6 +943,27 @@ class ResumeTests(StubCase):
         self.assertEqual(code, 2)
         self.assertIn("resume that run instead", err)
 
+    def test_check_timeout_resume_runs_the_checks_again(self) -> None:
+        """#146: the remedy is in ballast.toml, so the checks run before the review."""
+        run_id = self.blocked_run(step="record-fix-review-2")
+        record = autonomy.read_run(self.root, run_id)
+        record["fix"] = {"cycles": 2, "state": "review-pending"}
+        autonomy.write_run(self.root, record)
+        block = autonomy.make_block(
+            "limit",
+            autonomy.limit_condition("check-timeout", "x"),
+            run_id=run_id,
+            limit="check-timeout",
+        )
+        autonomy.record_block(self.root, run_id, block)
+        self.main("resume", run_id)
+        (resume,) = autonomy.read_run(self.root, run_id)["resumes"]
+        self.assertEqual(resume["reentry_step"], "checks-fix-2")
+        self.assertEqual(
+            autonomy.read_run(self.root, run_id)["fix"],
+            {"cycles": 2, "state": "review-pending"},
+        )
+
     def test_cycles_survive_a_resume(self) -> None:
         run_id = self.blocked_run(step="record-fix-review-2")
         record = autonomy.read_run(self.root, run_id)

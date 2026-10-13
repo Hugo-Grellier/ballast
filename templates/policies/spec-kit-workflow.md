@@ -698,6 +698,11 @@ treatment: `$CLAUDE_CONFIG_DIR` and `~/.claude` for Claude, `$CODEX_HOME` and
 credentials: the other CLI's homes are empty, its API-key variables are
 dropped, and only a Claude step sees `~/.claude.json`; `[checks]` commands
 see neither CLI's. A Codex API-key login has no refresh token and keeps working.
+`[checks]` commands, and the runner's acceptance checks, run like CI: confined
+and without secret-named variables like every step, but also without the run's
+variables (`BALLAST_SPEC_WORKFLOW`, `SPECKIT_WORKFLOW_RUN_ID`, `BALLAST_GIT`)
+and without the agent git guard on `PATH`, which only agent steps need (ADR-0021
+in the Ballast repository).
 No confined step reads the operator's global Git configuration (`~/.gitconfig`,
 `$GIT_CONFIG_GLOBAL`, `~/.config/git/config`), which can carry a token; its Git
 directory is read-only, so it never commits and needs no identity.
@@ -716,7 +721,13 @@ three fix cycles, counted in operator state; a resume never resets the count.
 While a cycle remains, a reviewer may leave a finding of any severity `open`
 ("fix this"). When the cycles are spent, a high or critical finding, a
 non-approved verdict or a failed check blocks the run as an exhausted limit
-(`fix-cycle limit (3)`), naming what is still open; a remaining medium finding
+(`fix-cycle limit (3)`), naming what is still open. A check that timed out,
+when it is the only thing open (no other failed check, no finding to fix and
+every verdict approved), blocks at once as `check timeout ([checks]
+timeout_minutes)` instead of spending fix cycles that cannot shorten it: speed
+up the checks or raise `[checks] timeout_minutes` (1-240, default 30), run
+`ballast trust`, then resume, which runs the checks again before the review is
+recorded. A remaining medium finding
 reaches the PR as `accepted-provisionally` with its reason. Plan review and
 spec reconciliation keep the stricter rule: a high or critical finding or a
 non-approved verdict blocks at once. The fix, its reviews and their
