@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_autonomy import (
     FEATURE,
@@ -30,7 +33,9 @@ from test_autonomy import (
     TOOLS,
     AutonomyCase,
     autonomy,
+    fixed_decision,
     listed_pr,
+    review,
 )
 
 sys.path.pop(0)
@@ -1792,6 +1797,723 @@ class LocalFallbackRecordTests(WrapperCase):
         run.fallback.setting_path(self.root, "run42").write_text("{")
         section = self.mode_section(autonomy.render_run_record(self.root, record))
         self.assertIn("- Local fallback: off\n", section)
+
+
+BASE_TOML = '[checks]\ncommands = ["true"]\n' + GITHUB_PIN
+READY = '[autonomous]\ncompletion = "ready"\n'
+DRAFT = '[autonomous]\ncompletion = "draft"\n'
+PR_URL = "https://github.com/acme/demo/pull/7"
+READY_LINE = (
+    f"PR completion: ready-for-review #7 {PR_URL}; merging stays the only human "
+    "approval"
+)
+TEMPLATE = ROOT / "templates/spec-kit/workflows/autonomous/workflow.yml"
+HEX = re.compile(r"\b[0-9a-f]{7,64}\b")
+
+
+class CompletionCase(RunCase):
+    """#141: an Autonomous run whose operator records meet every condition.
+
+    The real publisher, checkpoint and completion step run against the fake
+    `gh`; only the packet is a stand-in (packet.py's own tests build it).
+    The engine stub also stands in for `specify workflow resume`.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.gh_data("repos_acme_demo.json", {"default_branch": "main"})
+        self.gh_data("created-pr.json", PublisherCheckpointTests.PR)
+        # A served PR's head is what publication pushed.
+        (self.gh_dir / "head-sha").write_text("auto")
+        self.counts = {
+            **dict.fromkeys(run.draft_pr.ledger.PACKET_COUNTS, 0),
+            "verified": 2,
+        }
+        self.final = True
+        self.verdict = "approved"
+        self.before: list = []
+        self.changes: list = []
+        self.enterContext(
+            patch.object(run.draft_pr.packet, "publish", side_effect=self.fake_packet)
+        )
+
+    def fake_packet(self, work: object, outcome: run.draft_pr.Outcome) -> object:
+        """Stand in for packet.publish: published at HEAD with `self.counts`."""
+        del work
+        packet = run.draft_pr.packet
+        if outcome.state not in {"created", "reused"}:
+            return packet.make_outcome("pending", "no-pr")
+        head = self.git("rev-parse", "HEAD").strip()
+        return packet.PacketOutcome(
+            "published",
+            pr_number=outcome.pr_number,
+            head=head,
+            base=self.git("rev-parse", "main").strip(),
+            feature_version=head,
+            packet_digest="0" * 64,
+            shortened=False,
+            counts=dict(self.counts),
+        )
+
+    def fake_launch(self, command: list[str], run_id: str, *, start: bool) -> int:
+        """Stand in for the engine; `resume` continues the run's own state."""
+        directory = self.root / ".specify/workflows/runs" / run_id
+        if command[2] != "resume":
+            code = super().fake_launch(command, run_id, start=start)
+            workflow = yaml.safe_load(TEMPLATE.read_text())
+            (directory / "workflow.yml").write_text(
+                yaml.safe_dump(workflow, sort_keys=False)
+            )
+            (directory / "inputs.json").write_text(
+                json.dumps({"inputs": {"feature_directory": FEATURE}})
+            )
+            return code
+        self.launched.append((command, run_id))
+        scenario = self.engine.get("scenario")
+        if callable(scenario):
+            scenario(run_id)
+        state = json.loads((directory / "state.json").read_text())
+        state.update(
+            status=self.engine["status"],
+            current_step_id=self.engine.get("step", "record-final"),
+        )
+        (directory / "state.json").write_text(json.dumps(state))
+        return int(self.engine["code"])  # type: ignore[arg-type]
+
+    def configure(self, table: str) -> None:
+        """Set ballast.toml's `[autonomous]` table, as the operator commits it."""
+        (self.root / "ballast.toml").write_text(BASE_TOML + table)
+        if self.git("status", "--porcelain").strip():
+            self.git("commit", "-qam", "configure [autonomous]")
+
+    def trust(self) -> None:
+        """Record the checkout's inputs as `ballast trust` would."""
+        launcher = run.branch_sync.launcher
+        state = autonomy.state_dir(self.root)
+        state.mkdir(parents=True, exist_ok=True)
+        for name in (launcher.TRUSTED, launcher.TRUSTED_SOURCE):
+            (state / name).unlink(missing_ok=True)
+        launcher.record_baseline(
+            state, launcher.trusted_inputs(self.root), source="trust"
+        )
+
+    def eligible(self, run_id: str) -> None:
+        """Leave what a converged R1 run leaves: checks, reviews, acceptance."""
+        for change in self.before:
+            change(run_id)
+        self.publishable(run_id)
+        entries = [
+            fixed_decision(
+                1,
+                "spec-reconciliation",
+                review={**review("spec-reconciliation"), "verdict": self.verdict},
+                provider="codex",
+                role="reviewer",
+            )
+        ]
+        if self.final:
+            entries.append(fixed_decision(2, "final-acceptance"))
+        for entry in entries:
+            autonomy.append_decision(self.root, run_id, entry)
+        for change in self.changes:
+            change(run_id)
+
+    def _eligible_run(
+        self, table: str | None = READY, *extra: str
+    ) -> tuple[int, str, str, str]:
+        """Configure, then start an Autonomous run that reaches publication."""
+        if table is not None:
+            self.configure(table)
+        self.engine["scenario"] = self.eligible
+        code, out, err = self.start(*extra)
+        return code, out, err, self.launched[-1][1] if self.launched else ""
+
+    def blocked_run(self, *extra: str) -> str:
+        """Start a run that stops at record-tasks, before publication."""
+        self.engine.update(status="failed", code=1, step="record-tasks")
+        code, out, err = self.start(*extra)
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn("PR completion:", out)
+        self.engine.update(status="completed", code=0, scenario=self.eligible)
+        self.engine.pop("step")
+        return self.launched[-1][1]
+
+    def pr_ready_calls(self) -> list[list[str]]:
+        return [c for c in self.gh_calls() if c[:2] == ["pr", "ready"]]
+
+    def completions(self, run_id: str) -> list[dict]:
+        events, problems = run.draft_pr.ledger.read(self.root, run_id)
+        self.assertEqual(problems, [])
+        return [e["data"] for e in events if e["kind"] == "pr_completion"]
+
+    def snapshot(self, run_id: str) -> dict:
+        return autonomy.read_run(self.root, run_id)["eligibility"]["policy"]
+
+    def served(self) -> dict:
+        return json.loads((self.gh_dir / "repos_acme_demo_pulls_7.json").read_text())
+
+    def draft(self, run_id: str, *reasons: tuple[str, str], cause: str = "") -> None:
+        """Assert the run's last line and only event: a Draft, for `reasons`."""
+        self.assertEqual(self.pr_ready_calls(), [])
+        events = self.completions(run_id)
+        self.assertEqual(len(events), 1, events)
+        expected = {
+            "outcome": "draft",
+            "pr_number": 7,
+            "commit": self.git("rev-parse", "HEAD").strip(),
+            "reasons": [code for code, _ in reasons],
+        }
+        if cause:
+            expected["cause"] = cause
+        self.assertEqual(events[0], expected)
+        self.assertTrue(self.served()["draft"])
+
+    def last_line(self, out: str) -> str:
+        return out.splitlines()[-1]
+
+
+class CompletionReadyTests(CompletionCase):
+    """T011, T012 [AC-001, AC-002, AC-003, FR-007, FR-012]: the ready path."""
+
+    def test_start_marks_an_eligible_run_ready_once(self) -> None:
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.pr_ready_calls(), [["pr", "ready", "7", "--repo", "acme/demo"]]
+        )
+        lines = out.splitlines()
+        self.assertEqual(lines[-1], READY_LINE)
+        self.assertTrue(lines[-2].startswith("Acceptance packet: published #7"))
+        self.assertEqual(lines[-3], f"Draft PR: reused #7 {PR_URL}")
+        self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "published")
+        self.assertIsNone(autonomy.read_block(self.root, run_id))
+        self.assertFalse(self.served()["draft"])
+        pushed = self.git("rev-parse", "HEAD").strip()
+        origin = str(self.base / "origin.git")
+        self.assertEqual(
+            self.git("--git-dir", origin, "rev-parse", "refs/heads/27-demo-run"),
+            pushed + "\n",
+        )
+        self.assertEqual(
+            self.completions(run_id),
+            [{"outcome": "ready", "pr_number": 7, "commit": pushed}],
+        )
+
+    def test_resume_publication_evaluates_and_names_the_resolved_block(self) -> None:
+        """FR-007: a resume publication evaluates; condition (11) always fails."""
+        self.configure(READY)
+        run_id = self.blocked_run()
+        code, out, err = self.main("resume", run_id)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: a block was resolved during the "
+            "run (HD-0001)",
+        )
+        self.draft(run_id, ("block-resolved", ""))
+        api = [c for c in self.gh_calls() if c == ["api", "repos/acme/demo/pulls/7"]]
+        self.assertGreaterEqual(len(api), 1)
+
+    def test_checkpoint_after_ready_reuses_the_pr(self) -> None:
+        """AC-003: no second `pr ready`, and the PR stays ready for review."""
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        code, out, err = self.main("checkpoint", run_id)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.splitlines()[0], f"Draft PR: reused #7 {PR_URL}")
+        self.assertNotIn("PR completion:", out)
+        self.assertEqual(len(self.pr_ready_calls()), 1)
+        self.assertFalse(self.served()["draft"])
+        self.assertEqual(len(self.completions(run_id)), 1)
+
+    def test_publish_of_the_published_run_refuses_without_a_forge_call(self) -> None:
+        """AC-003, research R11: a published run has no publish retry."""
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        before = len(self.gh_calls())
+        code, _, err = self.main("publish", run_id)
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"run {run_id} is published", err)
+        self.assertEqual(len(self.gh_calls()), before)
+
+    def failed_publication(self) -> str:
+        """Start an eligible run whose `gh pr create` fails, then allow it."""
+        (self.gh_dir / "FAIL_pr_create").write_text("HTTP 502: Bad Gateway\n")
+        code, out, err, run_id = self._eligible_run(None)
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(autonomy.read_block(self.root, run_id)["category"], "forge")
+        self.assertNotIn("PR completion:", out)
+        (self.gh_dir / "FAIL_pr_create").unlink()
+        return run_id
+
+    def test_publish_retry_of_a_reported_run_runs_the_packet_then_completes(
+        self,
+    ) -> None:
+        """FR-007, research R2: the retry is a publication that evaluates."""
+        self.configure(READY)
+        run_id = self.failed_publication()
+        code, out, err = self.main("publish", run_id)
+        self.assertEqual(code, 0, out + err)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], f"Draft PR: {PR_URL}")
+        self.assertEqual(lines[2], f"Draft PR: reused #7 {PR_URL}")
+        self.assertTrue(lines[3].startswith("Acceptance packet: published #7"))
+        self.assertEqual(lines[4:], [READY_LINE])
+        self.assertEqual(len(self.pr_ready_calls()), 1)
+        self.assertEqual(self.completions(run_id)[0]["outcome"], "ready")
+
+    def test_publish_retry_without_the_opt_in_is_unchanged(self) -> None:
+        """FR-013: no checkpoint, no packet and no completion on the retry."""
+        run_id = self.failed_publication()
+        code, out, err = self.main("publish", run_id)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                f"Draft PR: {PR_URL}",
+                (
+                    "Every intermediate decision is agent-provisional; merging the "
+                    "PR is the only human approval."
+                ),
+            ],
+        )
+        self.assertEqual(self.pr_ready_calls(), [])
+        self.assertEqual(self.completions(run_id), [])
+
+
+class CompletionDraftTests(CompletionCase):
+    """T015 [AC-004, AC-005, AC-007, AC-008]: ineligible runs stay a Draft."""
+
+    def test_r2_stays_a_draft(self) -> None:
+        def raised(run_id: str) -> None:
+            record = autonomy.read_run(self.root, run_id)
+            autonomy.raise_risk(record, "R2", ["trust model"], "PD-0001")
+            autonomy.write_run(self.root, record)
+
+        self.changes.append(raised)
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        line = f"PR completion: draft #7 {PR_URL}: risk R2"
+        self.assertEqual(self.last_line(out), line)
+        self.draft(run_id, ("risk", "risk R2"))
+
+    def test_no_final_acceptance_stays_a_draft(self) -> None:
+        self.final = False
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: no final acceptance recorded",
+        )
+        self.draft(run_id, ("no-final-acceptance", ""))
+
+    def test_moved_head_stays_a_draft(self) -> None:
+        (self.gh_dir / "head-sha").write_text("1" * 40)
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: the PR head is not the published "
+            "commit",
+        )
+        self.draft(run_id, ("head-moved", ""))
+
+    def test_forge_refusal_keeps_the_runs_result(self) -> None:
+        """AC-008, FR-011: same exit, status and no block as a ready run."""
+        (self.gh_dir / "FAIL_pr_ready").write_text("HTTP 403: Forbidden\n")
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: marking ready failed (gh-forbidden)",
+        )
+        self.assertNotIn("Forbidden", out)
+        self.assertEqual(
+            self.pr_ready_calls(), [["pr", "ready", "7", "--repo", "acme/demo"]]
+        )
+        (event,) = self.completions(run_id)
+        self.assertEqual(
+            (event["outcome"], event["reasons"], event["cause"]),
+            ("draft", ["forge-failed"], "gh-forbidden"),
+        )
+        self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "published")
+        self.assertIsNone(autonomy.read_block(self.root, run_id))
+        self.assertTrue(self.served()["draft"])
+
+    def test_forge_applied_a_failed_request_is_ready(self) -> None:
+        """F-02: a failed `pr ready` the read-back shows applied is `ready`."""
+        (self.gh_dir / "ready-then-fail").write_text("")
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.last_line(out), READY_LINE)
+        (event,) = self.completions(run_id)
+        self.assertEqual(event["outcome"], "ready")
+        self.assertEqual(autonomy.read_run(self.root, run_id)["status"], "published")
+        self.assertFalse(self.served()["draft"])
+
+    def test_skipped_checkpoint_reports_the_missing_packet(self) -> None:
+        """F-03, FR-009: a skipped checkpoint leaves no packet; the Draft says so."""
+        skipped = run.draft_pr.Outcome("skipped", remedy="marker exists; restore it")
+        with patch.object(run.draft_pr, "checkpoint", return_value=skipped):
+            code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: acceptance packet not published",
+        )
+        self.draft(run_id, ("packet", ""))
+
+
+class CompletionUnconfiguredTests(CompletionCase):
+    """T016, T017 [AC-010, AC-011, AC-012, SC-003, FR-014]: no opt-in, no change."""
+
+    def observed(self, table: str | None) -> tuple[list[str], list[tuple], dict]:
+        """Return one eligible run's normalized stdout and ledger, and its policy."""
+        code, out, err, run_id = self._eligible_run(table)
+        self.assertEqual(code, 0, out + err)
+        events, _ = run.draft_pr.ledger.read(self.root, run_id)
+
+        def normal(text: str) -> str:
+            return HEX.sub("X", text.replace(run_id, "RUN"))
+
+        lines = [normal(line) for line in out.splitlines()]
+        kinds = [
+            (e["kind"], normal(json.dumps(e["data"], sort_keys=True))) for e in events
+        ]
+        return lines, kinds, self.snapshot(run_id)
+
+    def elsewhere(self, table: str | None) -> tuple[list[str], list[tuple], dict]:
+        """Run `observed` in a fresh checkout, operator state and fake GitHub."""
+        case = type(self)(self._testMethodName)
+        case.setUp()
+        try:
+            return case.observed(table)
+        finally:
+            case.tearDown()
+            case.doCleanups()
+
+    def nothing_new(self, lines: list[str], kinds: list[tuple]) -> None:
+        self.assertFalse([line for line in lines if line.startswith("PR completion")])
+        self.assertNotIn("pr_completion", [kind for kind, _ in kinds])
+        self.assertEqual(self.pr_ready_calls(), [])
+
+    def test_no_table_or_no_key_adds_nothing(self) -> None:
+        """AC-010, SC-003: the same output and ledger with or without a table."""
+        lines, kinds, policy = self.observed(None)
+        self.nothing_new(lines, kinds)
+        other = self.elsewhere('[autonomous]\nrisk = ["R0", "R1", "R2"]\n')
+        self.assertEqual((lines, kinds), other[:2])
+        new = {
+            "completion_configured",
+            "completion_max_severity",
+            "completion_flag",
+            "completion",
+        }
+        for snapshot in (policy, other[2]):
+            self.assertFalse(new & set(snapshot), snapshot)
+
+    def test_draft_is_the_same_as_no_configuration(self) -> None:
+        """AC-011: `completion = "draft"` prints and records what none does."""
+        lines, kinds, policy = self.observed(DRAFT)
+        self.nothing_new(lines, kinds)
+        self.assertEqual((lines, kinds), self.elsewhere(None)[:2])
+        self.assertEqual(
+            (policy["completion_configured"], policy["completion"]), ("draft", "draft")
+        )
+
+    def test_unknown_completion_value_is_no_configuration(self) -> None:
+        """FR-002: a warning at start, then the run behaves as `draft`."""
+        self.configure('[autonomous]\ncompletion = "Ready"\n')
+        self.engine["scenario"] = self.eligible
+        code, out, err = self.start()
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(
+            "ballast: ignored [autonomous] completion 'Ready': cannot widen "
+            "eligibility",
+            err,
+        )
+        run_id = self.launched[-1][1]
+        self.nothing_new(out.splitlines(), [])
+        self.assertEqual(self.completions(run_id), [])
+        self.assertEqual(self.snapshot(run_id)["completion"], "draft")
+
+    def test_unknown_severity_keeps_the_low_threshold(self) -> None:
+        """FR-006: a warning, and the threshold stays `low`."""
+        code, out, err, run_id = self._eligible_run(
+            READY + 'completion_max_severity = "medium"\n'
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(
+            "ignored [autonomous] completion_max_severity 'medium': cannot widen "
+            "eligibility",
+            err,
+        )
+        self.assertEqual(self.snapshot(run_id)["completion_max_severity"], "low")
+        self.assertEqual(self.last_line(out), READY_LINE)
+
+    def test_chat_publication_never_marks_ready(self) -> None:
+        """AC-012: a Chat run's publish never reaches the completion step."""
+        self.configure(READY)
+        with (
+            patch.object(run, "_chat_run", return_value=True),
+            patch.object(run.chat, "publish", return_value=0) as publish,
+            patch.object(run.completion, "complete") as complete,
+        ):
+            code, out, err = self.main("publish", "chat01")
+        self.assertEqual(code, 0, out + err)
+        publish.assert_called_once()
+        complete.assert_not_called()
+        self.assertNotIn("PR completion:", out)
+        self.assertEqual(self.pr_ready_calls(), [])
+
+    def test_human_gated_run_never_marks_ready(self) -> None:
+        """AC-012, FR-014: the checkpoint runs; nothing marks the PR ready."""
+        self.configure(READY)
+        with patch.object(run.completion, "complete") as complete:
+            code, out, err = self.main(
+                "start",
+                "-i",
+                "idea=Issue #27: demo",
+                "-i",
+                f"feature_directory={FEATURE}",
+            )
+        self.assertEqual(code, 0, out + err)
+        complete.assert_not_called()
+        self.assertIn("Draft PR:", out)
+        self.assertNotIn("PR completion:", out)
+        self.assertEqual(self.pr_ready_calls(), [])
+
+    def test_lowered_run_never_marks_ready(self) -> None:
+        """AC-012: an Autonomous run continued human-gated before publication."""
+        self.configure(READY)
+        run_id = RunContinueTests.stopped_run(self)
+        with patch.object(run.completion, "complete") as complete:
+            code, out, err = self.main(
+                "continue", run_id, "--reason", "block-resolved", "--ref", "chose Keep"
+            )
+        self.assertEqual(code, 0, out + err)
+        complete.assert_not_called()
+        self.assertNotIn("PR completion:", out)
+        self.assertEqual(self.pr_ready_calls(), [])
+
+    def test_checkpoint_never_marks_ready(self) -> None:
+        """FR-007: a checkpoint of an eligible, reported run leaves the Draft."""
+        (self.gh_dir / "FAIL_pr_ready").write_text("HTTP 502: Bad Gateway\n")
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        (self.gh_dir / "FAIL_pr_ready").unlink()
+        attempts = len(self.pr_ready_calls())
+        code, out, err = self.main("checkpoint", run_id)
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("PR completion:", out)
+        self.assertEqual(len(self.pr_ready_calls()), attempts)
+        self.assertTrue(self.served()["draft"])
+        self.assertEqual(len(self.completions(run_id)), 1)
+
+
+class CompletionFlagTests(CompletionCase):
+    """T019, T020, T021 [AC-013 to AC-018, SC-004]: only the operator decides."""
+
+    def test_flag_cannot_widen_ballast_toml(self) -> None:
+        """AC-015: refused before any record, Issue read or agent step."""
+        for table, configured in (("", "draft"), (DRAFT, "draft")):
+            with self.subTest(table=table):
+                self.configure(table)
+                code, _, err = self.start("--completion", "ready")
+                self.assertEqual(code, 2, err)
+                self.assertIn(
+                    "--completion ready cannot widen ballast.toml [autonomous] "
+                    f"completion ({configured})",
+                    err,
+                )
+                self.assertEqual(self.run_ids(), [])
+                self.assertEqual(self.launched, [])
+                self.assertEqual(self.gh_calls(), [])
+
+    def test_flag_narrows_a_ready_policy(self) -> None:
+        """AC-016: the snapshot records it, and the reason names the flag."""
+        code, out, err, run_id = self._eligible_run(READY, "--completion", "draft")
+        self.assertEqual(code, 0, out + err)
+        policy = self.snapshot(run_id)
+        self.assertEqual(
+            (
+                policy["completion_configured"],
+                policy["completion_flag"],
+                policy["completion"],
+            ),
+            ("ready", "draft", "draft"),
+        )
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: the run's start flag chose draft",
+        )
+        self.draft(run_id, ("policy-draft", ""))
+
+    def test_flag_refusals(self) -> None:
+        feature = f"feature_directory={FEATURE}"
+        for argv, text in (
+            (
+                ("start", "--mode", "chat", "--completion", "draft", "-i", feature),
+                "--completion needs --mode autonomous",
+            ),
+            (
+                ("start", "--completion", "ready", "-i", "idea=x", "-i", feature),
+                "--completion needs --mode autonomous",
+            ),
+            (
+                ("start", "--mode", "autonomous", "--completion", "merge"),
+                "--completion must be draft or ready",
+            ),
+            (
+                (
+                    "start",
+                    "--mode",
+                    "autonomous",
+                    "--completion",
+                    "draft",
+                    "--completion=draft",
+                ),
+                "--completion given twice",
+            ),
+        ):
+            with self.subTest(argv=argv):
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2, err)
+                self.assertIn(text, err)
+        self.assertEqual(self.launched, [])
+
+    def test_resume_and_continue_refuse_the_flag(self) -> None:
+        run_id = self.blocked_run()
+        code, _, err = self.main("resume", run_id, "--completion", "draft")
+        self.assertEqual(code, 2, err)
+        self.assertIn("recorded at start; it accepts only --ref TEXT", err)
+        code, _, err = self.main(
+            "continue",
+            run_id,
+            "--reason",
+            "block-resolved",
+            "--ref",
+            "x",
+            "--completion",
+            "draft",
+        )
+        self.assertEqual(code, 2, err)
+        self.assertIn("continue accepts only", err)
+        self.assertEqual(len(self.launched), 1)
+
+    def refreshed(self, *extra: str) -> tuple[str, str]:
+        """Block under `draft`, then opt in, trust and resume with a refresh."""
+        self.configure(DRAFT)
+        run_id = self.blocked_run(*extra)
+        self.configure(READY)
+        self.trust()
+        code, out, err = self.main("resume", run_id, "--refresh-policy")
+        self.assertEqual(code, 0, out + err)
+        return run_id, out
+
+    def test_refresh_keeps_the_start_flag(self) -> None:
+        """AC-018: a flag-narrowed run stays `draft` after the refresh."""
+        run_id, out = self.refreshed("--completion", "draft")
+        policy = self.snapshot(run_id)
+        self.assertEqual(
+            (
+                policy["completion_configured"],
+                policy["completion_flag"],
+                policy["completion"],
+            ),
+            ("ready", "draft", "draft"),
+        )
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: the run's start flag chose draft; "
+            "a block was resolved during the run (HD-0001)",
+        )
+        self.draft(run_id, ("policy-draft", ""), ("block-resolved", ""))
+
+    def test_refresh_applies_the_new_opt_in_without_a_flag(self) -> None:
+        """AC-018: the refreshed value applies; condition (11) keeps the Draft."""
+        run_id, out = self.refreshed()
+        policy = self.snapshot(run_id)
+        self.assertNotIn("completion_flag", policy)
+        self.assertEqual(
+            (policy["completion_configured"], policy["completion"]), ("ready", "ready")
+        )
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: a block was resolved during the "
+            "run (HD-0001)",
+        )
+        self.draft(run_id, ("block-resolved", ""))
+
+    def test_checkout_ballast_toml_never_changes_the_policy(self) -> None:
+        """AC-013, SC-004: an agent's `ready` copy is not the start snapshot."""
+
+        def rewrite(_: str) -> None:
+            (self.root / "ballast.toml").write_text(BASE_TOML + READY)
+
+        self.changes.append(rewrite)
+        code, out, err, run_id = self._eligible_run(DRAFT)
+        # The changed protected input stops the run before publication.
+        self.assertEqual(code, 1, out + err)
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(block["category"], "postcondition")
+        self.assertIn("ballast.toml", block["condition"])
+        self.assertEqual(self.snapshot(run_id)["completion_configured"], "draft")
+        self.assertEqual(self.snapshot(run_id)["completion"], "draft")
+        self.assertNotIn("PR completion:", out)
+        self.assertEqual(self.pr_ready_calls(), [])
+        self.assertEqual(self.completions(run_id), [])
+
+    def test_agent_claims_never_change_the_result(self) -> None:
+        """AC-014, SC-004: only operator records count, never agent artifacts."""
+
+        def raised(run_id: str) -> None:
+            record = autonomy.read_run(self.root, run_id)
+            autonomy.raise_risk(record, "R2", ["trust model"], "PD-0001")
+            autonomy.write_run(self.root, record)
+
+        def claims(run_id: str) -> None:
+            # A step's decision drafts, as the wrapper keeps them, never recorded.
+            for point in ("spec-reconciliation", "final-acceptance"):
+                draft = autonomy.snapshot_draft(
+                    self.root, run_id, "step01", f"{point}.json"
+                )
+                draft.parent.mkdir(parents=True, exist_ok=True)
+                draft.write_text(
+                    json.dumps(
+                        {
+                            "point": point,
+                            "decision": "accept",
+                            "summary": "Converged; every criterion verified.",
+                            "review": {"verdict": "approved", "findings": []},
+                        }
+                    )
+                )
+            reviews = self.root / FEATURE / "reviews"
+            reviews.mkdir(parents=True, exist_ok=True)
+            (reviews / "convergence.md").write_text("- Verdict: CONVERGED\n")
+            (self.root / FEATURE / "decisions.md").write_text(
+                "Final acceptance: accepted. Risk: R0. All checks passed.\n"
+            )
+            (self.root / FEATURE / "acceptance-evidence.json").write_text(
+                json.dumps({"verified": ["AC-001"], "checks": "passed"})
+            )
+
+        self.final = False
+        self.verdict = "changes-requested"
+        self.before.append(claims)
+        self.changes.append(raised)
+        code, out, err, run_id = self._eligible_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.last_line(out),
+            f"PR completion: draft #7 {PR_URL}: risk R2; no final acceptance "
+            "recorded; spec reconciliation is not recorded as approved and converged",
+        )
+        # The same reasons as the run without any agent write.
+        self.draft(
+            run_id, ("risk", ""), ("no-final-acceptance", ""), ("not-converged", "")
+        )
 
 
 if __name__ == "__main__":

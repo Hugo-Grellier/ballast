@@ -124,7 +124,7 @@ Before the first agent step of every `ballast run start`, `resume` or `continue`
 
 `--local-fallback MODEL` on `ballast run start` or `resume` (`off` turns it off) lets a headless step of a human-gated or Autonomous run retry once on a local Ollama model through Codex's `--oss` mode when its agent's quota or provider failed and nothing changed; every check it cannot establish refuses before any content is sent. See the [Local fallback section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#local-fallback).
 
-At the end of every `ballast run start`, `resume` or `continue` invocation, after any Autonomous publication, the launcher makes sure one Draft PR shows an issue-linked feature once its published branch holds a change outside `specs/<feature>/`, and reuses that PR afterwards. It needs `[github] repository = "OWNER/NAME"` in `ballast.toml`, uses your authenticated `gh` 2.48 or later, never pushes (only an Autonomous run's publisher does), and never marks a PR ready, merges or closes it. The [Draft PR section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#draft-pr) lists the reported states and their remedies. The same Draft PR carries an [acceptance packet](templates/policies/spec-kit-workflow.md#acceptance-packet): each acceptance criterion's evidence state at the head commit, the run's decisions, open findings and checks, and links to every source; it is a derived summary, not an approval.
+At the end of every `ballast run start`, `resume` or `continue` invocation, after any Autonomous publication, the launcher makes sure one Draft PR shows an issue-linked feature once its published branch holds a change outside `specs/<feature>/`, and reuses that PR afterwards. It needs `[github] repository = "OWNER/NAME"` in `ballast.toml`, uses your authenticated `gh` 2.48 or later, never pushes (only an Autonomous run's publisher does), and never marks a PR ready, merges or closes it (only an opted-in Autonomous run's [PR completion](#autonomous-runs) marks a PR ready). The [Draft PR section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#draft-pr) lists the reported states and their remedies. The same Draft PR carries an [acceptance packet](templates/policies/spec-kit-workflow.md#acceptance-packet): each acceptance criterion's evidence state at the head commit, the run's decisions, open findings and checks, and links to every source; it is a derived summary, not an approval.
 
 ### Autonomous runs
 
@@ -132,14 +132,14 @@ An eligible feature can run unattended to a Draft PR. Every gate decision is the
 
 ```bash
 ballast run start --mode autonomous [--wall-time MINUTES] [--max-agent-steps N] \
-    -i issue=N -i idea="Issue #N: OUTCOME" -i feature_directory=specs/N-slug [-i integration=auto]
+    [--completion draft|ready] -i issue=N -i idea="Issue #N: OUTCOME" -i feature_directory=specs/N-slug [-i integration=auto]
 ballast run resume RUN_ID [--ref TEXT]
 ballast run continue RUN_ID --reason block-resolved|changes-requested --ref TEXT
 ballast run publish RUN_ID
 ballast run checkpoint RUN_ID
 ```
 
-`--wall-time` (1–1440 active minutes, default 240) and `--max-agent-steps` (1–200, default 40) are accepted only with `--mode autonomous`. An ineligible start is refused before any agent step and prints the human-gated command instead. A run reviews its implementation, fixes what the reviews or the checks find within three fix cycles, and ends with a Draft PR or with a block that names its class, its reason and the next command. `ballast run resume` continues a blocked or interrupted Autonomous run in Autonomous after branch synchronization, recording your block resolution, and `ballast run checkpoint` refreshes a finished run's Draft PR checkpoint and acceptance packet without an agent; both stay agent-provisional, and merging the PR stays the single human approval. `continue` records the operator's decision, lowers the run to human-gated and starts the remaining human gates; before implementation it refuses and points to `resume`, unless `--mode chat` continues the run in Chat. `publish` retries a failed publication without running an agent. Nothing in an Autonomous run merges, marks a PR ready, releases or deploys.
+`--wall-time` (1–1440 active minutes, default 240) and `--max-agent-steps` (1–200, default 40) are accepted only with `--mode autonomous`. An ineligible start is refused before any agent step and prints the human-gated command instead. A run reviews its implementation, fixes what the reviews or the checks find within three fix cycles, and ends with a Draft PR or with a block that names its class, its reason and the next command. `ballast run resume` continues a blocked or interrupted Autonomous run in Autonomous after branch synchronization, recording your block resolution, and `ballast run checkpoint` refreshes a finished run's Draft PR checkpoint and acceptance packet without an agent; both stay agent-provisional, and merging the PR stays the single human approval. `continue` records the operator's decision, lowers the run to human-gated and starts the remaining human gates; before implementation it refuses and points to `resume`, unless `--mode chat` continues the run in Chat. `publish` retries a failed publication without running an agent. Nothing in an Autonomous run merges, releases or deploys, and without the `completion` opt-in below nothing marks a PR ready.
 
 Two `ballast.toml` tables configure it:
 
@@ -150,6 +150,8 @@ excluded_boundaries = ["agent authority"]
 authorized_privileged_actions = ["secret-provisioning"]
 wall_time_minutes = 120
 max_agent_steps = 24
+completion = "ready"                      # opt-in: "draft" (default) or "ready"
+completion_max_severity = "low"           # "low" (default), "info" or "none"
 
 [checks]                                  # required for Autonomous
 commands = ["uvx ruff check", "uv run python -m unittest"]
@@ -157,6 +159,8 @@ timeout_minutes = 30
 ```
 
 `authorized_privileged_actions` names privileged-action kinds: `operator-trust`, `scratch-repository`, `secret-provisioning`, `network-access`, `external-write` or `permission-change`. Agents declare each action they need before merge as `KIND` or `KIND: description`, and only the kind is compared. An entry not spelled exactly as a kind (for example `secret provisioning`) still matches only an action declared with exactly that text, with a warning; replace it with a kind. Keys that would widen eligibility, and `merge`, `release`, `deploy`, `mark ready` or `other` as authorized actions, are ignored with a warning. A run keeps the policy it started with; after authorizing an action and running `ballast trust`, `ballast run resume RUN_ID --refresh-policy` applies it to a blocked run. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
+
+`completion = "ready"` is the one `[autonomous]` key that lets the runner do more: it never makes an ineligible start eligible, but after an Autonomous publication the runner marks the PR ready for review, as you, when every condition holds: the run stayed Autonomous, risk R0 or R1 with no R2 boundary declared, no privileged action, final acceptance and an approved spec reconciliation recorded, no open finding above `completion_max_severity`, the `[checks]` passed on the published tree, the acceptance packet shows every criterion verified, no material provisional change, no resolved block (so a resumed run stays a Draft), and the PR head is still the pushed commit. Otherwise the PR stays a Draft. The run prints one `PR completion:` line (`ready-for-review`; `draft` with every reason; or `unverified` when GitHub accepted the request but does not show the PR ready at the pushed commit) and records it in the run ledger. `--completion draft` narrows one run; `--completion ready` cannot widen `ballast.toml` and refuses the start. Marking a PR ready is not an approval: merging stays the single human approval. See [PR completion in the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#autonomous-runs).
 
 ### Chat runs
 

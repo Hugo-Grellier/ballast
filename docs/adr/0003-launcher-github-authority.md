@@ -18,6 +18,7 @@ Feature work under `ballast run` must become visible in one Draft PR without a m
   - `gh api` reads of the repository, an Issue, its comments, the pulls for one head, a compare and the base branch's pull-request template;
   - `gh pr create --draft --body-file -`;
   - `gh pr edit <N> --body-file -`, rewriting only the Ballast-marked section, right after re-reading the PR and only when its body is unchanged;
+  - `gh pr ready <N> --repo <pinned>`, only from the Autonomous completion step of a run whose operator opted in, after every completion condition held (extended by [ADR-0019](0019-autonomous-pr-completion.md));
   - `git symbolic-ref`, `git for-each-ref`, `git remote get-url` and `git rev-parse`; no push, fetch or commit.
 - The checkpoint refuses to act while `BALLAST_TAMPERED` or the launcher's `in-progress` marker exists.
 - Agents keep every existing denial, and `run.py` removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the environment it passes to the workflow engine. The checkpoint, in `run.py`'s own process, keeps them.
