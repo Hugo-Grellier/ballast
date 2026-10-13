@@ -346,6 +346,15 @@ compatibility shim
 
 They MUST NOT duplicate the whole engineering policy.
 
+## 9.1 Agent sessions and agent steps
+
+An **agent session** is the operator's own Claude Code or Codex session, outside any `ballast run` step; an **agent step** is one confined agent invocation inside a run. They have different authority ([ADR-0020](../docs/adr/0020-agent-sessions-relay-decisions.md)):
+
+* A step runs no `ballast` command. The boundary is the launcher's `in-progress` marker and the step's sandbox, which hides operator state; `BALLAST_AGENT_STEP=1` in every step's environment is defence in depth only.
+* A session runs every command that carries no decision, and `ballast trust` on a checkout it set up (operator decision D-09), and relays decisions only within the run's autonomy. The agent command matrix lives as data in `tools/spec_workflow/actor.py`; the Spec Kit workflow policy and ADR-0020 name the same commands, and a governance test keeps them equal.
+* Every decision record names its actor: `operator` when stdin and stdout are terminals, or `relayed` with the session named by `--relayed-by SESSION`. A terminal-less command that records a decision without a session is refused before writing. A relay is accepted only where the run's autonomy allows it: a gate approval only in a Chat run in chat mode; a relayed `resume` or `continue` of a block that carries a decision only with `--ref`. Relayed records are rendered as `relayed by agent session SESSION`, never as operator-typed.
+* The terminal test is not proof of a human, and a relayed claim cannot be verified; both are residual risks ADR-0020 states.
+
 ---
 
 # 10. Specification storage
@@ -1140,6 +1149,13 @@ repeated agent failure
 In the human-gated mode, the human also approves at each workflow gate (scope, intent, plan, tasks, implementation review, spec reconciliation, final acceptance), and an R2 change needs that approval before the change.
 
 In an eligible Autonomous run (#27), the run does not interrupt the human at those gates. An agent records each gate decision as agent-provisional, with its basis and evidence; a provisional decision is never human approval (constitution BL-INV-006). The single human approval is the merge of the Draft PR, including for R2, whose PR states that the risky change was made without prior human approval. An escalation from the list above becomes a block that stops the run with its reason and recovery command; the operator continues human-gated.
+
+A human gate asks only for a decision ([ADR-0020](../docs/adr/0020-agent-sessions-relay-decisions.md), #147). Commands that carry none are not interruptions: the operator's agent session runs them (see §9.1), and the launcher does not ask for them.
+
+* A protected-input change merged on the default branch of the reviewed repository the trust baseline names refreshes the baseline and the installation before the launcher runs (`tools/ballast` calls the pinned standard's `setup --refresh`, which records a `default-branch` baseline only after a verified re-snapshot). The launcher's comparison is unchanged, so every other change still needs `ballast trust`.
+* `discard-runs` names `ballast trust` only when protected inputs differ from the baseline; a usage-limit stop is a resumable `interrupted` block; a failed implementation postcondition resumes at `implement`.
+* Several Chat gates are approved with one listing and one confirmation, recorded atomically.
+* The decisions themselves stay human: a Chat approval, typed or relayed after the operator's yes in chat; `reject`, `resolve` and `mode` at the operator's terminal; the answer a relayed `resume` of a decision block cites with `--ref`; and the merge.
 
 ---
 

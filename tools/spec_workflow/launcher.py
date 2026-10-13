@@ -14,9 +14,16 @@ can write. From the checkout root:
     ballast discard-runs       # after an unfinished agent step
 
 `status --json` prints whether the workflow is installed and why `run` would
-refuse, as `{"installed": bool, "refusal": null | "<reason>"}`, plus
-`"baseline_source": "setup" | "trust"` once a trust baseline exists; it writes
-nothing, so `ballast doctor` can call it before trust.
+refuse, as `{"installed": bool, "refusal": null | "<reason>"}`, plus the kind of
+that refusal (`"refusal_kind"`: `inputs-changed`, `pin-mismatch`, `tamper`,
+`unfinished-step`, `no-baseline`, `setup-unfinished` or `state`), and
+`"baseline_source": "setup" | "trust" | "default-branch"` once a trust baseline
+exists (with `"baseline_commit"` for a default-branch one); it writes nothing,
+so `ballast doctor` and the global `ballast` command can call it before trust.
+The global command runs the pinned standard's `setup --refresh` on
+`inputs-changed` or `pin-mismatch` (ADR-0020): it records a `default-branch`
+baseline only when every change came from the reviewed repository's default
+branch, and the comparison below stays the same check.
 
 Every command except `status` takes the checkout lock shared, and refuses
 while `ballast setup` holds it or left an unfinished attempt (its journal in
@@ -25,7 +32,12 @@ as the workflow tool runs, so setup never switches the installation under
 them. They also refuse while the pin differs from the installed version.
 
 `trust` records digests of every executable workflow input in your state
-directory, and the repository `ballast.toml` pins as one you reviewed. `ballast
+directory, and the repository `ballast.toml` pins as one you reviewed. It
+refuses when the installed agent settings differ from what `ballast.toml`
+produces, and inside an agent step. `discard-runs` takes no arguments
+(`--help` prints its usage). Every command but `status` refuses while
+`BALLAST_AGENT_STEP` is set; that is defence in depth, and the `in-progress`
+marker is the boundary that keeps a step from running any of them. `ballast
 setup` and a worktree's first-command preparation record the same baseline when
 the checkout holds exactly what they installed from reviewed configuration
 (ADR-0015); the source is kept beside it and never affects the comparison.
@@ -110,13 +122,40 @@ RECOVER = (
     "run nothing from the checkout until you have reviewed it (`git status` and "
     "the listed files) and restored the protected files with Git; then delete and "
     "recreate .venv (`uv sync --locked`), delete "
-    f"{TAMPER_MARKER}, run `ballast discard-runs`, then `ballast trust`"
+    f"{TAMPER_MARKER}, run `ballast discard-runs`, then `ballast trust` if "
+    "`ballast run status` still reports changed inputs"
 )
 EXIT_REFUSED = 2
 COMMANDS = {"run": ("-IS", "run.py"), "ledger": ("-IS", "ledger.py")}
 # The intake helper acts with the operator's `gh` authority before any run, so
 # it runs from this pinned standard, never from a checkout copy.
 INTAKE = Path(__file__).resolve().parents[1] / "feature_intake.py"
+# The standard this launcher runs from: the pin the installation matches.
+STANDARD_DIR = Path(__file__).resolve().parents[2]
+SETTINGS = ".ballast/spec_workflow/claude-settings.json"
+SETTINGS_REFUSAL = (
+    f"generated agent settings ({SETTINGS}) differ from what ballast.toml "
+    "produces; run `ballast setup`, review, then `ballast trust`"
+)
+# Set in every agent step's environment (agent.py); defence in depth only.
+AGENT_STEP = "BALLAST_AGENT_STEP"
+AGENT_STEP_REFUSAL = (
+    "an agent step is active, and it runs no ballast command but `status` "
+    "(BALLAST_AGENT_STEP is set; defence in depth: the in-progress marker is "
+    "the boundary)"
+)
+# The default-branch baseline `run.py` announced last; operator state.
+REFRESH_ANNOUNCED = "refresh-announced"
+REFRESHED = "BALLAST_REFRESHED"
+DISCARD_USAGE = """\
+usage: ballast discard-runs
+
+Stop an unfinished agent step's processes, then delete the checkout's saved
+run state (.specify/workflows/runs and .specify/workflow-state) and the
+in-progress marker. It takes no arguments and changes no other file. Afterwards
+`ballast trust` is needed only if the protected inputs differ from the trust
+baseline; the last line says which.
+"""
 
 
 TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")  # noqa: S108 - Refused, never used.
@@ -301,22 +340,31 @@ def write_atomic(path: Path, data: bytes) -> None:
         os.close(directory)
 
 
+SOURCES = ("trust", "setup", "default-branch")
+
+
 def record_baseline(
     state: Path,
     inputs: dict[str, str],
     *,
     source: str,
     reference: dict | None = None,
+    repository: str | None = None,
 ) -> None:
     """Write the trust baseline and, first, the record of who wrote it.
 
     The only writer of `trusted.json`. It decides nothing about eligibility:
-    `ballast trust` (the operator) and `setup_trust` (setup and preparation,
-    under ADR-0015's conditions) call it. The provenance is bound to the exact
-    baseline bytes, so a crash between the two writes leaves a record bound to a
-    baseline that was never written, which reads as the old baseline's `trust`.
-    Raises OSError; the caller reports it.
+    `ballast trust` (the operator), `setup_trust` (setup and preparation,
+    under ADR-0015's conditions) and its default-branch refresh (ADR-0020)
+    call it. `repository` is the reviewed `[github] repository` of the
+    recorded `ballast.toml`, case-folded; a refresh needs it. The provenance
+    is bound to the exact baseline bytes, so a crash between the two writes
+    leaves a record bound to a baseline that was never written, which reads as
+    the old baseline's `trust`. Raises OSError; the caller reports it.
     """
+    if source not in SOURCES:
+        message = f"unknown baseline source {source!r}"
+        raise OSError(message)
     data = json.dumps(inputs, indent=1).encode()
     provenance = {
         "schema": 1,
@@ -324,8 +372,10 @@ def record_baseline(
         "baseline": "sha256:" + hashlib.sha256(data).hexdigest(),
         "recorded": datetime.now(UTC).isoformat(timespec="seconds"),
     }
-    if source == "setup":
+    if source != "trust":
         provenance["reference"] = reference
+    if repository is not None:
+        provenance["repository"] = repository.casefold()
     write_atomic(
         state / TRUSTED_SOURCE, (json.dumps(provenance, indent=1) + "\n").encode()
     )
@@ -351,15 +401,40 @@ def _provenance(state: Path) -> tuple[bytes | None, dict | None]:
 
 
 def baseline_source(state: Path) -> str | None:
-    """Who recorded the baseline: None without one, else `setup` or `trust`.
+    """Return who recorded the baseline: None without one, else its source.
 
-    Display only: a missing, unreadable or unbound record reads as `trust`
+    The source is `setup`, `trust` or `default-branch`. Display only: a
+    missing, unreadable or unbound record reads as `trust`
     (FR-013), and the comparison never reads it (FR-015).
     """
     data, record = _provenance(state)
     if data is None:
         return None
-    return "setup" if record and record.get("source") == "setup" else "trust"
+    source = record.get("source") if record else None
+    return source if source in {"setup", "default-branch"} else "trust"
+
+
+def refresh_repository(state: Path) -> str | None:
+    """Return the reviewed repository a bound baseline names, case-folded.
+
+    A refresh counts only this repository's default branch (ADR-0020); a
+    legacy, unbound or unnamed baseline makes the checkout ineligible.
+    """
+    _, record = _provenance(state)
+    value = record.get("repository") if record else None
+    if not isinstance(value, str) or split_repository(value) is None:
+        return None
+    return value.casefold()
+
+
+def baseline_commit(state: Path) -> str | None:
+    """Return the default-branch commit a refreshed baseline names, or None."""
+    _, record = _provenance(state)
+    if not record or record.get("source") != "default-branch":
+        return None
+    reference = record.get("reference")
+    commit = reference.get("commit") if isinstance(reference, dict) else None
+    return commit if isinstance(commit, str) and DIGEST_OID.fullmatch(commit) else None
 
 
 def operator_baseline(state: Path) -> dict | None:
@@ -402,6 +477,7 @@ def split_repository(value: object) -> tuple[str, str] | None:
 
 
 DIGEST = re.compile(r"[0-9a-f]{64}")
+DIGEST_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def _reviewed_record(root: Path) -> tuple[list[str], dict[str, list[list[str]]]]:
@@ -514,6 +590,61 @@ def read_config(root: Path) -> str:
     return data.decode("utf-8")
 
 
+def merge_permissions(settings: dict, config: dict) -> dict:
+    """Append the project's extra allow/deny rules to the base settings.
+
+    The one producer of the installed `claude-settings.json`: setup writes
+    its result, and `trust` and the default-branch refresh compare with it.
+    """
+    agents = config.get("agents", {})
+    extra = agents.get("permissions", {}) if isinstance(agents, dict) else None
+    if not isinstance(extra, dict):
+        message = "agents.permissions must be a table"
+        raise ValueError(message)  # noqa: TRY004 - one malformed-config error
+    permissions = settings["permissions"]
+    for key in ("allow", "deny"):
+        rules = extra.get(f"extra_{key}", [])
+        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+            message = f"agents.permissions.extra_{key} must be a list of strings"
+            raise ValueError(message)
+        permissions[key] = list(dict.fromkeys([*permissions[key], *rules]))
+    return settings
+
+
+def generated_settings(standard_dir: Path, config: dict) -> bytes:
+    """Return the exact `claude-settings.json` bytes setup installs for config."""
+    base = json.loads(
+        (standard_dir / "tools/spec_workflow/claude-settings.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return (json.dumps(merge_permissions(base, config), indent=2) + "\n").encode()
+
+
+def settings_refusal(root: Path, state: Path, standard_dir: Path) -> str | None:
+    """Why the installed agent settings are not what ballast.toml produces, or None.
+
+    Checked when the installation lists the settings file or it exists; a
+    missing, unreadable or malformed `ballast.toml` table refuses (FR-004).
+    """
+    installed = root / SETTINGS
+    record = read_record(root, state)
+    listed = record is not None and SETTINGS in record["files"]
+    if not listed and not os.path.lexists(installed):
+        return None
+    try:
+        text = read_config(root) if os.path.lexists(root / "ballast.toml") else ""
+        expected = generated_settings(standard_dir, tomllib.loads(text))
+        actual = (
+            None
+            if installed.is_symlink() or not installed.is_file()
+            else installed.read_bytes()
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return SETTINGS_REFUSAL
+    return None if actual == expected else SETTINGS_REFUSAL
+
+
 def pinned_ref(root: Path) -> str | None:
     """Return the checkout's `[standard] ref`, or None unless it is a valid ref."""
     try:
@@ -528,13 +659,18 @@ def pinned_ref(root: Path) -> str | None:
 
 def _setup_refusal(root: Path, state: Path) -> str | None:
     """Name an unfinished setup attempt, or a pin that differs from the installation."""
+    found = _setup_refusal_kind(root, state)
+    return found[1] if found else None
+
+
+def _setup_refusal_kind(root: Path, state: Path) -> tuple[str, str] | None:
     if os.path.lexists(state / SETUP_ATTEMPT):
-        return UNFINISHED
+        return "setup-unfinished", UNFINISHED
     record = read_record(root, state)
     pin = pinned_ref(root)
     if record is not None and pin is not None and record["ref"] != pin:
         installed = record["ref"]
-        return (
+        return "pin-mismatch", (
             f'pinned {pin}, installed {installed}: restore ref = "{installed}" in '
             "ballast.toml, or fix the cause and rerun `ballast setup`"
         )
@@ -670,18 +806,31 @@ def _unfinished(marker: Path) -> str:
 
 
 def _refusal(root: Path) -> str | None:
+    found = _refusal_kind(root)
+    return found[1] if found else None
+
+
+def _refusal_kind(root: Path) -> tuple[str, str] | None:
+    """Return (kind, reason) of the refusal `run` would give, or None."""
     try:
         state = state_dir(root)
     except OSError as error:
-        return str(error)
-    return _setup_refusal(root, state) or _trust_refusal(root, state)
+        return "state", str(error)
+    return _setup_refusal_kind(root, state) or _trust_refusal_kind(root, state)
 
 
 def _trust_refusal(root: Path, state: Path) -> str | None:
+    found = _trust_refusal_kind(root, state)
+    return found[1] if found else None
+
+
+def _trust_refusal_kind(root: Path, state: Path) -> tuple[str, str] | None:
     if os.path.lexists(root / TAMPER_MARKER):
-        return f"{TAMPER_MARKER} exists: an agent changed protected files; {RECOVER}"
+        return "tamper", (
+            f"{TAMPER_MARKER} exists: an agent changed protected files; {RECOVER}"
+        )
     if os.path.lexists(state / IN_PROGRESS):
-        return _unfinished(state / IN_PROGRESS)
+        return "unfinished-step", _unfinished(state / IN_PROGRESS)
     try:
         trusted = json.loads((state / TRUSTED).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -690,23 +839,28 @@ def _trust_refusal(root: Path, state: Path) -> str | None:
             for path in input_bases(root)
             if os.path.lexists(path)
         ]
-        return (
+        return "no-baseline", (
             "no trusted baseline for this checkout; review its protected inputs "
             f"({', '.join(present)}), then run `ballast trust`"
         )
-    current = trusted_inputs(root)
-    changed = sorted(
-        name
-        for name in trusted.keys() | current.keys()
-        if trusted.get(name) != current.get(name)
-    )
+    changed = changed_inputs(root, trusted)
     if changed:
         shown = ", ".join(changed[:10]) + (" ..." if len(changed) > 10 else "")  # noqa: PLR2004
-        return (
+        return "inputs-changed", (
             f"workflow inputs changed since `trust`: {shown}; "
             "review them, then run `trust`"
         )
     return None
+
+
+def changed_inputs(root: Path, trusted: dict) -> list[str]:
+    """Return the protected inputs whose digest differs from the baseline."""
+    current = trusted_inputs(root)
+    return sorted(
+        name
+        for name in trusted.keys() | current.keys()
+        if trusted.get(name) != current.get(name)
+    )
 
 
 def _remove_tree(root: Path, name: str) -> list[str]:
@@ -768,12 +922,24 @@ def _discard(root: Path, state: Path) -> int:
     if marked:
         changes.append("stopped the unfinished agent step and removed its marker")
     lines = [f"  {change}" for change in changes] or ["  nothing to discard"]
+    # Run state and the marker are outside the baseline: discarding them never
+    # changes a protected input, so trust is needed only if one changed (R11).
+    found = _trust_refusal_kind(root, state)
+    if found is None:
+        step = (
+            "protected inputs are unchanged since the trust baseline; no "
+            "`ballast trust` is needed."
+        )
+    elif found[0] == "tamper":
+        step = f"{TAMPER_MARKER} exists: {RECOVER}."
+    else:
+        step = "review the checkout, then run `ballast trust`."
     sys.stdout.write(
         "discarded local run state:\n"
         + "\n".join(lines)
         + "\nUnchanged: the checkout's files, BALLAST_TAMPERED, .venv and the run "
-        "records in your state directory.\nNext: review the checkout, then run "
-        "`ballast trust`. A stopped Autonomous run cannot resume after this; "
+        f"records in your state directory.\nNext: {step} A stopped Autonomous run "
+        "cannot resume after this; "
         "continue it in Chat with `ballast run continue RUN_ID --mode chat "
         "--reason block-resolved --ref TEXT`, or start a fresh run. A Chat run "
         "is not discarded: `ballast run status RUN_ID` shows it, and `ballast run "
@@ -795,19 +961,22 @@ def _trust(root: Path, state: Path) -> int:
         )
         return EXIT_REFUSED
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # AC-003: never vouch for agent settings ballast.toml does not produce.
+    refusal = settings_refusal(root, state, STANDARD_DIR)
+    if refusal:
+        sys.stderr.write(f"ballast: refusing to trust: {refusal}\n")
+        return EXIT_REFUSED
     inputs = trusted_inputs(root)
-    record_baseline(state, inputs, source="trust")
+    repository = _trusted_repository(root, inputs)
+    record_baseline(state, inputs, source="trust", repository=repository)
     sys.stdout.write(f"trusted {len(inputs)} workflow inputs for {root}\n")
-    _review_repository(root, inputs)
+    if repository is not None:
+        _review_repository(root, inputs, repository)
     return 0
 
 
-def _review_repository(root: Path, inputs: dict[str, str]) -> None:
-    """Remember the repository the trusted `ballast.toml` pins as reviewed.
-
-    It decides which default branch setup may later count as reviewed
-    (ADR-0015). Failing to write it leaves the baseline recorded: warn only.
-    """
+def _trusted_repository(root: Path, inputs: dict[str, str]) -> str | None:
+    """Return the valid `[github] repository` of the ballast.toml being trusted."""
     try:
         text = read_config(root)
         digest = hashlib.sha256(text.encode()).hexdigest()
@@ -817,10 +986,17 @@ def _review_repository(root: Path, inputs: dict[str, str]) -> None:
             else None
         )
     except (OSError, ValueError):
-        return
+        return None
     value = github.get("repository") if isinstance(github, dict) else None
-    if split_repository(value) is None:
-        return
+    return value if split_repository(value) is not None else None
+
+
+def _review_repository(root: Path, inputs: dict[str, str], value: str) -> None:
+    """Remember the repository the trusted `ballast.toml` pins as reviewed.
+
+    It decides which default branch setup may later count as reviewed
+    (ADR-0015). Failing to write it leaves the baseline recorded: warn only.
+    """
     constitution = inputs.get(".specify/memory/constitution.md")
     pair = (
         (inputs["ballast.toml"], constitution)
@@ -885,17 +1061,54 @@ def _status(root: Path, *, installed: bool) -> dict:
     except OSError:
         state = None
     unfinished = state is not None and os.path.lexists(state / SETUP_ATTEMPT)
+    found = _refusal_kind(root) if installed or unfinished else None
     status = {
         "installed": installed,
-        "refusal": _refusal(root) if installed or unfinished else None,
+        "refusal": found[1] if found else None,
     }
+    if found:
+        status["refusal_kind"] = found[0]
     source = None if state is None else baseline_source(state)
     # Present only once a baseline exists; an older launcher never has it.
-    return status if source is None else {**status, "baseline_source": source}
+    if source is None:
+        return status
+    status["baseline_source"] = source
+    commit = baseline_commit(state) if state is not None else None
+    return status if commit is None else {**status, "baseline_commit": commit}
 
 
-def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
+def _announce_refresh(root: Path) -> None:
+    """Hand `run.py` a default-branch refresh it has not announced yet (AC-001).
+
+    Writes the announced baseline's digest to operator state, so the next
+    invocation does not repeat it. A failure only loses the announcement.
+    """
+    try:
+        state = state_dir(root)
+        _, record = _provenance(state)
+        if not record or record.get("source") != "default-branch":
+            return
+        announced = state / REFRESH_ANNOUNCED
+        with contextlib.suppress(OSError):
+            if announced.read_text(encoding="utf-8").strip() == record["baseline"]:
+                return
+        reference = record.get("reference") or {}
+        os.environ[REFRESHED] = json.dumps(
+            {
+                "repository": reference.get("repository"),
+                "branch": reference.get("branch"),
+                "commit": reference.get("commit"),
+            }
+        )
+        write_atomic(announced, (str(record["baseline"]) + "\n").encode())
+    except (OSError, ValueError, TypeError, AttributeError):
+        return
+
+
+def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - one exit per refusal
     """Verify the checkout, then run a workflow tool or record a baseline."""
+    # Only _announce_refresh may set it: an inherited value is a forgery.
+    os.environ.pop(REFRESHED, None)
     root = Path.cwd()
     installed = (root / ".ballast/spec_workflow/run.py").is_file()
     if argv == ["status", "--json"]:
@@ -906,6 +1119,18 @@ def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
         return 0
     if not argv or argv[0] not in {*COMMANDS, "intake", "trust", "discard-runs"}:
         sys.stderr.write(__doc__ or "")
+        return EXIT_REFUSED
+    if os.environ.get(AGENT_STEP):
+        sys.stderr.write(f"ballast: refusing: {AGENT_STEP_REFUSAL}\n")
+        return EXIT_REFUSED
+    if argv[0] == "discard-runs" and argv[1:]:
+        # AC-021, AC-022: before any lock or check; nothing changes.
+        if argv[1:] in (["--help"], ["-h"]):
+            sys.stdout.write(DISCARD_USAGE)
+            return 0
+        sys.stderr.write(
+            "ballast: refusing: discard-runs takes no arguments (see --help)\n"
+        )
         return EXIT_REFUSED
     # Before the lock: an uninstalled checkout gets no state file (#15),
     # except that an unfinished agent step can always be discarded: setup
@@ -933,6 +1158,8 @@ def main(argv: list[str]) -> int:  # noqa: PLR0911 - one exit per refusal
     else:
         flags, script = COMMANDS[argv[0]]
         tool = str(root / ".ballast/spec_workflow" / script)
+        if argv[0] == "run":
+            _announce_refresh(root)
     os.execv(sys.executable, [sys.executable, flags, tool, *argv[1:]])  # noqa: S606
     return EXIT_REFUSED  # unreachable
 

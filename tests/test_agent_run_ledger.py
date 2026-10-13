@@ -581,7 +581,14 @@ class LedgerTests(unittest.TestCase):
     def isolated_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         cli_dir = self.root / "tools/spec_workflow"
         cli_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("ledger.py", "artifacts.py", "autonomy.py", "launcher.py"):
+        # ledger.py's own imports; actor.py since #147 (autonomy imports it).
+        for name in (
+            "ledger.py",
+            "artifacts.py",
+            "autonomy.py",
+            "launcher.py",
+            "actor.py",
+        ):
             shutil.copy2(ROOT / "tools/spec_workflow" / name, cli_dir / name)
         return subprocess.run(  # noqa: S603
             [sys.executable, "-I", "-S", str(cli_dir / "ledger.py"), *args],
@@ -3591,6 +3598,111 @@ class ChatModeLedgerTests(unittest.TestCase):
                     "e2",
                 ),
             )
+
+    def test_a_gate_names_who_decided(self) -> None:
+        """#147: a relayed Chat approval is never an operator line (FR-011)."""
+        data = {"step_id": "review-plan", "choice": "approve", "log_line": 1}
+        ledger.validate(self.event("gate", {**data, "actor": "operator"}))
+        ledger.validate(
+            self.event(
+                "gate", {**data, "actor": "relayed", "relayed_by": "claude-code:t1"}
+            )
+        )
+        for bad in ({"actor": "agent"}, {"relayed_by": "a b"}):
+            with (
+                self.subTest(bad=bad),
+                self.assertRaises(ledger.LedgerError),
+            ):
+                ledger.validate(self.event("gate", {**data, **bad}))
+
+
+sys.path.insert(0, str(ROOT / "tests"))
+import test_autonomous_run as offline  # noqa: E402
+
+sys.path.pop(0)
+agent = offline.run.chat.agent  # the wrapper module run.py itself imported
+QUOTA_CLI = """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_ARGV"], "w") as handle:
+    json.dump({"argv": sys.argv[1:], "env": sorted(os.environ)}, handle)
+print("Claude AI usage limit reached|1760000000")
+sys.exit(1)
+"""
+
+
+class UsageLimitStopTests(offline.WrapperCase):
+    """#147 T035 [AC-025, AC-026, D-07]: a usage limit is a resumable stop."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.bin / "claude").write_text(QUOTA_CLI)
+        self.state = offline.autonomy.state_dir(self.root)
+
+    def stop_block(self, record: dict, step: str = "plan") -> dict:
+        """Return the block run.py records for the engine's failed step."""
+        engine = self.root / ".specify/workflows/runs/run42"
+        engine.mkdir(parents=True, exist_ok=True)
+        (engine / "state.json").write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "current_step_id": step,
+                    "step_results": {step: {"status": "failed", "error": "x"}},
+                }
+            )
+        )
+        with patch.object(offline.run, "ROOT", self.root):
+            return offline.run._stop_block("run42", record, 1)  # noqa: SLF001
+
+    def test_a_confirmed_stop_is_interrupted_and_resumable(self) -> None:
+        record = self.make_run()
+        offline.autonomy.write_run(self.root, record)
+        result = self.wrapper()
+        self.assertEqual(result.returncode, agent.EXIT_USAGE_LIMIT)
+        self.assertIn("the agent CLI hit its provider usage limit", result.stderr)
+        self.assertFalse((self.state / "in-progress").exists())
+        (step,) = self.steps()
+        self.assertEqual(step["exit_code"], agent.EXIT_USAGE_LIMIT)
+        block = self.stop_block(offline.autonomy.read_run(self.root, "run42"))
+        self.assertEqual(block["category"], "interrupted")
+        self.assertEqual(
+            block["condition"], "the agent CLI hit its provider usage limit"
+        )
+        self.assertIn(
+            "wait for the usage limit to reset, then ballast run resume run42",
+            block["recovery"],
+        )
+        self.assertEqual(block["command"], "ballast run resume run42")
+        self.assertTrue(offline.autonomy.resumable(block["category"]))
+        self.assertNotIn("discard-runs", block["recovery"])
+        self.assertNotIn("trust", block["recovery"])
+
+    def test_a_human_gated_step_exits_the_same_way(self) -> None:
+        result = self.wrapper()
+        self.assertEqual(result.returncode, agent.EXIT_USAGE_LIMIT)
+        self.assertFalse((self.state / "in-progress").exists())
+
+    def test_a_dead_wrapper_keeps_the_unfinished_step(self) -> None:
+        """AC-026: no recorded step and the marker left: unfinished-step."""
+        record = self.make_run()
+        offline.autonomy.write_run(self.root, record)
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "in-progress").write_text(
+            "ballast-agent-run42-20261013T101010123456Z-plan-claude.scope\n"
+        )
+        block = self.stop_block(record)
+        self.assertEqual(block["category"], "unfinished-step")
+        self.assertFalse(offline.autonomy.resumable("unfinished-step"))
+
+    def test_an_unconfirmed_stop_is_not_a_usage_limit(self) -> None:
+        limited = agent._usage_limited  # noqa: SLF001
+        seen = {"blocked": False, "contained": False, "tail": (b"usage limit reached",)}
+        self.assertFalse(limited("claude", 1, seen))
+        seen["contained"] = True
+        self.assertTrue(limited("claude", 1, seen))
+        self.assertFalse(limited("claude", 0, seen))
+        seen["tail"] = (b"some other failure",)
+        self.assertFalse(limited("claude", 1, seen))
 
 
 if __name__ == "__main__":

@@ -2349,5 +2349,100 @@ class CheckoutGitConfigTests(unittest.TestCase):
         self.assertEqual(bare, [], "git calls must start with *GIT")
 
 
+class RefreshSetupTests(ProjectCase):
+    """#147 T010 [FR-001, FR-004, AC-004]: `setup --refresh`, one settings producer."""
+
+    hold = SetupLockTests.hold
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.installed()
+
+    def refresh(self) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with fakes(), redirect_stdout(out), redirect_stderr(err):
+            code = setup.cli(["--project", str(self.root), "--refresh"])
+        return code, out.getvalue(), err.getvalue()
+
+    def assert_refused(self, reason: str) -> None:
+        before = self.snapshot()
+        code, out, err = self.refresh()
+        self.assertEqual(code, setup.EXIT_REFUSED, out + err)
+        self.assertIn(reason, err)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_refused_while_a_command_holds_the_lock(self) -> None:
+        holder = self.hold("shared")
+        self.assert_refused("command is running in this checkout")
+        holder.kill()
+        holder.wait()
+
+    def test_refused_after_an_unfinished_attempt(self) -> None:
+        (self.state() / "setup-attempt.json").write_text("{}\n")
+        self.assert_refused("Next: run `ballast setup`")
+
+    def test_refused_with_either_marker(self) -> None:
+        (self.root / "BALLAST_TAMPERED").write_text("")
+        self.assert_refused("BALLAST_TAMPERED exists")
+        (self.root / "BALLAST_TAMPERED").unlink()
+        (self.state() / "in-progress").write_text("ballast-agent-r1-step.scope\n")
+        self.assert_refused("an agent step did not finish")
+
+    def test_an_ineligible_checkout_is_left_alone(self) -> None:
+        # No baseline names a repository here: nothing changes, exit 0.
+        self.pin("vB")
+        before = self.snapshot()
+        code, out, err = self.refresh()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(out.startswith("not refreshed: "), out)
+        self.assertIn("the operator reviews and runs ballast trust", out)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_one_producer_writes_the_agent_settings(self) -> None:
+        self.assertIs(setup.merge_permissions, setup.launcher.merge_permissions)
+        config = PIN.format("vA") + '\n[agents.permissions]\nextra_deny = ["Read(x)"]\n'
+        (self.root / "ballast.toml").write_text(config)
+        self.installed()
+        installed = self.root / ".ballast/spec_workflow/claude-settings.json"
+        self.assertEqual(
+            installed.read_bytes(),
+            setup.launcher.generated_settings(ROOT, setup.tomllib.loads(config)),
+        )
+        self.assertNotIn("def merge_permissions", (ROOT / "tools/setup").read_text())
+
+    def test_only_the_agent_settings_depend_on_ballast_toml(self) -> None:
+        """R6, AC-004: a later config-derived installed file fails this test."""
+        plain = self.record()["files"]
+        (self.root / "ballast.toml").write_text(
+            PIN.format("vA")
+            + '\n[github]\nrepository = "acme/demo"\n'
+            + '\n[agents.permissions]\nextra_allow = ["Bash(make lint)"]\n'
+            + '\n[checks]\ncommands = ["make test"]\n'
+            + "\n[autonomous]\nrisk = ['R0']\n"
+        )
+        self.installed()
+        configured = self.record()["files"]
+        differing = sorted(
+            name
+            for name in plain.keys() | configured.keys()
+            if plain.get(name) != configured.get(name)
+        )
+        # The stamp is the fingerprint, which covers ballast.toml by design; it
+        # is not a protected input, and the refresh compares nothing with it.
+        self.assertEqual(
+            differing,
+            [launcher_stamp(), ".ballast/spec_workflow/claude-settings.json"],
+        )
+
+
+def launcher_stamp() -> str:
+    """Return the installation stamp, outside the launcher's protected inputs."""
+    stamp = setup.launcher.STAMP
+    assert not any(  # noqa: S101 - a test precondition
+        stamp.startswith(base + "/") for base in setup.launcher.BASES
+    )
+    return stamp
+
+
 if __name__ == "__main__":
     unittest.main()

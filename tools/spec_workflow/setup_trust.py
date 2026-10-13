@@ -23,6 +23,27 @@ and nothing reaches the network before the last):
    repository with the operator's own Git authority and nothing from the
    checkout's Git configuration.
 
+`refresh_eligible` and `record_refresh` refresh an existing baseline after a
+protected-input change (ADR-0020, `setup --refresh`, which the global `ballast`
+command runs before the launcher). The live default branch of the reviewed
+repository the baseline names counts as reviewed for any bytes, so the refresh
+records a `default-branch` baseline only when, in this order:
+
+1. the standard is outside the checkout and no marker exists;
+2. the baseline's provenance names a repository, `ballast.toml` pins the same
+   one (case-folded) and `ballast trust` reviewed it on this machine;
+3. every changed protected input is either installed by setup (attributed by
+   the regeneration) or a regular file committed at `HEAD` and unchanged from
+   it; anything else (`.venv`, an untracked or uncommitted file, a link, the
+   `.git` pointer) is not attributable;
+4. every committed change equals the default branch, observed through the
+   same throwaway path as above (one `ls-tree` lists them all);
+5. after the regeneration, every installed input equals the installation
+   record, every committed one its observed blob, every other one the previous
+   baseline, and the agent settings equal what `ballast.toml` produces.
+
+The launcher's comparison, its refusals and its markers are unchanged.
+
 Standard library plus `launcher`, `ledger` and `autonomy` only; runs under
 `python3 -I -S` from the pinned standard, never from a checkout copy.
 """
@@ -147,11 +168,10 @@ class Verdict:
                 "The next ballast run, ledger or intake needs no ballast trust.",
             ]
         if self.kind == "kept":
-            who = (
-                "you recorded with ballast trust"
-                if self.text == "trust"
-                else ("setup recorded")
-            )
+            who = {
+                "trust": "you recorded with ballast trust",
+                "default-branch": "refreshed from the default branch",
+            }.get(self.text, "setup recorded")
             return [f"The trust baseline {who} still matches; left unchanged."]
         return [self.reason_line, self.remedy]
 
@@ -760,8 +780,16 @@ def _record(
     """Write the baseline; undo it, restoring the previous one, on any doubt."""
     paths = [state / launcher.TRUSTED, state / launcher.TRUSTED_SOURCE]
     previous = [path.read_bytes() if path.exists() else None for path in paths]
+    # The earlier `trust` baseline's repository when its configuration matched.
+    repository = reference.get("repository") or launcher.refresh_repository(state)
     try:
-        launcher.record_baseline(state, snapshot, source="setup", reference=reference)
+        launcher.record_baseline(
+            state,
+            snapshot,
+            source="setup",
+            reference=reference,
+            repository=repository,
+        )
         if launcher.trusted_inputs(root) != snapshot:
             _no(CHANGED)
     except BaseException:
@@ -794,3 +822,235 @@ def settle(
     except Exception as error:  # noqa: BLE001 - the installation is already committed
         return Verdict("skipped", f"could not record it ({error})", mode=mode)
     return Verdict("recorded", _describe(reference), len(snapshot), mode)
+
+
+# --- the default-branch refresh (ADR-0020) -----------------------------------
+
+NOT_REFRESHED = "the operator reviews and runs ballast trust"
+NO_NAMED_BASELINE = (
+    "the trust baseline names no reviewed repository (one `ballast trust` records it)"
+)
+REPOINTED = "ballast.toml pins another repository than the trust baseline"
+NOTHING_CHANGED = "no protected input changed since the trust baseline"
+SETTINGS_DIFFER = (
+    "the regenerated agent settings differ from what ballast.toml produces"
+)
+BASELINE_MOVED = "the trust baseline changed while setup refreshed it"
+
+
+@dataclass(frozen=True)
+class Refresh:
+    """Whether a refresh may record, and what it observed (never stored)."""
+
+    eligible: bool
+    reason: str = ""
+    repository: str = ""
+    reference: dict[str, Any] | None = None
+    # Committed changed paths: the sha256 of the bytes the default branch carries.
+    observed: dict[str, str | None] | None = None
+    previous: dict[str, str] | None = None
+
+    def line(self) -> str:
+        """Return the one line setup prints when it does not refresh."""
+        return f"not refreshed: {self.reason}; {NOT_REFRESHED}"
+
+
+def installed_input(name: str) -> bool:
+    """Whether setup installs this protected input (the regeneration attributes it)."""
+    return name.startswith(".ballast/spec_workflow/") or (
+        name.startswith(".specify/") and name not in CONFIGS
+    )
+
+
+def _attributable(root: Path, git: str, name: str) -> bytes | None:
+    """Return a committed input's bytes, unchanged from `HEAD`; refuse the rest.
+
+    None means the input is absent here and at `HEAD`.
+    """
+    if name == ".git" or Path(name).parts[0] == ".venv":
+        _no(f"{name} changed and is never attributable to the default branch")
+    try:
+        data = _read_regular(root / name, READ_LIMIT)
+    except OSError as error:
+        message = f"{name} is not a regular file under 256 KiB ({error})"
+        _no(message)
+    checkout = _Checkout(root, git)
+    expected = None if data is None else _blob_id(data, checkout.object_format())
+    if checkout.head(name) != expected:
+        _no(f"{name} is not committed unchanged at HEAD")
+    return data
+
+
+def _pinned_repository(root: Path) -> str | None:
+    try:
+        github = tomllib.loads(launcher.read_config(root)).get("github")
+    except (OSError, ValueError):
+        return None
+    pinned = launcher.split_repository(
+        github.get("repository") if isinstance(github, dict) else None
+    )
+    return "/".join(pinned).casefold() if pinned else None
+
+
+def _eligible(root: Path, state: Path, standard: Path) -> Refresh:  # noqa: C901 - R2's ordered conditions
+    _precheck(root, state, standard)
+    try:
+        previous = json.loads((state / launcher.TRUSTED).read_text("utf-8"))
+    except (OSError, ValueError):
+        _no("no trust baseline exists yet")
+    if not isinstance(previous, dict):
+        _no("the trust baseline is unreadable")
+    repository = launcher.refresh_repository(state)
+    if repository is None:
+        _no(NO_NAMED_BASELINE)
+    if _pinned_repository(root) != repository:
+        _no(REPOINTED)
+    if repository not in launcher.reviewed_repositories(root):
+        _no(NOT_REVIEWED)
+    changed = launcher.changed_inputs(root, previous)
+    if not changed:
+        _no(NOTHING_CHANGED)
+    committed = [name for name in changed if not installed_input(name)]
+    configs: dict[str, bytes | None] = {}
+    if committed:
+        git = _git_program(root)
+        unborn = _Checkout(root, git).run("rev-parse", "--verify", "HEAD^{commit}")
+        if unborn.returncode:
+            _no("the checkout has no commit")
+        configs = {name: _attributable(root, git, name) for name in committed}
+    if os.path.lexists(state / launcher.IN_PROGRESS):
+        _no(IN_PROGRESS)
+    owner, name = repository.split("/")
+    reference: dict[str, Any] = {"repository": repository}
+    if configs:
+        try:
+            observed = _observe(root, state, git, (owner, name), configs)
+        except _Unobservable as cause:
+            message = f"could not read {repository}'s default branch: {cause}"
+            _no(message)
+        reference = {k: observed[k] for k in ("repository", "branch", "commit")}
+    return Refresh(
+        eligible=True,
+        repository=repository,
+        reference=reference,
+        observed={
+            path: None if data is None else hashlib.sha256(data).hexdigest()
+            for path, data in configs.items()
+        },
+        previous=previous,
+    )
+
+
+def refresh_eligible(root: Path, state: Path, *, standard: Path) -> Refresh:
+    """Decide, before installing anything, whether a refresh may record; never raises.
+
+    The first failing condition is the reason; the network is reached last.
+    """
+    try:
+        return _eligible(root, state, standard)
+    except _Ineligible as reason:
+        return Refresh(eligible=False, reason=str(reason))
+    except Exception as error:  # noqa: BLE001 - every doubt is "not refreshed"
+        return Refresh(eligible=False, reason=f"internal error: {type(error).__name__}")
+
+
+def _recordable(  # noqa: C901, PLR0912 - every recordable term, in order
+    root: Path,
+    state: Path,
+    verdict: Refresh,
+    record: dict | None,
+    standard: Path,
+) -> dict[str, str]:
+    """Return the snapshot to record after the regeneration; `_no` on any doubt."""
+    if record is None:
+        _no(NO_RECORD)
+    previous = verdict.previous or {}
+    observed = verdict.observed or {}
+    try:
+        held = json.loads((state / launcher.TRUSTED).read_text("utf-8"))
+    except (OSError, ValueError):
+        held = None
+    if held != previous:
+        _no(BASELINE_MOVED)
+    snapshot = launcher.trusted_inputs(root)
+    _check_parents(root, snapshot)
+    files = record["files"]
+    installed = {name for name in files if installed_input(name)}
+    for name in sorted(snapshot.keys() | previous.keys() | installed):
+        if installed_input(name):
+            if not _skipped(name) and files.get(name) != snapshot.get(name):
+                _no(f"{name} is not what setup installed")
+        elif name in observed:
+            if snapshot.get(name) != observed[name]:
+                _no(f"{name} no longer equals the default branch")
+        elif snapshot.get(name) != previous.get(name):
+            _no(f"{name} changed after setup checked it")
+    try:
+        config = tomllib.loads(launcher.read_config(root))
+        expected = launcher.generated_settings(standard, config)
+        actual = _read_regular(root / launcher.SETTINGS, READ_LIMIT)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        _no(SETTINGS_DIFFER)
+    if actual != expected:
+        _no(SETTINGS_DIFFER)
+    if os.path.lexists(root / launcher.TAMPER_MARKER):
+        _no(TAMPERED)
+    if os.path.lexists(state / launcher.IN_PROGRESS):
+        _no(IN_PROGRESS)
+    return snapshot
+
+
+def record_refresh(
+    root: Path,
+    state: Path,
+    verdict: Refresh,
+    record: dict | None,
+    *,
+    standard: Path,
+) -> str:
+    """Record the refreshed baseline and say so; restores everything on any doubt.
+
+    Called after the regeneration, under setup's exclusive lock. Returns the
+    line to print: `refreshed ...` or `not refreshed: <reason>; ...`.
+    """
+    paths = [state / launcher.TRUSTED, state / launcher.TRUSTED_SOURCE]
+    previous = [path.read_bytes() if path.exists() else None for path in paths]
+    reference = dict(verdict.reference or {})
+    try:
+        snapshot = _recordable(root, state, verdict, record, standard)
+        launcher.record_baseline(
+            state,
+            snapshot,
+            source="default-branch",
+            reference=reference,
+            repository=verdict.repository,
+        )
+        if launcher.trusted_inputs(root) != snapshot:
+            _no(CHANGED)
+    except Exception as error:  # noqa: BLE001 - every doubt records nothing
+        for path, data in zip(paths, previous, strict=True):
+            with contextlib.suppress(OSError):
+                if data is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    launcher.write_atomic(path, data)
+        reason = (
+            str(error)
+            if isinstance(error, _Ineligible)
+            else f"internal error: {type(error).__name__}"
+        )
+        return Refresh(eligible=False, reason=reason).line()
+    pair = (snapshot.get("ballast.toml"), snapshot.get(CONFIGS[1]))
+    if all(pair):
+        # Later fresh worktrees of this configuration need no trust either.
+        with contextlib.suppress(OSError):
+            launcher.add_reviewed(root, verdict.repository, pair)  # type: ignore[arg-type]
+    where = (
+        f"{reference['repository']} {reference['branch']} at {reference['commit'][:12]}"
+        if "commit" in reference
+        else f"{reference['repository']} (installed inputs only)"
+    )
+    return (
+        f"refreshed the trust baseline from {where} ({len(snapshot)} workflow "
+        "inputs); regenerated the installation for ballast.toml"
+    )

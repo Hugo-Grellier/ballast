@@ -40,6 +40,14 @@ try:
 finally:
     sys.path.pop(0)
 
+
+class TerminalText(io.StringIO):
+    """A text stream that says it is a terminal: the operator's, in process."""
+
+    def isatty(self) -> bool:
+        return True
+
+
 FAKE_SYSTEMD_RUN = """#!/usr/bin/env python3
 import os, sys
 args = sys.argv[1:]
@@ -448,13 +456,22 @@ class RunCase(WrapperCase):
         )
         return int(self.engine["code"])  # type: ignore[arg-type]
 
-    def main(self, *argv: str) -> tuple[int, str, str]:
-        out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+    def main(self, *argv: str, tty: bool = True) -> tuple[int, str, str]:
+        """run.main in process; by default at the operator's terminal (#147 T028)."""
+        out = TerminalText() if tty else io.StringIO()
+        err = io.StringIO()
+        stdin = TerminalText() if tty else io.StringIO()
+        with (
+            patch.object(sys, "stdin", stdin),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
             code = run.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
-    def start(self, *extra: str, integration: str = "claude") -> tuple[int, str, str]:
+    def start(
+        self, *extra: str, integration: str = "claude", tty: bool = True
+    ) -> tuple[int, str, str]:
         return self.main(
             "start",
             "--mode",
@@ -468,6 +485,7 @@ class RunCase(WrapperCase):
             f"feature_directory={FEATURE}",
             "-i",
             f"integration={integration}",
+            tty=tty,
         )
 
     def run_ids(self) -> list[str]:
@@ -1792,6 +1810,178 @@ class LocalFallbackRecordTests(WrapperCase):
         run.fallback.setting_path(self.root, "run42").write_text("{")
         section = self.mode_section(autonomy.render_run_record(self.root, record))
         self.assertIn("- Local fallback: off\n", section)
+
+
+SESSION = "claude-code:t1"
+NO_SESSION = (
+    "ballast: refusing: without a terminal, name the relaying agent session with "
+    "--relayed-by SESSION; nothing was recorded"
+)
+
+
+class RelayedStartTests(RunCase):
+    """#147 T021 [AC-012, AC-013]: a relayed Autonomous start, and what it refuses."""
+
+    def test_a_relayed_start_is_recorded_as_relayed(self) -> None:
+        self.engine["scenario"] = self.publishable
+        code, out, err = self.start("--relayed-by", SESSION, tty=False)
+        self.assertEqual(code, 0, out + err)
+        ((_, run_id),) = self.launched
+        record = autonomy.read_run(self.root, run_id)
+        start = record["mode_history"][0]
+        self.assertEqual((start["by"], start["relayed_by"]), ("relayed", SESSION))
+        text = autonomy.render_run_record(self.root, record)
+        self.assertIn(f"by agent session {SESSION} (relayed)", text)
+        self.assertNotIn("by operator", text)
+
+    def test_a_terminal_less_start_without_a_session_is_refused(self) -> None:
+        code, _, err = self.start(tty=False)
+        self.assertEqual(code, 2)
+        self.assertEqual(err, NO_SESSION + "\n")
+        self.assertEqual(self.run_ids(), [])
+        self.assertEqual(self.launched, [])
+
+    def test_a_relayed_approval_on_an_autonomous_run_is_refused(self) -> None:
+        """AC-012."""
+        self.engine["scenario"] = self.publishable
+        code, _, err = self.start()
+        self.assertEqual(code, 0, err)
+        ((_, run_id),) = self.launched
+        path = autonomy.run_dir(self.root, run_id) / "human-decisions.jsonl"
+        before = path.read_bytes() if path.exists() else None
+        code, _, err = self.main(
+            "approve", run_id, "final", "--relayed-by", SESSION, tty=False
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            err,
+            "ballast: refusing: an Autonomous run has no human gate before merge; "
+            "nothing was recorded\n",
+        )
+        self.assertEqual(path.read_bytes() if path.exists() else None, before)
+
+    def test_invalid_sessions_and_commands_that_take_none(self) -> None:
+        for session in ("a b", "human-approved", "-x", "a" * 81):
+            with self.subTest(session=session):
+                code, _, err = self.start("--relayed-by", session, tty=False)
+                self.assertEqual(code, 2)
+                self.assertIn("--relayed-by SESSION must match", err)
+        for command in ("status", "publish", "checkpoint"):
+            with self.subTest(command=command):
+                code, _, err = self.main(
+                    command, "run42", "--relayed-by", SESSION, tty=False
+                )
+                self.assertEqual(code, 2)
+                self.assertIn(f"--relayed-by is not accepted by {command}", err)
+        self.assertEqual(self.run_ids(), [])
+
+
+class IssueBranchOfferTests(RunCase):
+    """#147 T036 [AC-027, D-06]: the Issue branch is offered, never switched quietly."""
+
+    def on_develop(self) -> str:
+        self.git("checkout", "-q", "-b", "develop")
+        self.git("branch", "-D", "27-demo-run")
+        return self.git("rev-parse", "HEAD").strip()
+
+    def start_typing(self, typed: str) -> tuple[int, str, str]:
+        out, err = TerminalText(), io.StringIO()
+        with (
+            patch.object(sys, "stdin", TerminalText(typed)),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
+            code = run.main(
+                [
+                    "start",
+                    "--mode",
+                    "autonomous",
+                    "-i",
+                    "issue=27",
+                    "-i",
+                    "idea=Issue #27: demo",
+                    "-i",
+                    f"feature_directory={FEATURE}",
+                    "-i",
+                    "integration=claude",
+                ]
+            )
+        return code, out.getvalue(), err.getvalue()
+
+    def test_typing_switch_creates_the_branch_and_starts(self) -> None:
+        self.on_develop()
+        self.engine["scenario"] = self.publishable
+        code, out, err = self.start_typing("switch feat-27-demo-run\n")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(
+            "autonomous needs a feature branch named for Issue #27; this checkout "
+            "is on develop.",
+            out,
+        )
+        self.assertIn(
+            "Type `switch feat-27-demo-run` to run `git switch -c feat-27-demo-run` "
+            "and continue",
+            out,
+        )
+        self.assertEqual(
+            self.git("rev-parse", "--abbrev-ref", "HEAD").strip(), "feat-27-demo-run"
+        )
+        self.assertEqual(len(self.launched), 1)
+
+    def test_the_one_local_issue_branch_is_proposed(self) -> None:
+        self.git("checkout", "-q", "-b", "develop")
+        code, out, err = self.start_typing("no\n")
+        self.assertEqual(code, 2)
+        self.assertIn("Type `switch 27-demo-run` to run `git switch 27-demo-run`", out)
+        self.assertIn("Switch first: git switch 27-demo-run", err)
+
+    def test_any_other_answer_stops_with_head_unchanged(self) -> None:
+        head = self.on_develop()
+        code, _, err = self.start_typing("yes\n")
+        self.assertEqual(code, 2)
+        self.assertIn(autonomy.BRANCH_REFUSAL, err)
+        self.assertEqual(
+            self.git("rev-parse", "--abbrev-ref", "HEAD").strip(), "develop"
+        )
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), head)
+        self.assertEqual(self.run_ids(), [])
+
+    def test_without_a_terminal_or_relayed_it_prints_the_commands(self) -> None:
+        self.on_develop()
+        for extra in ((), ("--relayed-by", SESSION)):
+            with self.subTest(extra=extra):
+                code, _, err = self.main(
+                    "start",
+                    "--mode",
+                    "autonomous",
+                    *extra,
+                    "-i",
+                    "issue=27",
+                    "-i",
+                    f"feature_directory={FEATURE}",
+                    "-i",
+                    "idea=Issue #27: demo",
+                    tty=not extra,
+                )
+                if not extra:
+                    # At a terminal with nothing typed: the same refusal.
+                    pass
+                self.assertEqual(code, 2)
+                self.assertIn(
+                    "ballast: refusing: not eligible for autonomous: autonomous "
+                    "needs a feature branch named for the Issue without an open PR",
+                    err,
+                )
+                self.assertIn("Switch first: git switch -c feat-27-demo-run", err)
+                self.assertIn(
+                    "Then rerun: ballast run start --mode autonomous -i issue=27 -i "
+                    f"feature_directory={FEATURE}",
+                    err,
+                )
+                self.assertEqual(
+                    self.git("rev-parse", "--abbrev-ref", "HEAD").strip(), "develop"
+                )
+        self.assertEqual(self.run_ids(), [])
 
 
 if __name__ == "__main__":

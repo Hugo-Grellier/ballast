@@ -195,7 +195,10 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
         "action": {"started", "completed", "failed"},
         "status": {"completed", "failed", "paused", "skipped", "running"},
     },
-    "gate": {"choice": {"approve", "reject", "unobserved"}},
+    "gate": {
+        "choice": {"approve", "reject", "unobserved"},
+        "actor": {"operator", "relayed"},
+    },
     "route": {
         "profile": set(RANK),
         "effort": set(EFFORT_RANK),
@@ -302,7 +305,14 @@ FIELDS: dict[str, dict[str, str]] = {
         "exit_code?": "int",
         "log_line": "int",
     },
-    "gate": {"step_id": "label", "choice": "label", "log_line": "int"},
+    # `actor` and `relayed_by`: who decided a Chat gate (#147, ADR-0020).
+    "gate": {
+        "step_id": "label",
+        "choice": "label",
+        "log_line": "int",
+        "actor?": "label",
+        "relayed_by?": "id",
+    },
     "route": {
         "stage": "label",
         "provider?": "label",
@@ -446,6 +456,8 @@ FIELDS: dict[str, dict[str, str]] = {
         "command_digest": "sha",
         "pr_number": "int",
     },
+    # The trust baseline was refreshed from the reviewed default branch (#147).
+    "trust_refresh": {"repository": "label", "branch": "ref", "commit": "oid"},
 }
 # Written only by the runner, its Draft PR checkpoint, its branch
 # synchronization or `ballast run demo`, never by `record`.
@@ -459,6 +471,7 @@ RUNNER_ONLY = frozenset(
         "branch_sync",
         "acceptance_packet",
         "demo_capture",
+        "trust_refresh",
     }
 )
 DEMO_SCENARIO = re.compile(r"[A-Za-z0-9._-]{1,64}")

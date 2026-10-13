@@ -17,6 +17,10 @@ recoverable = true
 # The first `ballast run`, `ledger` or `intake` in a checkout with no
 # installation prepares it from a verified installation on this machine (#15).
 prepare = true
+# Before `ballast run`, `ledger` or `intake`, the global command runs
+# `tools/setup --refresh` when the launcher would refuse changed protected
+# inputs or a pin that differs from the installation (#147, ADR-0020).
+refresh = true
 
 [init]
 # `ballast init` runs this version's tools/init before a project pins it (#13).

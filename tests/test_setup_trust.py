@@ -1639,5 +1639,376 @@ class SharedRulesTests(unittest.TestCase):
         self.assertTrue(re.search(r"^import|^from", doctor, re.MULTILINE))
 
 
+# --- #147: the default-branch refresh ------------------------------------------
+
+MERGED = CONFIG + '\n[agents.permissions]\nextra_allow = ["Bash(make lint)"]\n'
+
+
+class RefreshCase(TrustCase):
+    """A checkout the operator trusted, then a change merged on the default branch."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.trust()
+        self.assertEqual(self.provenance()["repository"], REPO)
+        self.argv.clear()
+
+    def merge(self, files: dict[str, str], *, local: bool = True) -> None:
+        """Put FILES on the default branch; the checkout pulls them when LOCAL."""
+        carried = {
+            "ballast.toml": CONFIG,
+            ".specify/memory/constitution.md": CONSTITUTION,
+            **files,
+        }
+        self.remotes[REPO] = self.stand_in(REPO, carried)
+        if local:
+            for name, text in files.items():
+                (self.root / name).write_text(text)
+            _commit(self.root, "pull")
+
+    def refresh(self) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with ts.fakes(), redirect_stdout(out), ts.redirect_stderr(err):
+            code = ts.setup.cli(["--project", str(self.root), "--refresh"])
+        return code, out.getvalue(), err.getvalue()
+
+    def records(self) -> dict[str, object]:
+        """Everything a refused refresh must leave byte-identical."""
+        state = self.state()
+        reviewed = self.state_home / "ballast" / launcher.REVIEWED
+        return {
+            "trusted": self.baseline(),
+            "source": (state / launcher.TRUSTED_SOURCE).read_bytes(),
+            "reviewed": reviewed.read_bytes(),
+            "installation": ts.tree(self.root / ".ballast"),
+            "specify": ts.tree(self.root / ".specify"),
+        }
+
+    def assert_not_refreshed(
+        self,
+        reason: str,
+        *,
+        network: bool = False,
+        refused: bool = False,
+        launcher_names: str = "ballast trust",
+    ) -> str:
+        before = self.records()
+        code, out, err = self.refresh()
+        self.assertEqual(self.records(), before)
+        if refused:
+            self.assertEqual(code, 2, out + err)
+            self.assertIn(reason, err)
+        else:
+            self.assertEqual(code, 0, err)
+            self.assertTrue(out.startswith("not refreshed: "), out)
+            self.assertIn(reason, out)
+            self.assertIn("the operator reviews and runs ballast trust", out)
+        if not network:
+            self.assertEqual(self.network_commands(), [])
+        refusal = self.refusal()
+        self.assertIsNotNone(refusal)
+        self.assertIn(launcher_names.removeprefix("ballast "), refusal)
+        return out
+
+
+class RefreshEligibilityTests(RefreshCase):
+    """#147 T006 [AC-002, AC-005, AC-006, R2]: nothing recorded, trust still needed."""
+
+    def test_an_uncommitted_edit(self) -> None:
+        self.merge({"ballast.toml": MERGED}, local=False)
+        (self.root / "ballast.toml").write_text(MERGED)
+        self.assert_not_refreshed("ballast.toml is not committed unchanged at HEAD")
+
+    def test_a_branch_commit_absent_on_the_default_branch(self) -> None:
+        (self.root / "ballast.toml").write_text(MERGED)
+        _commit(self.root, "branch only")
+        self.assert_not_refreshed(DIFFERS, network=True)
+
+    def test_a_changed_venv(self) -> None:
+        (self.root / ".venv").mkdir()
+        (self.root / ".venv/pyvenv.cfg").write_text("home = /x\n")
+        self.assert_not_refreshed(".venv/pyvenv.cfg changed and is never attributable")
+
+    def test_repointed_to_an_unreviewed_repository(self) -> None:
+        other = CONFIG.replace(REPO, "other/project")
+        self.merge({"ballast.toml": other})
+        self.assert_not_refreshed(setup_trust.REPOINTED)
+
+    def test_repointed_to_another_reviewed_repository(self) -> None:
+        other = CONFIG.replace(REPO, "other/project")
+        launcher.add_reviewed(self.root, "other/project", digests(other))
+        self.remotes["other/project"] = self.stand_in("other/project")
+        self.merge({"ballast.toml": other})
+        self.assert_not_refreshed(setup_trust.REPOINTED)
+
+    def test_legacy_provenance_without_a_repository(self) -> None:
+        path = self.state() / launcher.TRUSTED_SOURCE
+        record = json.loads(path.read_text())
+        del record["repository"]
+        path.write_text(json.dumps(record, indent=1) + "\n")
+        self.merge({"ballast.toml": MERGED})
+        self.assert_not_refreshed(setup_trust.NO_NAMED_BASELINE)
+
+    def test_offline(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        self.remotes[REPO] = self.base / "missing.git"
+        self.assert_not_refreshed(
+            f"could not read {REPO}'s default branch: offline or unreachable",
+            network=True,
+        )
+
+    def test_a_timeout(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        real = setup_trust._run  # noqa: SLF001
+
+        def run(argv: list[str], **kwargs: Any) -> setup_trust.Result:  # noqa: ANN401
+            if "ls-remote" in argv and "--get-url" not in argv:
+                return setup_trust.Result(-1, timed_out=True)
+            return real(argv, **kwargs)
+
+        with patch.object(setup_trust, "_run", run):
+            self.assert_not_refreshed("timed out", network=True)
+
+    def test_an_insteadof_rewrite(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        mirror = self.stand_in(REPO, {"ballast.toml": MERGED})
+        configuration = self.base / "gitconfig"
+        configuration.write_text(
+            f'[url "file://{mirror}"]\n\tinsteadOf = file://{self.remotes[REPO]}\n'
+        )
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(configuration)}):
+            self.assert_not_refreshed("rewritten by Git configuration", network=True)
+        self.assertFalse(
+            any("--symref" in argv for argv in self.network_commands()),
+            "no network command after the rewrite was seen",
+        )
+
+    def test_a_tamper_marker(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        (self.root / launcher.TAMPER_MARKER).write_text("")
+        self.assert_not_refreshed(launcher.TAMPER_MARKER, refused=True)
+
+    def test_the_in_progress_marker(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        (self.state() / launcher.IN_PROGRESS).write_text("x\n")
+        self.assert_not_refreshed(
+            "an agent step did not finish",
+            refused=True,
+            launcher_names="an agent step did not finish",
+        )
+
+    def test_eligibility_refuses_markers_without_the_network(self) -> None:
+        """AC-006 at the decision itself, whoever calls it."""
+        self.merge({"ballast.toml": MERGED})
+        (self.state() / launcher.IN_PROGRESS).write_text("x\n")
+        found = setup_trust.refresh_eligible(self.root, self.state(), standard=ts.ROOT)
+        self.assertFalse(found.eligible)
+        self.assertIn("marker", found.reason)
+        self.assertEqual(self.network_commands(), [])
+
+    def test_a_symlink_on_the_default_branch(self) -> None:
+        (self.root / "ballast.toml").write_text(MERGED)
+        _commit(self.root, "pull")
+        work = self.base / "linkwork"
+        work.mkdir()
+        ts.git(work, "init", "-q")
+        (work / "blob").write_text(MERGED)
+        blob = ts.git(work, "hash-object", "-w", "blob").strip()
+        ts.git(
+            work, "update-index", "--add", "--cacheinfo", f"120000,{blob},ballast.toml"
+        )
+        (work / ".specify/memory").mkdir(parents=True)
+        (work / ".specify/memory/constitution.md").write_text(CONSTITUTION)
+        ts.git(work, "add", ".specify")
+        ts.git(work, "commit", "-q", "-m", "link")
+        bare = self.base / "link.git"
+        ts.git(self.base, "init", "-q", "--bare", "-b", "main", str(bare))
+        ts.git(work, "push", "-q", f"file://{bare}", "HEAD:refs/heads/main")
+        self.remotes[REPO] = bare
+        self.assert_not_refreshed(DIFFERS, network=True)
+
+    def test_a_submodule_on_the_default_branch(self) -> None:
+        (self.root / "ballast.toml").write_text(MERGED)
+        _commit(self.root, "pull")
+        work = self.base / "modwork"
+        work.mkdir()
+        ts.git(work, "init", "-q")
+        ts.git(
+            work,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{'1' * 40},ballast.toml",
+        )
+        (work / ".specify/memory").mkdir(parents=True)
+        (work / ".specify/memory/constitution.md").write_text(CONSTITUTION)
+        ts.git(work, "add", ".specify")
+        ts.git(work, "commit", "-q", "-m", "module")
+        bare = self.base / "mod.git"
+        ts.git(self.base, "init", "-q", "--bare", "-b", "main", str(bare))
+        ts.git(work, "push", "-q", f"file://{bare}", "HEAD:refs/heads/main")
+        self.remotes[REPO] = bare
+        self.assert_not_refreshed(DIFFERS, network=True)
+
+
+class RefreshRecordTests(RefreshCase):
+    """#147 T007 [AC-001, AC-004]: a merged change refreshes trust and installation."""
+
+    def test_a_merged_extra_allow_rule_is_refreshed(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        self.assertIn("ballast.toml", self.refusal() or "")
+        code, out, err = self.refresh()
+        self.assertEqual(code, 0, err)
+        commit = ts.git(self.remotes[REPO], "rev-parse", "main").strip()
+        count = len(json.loads(self.baseline()))
+        self.assertIn(
+            f"refreshed the trust baseline from {REPO} main at {commit[:12]} "
+            f"({count} workflow inputs); regenerated the installation for "
+            "ballast.toml\n",
+            out,
+        )
+        settings = json.loads(
+            (self.root / ".ballast/spec_workflow/claude-settings.json").read_text()
+        )
+        self.assertIn("Bash(make lint)", settings["permissions"]["allow"])
+        provenance = self.provenance()
+        self.assertEqual(provenance["source"], "default-branch")
+        self.assertEqual(provenance["repository"], REPO)
+        self.assertEqual(
+            provenance["reference"],
+            {"repository": REPO, "branch": "main", "commit": commit},
+        )
+        self.assertIn(
+            digests(MERGED), launcher.reviewed_configurations(self.root, REPO)
+        )
+        self.assertIsNone(self.refusal())
+        status = json.loads(self.launcher("status", "--json").stdout)
+        self.assertEqual(status["baseline_source"], "default-branch")
+        self.assertEqual(status["baseline_commit"], commit)
+        self.assertNotIn("refusing", self.launcher("ledger").stderr)
+
+    def test_a_plain_setup_refreshes_after_a_pull(self) -> None:
+        """FR-001, second alternative: the operator's own setup needs no trust."""
+        self.merge({"ballast.toml": MERGED})
+        # Saved run state makes ADR-0015's fresh-checkout path skip.
+        runs = self.root / ".specify/workflows/runs/r1"
+        runs.mkdir(parents=True)
+        (runs / "state.json").write_text("{}")
+        code, out, err = self.setup()
+        self.assertEqual(code, 0, err)
+        self.assertIn("refreshed the trust baseline from example/project main", out)
+        self.assertNotIn("Review the changed protected inputs", out)
+        self.assertEqual(self.provenance()["source"], "default-branch")
+        self.assertIsNone(self.refusal())
+
+    def test_a_merged_pin_change_is_refreshed(self) -> None:
+        self.merge({"ballast.toml": MERGED.replace('"vA"', '"vB"')})
+        self.assertIn("pinned vB, installed vA", self.refusal() or "")
+        code, out, err = self.refresh()
+        self.assertEqual(code, 0, err)
+        self.assertIn("refreshed the trust baseline", out)
+        self.assertEqual(self.record()["ref"], "vB")
+        self.assertIsNone(self.refusal())
+
+    def test_settings_that_differ_after_the_regeneration_record_nothing(self) -> None:
+        """AC-004: a producer that drifts from the trusted one is caught."""
+        self.merge({"ballast.toml": MERGED})
+        before = (
+            self.baseline(),
+            (self.state() / launcher.TRUSTED_SOURCE).read_bytes(),
+        )
+        real = launcher.generated_settings
+
+        def drifted(standard: Path, config: dict) -> bytes:
+            return real(standard, config) + b" "
+
+        with patch.object(launcher, "generated_settings", drifted):
+            code, out, err = self.refresh()
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"not refreshed: {setup_trust.SETTINGS_DIFFER}", out)
+        self.assertEqual(
+            before,
+            (self.baseline(), (self.state() / launcher.TRUSTED_SOURCE).read_bytes()),
+        )
+        self.assertIn("trust", self.refusal() or "")
+
+    def test_a_failed_regeneration_records_nothing(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        before = (
+            self.baseline(),
+            (self.state() / launcher.TRUSTED_SOURCE).read_bytes(),
+        )
+        ts.FAKE["fail"] = "fetch core"
+        self.addCleanup(ts.FAKE.clear)
+        code, _, err = self.refresh()
+        self.assertEqual(code, ts.setup.EXIT_FAILED, err)
+        self.assertIn("failed", err)
+        self.assertEqual(
+            before,
+            (self.baseline(), (self.state() / launcher.TRUSTED_SOURCE).read_bytes()),
+        )
+        self.assertIsNotNone(self.refusal())
+
+    def test_the_branch_moving_after_observation_names_the_observed_commit(
+        self,
+    ) -> None:
+        self.merge({"ballast.toml": MERGED})
+        observed = ts.git(self.remotes[REPO], "rev-parse", "main").strip()
+        found = setup_trust.refresh_eligible(self.root, self.state(), standard=ts.ROOT)
+        self.assertTrue(found.eligible, found.reason)
+        # The default branch moves on; the record names only what was observed.
+        self.remotes[REPO] = self.stand_in(REPO, {"ballast.toml": MERGED + "# x\n"})
+        installation = ts.setup.Setup(self.root)
+        with ts.fakes(), redirect_stdout(io.StringIO()):
+            installation.attempt(self.state(), installation.build)
+        line = setup_trust.record_refresh(
+            self.root,
+            self.state(),
+            found,
+            installation.recorded(self.state()),
+            standard=ts.ROOT,
+        )
+        self.assertIn(f"at {observed[:12]}", line)
+        self.assertEqual(self.provenance()["reference"]["commit"], observed)
+
+    def test_a_blob_that_no_longer_matches_records_nothing(self) -> None:
+        self.merge({"ballast.toml": MERGED})
+        found = setup_trust.refresh_eligible(self.root, self.state(), standard=ts.ROOT)
+        self.assertTrue(found.eligible, found.reason)
+        before = (
+            self.baseline(),
+            (self.state() / launcher.TRUSTED_SOURCE).read_bytes(),
+        )
+        (self.root / "ballast.toml").write_text(MERGED + "# local\n")
+        installation = ts.setup.Setup(self.root)
+        with ts.fakes(), redirect_stdout(io.StringIO()):
+            installation.attempt(self.state(), installation.build)
+        line = setup_trust.record_refresh(
+            self.root,
+            self.state(),
+            found,
+            installation.recorded(self.state()),
+            standard=ts.ROOT,
+        )
+        self.assertIn("not refreshed: ballast.toml no longer equals the default", line)
+        self.assertEqual(
+            before,
+            (self.baseline(), (self.state() / launcher.TRUSTED_SOURCE).read_bytes()),
+        )
+
+    def test_an_internal_error_is_not_refreshed(self) -> None:
+        with patch.object(launcher, "changed_inputs", side_effect=KeyError("x")):
+            found = setup_trust.refresh_eligible(
+                self.root, self.state(), standard=ts.ROOT
+            )
+        self.assertFalse(found.eligible)
+        self.assertEqual(found.reason, "internal error: KeyError")
+        self.assertEqual(
+            found.line(),
+            "not refreshed: internal error: KeyError; the operator reviews and "
+            "runs ballast trust",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

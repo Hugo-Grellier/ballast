@@ -1404,16 +1404,26 @@ class TrustBoundaryTests(SyncCase):
     def test_protected_input_from_the_base_fails_closed(self) -> None:
         """Q23."""
         self.s.advance_base({"ballast.toml": PIN + "# a new pin\n"})
-        outcome = self.s.check()
+        rerun = f"ballast run step {RUN} plan"
+        outcome = self.s.check(rerun=rerun)
         self.assertBlocked(outcome, "protected-input")
         self.assertEqual(
             outcome.detail, "the base changed protected inputs: ballast.toml"
         )
+        # #147 T011 [FR-002, AC-001]: rerun the command; it refreshes or names trust.
         self.assertEqual(
             outcome.recovery,
-            "review these changes; after a pin change run ballast setup first, then "
-            "ballast trust (operator only)",
+            branch_sync.RECOVERY["protected-input"].format(rerun=rerun),
         )
+        self.assertEqual(
+            branch_sync.RECOVERY["protected-input"],
+            "the synchronized branch changed protected inputs; rerun {rerun}: it "
+            "refreshes trust and the installation from the pinned default branch "
+            "when every change came from it, otherwise the operator reviews them "
+            "and runs ballast trust",
+        )
+        self.assertIn(rerun, outcome.recovery)
+        self.assertNotIn("ballast setup first", outcome.recovery)
         # AC-016: the synchronization is kept, and the launcher now refuses.
         self.assertEqual(self.s.head(), outcome.head_after)
         self.assertIn("# a new pin", (self.s.root / "ballast.toml").read_text())

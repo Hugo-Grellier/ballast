@@ -8,6 +8,7 @@ no usable `bwrap`.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ TOOLS = ROOT / "tools/spec_workflow"
 FIXTURES = ROOT / "tests/fixtures/autonomy"
 sys.path.insert(0, str(TOOLS))
 try:
+    import actor
     import artifacts
     import autonomy
     import draft_pr
@@ -4281,3 +4283,383 @@ class PrTitleTests(unittest.TestCase):
                 self.assertEqual(
                     autonomy.pr_title(issue_title, "2-counter-text"), expected
                 )
+
+
+class _Stream:
+    """A stand-in stream whose `isatty` answers as told."""
+
+    def __init__(self, tty: bool) -> None:  # noqa: FBT001
+        self.tty = tty
+
+    def isatty(self) -> bool:
+        return self.tty
+
+
+TTY_STREAM, PIPE_STREAM = _Stream(True), _Stream(False)  # noqa: FBT003
+
+
+class ActorTests(unittest.TestCase):
+    """#147 T004: the actor rule and the agent command matrix [AC-028, FR-010]."""
+
+    def test_resolve(self) -> None:
+        tty, pipe = TTY_STREAM, PIPE_STREAM
+        self.assertEqual(
+            actor.resolve("claude-code:t1", stdin=pipe, stdout=pipe),
+            actor.Actor("relayed", "claude-code:t1"),
+        )
+        self.assertEqual(actor.resolve(None, stdin=tty, stdout=tty), actor.OPERATOR)
+        # A named session wins over a terminal: a relay never reads as typed.
+        self.assertEqual(actor.resolve("s1", stdin=tty, stdout=tty).by, "relayed")
+        for stdin, stdout in ((pipe, pipe), (tty, pipe), (pipe, tty)):
+            with self.assertRaises(actor.Refused) as caught:
+                actor.resolve(None, stdin=stdin, stdout=stdout)
+            self.assertEqual(
+                str(caught.exception),
+                "without a terminal, name the relaying agent session with "
+                "--relayed-by SESSION; nothing was recorded",
+            )
+
+    def test_invalid_sessions(self) -> None:
+        for session in ("", "a" * 81, "-x", "a b", "human-approved", "x/y"):
+            with self.subTest(session=session), self.assertRaises(actor.Refused):
+                actor.resolve(session, stdin=PIPE_STREAM, stdout=PIPE_STREAM)
+        self.assertEqual(
+            actor.resolve("a" * 80, stdin=PIPE_STREAM, stdout=PIPE_STREAM).relayed_by,
+            "a" * 80,
+        )
+
+    def test_fields_and_label(self) -> None:
+        relayed = actor.Actor("relayed", "claude-code:t1")
+        self.assertEqual(
+            relayed.fields(), {"by": "relayed", "relayed_by": "claude-code:t1"}
+        )
+        self.assertEqual(actor.OPERATOR.fields(), {"by": "operator"})
+        self.assertEqual(
+            actor.label(relayed.fields()), "agent session claude-code:t1 (relayed)"
+        )
+        self.assertEqual(actor.label({"by": "operator"}), "operator")
+
+    def test_decision_free_is_pinned(self) -> None:
+        """AC-028: widening the decision-free set fails until this test changes."""
+        self.assertEqual(
+            actor.DECISION_FREE, {"upstream-sync", "interrupted", "postcondition"}
+        )
+        self.assertLessEqual(actor.DECISION_FREE, set(autonomy.BLOCK_CATEGORIES))
+        self.assertEqual(
+            actor.RELAY_ACCEPTING, ("start", "resume", "continue", "approve")
+        )
+
+    def test_allowed(self) -> None:
+        relayed = actor.Actor("relayed", "s1")
+        self.assertIsNone(actor.allowed("approve", "chat", relayed))
+        self.assertEqual(
+            actor.allowed("approve", "human-gated", relayed),
+            "a human-gated run takes approvals only from the operator at a "
+            "terminal; nothing was recorded",
+        )
+        self.assertEqual(
+            actor.allowed("approve", "autonomous", relayed),
+            "an Autonomous run has no human gate before merge; nothing was recorded",
+        )
+        for mode in autonomy.MODES:
+            self.assertIsNone(actor.allowed("approve", mode, actor.OPERATOR))
+        for command in ("start", "resume", "continue"):
+            self.assertIsNone(actor.allowed(command, "autonomous", relayed))
+        for command in ("status", "publish", "step", "reject", "resolve", "mode"):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    actor.allowed(command, "chat", relayed),
+                    f"--relayed-by is not accepted by {command}",
+                )
+                self.assertIsNone(actor.allowed(command, "chat", actor.OPERATOR))
+        for category in autonomy.BLOCK_CATEGORIES:
+            for command in ("resume", "continue"):
+                with self.subTest(category=category, command=command):
+                    refusal = actor.allowed(
+                        command, "autonomous", relayed, block_category=category
+                    )
+                    if category in actor.DECISION_FREE:
+                        self.assertIsNone(refusal)
+                    else:
+                        self.assertEqual(
+                            refusal,
+                            f"the {category} block carries a decision; relay it "
+                            "only with --ref naming the operator's answer; nothing "
+                            "was recorded",
+                        )
+                    self.assertIsNone(
+                        actor.allowed(
+                            command,
+                            "autonomous",
+                            relayed,
+                            block_category=category,
+                            ref="Issue #147 comment, option 2",
+                        )
+                    )
+        # A category added later carries a decision until classified.
+        self.assertIsNotNone(
+            actor.allowed("resume", "autonomous", relayed, block_category="new-kind")
+        )
+
+    def test_matrix(self) -> None:
+        commands = [row.command for row in actor.MATRIX]
+        self.assertEqual(len(commands), len(set(commands)))
+        self.assertEqual(
+            actor.operator_only(),
+            {
+                "ballast run step",
+                "ballast run reject",
+                "ballast run resolve",
+                "ballast run mode",
+            },
+        )
+        # D-09: trust is agent-runnable outside a step, never operator-reserved.
+        self.assertIn("ballast trust", actor.agent_runnable())
+        approve = next(r for r in actor.MATRIX if r.command == "ballast run approve")
+        self.assertEqual(
+            approve.modes,
+            {"human-gated": "refused", "chat": "yes", "autonomous": "refused"},
+        )
+
+    def test_stdlib_only(self) -> None:
+        """Analyze U3: actor.py imports only the standard library."""
+        tree = ast.parse((TOOLS / "actor.py").read_text(encoding="utf-8"))
+        imports = {
+            name.split(".")[0]
+            for node in ast.walk(tree)
+            for name in (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom)
+                else []
+            )
+        }
+        self.assertLessEqual(
+            imports, {"__future__", "re", "dataclasses", "typing", "autonomy"}
+        )
+
+
+class RelayedRecordSchemaTests(AutonomyCase):
+    """#147 T005: relayed human decisions and mode history [AC-010, AC-013, AC-019]."""
+
+    AT = "2026-10-13T12:00:00+00:00"
+
+    def decision(self, **changes: object) -> dict:
+        return {
+            "kind": "merge-feedback",
+            "ref": "x",
+            "resolves": None,
+            "at": self.AT,
+            "by": "relayed",
+            "relayed_by": "claude-code:t1",
+            **changes,
+        }
+
+    def approval(self, **changes: object) -> dict:
+        return self.decision(
+            **{
+                "kind": "gate-approval",
+                "ref": "relayed approve plan",
+                "gate": "plan",
+                "artifact": f"{FEATURE}/plan.md",
+                "digest": "sha256:" + "a" * 64,
+                "supersedes_provisional": [],
+                **changes,
+            }
+        )
+
+    def test_valid_relayed_decisions(self) -> None:
+        autonomy.validate_human_decision(self.decision())
+        autonomy.validate_human_decision(self.approval())
+        for category in actor.DECISION_FREE:
+            autonomy.validate_human_decision(
+                self.decision(
+                    kind="block-resolution",
+                    ref=autonomy.relayed_resume_ref(category),
+                    block_category=category,
+                )
+            )
+        autonomy.validate_human_decision(
+            self.decision(
+                kind="block-resolution",
+                ref="Issue #147 comment, option 2",
+                block_category="decision",
+            )
+        )
+
+    def test_invalid_relayed_decisions(self) -> None:
+        operator = self.decision(by="operator")
+        cases = {
+            "no session": self.decision(relayed_by=None),
+            "bad session": self.decision(relayed_by="a b"),
+            "approval session": self.decision(relayed_by="human-approved"),
+            "operator with session": operator,
+            "unknown actor": self.decision(by="agent"),
+            "chat text": self.approval(ref="yes, approve plan"),
+            "rejection": self.decision(
+                kind="gate-rejection",
+                ref="no",
+                gate="plan",
+                artifact="a",
+                digest="sha256:x",
+            ),
+            "resolution": self.decision(
+                kind="decision-resolution",
+                ref="resolve DEC-0001",
+                decision="DEC-0001",
+                digest="sha256:x",
+            ),
+            "block without category": self.decision(kind="block-resolution"),
+            "unknown category": self.decision(
+                kind="block-resolution", block_category="nope"
+            ),
+            "decision block without ref": self.decision(
+                kind="block-resolution",
+                ref=autonomy.relayed_resume_ref("decision"),
+                block_category="decision",
+            ),
+            "approval wording": self.decision(
+                kind="block-resolution",
+                ref="approved by the operator",
+                block_category="contradiction",
+            ),
+        }
+        for name, entry in cases.items():
+            with self.subTest(name), self.assertRaises(autonomy.AutonomyError):
+                autonomy.validate_human_decision(entry)
+
+    def test_legacy_operator_records_still_validate(self) -> None:
+        autonomy.validate_human_decision(
+            {"kind": "block-resolution", "ref": "x", "at": self.AT, "by": "operator"}
+        )
+        autonomy.validate_run(fixed_run(), "gold01")
+
+    def test_mode_history(self) -> None:
+        relayed = actor.Actor("relayed", "claude-code:t1")
+        fixed = fixed_run()
+        record = autonomy.new_run(
+            run_id="gold01",
+            feature=FEATURE,
+            issue=ISSUE,
+            workflow="ballast-autonomous",
+            mode="autonomous",
+            integration="claude",
+            risk=fixed["risk"],
+            eligibility=fixed["eligibility"],
+            limits=fixed["limits"],
+            actor=relayed,
+        )
+        start = record["mode_history"][0]
+        self.assertEqual(
+            (start["by"], start["relayed_by"]), ("relayed", "claude-code:t1")
+        )
+        record["status"] = "stopped"
+        autonomy.change_mode(
+            record, "human-gated", reason="r", decision_id="HD-0001", actor=relayed
+        )
+        self.assertEqual(record["mode_history"][-1]["by"], "relayed")
+        for entry in (
+            {**start, "relayed_by": "a b"},
+            {**start, "by": "operator"},
+            {**start, "by": "agent"},
+        ):
+            with self.assertRaises(autonomy.AutonomyError):
+                autonomy.validate_run({**record, "mode_history": [entry]}, "gold01")
+        chat = autonomy.new_run(
+            run_id="chat42",
+            feature=FEATURE,
+            issue=ISSUE,
+            workflow=autonomy.CHAT,
+            mode="chat",
+            integration="claude",
+            start_head="a" * 40,
+            last_manifest="b" * 64,
+            actor=relayed,
+        )
+        with self.assertRaisesRegex(autonomy.AutonomyError, "switch"):
+            autonomy.change_mode(
+                chat, "human-gated", reason="r", decision_id="HD-0001", actor=relayed
+            )
+        self.assertEqual(len(chat["mode_history"]), 1)
+
+    def test_append_human_decisions_chains_all(self) -> None:
+        directory = autonomy.run_dir(self.root, "run42")
+        autonomy.append_human_decision(
+            self.root, "run42", "merge-feedback", "first", resolves=None
+        )
+        relayed = actor.Actor("relayed", "s1")
+        entries = [
+            autonomy.human_decision(
+                "merge-feedback", f"n{index}", resolves=None, actor=relayed
+            )
+            for index in range(3)
+        ]
+        written = autonomy.append_human_decisions(directory, entries)
+        self.assertEqual([e["id"] for e in written], ["HD-0002", "HD-0003", "HD-0004"])
+        read = autonomy.read_human_decisions(self.root, "run42")
+        self.assertEqual(
+            [e["id"] for e in read], ["HD-0001", "HD-0002", "HD-0003", "HD-0004"]
+        )
+        self.assertEqual(read[1]["relayed_by"], "s1")
+
+    def test_crash_before_the_atomic_write_changes_nothing(self) -> None:
+        """AC-019: all lines or none."""
+        directory = autonomy.run_dir(self.root, "run42")
+        autonomy.append_human_decision(
+            self.root, "run42", "merge-feedback", "first", resolves=None
+        )
+        path = directory / "human-decisions.jsonl"
+        before = path.read_bytes()
+        entries = [
+            autonomy.human_decision("merge-feedback", "n", resolves=None)
+            for _ in range(2)
+        ]
+        with (
+            patch.object(autonomy, "_write_bytes", side_effect=OSError("crash")),
+            self.assertRaises(OSError),
+        ):
+            autonomy.append_human_decisions(directory, entries)
+        self.assertEqual(path.read_bytes(), before)
+        with self.assertRaises(autonomy.AutonomyError):
+            autonomy.append_human_decisions(
+                directory, [entries[0], {**entries[1], "by": "nobody"}]
+            )
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_renderers_say_relayed(self) -> None:
+        """AC-010, AC-013: a relay never reads as operator-typed."""
+        run = fixed_run()
+        run["mode_history"][0] |= {"by": "relayed", "relayed_by": "claude-code:t1"}
+        run["resumes"] = [
+            {
+                "decision_id": "HD-0001",
+                "block_category": "interrupted",
+                "block_step": "implement",
+                "reentry_step": "implement",
+                "changed_inputs": [],
+            }
+        ]
+        human = [
+            {
+                "id": "HD-0001",
+                "kind": "block-resolution",
+                "ref": autonomy.relayed_resume_ref("interrupted"),
+                "block_category": "interrupted",
+                "at": self.AT,
+                "by": "relayed",
+                "relayed_by": "claude-code:t1",
+            }
+        ]
+        text = autonomy.render_record(run, golden_decisions(), None, human=human)
+        self.assertIn(
+            "- Mode start: autonomous at 2026-10-03T12:00:00+00:00 by agent "
+            "session claude-code:t1 (relayed)",
+            text,
+        )
+        self.assertIn(
+            f"- HD-0001 at {self.AT} by agent session claude-code:t1 (relayed): "
+            "resolved the interrupted block at implement",
+            text,
+        )
+        self.assertNotIn("by operator", text)

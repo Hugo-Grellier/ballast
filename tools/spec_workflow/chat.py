@@ -15,8 +15,14 @@ interactive step runs under bubblewrap, which hides operator state.
   current human approvals pass when it is requested; each evaluation is
   recorded, so a failed check blocks until a later run of it passes, whatever
   the mode. Nothing stores a "blocked" flag.
-- Gates open only through `approve` with a TTY and typed confirmation, bound
-  to the artifact's digest; agent output never opens one.
+- Gates open only through `approve`, bound to the artifact's digest: at a
+  TTY with one typed confirmation for every gate named, or relayed by the
+  operator's agent session after a yes in chat (`--relayed-by`, ADR-0020),
+  which is recorded and shown as relayed and accepted only while the run's
+  mode is chat. Agent output never opens one; `reject`, `resolve` and `mode`
+  stay at the operator's terminal.
+- `step --headless` runs a Chat step's agent under the Autonomous
+  confinement, so the operator's agent session can advance the run.
 
 See specs/20-chat-mode/contracts/ for the command, phase-graph, step-runner,
 run-record and PR-evidence contracts. Standard library only; runs under
@@ -51,6 +57,7 @@ from typing import TYPE_CHECKING, Any
 # Never read or write checkout bytecode, including for the imports below.
 sys.pycache_prefix = os.devnull
 
+import actor  # noqa: E402
 import agent  # noqa: E402
 import artifacts  # noqa: E402
 import autonomy  # noqa: E402
@@ -73,8 +80,8 @@ DETAIL_LIMIT = 2000
 PATH_LIMIT = 500
 WORKFLOW_ID = "ballast-feature"
 NO_TERMINAL = (
-    "Chat steps need a terminal; use `ballast run mode RUN human-gated` for "
-    "headless steps"
+    "a Chat step needs a terminal; run it headless with --headless, or switch "
+    "the run to human-gated at a terminal"
 )
 # The separator of the summary's and the PR section's identity line.
 SEP = f" {chr(0xB7)} "  # a middle dot
@@ -756,8 +763,13 @@ CHECKS: dict[str, Callable[[artifacts.Feature], object]] = {
 }
 
 
-def _check(run: Run, name: str) -> tuple[bool, str]:  # noqa: PLR0911 - one branch per check kind
-    """Run one check; (passed, detail). Nothing is recorded."""
+def _check(  # noqa: PLR0911 - one branch per check kind
+    run: Run, name: str, *, intent_in_batch: bool = False
+) -> tuple[bool, str]:
+    """Run one check; (passed, detail). Nothing is recorded.
+
+    `intent_in_batch`: an approval batch approves intent before this gate.
+    """
     if name == "scope":
         return _scope_check(run)
     if name == OPEN_VIOLATIONS:
@@ -768,8 +780,10 @@ def _check(run: Run, name: str) -> tuple[bool, str]:  # noqa: PLR0911 - one bran
         return False, "no implementation baseline; approve tasks first"
     if name == "project-checks":
         return _checks_result(run)
+    feature = run.feature()
+    feature.intent_in_batch = intent_in_batch
     try:
-        CHECKS[name](run.feature())
+        CHECKS[name](feature)
     except (
         artifacts.ContractError,
         autonomy.AutonomyError,
@@ -912,9 +926,22 @@ def _requirement(  # noqa: PLR0913 - complexity inherent to one guarded flow
     *,
     record: bool,
     memo: dict | None = None,
+    assumed: frozenset[str] = frozenset(),
+    intent_recorded: bool = False,
 ) -> tuple[bool, str, str | None, str]:
-    """Evaluate one entry or gate requirement; (passed, detail, E-id, name)."""
+    """Evaluate one entry or gate requirement; (passed, detail, E-id, name).
+
+    `assumed` names the gates an approval batch approves before this one;
+    once the batch recorded intent (`intent_recorded`), checks read it.
+    """
     kind, value = item
+    if kind == "approval" and value in assumed:
+        return (
+            True,
+            f"{value} is approved earlier in this batch",
+            None,
+            f"{value}-approval",
+        )
     if kind == "approval":
         name = f"{value}-approval"
         state, decision = approval_state(run, str(value), humans)
@@ -933,7 +960,9 @@ def _requirement(  # noqa: PLR0913 - complexity inherent to one guarded flow
         if memo is not None and name in memo:
             passed, detail = memo[name]
         else:
-            passed, detail = _check(run, name)
+            passed, detail = _check(
+                run, name, intent_in_batch="intent" in assumed and not intent_recorded
+            )
             if memo is not None:
                 memo[name] = (passed, detail)
     if not record:
@@ -981,15 +1010,32 @@ def entry(
     return True, None, None, None
 
 
-def gate_precondition(
-    run: Run, gate: str, *, record: bool = True, memo: dict | None = None
+def gate_precondition(  # noqa: PLR0913 - every batch input explicit
+    run: Run,
+    gate: str,
+    *,
+    record: bool = True,
+    memo: dict | None = None,
+    assumed: frozenset[str] = frozenset(),
+    intent_recorded: bool = False,
 ) -> tuple[bool, str | None, str | None, str | None]:
-    """Return a gate's precondition now; (passed, failing check, E-id, detail)."""
+    """Return a gate's precondition now; (passed, failing check, E-id, detail).
+
+    `assumed`: the gates an approval batch approves before this one count as
+    approved at their current digests (R9).
+    """
     humans = run.humans()
     extra = [("check", OPEN_VIOLATIONS)] if gate in {"implementation", "final"} else []
     for item in [*GATES[gate]["pre"], *extra]:
         passed, detail, event_id, name = _requirement(
-            run, item, "gate", humans, record=record, memo=memo
+            run,
+            item,
+            "gate",
+            humans,
+            record=record,
+            memo=memo,
+            assumed=assumed,
+            intent_recorded=intent_recorded,
         )
         if not passed:
             return False, name, event_id, detail
@@ -1010,11 +1056,16 @@ def allowed_actions(run: Run) -> list[str]:
         elif entry(run, phase, record=False, memo=memo)[0]:
             actions.append(f"ballast run step {run.id} {phase}")
     humans = run.humans()
+    approvable = []
     for gate in GATES:
         if approval_state(run, gate, humans)[0] == "current":
             continue
         if gate_precondition(run, gate, record=False, memo=memo)[0]:
+            approvable.append(gate)
             actions.append(f"ballast run approve {run.id} {gate}")
+    if len(approvable) > 1:
+        # R9: one command and one confirmation for every approvable gate.
+        actions.append(f"ballast run approve {run.id} {' '.join(approvable)}")
     implementation = memo.get("implementation") or _check(run, "implementation")
     if implementation[0]:
         actions.append(f"ballast run checks {run.id}")
@@ -1071,7 +1122,9 @@ def _ledger_snapshot(run: Run) -> None:
     _ledger(run, "snapshot", data, f"runner:snapshot:{uuid.uuid4().hex}")
 
 
-def _ledger_gate(run: Run, gate: str, choice: str) -> None:
+def _ledger_gate(
+    run: Run, gate: str, choice: str, who: actor.Actor = actor.OPERATOR
+) -> None:
     gate_id = GATES[gate]["gate_id"]
     line = _log_line(run)
     _ledger(
@@ -1095,7 +1148,15 @@ def _ledger_gate(run: Run, gate: str, choice: str) -> None:
             "log_line": line,
         },
     )
-    _ledger(run, "gate", {"step_id": gate_id, "choice": choice, "log_line": line})
+    # Who decided: never an operator line for a relayed approval (FR-011).
+    who_fields = {"actor": who.by}
+    if who.relayed_by is not None:
+        who_fields["relayed_by"] = who.relayed_by
+    _ledger(
+        run,
+        "gate",
+        {"step_id": gate_id, "choice": choice, "log_line": line, **who_fields},
+    )
 
 
 def phase_graph() -> dict:
@@ -1358,6 +1419,7 @@ def _new_run(  # noqa: PLR0913 - one record, every field explicit
     decision_id: str | None = None,
     idea: str | None = None,
     model: str | None = None,
+    who: actor.Actor = actor.OPERATOR,
 ) -> Run:
     match = autonomy.FEATURE.fullmatch(feature)
     if match is None:
@@ -1379,6 +1441,7 @@ def _new_run(  # noqa: PLR0913 - one record, every field explicit
         start_head=_head(root),
         last_manifest=digest,
         decision_id=decision_id,
+        actor=who,
     )
     record["idea"] = idea
     record["model"] = model
@@ -1386,8 +1449,11 @@ def _new_run(  # noqa: PLR0913 - one record, every field explicit
     return Run(root, record)
 
 
-def start(root: Path, options: list[str]) -> int:
-    """`ballast run start --mode chat`: record, synchronize, summarize; no agent."""
+def start(root: Path, options: list[str], who: actor.Actor = actor.OPERATOR) -> int:
+    """`ballast run start --mode chat`: record, synchronize, summarize; no agent.
+
+    `who` started it: the operator, or a relaying agent session (ADR-0020).
+    """
     inputs = _start_inputs(options)
     feature = inputs.get("feature_directory", "")
     if not autonomy.FEATURE.fullmatch(feature):
@@ -1412,6 +1478,7 @@ def start(root: Path, options: list[str]) -> int:
         review=review,
         idea=inputs.get("idea"),
         model=model,
+        who=who,
     )
     _out(
         f"Chat run {run.id}: {feature}, authoring {integration}, review by {review}"
@@ -1781,10 +1848,21 @@ def _refuse(
     return Refused(code, reason)
 
 
-def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
-    root: Path, run_id: str, phase: str, kind: str | None, options: list[str]
+def run_step(  # noqa: C901, PLR0912, PLR0913, PLR0915 - the lifecycle, in order
+    root: Path,
+    run_id: str,
+    phase: str,
+    kind: str | None,
+    options: list[str],
+    *,
+    headless: bool = False,
 ) -> int:
-    """`ballast run step RUN PHASE`: the step-runner lifecycle (contracts)."""
+    """`ballast run step RUN PHASE [--headless]`: the step-runner lifecycle.
+
+    In chat mode a step is interactive at the operator's terminal, or with
+    `headless` runs under the Autonomous confinement (ADR-0020), after which
+    the next pending gates and the batch approval are printed.
+    """
     if phase not in PHASES:
         raise Refused(
             EXIT_REFUSED, f"unknown phase {phase!r}; phases: {', '.join(PHASES)}"
@@ -1802,7 +1880,8 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
             raise _refuse(
                 run, "step", f"run {run.id} is published", EXIT_REFUSED, phase=phase
             )
-        interactive = run.mode == "chat"
+        interactive = run.mode == "chat" and not headless
+        confined = run.mode == "chat" and headless
         if interactive and not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise _refuse(run, "step", NO_TERMINAL, EXIT_REFUSED, phase=phase)
         rerun = f"ballast run step {run.id} {phase}" + (
@@ -1858,12 +1937,14 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
                 EXIT_REFUSED,
                 phase=phase,
             )
-        if interactive:
+        if interactive or confined:
             reason = (
                 None
                 if shutil.which(integration)
                 else f"{integration} CLI not found on PATH"
             )
+            if confined and reason is None and not shutil.which("bwrap"):
+                reason = "bwrap is not on PATH, and a headless Chat step runs confined"
             reason = reason or _confinable(root, integration)
             if reason is not None:
                 refusal = _integration_refusal(root, integration, reason)
@@ -1953,17 +2034,40 @@ def run_step(  # noqa: C901, PLR0912, PLR0915 - the lifecycle, in order
                 settings,
             )
         else:
-            result = _headless(run, integration, prompt, name)
+            # Human-gated keeps today's call; a Chat run's headless step confines.
+            confine = {"confined": True} if confined else {}
+            result = _headless(run, integration, prompt, name, **confine)
         # Steps 9 to 12 run to the end: a second signal is ignored.
         numbers = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
         previous = {number: signal.signal(number, signal.SIG_IGN) for number in numbers}
         try:
-            return _finish(
+            code = _finish(
                 run, name, phase, kind, start_entry, result, protected, log_dir
             )
         finally:
             for number, handler in previous.items():
                 signal.signal(number, handler)
+    if confined and code == EXIT_OK:
+        _next_gates(run)
+    return code
+
+
+def _next_gates(run: Run) -> None:
+    """After a headless Chat step: the gates now pending and the batch command."""
+    run.record = autonomy.read_run(run.root, run.id)
+    run.changed()
+    humans = run.humans()
+    pending = [
+        gate
+        for gate in GATES
+        if approval_state(run, gate, humans)[0] in {"pending", "stale"}
+        and gate_precondition(run, gate, record=False)[0]
+    ]
+    if not pending:
+        _out("No gate is ready for approval yet.")
+        return
+    _out(f"Ready for approval: {', '.join(pending)}")
+    _out(f"Next: ballast run approve {run.id} {' '.join(pending)}")
 
 
 def _interactive(  # noqa: PLR0913, PLR0917 - one session, every input explicit
@@ -2038,13 +2142,19 @@ def _write_settings(log_dir: Path) -> None:
         os.close(log_fd)
 
 
-def _headless(run: Run, integration: str, prompt: str, name: str) -> dict:
-    """Run the phase headless through agent.py (human-gated mode).
+def _headless(
+    run: Run, integration: str, prompt: str, name: str, *, confined: bool = False
+) -> dict:
+    """Run the phase headless through agent.py.
 
+    Human-gated mode keeps today's argv; a Chat run's `--headless` step passes
+    `--confined`, so agent.py applies the Autonomous confinement (R10).
     agent.py writes its logs to the step's own directory, `name`.
     """
     program = HERE / "bin" / integration
     args = ["-p", prompt] if integration == "claude" else ["exec", prompt]
+    if confined:
+        args = [agent.CONFINED, *args]
     env = {
         **{k: v for k, v in os.environ.items() if k not in draft_pr.TOKEN_VARIABLES},
         "BALLAST_SPEC_WORKFLOW": "1",
@@ -2074,7 +2184,7 @@ def _headless(run: Run, integration: str, prompt: str, name: str) -> dict:
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
-    if code == agent.EXIT_INTERRUPTED:
+    if code in {agent.EXIT_INTERRUPTED, agent.EXIT_USAGE_LIMIT}:
         interrupted = True
     marker = launcher.state_dir(run.root) / launcher.IN_PROGRESS
     return {
@@ -2246,7 +2356,7 @@ def _mode_history(record: dict) -> str:
         reason = f": {_safe(change['reason'])}" if change.get("reason") else ""
         parts.append(
             f"{change['action']} {change['mode']} at {change['at']} "
-            f"by {change['by']}{extra}{reason}"
+            f"by {actor.label(change)}{extra}{reason}"
         )
     return "; ".join(parts)
 
@@ -2332,6 +2442,8 @@ def summary(run: Run) -> str:  # noqa: C901, PLR0912, PLR0915 - seven fixed sect
             text = "approved, current" + (
                 f" ({decision['id']})" if decision else " (registered intent block)"
             )
+            if decision and decision.get("by") == "relayed":
+                text += f", relayed by agent session {decision['relayed_by']}"
         elif state == "stale":
             change = next(
                 (
@@ -2485,113 +2597,305 @@ def _require_no_step(run: Run, command: str) -> None:
         )
 
 
-def _gate_decision(  # noqa: C901, PLR0912 - complexity inherent to one guarded flow
-    root: Path, run_id: str, gate: str, choice: str, reason: str | None
-) -> int:
-    command = "approve" if choice == "approve" else "reject"
+def _gate_ready(
+    run: Run, gate: str, command: str, assumed: frozenset[str] = frozenset()
+) -> str:
+    """Check a gate's precondition and return its digest, or raise the refusal."""
+    passed, failing, _, detail = gate_precondition(
+        run, gate, record=False, assumed=assumed
+    )
+    if not passed:
+        _, _, event_id, _ = _requirement_event(run, failing, detail, gate)
+        raise _refuse(
+            run,
+            command,
+            f"the {gate} gate's precondition fails: {failing} ({event_id}): "
+            f"{_first_line(str(detail))}",
+            EXIT_BLOCKED,
+            gate=gate,
+            failed_check=event_id,
+        )
+    digest = gate_digest(run, gate)
+    if digest is None:
+        raise _refuse(
+            run,
+            command,
+            f"{gate_artifact(run, gate)} is missing",
+            EXIT_BLOCKED,
+            gate=gate,
+        )
+    return digest
+
+
+def _supersedes(run: Run, gate: str, humans: list[dict]) -> list[str]:
+    """Return the continued source's provisional decisions an approval supersedes."""
+    replaced = superseding(run, humans)
+    return [
+        entry["id"]
+        for entry in autonomy.current(_source_decisions(run), GATES[gate]["point"])
+        if entry["id"] not in replaced
+    ]
+
+
+def _reject(root: Path, run_id: str, gate: str, reason: str | None) -> int:
     if gate not in GATES:
         raise Refused(EXIT_REFUSED, f"unknown gate {gate!r}; gates: {', '.join(GATES)}")
-    if choice == "reject" and not (reason and reason.strip()):
+    if not (reason and reason.strip()):
         raise Refused(EXIT_REFUSED, "reject needs --reason TEXT")
-    _terminal(command)
+    _terminal("reject")
     run = load(root, run_id)
-    with Lock(run, f"{command} {gate}"):
+    with Lock(run, f"reject {gate}"):
         late_close(run)
         out_of_step(run)
-        _require_no_step(run, command)
-        passed, failing, _, detail = gate_precondition(run, gate, record=False)
-        if not passed:
-            _, _, event_id, _ = _requirement_event(run, failing, detail, gate)
-            raise _refuse(
-                run,
-                command,
-                f"the {gate} gate's precondition fails: {failing} ({event_id}): "
-                f"{_first_line(str(detail))}",
-                EXIT_BLOCKED,
-                gate=gate,
-                failed_check=event_id,
-            )
-        digest = gate_digest(run, gate)
-        if digest is None:
-            raise _refuse(
-                run,
-                command,
-                f"{gate_artifact(run, gate)} is missing",
-                EXIT_BLOCKED,
-                gate=gate,
-            )
+        _require_no_step(run, "reject")
+        digest = _gate_ready(run, gate, "reject")
         humans = run.humans()
-        point = GATES[gate]["point"]
-        replaced = superseding(run, humans)
-        supersedes = (
-            [
-                entry["id"]
-                for entry in autonomy.current(_source_decisions(run), point)
-                if entry["id"] not in replaced
-            ]
-            if choice == "approve"
-            else []
-        )
         _out(f"Gate: {gate}")
         _out(f"Artifact: {gate_artifact(run, gate)}")
         _out(f"Digest: {digest}")
-        if supersedes:
-            _out(
-                f"Supersedes agent-provisional decisions: {', '.join(supersedes)} "
-                "(they stay labeled agent-provisional)"
-            )
-        if not _confirm(f"{command} {gate}"):
-            _out(
-                f"Not {'approved' if choice == 'approve' else 'rejected'}; "
-                "nothing was recorded."
-            )
+        if not _confirm(f"reject {gate}"):
+            _out("Not rejected; nothing was recorded.")
             return EXIT_REFUSED
         run.changed()
         if gate_digest(run, gate) != digest:
             raise _refuse(
                 run,
-                command,
+                "reject",
                 f"{gate_artifact(run, gate)} changed while you confirmed",
                 EXIT_REFUSED,
                 gate=gate,
             )
         for item in GATES[gate]["pre"]:
             _requirement(run, item, "gate", humans, record=True)
-        if choice == "approve" and gate == "intent":
-            artifacts.record_intent(run.feature())
-            run.changed()
-        if choice == "approve":
-            decision = run.human(
-                "gate-approval",
-                f"approve {gate}",
-                gate=gate,
-                artifact=gate_artifact(run, gate),
-                digest=digest,
-                supersedes_provisional=supersedes,
-            )
-        else:
-            decision = run.human(
-                "gate-rejection",
-                str(reason),
-                gate=gate,
-                artifact=gate_artifact(run, gate),
-                digest=digest,
-            )
-        if choice == "approve" and gate == "tasks":
-            run.record["baseline"] = {
-                "tree": artifacts.worktree_tree(root),
-                "at": _now(),
-                "approval": decision["id"],
-            }
-        if choice == "approve" and gate == "final" and run.record["status"] == "active":
-            autonomy.set_status(run.record, "completed")
+        decision = run.human(
+            "gate-rejection",
+            str(reason),
+            gate=gate,
+            artifact=gate_artifact(run, gate),
+            digest=digest,
+        )
         run.record["last_manifest"] = current_manifest(run)
         run.save()
-        _ledger_gate(run, gate, choice)
+        _ledger_gate(run, gate, "reject")
         archive(run)
-        verb = "approved" if choice == "approve" else "rejected"
-        _out(f"Recorded {decision['id']}: {gate} {verb} at {digest}")
+        _out(f"Recorded {decision['id']}: {gate} rejected at {digest}")
     return EXIT_OK
+
+
+def _batch(gates: list[str], through: str | None) -> list[str]:
+    """Validate the named gates (or `--through`); refuses before anything is read."""
+    for gate in [*gates, *([through] if through else [])]:
+        if gate not in GATES:
+            raise Refused(
+                EXIT_REFUSED, f"unknown gate {gate!r}; gates: {', '.join(GATES)}"
+            )
+    if through is not None and gates:
+        raise Refused(
+            EXIT_REFUSED, "--through and explicitly named gates are mutually exclusive"
+        )
+    order = list(GATES)
+    indexes = [order.index(gate) for gate in gates]
+    if indexes != sorted(set(indexes)):
+        raise Refused(
+            EXIT_REFUSED,
+            f"name gates once each, in the order {', '.join(order)}; nothing was "
+            "recorded",
+        )
+    return gates
+
+
+def _select(run: Run, gates: list[str], through: str | None) -> list[str]:
+    """Return the gates a batch approves: named, pending or stale ones (R9)."""
+    humans = run.humans()
+    if through is not None:
+        order = list(GATES)
+        selected = [
+            gate
+            for gate in order[: order.index(through) + 1]
+            if approval_state(run, gate, humans)[0] in {"pending", "stale"}
+        ]
+        if not selected:
+            raise _refuse(
+                run,
+                "approve",
+                f"no gate through {through} is pending",
+                EXIT_REFUSED,
+            )
+        return selected
+    if len(gates) > 1:
+        for gate in gates:
+            if approval_state(run, gate, humans)[0] not in {"pending", "stale"}:
+                raise _refuse(
+                    run, "approve", f"{gate} is not pending", EXIT_REFUSED, gate=gate
+                )
+    return gates
+
+
+def _show_batch(run: Run, shown: list[tuple[str, str, list[str]]]) -> None:
+    """Show every decision of an approval with its artifact and digest."""
+    if len(shown) == 1:
+        gate, digest, _ = shown[0]
+        _out(f"Gate: {gate}")
+        _out(f"Artifact: {gate_artifact(run, gate)}")
+        _out(f"Digest: {digest}")
+    else:
+        _out(f"Approving {len(shown)} decisions in run {run.id}:")
+        width = max(len(gate) for gate, _, _ in shown)
+        for gate, digest, _ in shown:
+            _out(f"  {gate:<{width}}  {gate_artifact(run, gate)}  {digest}")
+    for _, _, supersedes in shown:
+        if supersedes:
+            _out(
+                f"Supersedes agent-provisional decisions: {', '.join(supersedes)} "
+                "(they stay labeled agent-provisional)"
+            )
+
+
+def _same_digests(run: Run, shown: list[tuple[str, str, list[str]]], when: str) -> None:
+    """Refuse, recording nothing, when a shown digest moved."""
+    run.changed()
+    for gate, digest, _ in shown:
+        if gate_digest(run, gate) != digest:
+            raise _refuse(
+                run,
+                "approve",
+                f"{gate_artifact(run, gate)} changed {when}",
+                EXIT_REFUSED,
+                gate=gate,
+            )
+
+
+def _record_requirements(
+    run: Run, gate: str, humans: list[dict], assumed: frozenset[str]
+) -> None:
+    """Record a gate's requirement checks against the recorded intent; refuse a failure.
+
+    An earlier gate of the batch counts as approved; every check reads the
+    checkout as it now is, so nothing assumed reaches a recorded decision.
+    """
+    for item in GATES[gate]["pre"]:
+        if item[0] == "approval" and item[1] in assumed:
+            continue
+        passed, detail, event_id, name = _requirement(
+            run, item, "gate", humans, record=True, intent_recorded=True
+        )
+        if not passed:
+            raise _refuse(
+                run,
+                "approve",
+                f"the {gate} gate's precondition fails: {name} ({event_id}): "
+                f"{_first_line(str(detail))}",
+                EXIT_BLOCKED,
+                gate=gate,
+                failed_check=event_id,
+            )
+
+
+def approve_many(  # noqa: C901 - one guarded, all-or-nothing flow
+    root: Path,
+    run_id: str,
+    gates: list[str],
+    through: str | None = None,
+    who: actor.Actor = actor.OPERATOR,
+) -> int:
+    """`ballast run approve RUN GATE... | --through GATE`: all gates, or none (R9).
+
+    Under one run lock it validates every gate, shows each decision with its
+    artifact and digest, takes one typed line (or, relayed in a Chat run, no
+    prompt), re-reads every digest, and writes every human decision in one
+    atomic rewrite. A single gate keeps today's prompt.
+    """
+    gates = _batch(gates, through)
+    if who.by == "operator":
+        _terminal("approve")
+    run = load(root, run_id)
+    with Lock(run, f"approve {' '.join(gates) or 'through ' + str(through)}"):
+        late_close(run)
+        out_of_step(run)
+        _require_no_step(run, "approve")
+        if who.by == "relayed" and run.mode != "chat":
+            raise _refuse(run, "approve", actor.HUMAN_GATED, EXIT_REFUSED)
+        selected = _select(run, gates, through)
+        humans = run.humans()
+        shown: list[tuple[str, str, list[str]]] = []
+        for index, gate in enumerate(selected):
+            digest = _gate_ready(run, gate, "approve", frozenset(selected[:index]))
+            shown.append((gate, digest, _supersedes(run, gate, humans)))
+        if who.by == "operator":
+            _show_batch(run, shown)
+            if not _confirm("approve " + " ".join(selected)):
+                _out(
+                    "Not approved; the typed text did not match; nothing was recorded."
+                )
+                return EXIT_REFUSED
+        _same_digests(run, shown, "while you confirmed")
+        _record_all_or_none(run, shown, selected, humans, who)
+        entries = [
+            autonomy.human_decision(
+                "gate-approval",
+                f"relayed approve {gate}" if who.by == "relayed" else f"approve {gate}",
+                resolves=None,
+                extra={
+                    "gate": gate,
+                    "artifact": gate_artifact(run, gate),
+                    "digest": digest,
+                    "supersedes_provisional": supersedes,
+                },
+                actor=who,
+            )
+            for gate, digest, supersedes in shown
+        ]
+        decisions = autonomy.append_human_decisions(run.dir, entries)
+        for (gate, _, _), decision in zip(shown, decisions, strict=True):
+            if gate == "tasks":
+                run.record["baseline"] = {
+                    "tree": artifacts.worktree_tree(root),
+                    "at": _now(),
+                    "approval": decision["id"],
+                }
+            if gate == "final" and run.record["status"] == "active":
+                autonomy.set_status(run.record, "completed")
+        run.record["last_manifest"] = current_manifest(run)
+        run.save()
+        for gate, _, _ in shown:
+            _ledger_gate(run, gate, "approve", who)
+        archive(run)
+        label = (
+            f", relayed by agent session {who.relayed_by}"
+            if who.by == "relayed"
+            else ""
+        )
+        for (gate, digest, _), decision in zip(shown, decisions, strict=True):
+            _out(f"Recorded {decision['id']}: {gate} approved at {digest}{label}")
+    return EXIT_OK
+
+
+def _record_all_or_none(
+    run: Run,
+    shown: list[tuple[str, str, list[str]]],
+    selected: list[str],
+    humans: list[dict],
+    who: actor.Actor,
+) -> None:
+    """Record intent, then check every gate; a refusal restores intent.md (AC-019)."""
+    intent = run.feature().file("intent.md")
+    before = intent.read_bytes() if intent.exists() else None
+    try:
+        if "intent" in selected:
+            artifacts.record_intent(
+                run.feature(), who.relayed_by if who.by == "relayed" else None
+            )
+            # Recording the intent must not move a digest the operator saw.
+            _same_digests(run, shown, "while recording intent")
+        for index, (gate, _, _) in enumerate(shown):
+            _record_requirements(run, gate, humans, frozenset(selected[:index]))
+    except BaseException:
+        if "intent" in selected:
+            if before is None:
+                intent.unlink(missing_ok=True)
+            else:
+                intent.write_bytes(before)
+        raise
 
 
 def _requirement_event(
@@ -2611,14 +2915,16 @@ def _requirement_event(
     return False, str(detail), event["id"], str(name)
 
 
-def approve(root: Path, run_id: str, gate: str) -> int:
+def approve(
+    root: Path, run_id: str, gate: str, who: actor.Actor = actor.OPERATOR
+) -> int:
     """`ballast run approve RUN GATE`: a human approval bound to a digest."""
-    return _gate_decision(root, run_id, gate, "approve", None)
+    return approve_many(root, run_id, [gate], None, who)
 
 
 def reject(root: Path, run_id: str, gate: str, reason: str | None) -> int:
-    """`ballast run reject RUN GATE --reason TEXT`: a human rejection."""
-    return _gate_decision(root, run_id, gate, "reject", reason)
+    """`ballast run reject RUN GATE --reason TEXT`: a human rejection, never relayed."""
+    return _reject(root, run_id, gate, reason)
 
 
 def resolve(root: Path, run_id: str, decision: str) -> int:
@@ -2764,11 +3070,15 @@ def change_mode(root: Path, run_id: str, target: str, reason: str | None) -> int
         raise Refused(EXIT_REFUSED, "mode needs --reason TEXT")
     if not autonomy.RUN_ID.fullmatch(run_id or ""):
         raise Refused(EXIT_REFUSED, "a valid RUN_ID is required")
+    # ADR-0020: switching a human-gated run to chat would open relayed
+    # approvals on it, so the operator types the switch at a terminal.
+    _terminal("mode")
     try:
         record = autonomy.find_run(root, run_id)
     except autonomy.AutonomyError as error:
         raise Refused(EXIT_REFUSED, f"run {run_id}: {error}") from error
     if record is None:
+        _confirm_mode(run_id, target)
         return _link_engine_run(root, run_id, target, reason)
     if record["workflow"] != autonomy.CHAT:
         message = f"run {run_id} is a {record['workflow']} run; " + (
@@ -2788,6 +3098,7 @@ def change_mode(root: Path, run_id: str, target: str, reason: str | None) -> int
             raise _refuse(
                 run, "mode", f"run {run.id} is already in {target} mode", EXIT_REFUSED
             )
+        _confirm_mode(run.id, target)
         decision = autonomy.append_human_decision(
             root,
             run.id,
@@ -2814,6 +3125,14 @@ def change_mode(root: Path, run_id: str, target: str, reason: str | None) -> int
                 "gates still need `ballast run approve`."
             )
     return EXIT_OK
+
+
+def _confirm_mode(run_id: str, target: str) -> None:
+    """Require the typed `mode RUN TARGET`; anything else records nothing."""
+    if not _confirm(f"mode {run_id} {target}"):
+        raise Refused(
+            EXIT_REFUSED, "the typed text did not match; the mode is unchanged"
+        )
 
 
 def _engine_state(root: Path, run_id: str) -> dict:
@@ -2896,7 +3215,9 @@ def _link_engine_run(root: Path, run_id: str, target: str, reason: str) -> int:
     return EXIT_OK
 
 
-def continue_run(root: Path, source: dict, decision: dict) -> int:
+def continue_run(
+    root: Path, source: dict, decision: dict, who: actor.Actor = actor.OPERATOR
+) -> int:
     """Run steps 4 to 6 of `continue --mode chat`: the linked Chat run (AC-022).
 
     `run.py` has already recorded the human decision, lowered the source to
@@ -2910,6 +3231,7 @@ def continue_run(root: Path, source: dict, decision: dict) -> int:
         continues=source["run_id"],
         reason=decision["kind"],
         decision_id=decision["id"],
+        who=who,
     )
     _ledger(run, "run", _archive_definition(run), "runner:run")
     outcome = synchronize(run, **_inherited_pin(run))
@@ -2976,8 +3298,9 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
         "",
         (
             f"Mode: {run.mode} (driven by the operator; every gate decision "
-            "below was made by the operator through `ballast run approve` or "
-            "`reject`, and publishing needs every gate's latest approval "
+            "below was made through `ballast run approve` or `reject`, by the "
+            "operator at a terminal or relayed by the operator's agent session "
+            "as marked, and publishing needs every gate's latest approval "
             "current). "
             f"History: {_mode_history(record)}."
         ),
@@ -3034,7 +3357,12 @@ def publish_section(root: Path, record: dict, *, short: bool = False) -> str:  #
             # ENG-003: say whether this approval is the gate's current one.
             state, latest = states[entry["gate"]]
             currency = state if latest and latest["id"] == entry["id"] else "superseded"
-            decision = f"{entry['id']} approved by the operator ({currency})"
+            who = (
+                f"relayed by agent session {entry['relayed_by']}"
+                if entry.get("by") == "relayed"
+                else "approved by the operator"
+            )
+            decision = f"{entry['id']} {who} ({currency})"
         elif entry["kind"] == "gate-rejection":
             decision = f"{entry['id']} rejected: {autonomy.neutralize(entry['ref'])}"
         else:

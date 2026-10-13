@@ -21,6 +21,12 @@ it also refuses a run that is not active, enforces the wall-time and step
 limits (EXIT_LIMIT), runs the agent under bubblewrap (autonomy.confined_argv),
 and records which drafts the step created, so a recorder attributes each draft
 to the step that wrote it. Human-gated runs keep the argv above unchanged.
+`--confined` (first argument, before the CLI's own) gives a Chat run's
+headless step the same confinement without an Autonomous record (#147).
+Every step's environment carries BALLAST_AGENT_STEP=1, defence in depth
+only: the in-progress marker is what refuses `ballast` commands meanwhile.
+A failed attempt that hit the CLI's usage limit, and whose processes were
+confirmed stopped, exits EXIT_USAGE_LIMIT, a resumable stop.
 
 Local fallback (#23, fallback.py): only when the operator turned it on for the
 run (`fallback.json` in its operator directory), a step whose first attempt
@@ -67,6 +73,7 @@ import artifacts  # noqa: E402
 import autonomy  # noqa: E402
 import fallback  # noqa: E402
 from launcher import (  # noqa: E402
+    AGENT_STEP,
     EXIT_REFUSED,
     IN_PROGRESS,
     SCOPE,
@@ -133,7 +140,12 @@ EXIT_BLOCKED = 3
 EXIT_TAMPERED = 4
 EXIT_LIMIT = 5
 EXIT_AUTH = 6
+# The agent CLI hit its provider usage limit and its processes were confirmed
+# stopped: a resumable `interrupted` stop (#147, D-07).
+EXIT_USAGE_LIMIT = 7
 EXIT_USAGE = 2
+# A headless Chat step runs under the Autonomous confinement (#147, ADR-0020).
+CONFINED = "--confined"
 EXIT_INTERRUPTED = 130
 PR_SET_CHILD_SUBREAPER = 36
 # Python cannot read or write bytecode under a file, so this prefix makes every
@@ -861,7 +873,7 @@ def run_interactive(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one session, eve
         systemd_run, scope_options = _containment(root)
     except (OSError, ValueError, autonomy.AutonomyError) as error:
         raise LaunchError(str(error)) from error
-    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
+    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE, AGENT_STEP: "1"}
     git, _ = autonomy.trusted_program("git", root)
     if git is not None:
         env["BALLAST_GIT"] = git
@@ -1203,6 +1215,9 @@ def main() -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded step, 
         sys.stderr.write("invoke through .ballast/spec_workflow/bin/{claude,codex}\n")
         return EXIT_USAGE
     args = sys.argv[1:]
+    confined = args[:1] == [CONFINED]
+    if confined:
+        args = args[1:]
     run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "")
     setting = _fallback_setting(Path.cwd(), run_id)
     real: str | None = None
@@ -1223,6 +1238,7 @@ def main() -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded step, 
     prompt = args[1]
     try:
         found = _autonomous_record(root, run_id) if RUN_ID.fullmatch(run_id) else None
+        chat_feature = _confined_chat(root, run_id) if confined else None
     except Refusal as refusal:
         return _refuse_step(root, run_id, refusal)
     if found is not None:
@@ -1267,6 +1283,7 @@ def main() -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded step, 
         observe = (
             {"evidence": first, "feature": feature} if setting is not None else None
         )
+        seen: dict = {}
         exit_code, entry = _attempt(
             root,
             integration=integration,
@@ -1275,7 +1292,15 @@ def main() -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded step, 
             record=record,
             prompt=prompt,
             observe=observe,
+            seen=seen,
+            confine=chat_feature,
         )
+        if observe is None and _usage_limited(integration, exit_code, seen):
+            # R13: confirmed stopped, marker removed: resumable, not failed.
+            sys.stderr.write(f"spec workflow agent wrapper: {USAGE_LIMITED}\n")
+            exit_code = EXIT_USAGE_LIMIT
+            if entry:
+                entry |= {"exit_code": exit_code, "reason": USAGE_LIMITED}
         if observe is not None:
             assert setting is not None  # noqa: S101 - observe exists only then
             cause = fallback.classify(
@@ -1348,6 +1373,49 @@ def main() -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded step, 
             n=attempt, total=autonomy.DRAFT_RETRIES, message=refused
         )
         attempt += 1
+
+
+USAGE_LIMITED = "the agent CLI hit its provider usage limit"
+
+
+def _usage_limited(integration: str, exit_code: int, seen: dict) -> bool:
+    """Whether a failed attempt hit a usage limit and was confirmed stopped (R13).
+
+    Classified like the local fallback's primary attempt, whether or not a
+    fallback is configured; only a contained, untampered attempt qualifies,
+    so a step whose processes could not be stopped keeps its marker.
+    """
+    if exit_code == 0 or not seen:
+        return False
+    cause = fallback.classify(
+        integration,
+        exit_code,
+        seen["blocked"],
+        seen["contained"],
+        seen["tail"],
+        cli_found=True,
+    )
+    return cause == fallback.QUOTA and seen["contained"]
+
+
+def _confined_chat(root: Path, run_id: str) -> str:
+    """Return the feature of the Chat run a `--confined` headless step serves.
+
+    Refuses anything but an active Chat run whose confinement self-test
+    passes: the step runs under no less confinement than Autonomous.
+    """
+    try:
+        record = autonomy.find_run(root, run_id) if RUN_ID.fullmatch(run_id) else None
+    except autonomy.AutonomyError as error:
+        raise Refusal(EXIT_USAGE, f"run record unreadable: {error}") from error
+    if record is None or record["workflow"] != autonomy.CHAT:
+        message = f"{CONFINED} applies only to a Chat run's headless step"
+        raise Refusal(EXIT_USAGE, message)
+    try:
+        autonomy.confinement_self_test(root)
+    except autonomy.AutonomyError as error:
+        raise Refusal(EXIT_REFUSED, f"confinement: {error}") from error
+    return record["feature"]
 
 
 def _without_cli(  # noqa: PLR0913 - the step's every input
@@ -1547,7 +1615,7 @@ def _fallback_step(  # noqa: C901, PLR0913 - one decision, one attempt
 
 def _base_env(root: Path) -> dict[str, str]:
     """Return the operator environment every attempt starts from, with git guarded."""
-    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE}
+    env = {**os.environ, "PYTHONPYCACHEPREFIX": NO_BYTECODE, AGENT_STEP: "1"}
     # Every `git` the agent runs goes through guard/git first (#34).
     git, _ = autonomy.trusted_program("git", root)
     if git is not None:
@@ -1579,10 +1647,15 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
     prompt: str,
     observe: dict | None = None,
     route: dict | None = None,
+    seen: dict | None = None,
+    confine: str | None = None,
 ) -> tuple[int, dict]:
     """Run the agent once; return its exit code and, for Autonomous, its step entry.
 
     The entry is not appended here: the caller first checks the drafts.
+    `confine` names the feature of a Chat run's headless step, which runs
+    under the Autonomous confinement without an Autonomous record; `seen`
+    receives the output tail, blocking and containment of the attempt.
 
     With the local fallback on, `observe` receives what the decision needs
     (step ID, output tail, blocking, containment) and, when it asks for
@@ -1609,6 +1682,9 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             "tree_before": autonomy.tree_digest(root, _review_exclusions(feature)),
             "reviews_before": autonomy.reviews_digest(root, feature),
         }
+    elif confine is not None:
+        feature = confine
+    if record is not None or confine is not None:
         if integration == "claude":
             argv += [
                 "--allowedTools",
@@ -1869,6 +1945,15 @@ def _attempt_in(  # noqa: C901, PLR0912, PLR0913, PLR0915 - one guarded, linear 
             with _open_log(log_fd, "usage.json") as usage_log:
                 usage_log.write(usage)
         os.close(log_fd)
+    if seen is not None:
+        seen |= {
+            "tail": (
+                b"".join(stdout)[-fallback.TAIL_BYTES :],
+                b"".join(stderr)[-fallback.TAIL_BYTES :],
+            ),
+            "blocked": bool(blocked),
+            "contained": contained and not tampered,
+        }
     if observe is not None:
         observe |= {
             "step": log_dir.name,

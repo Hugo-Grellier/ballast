@@ -336,8 +336,11 @@ refuse, before executing any checkout code, if those inputs changed since
 `trust` (or since the baseline setup recorded), if `BALLAST_TAMPERED` exists, or if an agent step never finished its
 check (for example because the agent killed the wrapper). Saved run state is
 not in the baseline, so after an unfinished step `trust` also refuses: review
-the checkout, run `ballast discard-runs`, then `trust`; continue the stopped
-run in Chat (see below) or start a fresh run. `discard-runs` first kills the unfinished step's agent scope (see
+the checkout and run `ballast discard-runs`; its last line says whether the
+protected inputs still match the baseline, and only when they do not is
+`ballast trust` needed. Continue the stopped run in Chat (see below) or start a
+fresh run. `ballast discard-runs --help` prints its usage and changes nothing,
+and any other argument is refused. `discard-runs` first kills the unfinished step's agent scope (see
 below) and refuses unless systemd confirms it is gone, so no surviving agent
 process can rewrite state afterwards; only then does it delete the local run
 state (the archived copy in the Git common directory remains). It never follows
@@ -346,8 +349,10 @@ relies on the agent sandbox keeping it read-only. They run `run.py` and
 `ledger.py` under the launcher's own `/usr/bin/python3 -I -S`.
 Bytecode is excluded from the baseline because no workflow tool reads it.
 
-**Setup-recorded baseline.** Only the operator's `ballast trust` records a
-baseline after a review, with one exception that the operator's own
+**Setup-recorded baseline.** `ballast trust`, run by the operator or the
+operator's agent session outside a step, records a baseline after a review.
+Setup also records one after a default-branch refresh (ADR-0020, below), and
+in one more case: the operator's own
 `ballast setup` (and a new worktree's first-command preparation, which installs
 from a verified local copy) may also record it (ADR-0015). They record it only
 when every protected input is exactly what setup installed (no `.venv`, no
@@ -369,8 +374,36 @@ an agent step can never lead to a recorded baseline; it then says why and that
 `ballast trust` is needed after review. A baseline recorded from the operator's
 earlier one is marked as recorded by setup, so a later setup that records again
 needs the network or `ballast trust`. The launcher compares the baseline exactly
-as before, whoever recorded it, and `ballast doctor` shows which. Only the
-operator runs `ballast trust`; an agent never does.
+as before, whoever recorded it, and `ballast doctor` shows which. `ballast
+trust` is run by the operator, or by the operator's agent session on a checkout
+it set up, never by an agent inside a workflow step (the `in-progress` marker
+refuses it; see [Agent sessions](#agent-sessions-and-relayed-decisions)). It
+also refuses when `.ballast/spec_workflow/claude-settings.json` differs from
+what `ballast.toml` produces: run `ballast setup`, review, then `ballast trust`.
+
+**Automatic refresh from the default branch (ADR-0020).** A change merged on
+the default branch of the reviewed repository needs neither `ballast trust`
+nor `ballast setup`. Before `ballast run`, `ledger` or `intake`, the global
+`ballast` command asks the launcher why it would refuse; on changed protected
+inputs or a pin that differs from the installation it runs the pinned
+version's `tools/setup --refresh`. That refresh records a `default-branch`
+baseline only when the baseline's provenance names the repository
+`ballast.toml` pins, `ballast trust` reviewed it, every changed input is either
+installed by setup or committed unchanged at `HEAD` and equal to the live
+default branch (observed like the setup-recorded baseline above), no marker
+exists, and the regenerated installation and agent settings are exactly what
+`ballast.toml` produces. It prints `refreshed the trust baseline from
+OWNER/NAME BRANCH at COMMIT12 (N workflow inputs); …`, and the first
+`ballast run` afterwards prints `trust baseline refreshed from OWNER/NAME
+BRANCH at COMMIT12` once. The refresh never runs inside a step or for
+`ballast run status`, and when the pinned version cannot be fetched it is
+skipped and the launcher's own refusal shows. Otherwise it prints `not refreshed: <reason>` and changes nothing,
+and the launcher still names `ballast trust`: a local edit, a branch-only
+commit, a `.venv` change, a repointed repository and an unobservable branch
+always need the operator's review. A baseline from before this version names
+no repository, so one `ballast trust` is needed first. A global `ballast`
+older than this version never refreshes: `ballast self-install`. A plain
+`ballast setup` refreshes the same way.
 
 **Headless permissions.** Start and resume runs only with
 `ballast run`; a `preflight` step fails otherwise. It routes
@@ -444,7 +477,8 @@ modules, but only the installed launcher is outside agent reach. A planted
 from the checkout: inspect the listed files and `git status`, restore them with
 Git, remove `__pycache__` directories, delete and recreate `.venv` with the
 project's locked dependency install, delete the marker, run `ballast
-discard-runs` (it lists the run state it removed), and `ballast trust` again.
+discard-runs` (it lists the run state it removed), and `ballast trust` again if
+`ballast run status` still reports changed inputs.
 The discarded run state is gone, so a run stopped on `tamper` or
 `unfinished-step` cannot resume in Autonomous or continue human-gated; continue
 it in Chat with `ballast run continue RUN_ID --mode chat --reason
@@ -528,7 +562,8 @@ in process, on the run's feature.
 | Entry of a `step` | trusted `chat.py` | The phase's cumulative checks and current human approvals pass now; each evaluation is recorded in the run's hash-chained event log in operator state. A refused phase names its first failing check. |
 | Interactive agent step | confined agent behind a wrapper-owned pty | Runs only after the launcher's checks and branch synchronization in the same invocation; anything its permission rules do not allow is denied without a prompt. |
 | Close of a `step` | trusted `chat.py` | The agent's scope is confirmed stopped, protected inputs are unchanged, the phase's postcondition passes and the step changed only its write scope (`specs/<f>/` before `implement`, `specs/<f>/reviews/` for a review). |
-| `approve`, `reject`, `resolve` | the operator, from a terminal | No step is active, the gate's precondition passes, and the operator types the confirmation; the human decision is bound to the artifact's digest and is current only while it matches. |
+| `approve` | the operator, from a terminal (one typed line for one gate or a batch); or, in a Chat run in chat mode, the operator's agent session with `--relayed-by SESSION` (no prompt, recorded as relayed) | No step is active and every gate's precondition passes; all gates are recorded or none. Each human decision is bound to its artifact's digest and is current only while it matches. |
+| `reject`, `resolve` | the operator, from a terminal | No step is active, the gate's precondition passes, and the operator types the confirmation; never relayed. |
 | `checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry runs and its result is recorded with the tree it ran on; no `[checks]` table is recorded as unavailable. |
 | `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR, then runs the Draft PR checkpoint, which refreshes that PR and attempts the acceptance packet; a packet failure, or a PR that GitHub does not list yet, leaves the publication successful and names `ballast run checkpoint RUN` as the retry. |
 
@@ -729,7 +764,7 @@ Resume refuses, naming the command that applies, a run that is:
 | completed | `ballast run publish RUN_ID` |
 | published | `ballast run checkpoint RUN_ID` |
 | continued (lowered by `continue`) | resume the continuation run |
-| stopped on `tamper` or `unfinished-step` | `ballast discard-runs` and `ballast trust`, then `ballast run continue RUN_ID --mode chat --reason block-resolved --ref TEXT` |
+| stopped on `tamper` or `unfinished-step` | `ballast discard-runs` (and `ballast trust` if it says the inputs changed), then `ballast run continue RUN_ID --mode chat --reason block-resolved --ref TEXT` |
 | stopped on `forge` or `permission` | `ballast run publish RUN_ID` |
 | stopped on `upstream-sync` at start | your `ballast run start --mode autonomous` command |
 | stopped on the agent-step or wall-time limit | `ballast run continue RUN_ID --reason block-resolved --ref TEXT`, or a new run with a larger limit |
@@ -737,7 +772,11 @@ Resume refuses, naming the command that applies, a run that is:
 
 An `active` run whose invocation is gone (the runner was killed) is stopped as
 `interrupted` and resumed. A rewind spends agent steps again; a run that runs
-out of them blocks, and the operator continues it human-gated.
+out of them blocks, and the operator continues it human-gated. A step whose
+agent CLI hit its provider usage limit, and whose processes were confirmed
+stopped, stops as `interrupted`: wait for the limit to reset, then `ballast run
+resume RUN_ID`, with no `discard-runs` and no `trust`. A failed implementation
+postcondition resumes at `implement`, whose validator then runs again.
 
 A paused run's work stays uncommitted until publication. When the base
 advanced during the pause, the synchronization therefore blocks the first
@@ -877,12 +916,12 @@ each agent step is the only agent step of its invocation:
 | Command | What it does |
 |---|---|
 | `ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: ..."] [-i integration=auto\|claude\|codex] [-i model=NAME]` | Records the run in operator state, synchronizes and pins the branch, archives the `ballast-feature` definition, writes the Issue snapshot the `specify` step reads, prints the handoff summary and runs the Draft PR checkpoint. No agent runs. |
-| `ballast run step RUN PHASE [--kind KIND]` | Runs one phase: `specify`, `clarify`, `plan`, `tasks`, `analyze`, `implement`, `reconcile-intent`, `converge`, or `review --kind plan\|implementation\|security\|test\|documentation\|spec-reconciliation`. |
+| `ballast run step RUN PHASE [--kind KIND] [--headless]` | Runs one phase: `specify`, `clarify`, `plan`, `tasks`, `analyze`, `implement`, `reconcile-intent`, `converge`, or `review --kind plan\|implementation\|security\|test\|documentation\|spec-reconciliation`. In chat mode it is interactive at your terminal; `--headless` runs it without one, under the Autonomous confinement (bwrap, systemd scope, confined permission lists, self-test), then prints the gates now pending and `ballast run approve RUN --through GATE`. |
 | `ballast run status RUN` | Prints the handoff summary from the run record: mode and history, feature identity, completed steps, failed checks, gates (current, stale, rejected, pending), open decisions, changes made outside agent steps, and the allowed next actions. It needs no conversation log. |
-| `ballast run approve RUN GATE`, `ballast run reject RUN GATE --reason TEXT` | Records a human decision for `scope`, `intent`, `plan`, `tasks`, `implementation`, `spec-reconciliation` or `final`, bound to the artifact's digest. `approve intent` writes the registered approval block in `intent.md`; `approve tasks` records the implementation baseline. |
+| `ballast run approve RUN GATE [GATE ...]`, `ballast run approve RUN --through GATE`, `ballast run reject RUN GATE --reason TEXT` | Records a human decision for `scope`, `intent`, `plan`, `tasks`, `implementation`, `spec-reconciliation` or `final`, bound to the artifact's digest. `approve intent` writes the registered approval block in `intent.md`; `approve tasks` records the implementation baseline. Several gates, named in that order or selected with `--through` (every pending or stale gate up to it), are shown together with their artifacts and digests and confirmed with one typed line; they are all recorded, atomically, or none is. |
 | `ballast run resolve RUN DEC-NNNN` | Records the human resolution of a decision proposal, bound to its resolution text. A resolution an agent writes resolves nothing. |
 | `ballast run checks RUN` | Runs the `[checks] commands`, confined, and records the result for the current tree. |
-| `ballast run mode RUN chat\|human-gated --reason TEXT` | Switches the run. In human-gated mode each `step` runs headless through the agent wrapper, with the same checks, gates and records. A paused `ballast-feature` engine run switched to chat continues as a linked Chat run. |
+| `ballast run mode RUN chat\|human-gated --reason TEXT` | Switches the run, at your terminal with the typed text `mode RUN TARGET`. In human-gated mode each `step` runs headless through the agent wrapper, with the same checks, gates and records. A paused `ballast-feature` engine run switched to chat continues as a linked Chat run. |
 | `ballast run continue RUN --reason block-resolved\|changes-requested --ref TEXT --mode chat` | Continues a stopped Autonomous run as a linked Chat run (see [Autonomous runs](#autonomous-runs)). |
 | `ballast run publish RUN` | After a current final approval, commits, pushes and writes the Chat section into the feature's single Draft PR, then attempts the [acceptance packet](#acceptance-packet) in it; when the packet is not published, `ballast run checkpoint RUN` retries it. |
 | `ballast run checkpoint RUN` | Refreshes the Draft PR checkpoint and the acceptance packet from the run's records, for example after `ballast ledger check`; it starts no agent and refuses while a step holds the run's lock. |
@@ -923,8 +962,12 @@ confirms them stopped, and the next invocation closes the step as interrupted.
 
 **Human approvals only through `ballast run approve`.** Nothing an agent writes,
 prints or says opens a gate, records a passing check, resolves a decision or
-changes the mode: approvals exist only as operator commands from a terminal,
-refused while a step is active. `final` is bound to the whole tree, reviews
+changes the mode: approvals exist only as `ballast run approve` commands,
+refused while a step is active, typed by the operator at a terminal or, in a
+Chat run in chat mode, relayed by the operator's agent session after the
+operator's yes in chat (`--relayed-by SESSION`, recorded and shown as
+`relayed by agent session SESSION`; see
+[Agent sessions](#agent-sessions-and-relayed-decisions)). `final` is bound to the whole tree, reviews
 included, and needs every earlier approval current; `publish` checks it again.
 A change a step made outside its write scope blocks every later step until the
 operator restores or changes it. Chat asks for every human approval the
@@ -938,6 +981,83 @@ with `mode: chat`; `ballast ledger report --run RUN` reports it against the
 `ballast-feature` steps and gates. Conversation logs stay in ignored
 `.specify/workflow-state/<run>/agents/` like any agent log, and are never
 attached to, quoted in or linked from an Issue or a PR.
+
+## Agent sessions and relayed decisions
+
+A human gate asks for a decision; a command that carries none is for the
+operator's agent session (ADR-0020). "Agent session" means the operator's own
+Claude Code or Codex session, outside any `ballast run` step. An agent inside a
+step runs no `ballast` command: the `in-progress` marker refuses every
+launcher command but `status` while a step runs, and the step's sandbox hides
+operator state. Every step's environment also carries `BALLAST_AGENT_STEP=1`,
+which the launcher refuses too; that is defence in depth, not the boundary.
+
+| Command | Agent session | Recorded actor | Human-gated run | Chat run | Autonomous run |
+| --- | --- | --- | --- | --- | --- |
+| `ballast setup` | may run | none | yes | yes | yes |
+| `ballast intake` | may run | none | yes | yes | yes |
+| `ballast run status` | may run | none | yes | yes | yes |
+| `ballast run start` | may run, with `--relayed-by` | none: a human-gated run has no operator run record | yes | n/a | n/a |
+| `ballast run start --mode chat` | may run, with `--relayed-by` | relayed mode start | n/a | yes | n/a |
+| `ballast run start --mode autonomous` | relays after a yes in chat, with `--relayed-by` | relayed mode start | n/a | n/a | yes, when eligible |
+| `ballast run resume` | relays, with `--relayed-by`; `--ref` for a block that carries a decision | relayed block resolution | yes (no record) | n/a | yes |
+| `ballast run continue` | relays, with `--relayed-by` and `--ref` | relayed block resolution or mode change | n/a | n/a | yes (Autonomous source only) |
+| `ballast run step --headless` | may run | none (step records) | n/a | yes | n/a |
+| `ballast run step` | refused (needs a terminal) | none | n/a | operator | n/a |
+| `ballast run publish` | may run | none | n/a | yes, after a current final approval | runner publishes |
+| `ballast run approve` | relays after a yes in chat, with `--relayed-by` | relayed gate approval | refused | yes | refused |
+| `ballast run reject` | refused (terminal only) | operator | operator | operator | n/a |
+| `ballast run resolve` | refused (terminal only) | operator | operator | operator | n/a |
+| `ballast run mode` | refused (terminal only) | operator | operator | operator | n/a |
+| `ballast trust` | may run outside a step, on a checkout the session set up; refused inside one | none (`source: trust`) | | | |
+| `ballast discard-runs` | may run | none | | | |
+| `ballast ledger` | may run | as before | | | |
+
+**Who acted.** `start`, `resume`, `continue` and a Chat `approve` record the
+operator when stdin and stdout are terminals, or the agent session named by
+`--relayed-by SESSION` (`[A-Za-z0-9][A-Za-z0-9._:-]{0,79}`, for example
+`claude-code:5f0c2a`). Without either they are refused before anything is
+written: `without a terminal, name the relaying agent session with --relayed-by
+SESSION; nothing was recorded`. Every other command refuses `--relayed-by`. A
+relayed record quotes no chat text, and `record.md`, `ballast run status`, the
+Chat PR section and the ledger show `relayed by agent session SESSION`, never
+`by operator`. The launcher cannot verify that you said yes in chat: a relay is
+a labeled claim by the session you run.
+
+**Relays by mode.**
+
+- Human-gated: the session may start and resume the run; its gates are Spec
+  Kit engine gates that prompt only at your terminal, so a relayed `approve`
+  is refused (`a human-gated run takes approvals only from the operator at a
+  terminal`).
+- Chat: the session may start the run, run `step --headless`, and relay
+  `approve` (one gate or a batch) after your yes in chat.
+- Autonomous: the session relays the start after your yes in chat, and
+  `resume` and `continue` of a stopped run; a relayed `approve` is refused (`an
+  Autonomous run has no human gate before merge`).
+
+**Blocks that carry a decision.** A relayed `resume` or `continue` of a block
+that carries a decision needs `--ref` naming your answer (for example `Issue
+#147 comment, option 2`); without it the command is refused (`the CATEGORY
+block carries a decision; relay it only with --ref naming the operator's
+answer`). Only `upstream-sync`, `interrupted` (a usage limit included) and
+`postcondition` carry no decision. `continue` already needs `--ref` for every
+block. The `ref` names the answer and never claims an approval.
+
+**Terminal only.** `reject`, `resolve`, `mode` and an interactive `step` stay
+at your terminal; `mode` also takes the typed text `mode RUN TARGET`, so a
+session can never switch a human-gated run to Chat to relay its gates. A
+terminal is not proof of a human: an agent session can allocate a
+pseudo-terminal, so keep these commands your own. `ballast trust` keeps its
+terminal-free behavior (operator decision D-09): the session may run it outside
+a step on a checkout it set up, and only the step boundary keeps an agent
+inside a step from vouching for its own changes.
+
+**Autonomous start on another branch.** An Autonomous start needs a branch
+named for the Issue. On any other branch, at a terminal it offers the one local
+branch named for the Issue, or `feat-<feature directory>`, and switches only
+when you type `switch BRANCH`; without a terminal, or relayed, it prints `Switch
+first: git switch -c BRANCH` and the start command to rerun.
 
 ## Local agent-run evidence
 
@@ -1160,15 +1280,18 @@ your `ballast run continue` command.
 | `conflict` | a commit made after a pushed synchronization conflicts | git rebase --onto {new_head} {old_head} {branch}, resolve, then rerun |
 | `push-failed` | the push failed and a retry can succeed alone | rerun |
 | `push-failed` | the repository rejected the push | check {repo}'s branch rules for {branch} (protection, required signatures), then rerun |
-| `protected-input` | the update changed `ballast.toml`, `.ballast/`, `.specify/` or `.venv/` | review these changes; after a pin change run ballast setup first, then ballast trust (operator only) |
+| `protected-input` | the update changed `ballast.toml`, `.ballast/`, `.specify/` or `.venv/` | the synchronized branch changed protected inputs; rerun rerun: it refreshes trust and the installation from the pinned default branch when every change came from it, otherwise the operator reviews them and runs ballast trust |
 | `internal-error` | an unexpected failure, Ctrl-C, or the check could not be recorded | report it with the run ID, then rerun |
 | `internal-error` | no committer identity | set user.name and user.email in your global Git configuration, then rerun |
 | `internal-error` | invalid write-ahead record | report it with the run ID; Ballast keeps {record} until you check {branch} and its published branch and delete it |
 | `busy`, `internal-error` | after the published branch was already updated | rerun to finish the synchronization |
 
 "Nothing changes" has two exceptions. `protected-input` keeps the completed
-synchronization, so you can review it and run `ballast trust`; the next
-`ballast run` is refused until you do. A block after a successful push leaves
+synchronization and starts no agent. Rerun the same command (your agent
+session may): when every change came from the reviewed default branch, the
+global `ballast` command refreshes trust and the installation before the
+launcher runs (see [Automatic refresh](#workflow-runner-contract)); otherwise the
+launcher refuses until you review the changes and run `ballast trust`. A block after a successful push leaves
 the published branch at the rebased commit; the next invocation on the branch,
 whatever its run ID, finishes the synchronization from a write-ahead record in
 your state directory, and says so with `completed the interrupted

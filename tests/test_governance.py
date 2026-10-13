@@ -473,5 +473,132 @@ class FeatureUiStatesDocumentTests(unittest.TestCase):
                     self.assertTrue((ROOT / self.ADR).parent.joinpath(target).exists())
 
 
+def _actor_module() -> object:
+    import importlib  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+    try:
+        return importlib.import_module("actor")
+    finally:
+        sys.path.pop(0)
+
+
+MATRIX_ROW = re.compile(r"^\| `(ballast [^`]+)` \| ([^|]+) \|", re.MULTILINE)
+
+
+class AgentCommandMatrixDocumentTests(unittest.TestCase):
+    """#147 T049 [AC-007, AC-009, FR-014, FR-018]: one matrix, three documents."""
+
+    ADR = "docs/adr/0020-agent-sessions-relay-decisions.md"
+    POLICY = "templates/policies/spec-kit-workflow.md"
+    AGENTS = (
+        "AGENTS.md",
+        "templates/AGENTS.md",
+        "templates/init/agents-section.md",
+        "templates/skills/ballast-feature-intake/SKILL.md",
+    )
+
+    def text(self, name: str) -> str:
+        return (ROOT / name).read_text(encoding="utf-8")
+
+    def rows(self, name: str) -> dict[str, str]:
+        text = self.text(name)
+        if name == self.POLICY:
+            start = text.index("## Agent sessions and relayed decisions")
+            text = text[start : text.index("\n## ", start + 1)]
+        return dict(MATRIX_ROW.findall(text))
+
+    def test_the_tables_name_exactly_the_matrix(self) -> None:
+        """AC-007: the policy and the ADR name actor.py's commands, nothing else."""
+        actor = _actor_module()
+        commands = {row.command for row in actor.MATRIX}
+        for name in (self.POLICY, self.ADR):
+            with self.subTest(document=name):
+                rows = self.rows(name)
+                self.assertEqual(set(rows), commands)
+                refused = {c for c, rule in rows.items() if rule.startswith("refused")}
+                self.assertEqual(refused, actor.operator_only())
+                self.assertEqual(set(rows) - refused, actor.agent_runnable())
+                text = " ".join(self.text(name).split())
+                for category in sorted(actor.DECISION_FREE):
+                    self.assertIn(f"`{category}`", text)
+
+    def test_trust_is_never_operator_reserved(self) -> None:
+        """D-09: outside a step the session may run it; inside one nothing may."""
+        for name in (self.POLICY, self.ADR):
+            with self.subTest(document=name):
+                rule = self.rows(name)["ballast trust"]
+                self.assertTrue(rule.startswith("may run outside a step"), rule)
+        for name in (self.POLICY, self.ADR, *self.AGENTS):
+            with self.subTest(document=name):
+                text = " ".join(self.text(name).split())
+                self.assertNotIn("Only the operator runs `ballast trust`", text)
+                self.assertNotIn("An agent never runs it", text)
+                self.assertNotRegex(text, r"`ballast trust`[^.]*terminal only")
+
+    def test_adr_0020(self) -> None:
+        """AC-009: what it supersedes and amends, each level, and its risks."""
+        adr = " ".join(self.text(self.ADR).split())
+        for text in (
+            "- Status: proposed",
+            "Supersedes in part: [ADR-0004](0004-autonomous-provisional-decisions.md)",
+            "[ADR-0009](0009-chat-mode-operator-driven-steps.md)",
+            "Amends: [ADR-0010](0010-autonomous-resume-and-bounded-recovery.md)",
+            "[ADR-0015](0015-setup-recorded-trust-baseline.md)",
+            "**Human-gated**",
+            "**Chat**",
+            "**Autonomous**",
+            "an agent session can allocate a pseudo-terminal",
+            "`ballast trust` has no terminal test (D-09)",
+            "`BALLAST_AGENT_STEP` is not a boundary",
+            "prompt only at a terminal",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, adr)
+        for earlier in (
+            "0004-autonomous-provisional-decisions.md",
+            "0009-chat-mode-operator-driven-steps.md",
+            "0010-autonomous-resume-and-bounded-recovery.md",
+            "0015-setup-recorded-trust-baseline.md",
+        ):
+            with self.subTest(adr=earlier):
+                self.assertIn(
+                    "(0020-agent-sessions-relay-decisions.md)",
+                    self.text(f"docs/adr/{earlier}"),
+                )
+        link = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+        for target in link.findall(self.text(self.ADR)):
+            if "://" not in target:
+                with self.subTest(target=target):
+                    self.assertTrue((ROOT / self.ADR).parent.joinpath(target).exists())
+
+    def test_the_constitution_amendment(self) -> None:
+        """FR-014: version, BL-INV-002 text and a history entry; applied at merge."""
+        text = self.text(
+            "specs/147-human-gates-are-decisions/constitution-amendment.md"
+        )
+        for expected in (
+            "**Version**: 1.3.0",
+            "(BL-INV-002)",
+            "the operator's `ballast` command refreshing an existing baseline",
+            "**1.3.0** (2026-10-13, #147)",
+            "**Reason**",
+            "**Compatibility**",
+        ):
+            with self.subTest(text=expected):
+                self.assertIn(expected, text)
+
+    def test_agents_guidance_distinguishes_sessions_and_steps(self) -> None:
+        """FR-018: no "an agent never runs `ballast run`" left."""
+        for name in self.AGENTS:
+            with self.subTest(document=name):
+                text = " ".join(self.text(name).split())
+                self.assertNotIn("never runs `ballast run`", text)
+                self.assertNotIn("never runs `ballast run` commands", text)
+                self.assertIn("--relayed-by", text)
+                self.assertRegex(text, r"`ballast run reject`, `resolve`")
+
+
 if __name__ == "__main__":
     unittest.main()

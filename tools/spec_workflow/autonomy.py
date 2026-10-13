@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 # Never read or write checkout bytecode, including for the import below.
 sys.pycache_prefix = os.devnull
 
+import actor  # noqa: E402
 from launcher import digests, state_dir, venv_warning  # noqa: E402
 
 VERSION = 1
@@ -462,11 +463,13 @@ def new_run(  # noqa: PLR0913 - one record, every field explicit
     start_head: str | None = None,
     last_manifest: str | None = None,
     decision_id: str | None = None,
+    actor: actor.Actor = actor.OPERATOR,
 ) -> dict:
     """Build a fresh, validated run record with status `active`.
 
     A `ballast-chat` record also carries `start_head`, `last_manifest`, a
     `baseline` and an `active_step` (both unset at start), and no limits.
+    `actor` is who started it: the operator, or a relaying agent session.
     """
     review = review_integration or integration
     record = {
@@ -479,7 +482,7 @@ def new_run(  # noqa: PLR0913 - one record, every field explicit
             {
                 "mode": mode,
                 "at": now(),
-                "by": "operator",
+                **actor.fields(),
                 "action": "start",
                 "reason": reason,
                 "decision_id": decision_id,
@@ -515,11 +518,26 @@ def _require(condition: bool, message: str) -> None:  # noqa: FBT001
         raise AutonomyError(message)
 
 
+def _validate_actor(entry: dict, what: str) -> None:
+    """`by` is the operator, or a relay naming a valid agent session (ADR-0020)."""
+    by = entry.get("by")
+    _require(by in {"operator", "relayed"}, f"{what} is the operator's or relayed")
+    if by == "relayed":
+        session = entry.get("relayed_by")
+        _require(
+            isinstance(session, str) and actor.session_refusal(session) is None,
+            f"a relayed {what} names an invalid agent session",
+        )
+    else:
+        _require("relayed_by" not in entry, f"an operator {what} names no session")
+
+
 def _validate_mode_history(history: object, workflow: object = None) -> None:
     """Start once; then only lower from autonomous or switch a Chat run (#20).
 
     A Chat run switches between chat and human-gated, which have the same
-    approval authority; no later change ever reaches autonomous.
+    approval authority; no later change ever reaches autonomous. A switch is
+    the operator's at a terminal; a start or a lowering may be relayed.
     """
     _require(
         isinstance(history, list) and bool(history), "run record has no mode history"
@@ -528,9 +546,13 @@ def _validate_mode_history(history: object, workflow: object = None) -> None:
     for index, change in enumerate(history):
         _require(isinstance(change, dict), "mode change must be an object")
         _require(change.get("mode") in MODES, "mode change has an unknown mode")
-        _require(change.get("by") == "operator", "only the operator changes a mode")
+        _validate_actor(change, "mode change")
         _parse_time(change.get("at"))
         action = change.get("action")
+        _require(
+            action != "switch" or change.get("by") == "operator",
+            "only the operator switches a mode",
+        )
         if index == 0:
             _require(action == "start", "the first mode change must be the start")
             continue
@@ -743,7 +765,12 @@ def set_status(record: dict, status: str) -> dict:
 
 
 def change_mode(
-    record: dict, mode: str, *, reason: str | None, decision_id: str | None
+    record: dict,
+    mode: str,
+    *,
+    reason: str | None,
+    decision_id: str | None,
+    actor: actor.Actor = actor.OPERATOR,
 ) -> dict:
     """Append a mode change: lower a paused Autonomous run, or switch a Chat run.
 
@@ -767,7 +794,7 @@ def change_mode(
     entry = {
         "mode": mode,
         "at": now(),
-        "by": "operator",
+        **actor.fields(),
         "action": "switch" if switch else "lower",
         "reason": reason,
         "decision_id": decision_id,
@@ -957,19 +984,15 @@ def append_decision(root: Path, run_id: str, entry: dict) -> dict:
     return append_log(path, "PD", entry)
 
 
-def append_human_decision(  # noqa: PLR0913 - complexity inherent to one guarded flow
-    root: Path,
-    run_id: str,
+def human_decision(
     kind: str,
     ref: str,
     *,
     resolves: str | None,
     extra: dict | None = None,
+    actor: actor.Actor = actor.OPERATOR,
 ) -> dict:
-    """Record an operator decision against a run.
-
-    The Chat kinds carry the extra fields of `HUMAN_DECISION_FIELDS`.
-    """
+    """Build and validate one human decision, without its ID and chain hash."""
     if kind not in HUMAN_DECISION_KINDS:
         message = f"unknown human decision kind {kind!r}"
         raise AutonomyError(message)
@@ -982,11 +1005,61 @@ def append_human_decision(  # noqa: PLR0913 - complexity inherent to one guarded
         "ref": ref.strip(),
         "resolves": resolves,
         "at": now(),
-        "by": "operator",
+        **actor.fields(),
     }
-    validate_human_decision(entry)
-    path = run_dir(root, run_id) / "human-decisions.jsonl"
-    return append_log(path, "HD", entry)
+    return validate_human_decision(entry)
+
+
+def append_human_decision(  # noqa: PLR0913 - complexity inherent to one guarded flow
+    root: Path,
+    run_id: str,
+    kind: str,
+    ref: str,
+    *,
+    resolves: str | None,
+    extra: dict | None = None,
+    actor: actor.Actor = actor.OPERATOR,
+) -> dict:
+    """Record a human decision against a run: the operator's, or a relayed one.
+
+    The Chat kinds carry the extra fields of `HUMAN_DECISION_FIELDS`.
+    """
+    entry = human_decision(kind, ref, resolves=resolves, extra=extra, actor=actor)
+    return append_human_decisions(run_dir(root, run_id), [entry])[0]
+
+
+def append_human_decisions(directory: Path, decisions: list[dict]) -> list[dict]:
+    """Append validated human decisions all at once, or none (R9, AC-019).
+
+    Each gets the next `HD-NNNN` and chains to the line before it; the file
+    is rewritten once, atomically, so a crash leaves it as it was.
+    """
+    path = directory / "human-decisions.jsonl"
+    existing = read_log(path, "HD")
+    data = _read_bytes(path) if existing else b""
+    previous = (
+        hashlib.sha256(data.splitlines(keepends=True)[-1]).hexdigest()
+        if existing
+        else ZERO
+    )
+    written = []
+    lines = []
+    for number, decision in enumerate(decisions, start=len(existing) + 1):
+        validate_human_decision(decision)
+        entry = {
+            **{k: v for k, v in decision.items() if k not in {"id", "prev"}},
+            "id": f"HD-{number:04d}",
+            "prev": previous,
+        }
+        line = (
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        previous = hashlib.sha256(line).hexdigest()
+        written.append(entry)
+        lines.append(line)
+    if lines:
+        _write_bytes(path, data + b"".join(lines))  # mkstemp: mode 0600
+    return written
 
 
 def _short_text(value: object, limit: int = 300) -> bool:
@@ -1016,13 +1089,27 @@ HUMAN_DECISION_FIELDS = {
 }
 
 
+# Human decisions only the operator records, at a terminal (ADR-0020).
+OPERATOR_ONLY_DECISIONS = ("gate-rejection", "decision-resolution")
+
+
+def relayed_resume_ref(category: str) -> str:
+    """Return the reference of a relayed resume without --ref (no decision)."""
+    return f"relayed resume after the {category} block"
+
+
 def validate_human_decision(entry: object) -> dict:
-    """Check a human decision's kind, common fields and its kind's extra fields."""
+    """Check a human decision's kind, common fields and its kind's extra fields.
+
+    A relayed decision names its agent session and quotes no chat text: a
+    gate approval's reference is `relayed approve GATE`, and a resolution of
+    a block that carries a decision cites the operator's answer (D-08).
+    """
     _require(isinstance(entry, dict), "human decision must be an object")
     assert isinstance(entry, dict)  # noqa: S101 - narrowed above
     kind = entry.get("kind")
     _require(kind in HUMAN_DECISION_KINDS, f"unknown human decision kind {kind!r}")
-    _require(entry.get("by") == "operator", "a human decision is the operator's")
+    _validate_actor(entry, "human decision")
     _require(_short_text(entry.get("ref"), 500), "human decision has no reference")
     _parse_time(entry.get("at"))
     for name, rule in HUMAN_DECISION_FIELDS.get(str(kind), {}).items():
@@ -1032,7 +1119,37 @@ def validate_human_decision(entry: object) -> dict:
             entry.get("from") in MODES and entry.get("to") in MODES,
             "mode-change has an invalid mode",
         )
+    category = entry.get("block_category")
+    _require(
+        category is None or category in BLOCK_CATEGORIES,
+        f"{kind} names an unknown block category",
+    )
+    if entry.get("by") == "relayed":
+        _validate_relayed(entry, str(kind), category)
     return entry
+
+
+def _validate_relayed(entry: dict, kind: str, category: object) -> None:
+    _require(
+        kind not in OPERATOR_ONLY_DECISIONS,
+        f"a {kind} is the operator's at a terminal, never relayed",
+    )
+    if kind == "gate-approval":
+        _require(
+            entry["ref"] == f"relayed approve {entry.get('gate')}",
+            "a relayed gate approval quotes no chat text",
+        )
+    if kind == "block-resolution":
+        _require(
+            isinstance(category, str), "a relayed block resolution names its block"
+        )
+        if category not in actor.DECISION_FREE:
+            _require(
+                entry["ref"] != relayed_resume_ref(str(category))
+                and not HUMAN_APPROVAL.search(entry["ref"]),
+                f"the {category} block carries a decision; a relayed resolution "
+                "cites the operator's answer",
+            )
 
 
 # --- Agent steps and drafts -----------------------------------------------
@@ -1221,12 +1338,14 @@ RECOVERY = {
     "postcondition": "Fix the failed contract, then resume, or continue human-gated.",
     "tamper": "Run nothing from the checkout until you have reviewed it and "
     "restored the protected files with Git; then delete and recreate .venv (uv sync "
-    "--locked), delete BALLAST_TAMPERED, run ballast discard-runs and ballast "
-    "trust. The discarded run cannot resume in Autonomous; continue it in Chat "
+    "--locked), delete BALLAST_TAMPERED, run ballast discard-runs, review the "
+    "checkout, then ballast trust if ballast run status still reports changed "
+    "inputs. The discarded run cannot resume in Autonomous; continue it in Chat "
     "with ballast run continue RUN_ID --mode chat --reason block-resolved "
     "--ref TEXT.",
     "unfinished-step": "Review the checkout, run ballast discard-runs, then ballast "
-    "trust. The discarded run cannot resume in Autonomous; continue it in Chat with "
+    "trust if ballast run status still reports changed inputs. The discarded run "
+    "cannot resume in Autonomous; continue it in Chat with "
     "ballast run continue RUN_ID --mode chat --reason block-resolved --ref TEXT.",
     "permission": "Restore the missing permission or credential, then retry.",
     "ineligible": "Remove the cause, then resume, or run the feature human-gated "
@@ -1258,6 +1377,11 @@ DISCARDED_RECOVERY = (
     "or continue human-gated; review the checkout and continue it in Chat."
 )
 SYNC_RESUME_RECOVERY = "Remove the cause shown, then resume again."
+# An agent step stopped by its CLI's usage limit (#147 R13): no discard, no trust.
+USAGE_LIMIT_RECOVERY = (
+    "wait for the usage limit to reset, then ballast run resume {run} "
+    "(Chat: ballast run step {run} PHASE)"
+)
 # The class each category belongs to (FR-023); derived, never stored.
 BLOCK_CLASSES = {
     "contradiction": "conflict",
@@ -3428,7 +3552,7 @@ def _mode_lines(run: dict, local_fallback: str | None = None) -> list[str]:
             extra += f": {neutralize(change['reason'])}"
         lines.append(
             f"- Mode {change['action']}: {change['mode']} at {change['at']} "
-            f"by {change['by']}{extra}"
+            f"by {actor.label(change)}{extra}"
         )
     risk = run.get("risk")
     if risk:
@@ -3737,7 +3861,7 @@ def _resolution_lines(run: dict, human: list[dict]) -> list[str]:
                 f"{_policy_text(refreshed['current'])}"
             )
         lines.append(
-            f"- {entry['id']} at {entry.get('at')} by {entry.get('by')}: {where}"
+            f"- {entry['id']} at {entry.get('at')} by {actor.label(entry)}: {where}"
             + (f"; changed during the block: {changed}" if changed else "")
             + f"; reference: {neutralize(entry.get('ref', ''))}"
         )
