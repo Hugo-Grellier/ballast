@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "spec_digest": "27c324477010df08ccfbdabdce3300346594fe132177531abbf10c1927137155",
+  "criteria": {
+    "AC-001": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_adr_0020_header_and_sections",
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_adr_0020_links_resolve"
+    ],
+    "AC-002": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_stop_rule",
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_what_still_blocks"
+    ],
+    "AC-003": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_trusted_author"
+    ],
+    "AC-004": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_limit_outcome"
+    ],
+    "AC-005": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_self_resume"
+    ],
+    "AC-006": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_residual_risk"
+    ],
+    "AC-007": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_adr_0004_note"
+    ],
+    "AC-008": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_adr_0010_notes"
+    ],
+    "AC-009": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_chat_runs_unaffected"
+    ],
+    "AC-010": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_policy_cites_adr_0020"
+    ],
+    "AC-011": [
+      "tests.test_governance.AutonomousStopRuleDocumentTests.test_technical_spec_links_adr_0020"
+    ],
+    "AC-012": []
+  }
+}

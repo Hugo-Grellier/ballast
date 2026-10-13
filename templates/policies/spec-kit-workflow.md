@@ -682,6 +682,11 @@ point. Every block names its class, printed as
 | exhausted limits | `limit` (the agent-step limit, the wall-time limit, the three fix cycles, or the two draft retries) |
 | unsafe uncertainty | `decision`, `postcondition`, `tamper`, `unfinished-step`, `interrupted`, `upstream-sync` |
 
+**Stop rule.** ADR-0020 in the Ballast repository is the authority for when
+an Autonomous run stops and what it does instead of stopping, and later Ballast
+releases deliver it. Until a release you pin does, the blocks, limits and
+resume this section describes apply as written.
+
 A confined Claude or Codex step reads the operator's login without its refresh
 token, so it can never rotate the operator out of their session. When the
 access token expires during a step, the step stops with a `credential` block:
