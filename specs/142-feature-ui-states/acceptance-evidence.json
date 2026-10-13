@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "spec_digest": "c1d2069d9e5843c01ad9a3b8fdd5008708cb51bac8c46c335438b3916a0cebeb",
+  "criteria": {
+    "AC-001": [
+      "tests.test_packet.FeatureUiStateTests.test_valid_entries_appear_beside_their_criteria",
+      "tests.test_packet.UiStateTests.test_results_appear_beside_their_criteria"
+    ],
+    "AC-002": [
+      "tests.test_packet.FeatureUiStateTests.test_undefined_criterion_invalidates_only_the_ui_section"
+    ],
+    "AC-003": [
+      "tests.test_packet.FeatureUiStateTests.test_each_entry_rule_names_the_feature_file"
+    ],
+    "AC-004": [
+      "tests.test_packet.FeatureUiStateTests.test_unreadable_file_names_the_feature_file"
+    ],
+    "AC-005": [
+      "tests.test_packet.FeatureUiStateTests.test_other_features_files_never_reach_this_packet"
+    ],
+    "AC-006": [
+      "tests.test_packet.FeatureUiStateTests.test_file_is_read_at_the_head_commit"
+    ],
+    "AC-007": [
+      "tests.test_packet.FeatureIsolationTests.test_no_file_and_no_table_is_not_configured"
+    ],
+    "AC-008": [
+      "tests.test_packet.FeatureIsolationTests.test_repository_entries_alone_are_listed_without_criteria"
+    ],
+    "AC-009": [
+      "tests.test_packet.FeatureIsolationTests.test_repository_table_is_valid_for_every_feature",
+      "tests.test_packet.FeatureUiStateTests.test_other_features_files_never_reach_this_packet"
+    ],
+    "AC-010": [
+      "tests.test_packet.MergedUiStateTests.test_repository_then_feature_entries",
+      "tests.test_packet.MergedUiStateTests.test_api_section_unchanged_by_feature_file"
+    ],
+    "AC-011": [
+      "tests.test_packet.MergedUiStateTests.test_repository_criteria_give_the_move_reason"
+    ],
+    "AC-012": [
+      "tests.test_packet.MergedUiStateTests.test_more_than_fifty_in_total"
+    ],
+    "AC-013": [
+      "tests.test_packet.MergedUiStateTests.test_repository_reason_wins_when_both_are_invalid",
+      "tests.test_packet.ReviewConfigTests.test_invalid_configuration_names_a_fixed_reason"
+    ],
+    "AC-014": [
+      "tests.test_packet.AgentDeclaredTests.test_label_only_on_feature_entries"
+    ],
+    "AC-015": [
+      "tests.test_packet.AgentDeclaredTests.test_hostile_name_is_inert"
+    ],
+    "AC-016": [
+      "tests.test_packet.AgentDeclaredTests.test_evidence_states_ignore_the_file"
+    ],
+    "AC-017": [
+      "tests.test_governance.FeatureUiStatesDocumentTests.test_policy_describes_where_ui_states_live"
+    ],
+    "AC-018": [
+      "tests.test_governance.FeatureUiStatesDocumentTests.test_policy_explains_keeping_screenshots_current"
+    ],
+    "AC-019": [
+      "tests.test_governance.FeatureUiStatesDocumentTests.test_adr_0019_amends_adr_0006"
+    ]
+  }
+}

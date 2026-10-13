@@ -1,0 +1,18 @@
+# Decisions: 142-feature-ui-states
+
+## D-001 (proposal, fix cycle 1): ledger test failures in the runner's test check
+
+- **Status**: proposed, agent-provisional; for the next review to decide.
+- **Label**: proposed product change (out of this feature's scope).
+- **Observation**: the `[checks]` test command failed in `tests/test_agent_run_ledger.py`, for example `test_criterion_mapped_to_no_test_stays_missing`, `test_explicit_record_cannot_forge_snapshot_or_ac_check` and `test_stale_manifest_does_not_block_runner_snapshot`. They fail with `operator attestation is unavailable inside an agent step`. `ledger._operator_step_guard` raises this when `BALLAST_SPEC_WORKFLOW` or `SPECKIT_WORKFLOW_RUN_ID` is set. The runner appears to set these for the check command, and the ledger tests do not clear them. Only `test_explicit_record_cannot_forge_snapshot_or_ac_check` patches the variable, and only to set it.
+- **Why not fixed here**: this feature does not touch `tools/spec_workflow/ledger.py` or `tests/test_agent_run_ledger.py`. Isolating those tests from the caller's environment, or changing which environment the runner gives `[checks]` commands, is an unrelated change to the run machinery. The tasks' "Repository Impact" excludes it, and the engineering policy forbids mixing unrelated work into a feature.
+- **Proposal**: open a separate Issue to make the ledger tests independent of `BALLAST_SPEC_WORKFLOW` and `SPECKIT_WORKFLOW_RUN_ID`, for example by clearing both in `setUp` with `patch.dict(os.environ, ...)`. Do this without weakening `_operator_step_guard`. Until then, treat these failures as environmental for this feature. The check output was truncated, so the remaining 20 errors could not be attributed one by one; the next check run shows whether any remain outside the ledger tests.
+
+## D-002 (proposal, fix cycle 2): the runner's test check timed out
+
+- **Status**: proposed, agent-provisional; for the next review to decide.
+- **Label**: proposed product change (out of this feature's scope).
+- **Observation**: the `[checks]` test command hit its 30-minute `timeout_minutes` (exit 124, `timed_out: true`). Its truncated output shows errors and failures in the first modules in glob order (`tests/test_agent_run_ledger.py` onward, including the `operator attestation is unavailable inside an agent step` message from D-001), then long runs of passing tests until the timeout. The cycle 2 fix input lists no review findings.
+- **Local reproduction**: inside the fix step, `tests/test_packet.py` and `tests/test_governance.py` fail with `git-untrusted` ("git not found outside working trees"): the agent step puts the checkout's `.ballast/spec_workflow/guard/git` first on `PATH`, so every packet collection stops before it reads the feature. The resulting `KeyError: 'AC-…'` and `('pending', 'no-pr')` failures come from that guard, not from `packet.py`. Running the suite with a system git on `PATH` needed an approval this step cannot get, so the step could not confirm a clean pass or measure the suite's duration outside the guard.
+- **Why not fixed here**: no failure is attributable to this feature's diff, and the new tests in `tests/test_packet.py` add no sleeps, subprocess waits or large loops. Changing the environment the runner gives `[checks]` commands, the git guard, or `timeout_minutes` in `ballast.toml` is outside this feature and, for the guard and the runner, R2.
+- **Proposal**: run the fast gate outside an agent step (the operator's terminal or CI) as the evidence for this feature. Fold the timeout into the D-001 Issue: the runner should give `[checks]` commands an environment without the agent guard and the run variables, so the suite runs as it does in CI.

@@ -58,6 +58,8 @@ FILE_LIMIT = 1024 * 1024
 LIST_LIMIT = 50
 OPERATION_LIMIT = 2000
 UI_LIMIT = 50
+REPOSITORY, FEATURE = "ballast.toml", "ui-states.toml"  # UI state sources
+AGENT_LABEL = "agent-declared in ui-states.toml"
 REF_DEPTH = 5
 PATH_LIMIT = 300
 LEVELS = (1, 2, 3, 4)
@@ -148,6 +150,7 @@ class UiResult:
     result: str  # present, passed, failed, not run (in progress), not run, missing
     path: str | None = None
     run: int | None = None
+    agent: bool = False
 
 
 @dataclass(frozen=True)
@@ -255,17 +258,25 @@ class LedgerCheck:
 
 @dataclass(frozen=True)
 class UiState:
-    """A `[[review.ui_states]]` entry."""
+    """A UI state entry; `agent` marks one from the feature's ui-states.toml.
+
+    Repository entries (`[[review.ui_states]]`) carry no criteria.
+    """
 
     name: str
     criteria: tuple[str, ...]
     path: str | None = None
     check: str | None = None
+    agent: bool = False
 
 
 @dataclass(frozen=True)
 class ReviewConfig:
-    """The optional `[review]` table of the protected ballast.toml."""
+    """The optional `[review]` table of the protected ballast.toml.
+
+    After `collect`, `ui_states` holds the repository entries merged with the
+    feature's; every UI reason but the total limit names its source file.
+    """
 
     openapi: str | None = None
     ui_states: tuple[UiState, ...] | None = None
@@ -518,7 +529,7 @@ def event_data(outcome: PacketOutcome) -> dict[str, Any]:
 # --- collect --------------------------------------------------------------------
 
 
-def review_config(root: Path, spec_ids: set[str] | None = None) -> ReviewConfig:
+def review_config(root: Path) -> ReviewConfig:
     """Parse `[review]`; any problem is a fixed reason, never a stop."""
     try:
         config = tomllib.loads((root / "ballast.toml").read_text(encoding="utf-8"))
@@ -534,47 +545,95 @@ def review_config(root: Path, spec_ids: set[str] | None = None) -> ReviewConfig:
     api_error = None
     if openapi is not None and not safe_path(openapi):
         openapi, api_error = None, "openapi is not a safe repository path"
-    states, ui_error = _ui_states(review.get("ui_states"), spec_ids)
+    states, ui_error = _ui_states(review.get("ui_states"), REPOSITORY)
     return ReviewConfig(openapi, states, api_error, ui_error)
 
 
 def _ui_states(  # noqa: C901, PLR0911 - One fixed reason per rule.
-    value: object, spec_ids: set[str] | None
+    value: object, source: str, spec_ids: set[str] | None = None
 ) -> tuple[tuple[UiState, ...] | None, str | None]:
+    """Validate one source's entries; criteria are the feature file's only."""
     if value is None:
         return None, None
     if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
-        return None, "ui_states is not a list of tables"
+        return None, f"{source}: ui_states is not a list of tables"
     if len(value) > UI_LIMIT:
         return None, "more than 50 UI states"
+    feature = source == FEATURE
+    keys = (
+        {"name", "criteria", "path", "check"} if feature else {"name", "path", "check"}
+    )
     states = []
     for entry in value:
         name, criteria = entry.get("name"), entry.get("criteria")
         path, check = entry.get("path"), entry.get("check")
-        if set(entry) - {"name", "criteria", "path", "check"}:
-            return None, "UI state has an unknown key"
+        if not feature and "criteria" in entry:
+            return (
+                None,
+                f"{source}: UI state criteria belong in the feature's {FEATURE}",
+            )
+        if set(entry) - keys:
+            return None, f"{source}: UI state has an unknown key"
         if not isinstance(name, str) or not 1 <= len(name) <= 80:  # noqa: PLR2004
-            return None, "UI state name must be 1-80 characters"
-        if (
+            return None, f"{source}: UI state name must be 1-80 characters"
+        if feature and (
             not isinstance(criteria, list)
             or not criteria
             or not all(isinstance(c, str) and ledger.AC.fullmatch(c) for c in criteria)
         ):
-            return None, "UI state criteria must be AC-NNN IDs"
+            return None, f"{source}: UI state criteria must be AC-NNN IDs"
         if (path is None) == (check is None):
-            return None, "UI state needs exactly one of path or check"
+            return None, f"{source}: UI state needs exactly one of path or check"
         if path is not None and not safe_path(path):
-            return None, "UI state path is not a safe repository path"
+            return None, f"{source}: UI state path is not a safe repository path"
         if check is not None and (
             not isinstance(check, str)
             or not 1 <= len(check) <= 100  # noqa: PLR2004
             or not check.isprintable()
         ):
-            return None, "UI state check must be 1-100 characters"
-        if spec_ids is not None and not set(criteria) <= spec_ids:
-            return None, "UI state names a criterion the spec does not define"
-        states.append(UiState(name, tuple(criteria), path, check))
+            return None, f"{source}: UI state check must be 1-100 characters"
+        if feature and not set(criteria) <= (spec_ids or set()):
+            return (
+                None,
+                f"{source}: UI state names a criterion the spec does not define",
+            )
+        states.append(UiState(name, tuple(criteria or ()), path, check, agent=feature))
     return tuple(states), None
+
+
+def feature_ui_states(
+    text: str | None, spec_ids: set[str], *, present: bool, too_large: bool
+) -> tuple[tuple[UiState, ...] | None, str | None]:
+    """Parse the feature's ui-states.toml at head; a problem is a fixed reason."""
+    if not present:
+        return None, None
+    if too_large:
+        return None, f"{FEATURE}: larger than 1 MiB"
+    if text is None:
+        return None, f"{FEATURE}: not UTF-8 text"
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None, f"{FEATURE}: not valid TOML"
+    if set(data) - {"ui_states"}:
+        return None, f"{FEATURE}: has a top-level key other than ui_states"
+    return _ui_states(data.get("ui_states"), FEATURE, spec_ids)
+
+
+def merge_ui_states(
+    config: ReviewConfig, states: tuple[UiState, ...] | None, error: str | None
+) -> ReviewConfig:
+    """Repository entries, then the feature's; the repository's reason first."""
+    if config.ui_error is not None:
+        return config
+    if error is not None:
+        return replace(config, ui_states=None, ui_error=error)
+    if config.ui_states is None and states is None:
+        return replace(config, ui_states=None)
+    merged = (*(config.ui_states or ()), *(states or ()))
+    if len(merged) > UI_LIMIT:
+        return replace(config, ui_states=None, ui_error="more than 50 UI states")
+    return replace(config, ui_states=merged)
 
 
 def _manifest(text: str | None, raw: bytes | None) -> Manifest | None:
@@ -1024,7 +1083,19 @@ class _Step:
             )
         check_runs = self.check_runs(head)
         spec_ids = {ac_id for ac_id, _, _ in criteria}
-        config = review_config(root, spec_ids)
+        # A listed file whose text is None reads "not UTF-8 text", also after a
+        # failed `git cat-file`: the section is derived and the next checkpoint
+        # reads it again.
+        ui_text, _ = read(FEATURE)
+        config = merge_ui_states(
+            review_config(root),
+            *feature_ui_states(
+                ui_text,
+                spec_ids,
+                present=FEATURE in files,
+                too_large=FEATURE in too_large,
+            ),
+        )
         api = None
         if config.openapi is not None:
             api = self.compare_api(config.openapi, base, head)
@@ -1114,10 +1185,11 @@ class _Step:
                 state.criteria,
                 "present" if found else MISSING,
                 state.path if found else None,
+                agent=state.agent,
             )
         named = [r for r in runs if r.name == state.check]
         if not named:
-            return UiResult(state.name, state.criteria, MISSING)
+            return UiResult(state.name, state.criteria, MISSING, agent=state.agent)
         latest = named[-1]
         if latest.status != "completed":
             result = "not run (in progress)"
@@ -1127,7 +1199,9 @@ class _Step:
             result = NOT_RUN
         else:
             result = FAILED
-        return UiResult(state.name, state.criteria, result, None, latest.id)
+        return UiResult(
+            state.name, state.criteria, result, None, latest.id, agent=state.agent
+        )
 
     # --- OpenAPI (R10) ----------------------------------------------------
 
@@ -1357,7 +1431,8 @@ def _detail(sources: Sources, criterion: Criterion, level: int) -> str:
             lines.append(line)
         detail = f"{criterion.reason}: " + "; ".join(lines)
     for result in criterion.ui:
-        detail += f" · UI {inert(result.name, 80)}: {_ui_text(sources, result)}"
+        label = f" ({AGENT_LABEL})" if result.agent else ""
+        detail += f" · UI {inert(result.name, 80)}{label}: {_ui_text(sources, result)}"
     deferred = [
         d.id for d in sources.deferred if criterion.id in d.criteria and d.recorded
     ]
@@ -1604,7 +1679,10 @@ def _ui_lines(sources: Sources, level: int, archive: bool) -> list[str]:  # noqa
         done = sum(u.result in {"present", "passed"} for u in sources.ui)
         return [*lines, f"UI states: {len(sources.ui)}, {done} with a result.", ""]
     items = [
-        f"- {inert(u.name, 80)} ({', '.join(u.criteria)}): {_ui_text(sources, u)}"
+        f"- {inert(u.name, 80)} ({', '.join(u.criteria)}, {AGENT_LABEL}): "
+        f"{_ui_text(sources, u)}"
+        if u.agent
+        else f"- {inert(u.name, 80)}: {_ui_text(sources, u)}"
         for u in sources.ui
     ]
     return [*lines, *(_capped(sources, items, archive) or ["None (0)."]), ""]

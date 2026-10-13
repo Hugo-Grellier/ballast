@@ -411,5 +411,67 @@ class LocalFallbackDocumentTests(unittest.TestCase):
                     self.assertTrue((path.parent / target).exists())
 
 
+class FeatureUiStatesDocumentTests(unittest.TestCase):
+    """#142 T020 [AC-017 to AC-019]: where UI states live and why it changed."""
+
+    ADR = "docs/adr/0019-feature-local-ui-states.md"
+
+    def packet_section(self) -> str:
+        spec_kit = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
+        section = spec_kit[spec_kit.index("### Acceptance packet") :]
+        return " ".join(section[: section.index("\n### ")].split())
+
+    def test_policy_describes_where_ui_states_live(self) -> None:
+        section = self.packet_section()
+        for text in (
+            "`specs/<feature>/ui-states.toml`",
+            "[[ui_states]]",
+            'criteria = ["AC-003"]',
+            "a non-empty `criteria` list and exactly one of `path` or `check`",
+            (
+                "`[[review.ui_states]]` in `ballast.toml` holds only criterion-less,"
+                " repository-wide entries"
+            ),
+            "at most 50 in total",
+            "criteria belong in the feature's ui-states.toml",
+            "labeled `agent-declared in ui-states.toml`",
+            "A UI state never changes a criterion's state",
+            "names the failing source",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, section)
+
+    def test_policy_explains_keeping_screenshots_current(self) -> None:
+        section = self.packet_section()
+        for text in (
+            "commit the new `path` file with the change that alters the screen",
+            "the packet links it at the head commit",
+            "A `check` result is read for the head commit only",
+            "shows `missing`",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, section)
+
+    def test_adr_0019_amends_adr_0006(self) -> None:
+        adr = " ".join((ROOT / self.ADR).read_text().split())
+        self.assertIn("- Status: proposed", adr)
+        for text in (
+            "`ballast.toml`",
+            "`specs/<feature>/ui-states.toml`",
+            "Amends: [ADR-0006](0006-review-packet-reads.md)",
+            "No new program, GitHub call, fetch or download",
+            "No agent authority beyond",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, adr)
+        adr_0006 = (ROOT / "docs/adr/0006-review-packet-reads.md").read_text()
+        self.assertIn("(0019-feature-local-ui-states.md)", adr_0006)
+        link = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+        for target in link.findall((ROOT / self.ADR).read_text()):
+            if "://" not in target:
+                with self.subTest(target=target):
+                    self.assertTrue((ROOT / self.ADR).parent.joinpath(target).exists())
+
+
 if __name__ == "__main__":
     unittest.main()

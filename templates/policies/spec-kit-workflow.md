@@ -1345,15 +1345,27 @@ publish` retry runs no checkpoint, and `ballast run continue` starts a
 new run whose packet reads only the new run's ledger.
 
 Optional review sections come from the `[review]` table of `ballast.toml`,
-which agents cannot change (run `ballast trust` after editing it):
+which agents cannot change (run `ballast trust` after editing it), and from the
+feature's own `ui-states.toml`:
 
 ```toml
 [review]
 openapi = "docs/api/openapi.json"   # a committed JSON OpenAPI document
 
-[[review.ui_states]]                 # at most 50
-name = "Login error"                 # 1-80 characters
-criteria = ["AC-003"]
+[[review.ui_states]]                 # repository-wide screens, no criteria
+name = "Home page"                   # 1-80 characters
+check = "ui / home"                  # a GitHub check run on the head commit, or instead:
+# path = "docs/screens/home.png"     # a committed file
+```
+
+UI states linked to criteria belong to the feature. Declare them in
+`specs/<feature>/ui-states.toml`, committed with the feature and read at the
+PR's head commit:
+
+```toml
+[[ui_states]]
+name = "Login error"                    # 1-80 characters
+criteria = ["AC-003"]                   # AC-NNN IDs this feature's spec.md defines
 path = "docs/screens/login-error.png"   # a committed file, or instead:
 # check = "ui / login-error"            # a GitHub check run on the head commit
 ```
@@ -1366,12 +1378,33 @@ path = "docs/screens/login-error.png"   # a committed file, or instead:
   human review. Only JSON is read; commit a JSON rendering of a YAML document.
   Otherwise the section says `no API change`, `added in this PR`,
   `removed in this PR` or `could not compare (<reason>)`.
-- Each UI state appears beside its criteria with a link to the file at the
-  head commit, or the check run's result (`passed`, `failed`, `not run`,
-  `not run (in progress)`), or `missing`. Ballast captures nothing itself.
-- Without the table each section is one `not configured` line; an invalid
-  value gives `configuration invalid (<reason>)` and the rest of the packet is
-  published.
+- The feature file's only top-level key is `ui_states`. Each entry has `name`,
+  a non-empty `criteria` list and exactly one of `path` or `check`. Its
+  criteria are checked against the same commit's `spec.md` of that feature
+  only, so one feature's file never affects another feature's packet. The
+  file is not a protected input: agents write it like `spec.md`.
+- `[[review.ui_states]]` in `ballast.toml` holds only criterion-less,
+  repository-wide entries. They are listed first on every feature's packet,
+  then the feature's entries; at most 50 in total. A `criteria` key there,
+  even `criteria = []`, gives `configuration invalid (ballast.toml: UI state
+  criteria belong in the feature's ui-states.toml)`: move the entry to the
+  feature's file.
+- Each feature entry appears in the UI states section and beside each of its
+  criteria labeled `agent-declared in ui-states.toml`; repository entries
+  appear only in the section and carry no label. A UI state never changes a
+  criterion's state.
+- A UI state shows a link to the file at the head commit, or the check run's
+  result (`passed`, `failed`, `not run`, `not run (in progress)`), or
+  `missing`. Ballast captures nothing itself. To keep a screenshot current,
+  commit the new `path` file with the change that alters the screen: the
+  packet links it at the head commit. A `check` result is read for the head
+  commit only, so a check that has not run on it, or a path absent at head,
+  shows `missing`.
+- Without either source the UI section is one `not configured` line, and
+  without `openapi` the API section is too. An invalid value gives
+  `configuration invalid (<reason>)` and the rest of the packet is published.
+  A UI reason names the failing source, `ballast.toml:` or
+  `ui-states.toml:`, and the repository's is shown when both fail.
 
 The packet section is replaced in place, appended again after a human deletes
 it, and left unedited when nothing but its generation time changed. When the
@@ -1407,8 +1440,8 @@ exit status or its step state; the next checkpoint retries.
 
 The packet adds only read calls to the checkpoint's GitHub authority (the PR,
 check runs at the head commit, the configured OpenAPI file) and local Git reads
-of the head commit; it never fetches, pushes or commits. See ADR-0006 in the
-Ballast repository.
+of the head commit; it never fetches, pushes or commits. See ADR-0006 and
+ADR-0019 in the Ballast repository.
 
 ### Demo capture
 

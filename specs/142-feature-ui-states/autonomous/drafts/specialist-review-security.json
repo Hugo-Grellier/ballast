@@ -1,0 +1,36 @@
+{
+  "point": "specialist-review",
+  "decision": "accept-finding",
+  "summary": "Security recheck after cycle 3 approved: ui-states.toml is still read at head only, validated, rendered inert with a fixed label, and changes no criterion state or protected input; cycle 3 changed no tracked file.",
+  "basis": "Fix cycle 3 carried no findings, only the timed-out test check, and changed no tracked file. I reviewed the whole diff again against dfa191c. The feature file is read only through the existing read() closure: it returns nothing for a name git ls-tree did not list under the feature at head, else reads via cat-file under the 1 MiB limit. No new git or gh call, program or fetch (FR-014). Entries pass the shared validator; names go through inert(); links are Ballast-built; the label is a constant set only from the source argument; UI results never feed criterion states (FR-012). Protected inputs and the trust baseline are unchanged, per the operator's Issue #142 intake decision 2b. D-002 proposes changing the guard environment for checks; that is R2 work kept outside this diff for a human. No step has observed test_packet passing, and the test check timed out after the last cycle, which stops the run for a human regardless of this verdict.",
+  "evidence": [
+    "specs/142-feature-ui-states/reviews/security.md",
+    "tools/spec_workflow/packet.py",
+    "docs/adr/0019-feature-local-ui-states.md",
+    "specs/142-feature-ui-states/spec.md",
+    "specs/142-feature-ui-states/decisions.md",
+    "specs/142-feature-ui-states/autonomous/record.md"
+  ],
+  "artifact": "tools/spec_workflow/packet.py",
+  "model": "claude-opus-5-5",
+  "material": false,
+  "supersedes": null,
+  "privileged_actions": [],
+  "review": {
+    "kind": "security",
+    "verdict": "approved",
+    "report": "specs/142-feature-ui-states/reviews/security.md",
+    "findings": [
+      {
+        "id": "F-001",
+        "severity": "info",
+        "label": "spec-ambiguity",
+        "disposition": "open",
+        "reason": "A feature entry may name any committed path or head-commit check, including an unrelated passing one, and the packet shows it beside the criterion. The spec accepts this edge case. The fixed agent-declared label and FR-012 bound it, and the merge reviewer should judge these links like other agent-written content.",
+        "evidence": ["specs/142-feature-ui-states/spec.md"]
+      }
+    ],
+    "required_kinds": []
+  },
+  "assumption": null
+}
