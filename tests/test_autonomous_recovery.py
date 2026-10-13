@@ -957,6 +957,56 @@ class ResumeTests(StubCase):
             {"cycles": 2, "state": "review-pending"},
         )
 
+    def limit_block_at(self, step: str, limit: str) -> str:
+        """Block a run at `step` with the recorder's `limit` block, inputs kept."""
+        run_id = self.blocked_run(step=step)
+        inputs = autonomy.read_block(self.root, run_id).get("inputs") or {}
+        autonomy.record_block(
+            self.root,
+            run_id,
+            autonomy.make_block(
+                "limit",
+                autonomy.limit_condition(limit, "check 'x' timed out after 60 min"),
+                run_id=run_id,
+                step_id=step,
+                limit=limit,
+            ),
+        )
+        autonomy.set_block_inputs(self.root, run_id, inputs)
+        self.engine.update(status="failed", code=1, step=step)
+        return run_id
+
+    def test_check_timeout_resumes_at_the_feedback_checks(self) -> None:
+        """#146 T019 [AC-015]: the checks rerun under the trusted new timeout."""
+        for step, checks in (
+            ("record-implementation-review", "checks-implementation"),
+            ("record-fix-review-1", "checks-fix-1"),
+        ):
+            with self.subTest(step=step):
+                run_id = self.limit_block_at(step, "check-timeout")
+                code, out, err = self.main("resume", run_id)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn(f"resumes in Autonomous at {checks}", out)
+                self.assertEqual(self.resumed_at, checks)
+
+    def test_an_earlier_changed_input_still_wins(self) -> None:
+        (self.root / FEATURE).mkdir(parents=True, exist_ok=True)
+        spec = self.root / FEATURE / "spec.md"
+        spec.write_text("# Spec\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "spec")
+        run_id = self.limit_block_at("record-implementation-review", "check-timeout")
+        spec.write_text("# Spec\n\nChanged during the block.\n")
+        _, out, err = self.main("resume", run_id)
+        self.assertIn("resumes in Autonomous at validate-spec", out + err)
+        self.assertEqual(self.resumed_at, "validate-spec")
+
+    def test_fix_cycle_limit_reenters_as_before(self) -> None:
+        run_id = self.limit_block_at("record-fix-review-3", "fix-cycles")
+        _, out, err = self.main("resume", run_id)
+        self.assertIn("resumes in Autonomous at review-fix-3", out + err)
+        self.assertEqual(self.resumed_at, "review-fix-3")
+
 
 class CheckpointTests(StubCase):
     """T034 [AC-023, AC-024, AC-025, AC-033; quickstart 19-20]."""

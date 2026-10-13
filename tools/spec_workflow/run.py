@@ -1882,13 +1882,30 @@ def _block_step(failed: str | None, steps: list[str]) -> str | None:
     return failed
 
 
+def _check_timeout_step(failed: str | None, steps: list[str]) -> str | None:
+    """Return the feedback checks step before a `check-timeout` block (#146)."""
+    if failed == "record-implementation-review":
+        target = "checks-implementation"
+    else:
+        match = re.fullmatch(r"record-fix-review-(\d+)", failed or "")
+        target = f"checks-fix-{match.group(1)}" if match else None
+    return target if target in steps else None
+
+
 def _reentry(run_id: str, record: dict, block: dict) -> tuple[str, list[str]]:
-    """Return the earliest of the block step and changed inputs' steps (#21 R6)."""
+    """Return the earliest of the block step and changed inputs' steps (#21 R6).
+
+    A `check-timeout` block re-enters at its feedback checks step, which
+    reruns the checks under the timeout of the trusted ballast.toml (#146).
+    """
     steps = _engine_steps(run_id)
     if not steps:
         message = f"run {run_id}'s workflow copy lists no steps to resume at"
         raise RuntimeError(message)
-    step = _block_step(_engine_state(run_id).get("current_step_id"), steps)
+    failed = _engine_state(run_id).get("current_step_id")
+    step = _block_step(failed, steps)
+    if block.get("category") == "limit" and block.get("limit") == "check-timeout":
+        step = _check_timeout_step(failed, steps) or step
     if step is None:
         message = f"run {run_id}'s workflow state names no step to resume at"
         raise RuntimeError(message)

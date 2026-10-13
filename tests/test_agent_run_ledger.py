@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import ClassVar
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,10 +47,26 @@ def git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+RUN_VARIABLES = ("BALLAST_SPEC_WORKFLOW", "SPECKIT_WORKFLOW_RUN_ID")
+
+
+def _clear_run_variables(test: unittest.TestCase) -> None:
+    """Unset the run variables for one test, whatever the caller set (#146 R5).
+
+    A test that needs one sets it in its own `patch.dict`, nested inside this.
+    """
+    patcher = patch.dict(os.environ)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    for name in RUN_VARIABLES:
+        os.environ.pop(name, None)
+
+
 class LedgerTests(unittest.TestCase):
     """Exercise ledger storage and deterministic import with fictional runs."""
 
     def setUp(self) -> None:
+        _clear_run_variables(self)
         self.temp = TemporaryDirectory()
         self.root = Path(self.temp.name)
         git(self.root, "init", "-q")
@@ -3209,6 +3226,10 @@ SHA_A = "b" * 64
 class SpecCriteriaTests(unittest.TestCase):
     """R6: one criteria parser for both list forms."""
 
+    def setUp(self) -> None:
+        super().setUp()
+        _clear_run_variables(self)
+
     def test_parses_both_forms_in_order_with_titles_and_lines(self) -> None:
         text = (
             "# Spec\n"
@@ -3241,6 +3262,7 @@ class CommitFingerprintTests(unittest.TestCase):
     """R3: a clean checkout's fingerprint equals its commit's."""
 
     def setUp(self) -> None:
+        _clear_run_variables(self)
         self.temp = TemporaryDirectory()
         self.root = Path(self.temp.name)
         git(self.root, "init", "-q")
@@ -3397,6 +3419,7 @@ class AcceptancePacketEventTests(unittest.TestCase):
     PUBLISHED = PUBLISHED_PACKET
 
     def setUp(self) -> None:
+        _clear_run_variables(self)
         self.temp = TemporaryDirectory()
         self.root = Path(self.temp.name)
         git(self.root, "init", "-q")
@@ -3732,6 +3755,92 @@ class ChatModeLedgerTests(unittest.TestCase):
                     "e2",
                 ),
             )
+
+
+class OperatorStepGuardTests(unittest.TestCase):
+    """#146 T010 [AC-008]: either run variable alone refuses an attestation."""
+
+    setUp = LedgerTests.setUp
+    tearDown = LedgerTests.tearDown
+
+    def test_either_run_variable_refuses(self) -> None:
+        refusal = "operator attestation is unavailable inside an agent step"
+        for variables in (
+            {"BALLAST_SPEC_WORKFLOW": "1"},
+            {"SPECKIT_WORKFLOW_RUN_ID": "run_1"},
+            {"BALLAST_SPEC_WORKFLOW": "1", "SPECKIT_WORKFLOW_RUN_ID": "run_1"},
+        ):
+            with self.subTest(variables=sorted(variables)):
+                with patch.dict(os.environ, variables):
+                    with self.assertRaisesRegex(ledger.LedgerError, refusal):
+                        ledger._operator_step_guard()  # noqa: SLF001
+                    with self.assertRaisesRegex(ledger.LedgerError, refusal):
+                        ledger._check(  # noqa: SLF001 - the attestation command
+                            self.root,
+                            "run_1",
+                            "AC-001",
+                            "tests.test_demo.DemoTests.test_one",
+                        )
+                ledger._operator_step_guard()  # noqa: SLF001 - cleared again
+
+
+class IsolationTests(unittest.TestCase):
+    """#146 T011 [AC-007, AC-009]: no test depends on the caller's run variables."""
+
+    CALLER: ClassVar[dict[str, str]] = {
+        "BALLAST_SPEC_WORKFLOW": "1",
+        "SPECKIT_WORKFLOW_RUN_ID": "run_from_caller",
+    }
+
+    def test_each_class_clears_and_restores_the_run_variables(self) -> None:
+        classes = (
+            LedgerTests,
+            SpecCriteriaTests,
+            CommitFingerprintTests,
+            AcceptancePacketEventTests,
+            DemoCaptureEventTests,
+            ChatModeLedgerTests,
+            OperatorStepGuardTests,
+        )
+        with patch.dict(os.environ, self.CALLER):
+            for case_class in classes:
+                with self.subTest(case=case_class.__name__):
+                    name = unittest.TestLoader().getTestCaseNames(case_class)[0]
+                    case = case_class(name)
+                    case.setUp()
+                    try:
+                        for variable in RUN_VARIABLES:
+                            self.assertNotIn(variable, os.environ)
+                    finally:
+                        case.tearDown()
+                        case.doCleanups()
+                    for variable, value in self.CALLER.items():
+                        self.assertEqual(os.environ.get(variable), value)
+
+    def test_named_tests_pass_under_a_caller_with_both_variables(self) -> None:
+        for name in (
+            "test_criterion_mapped_to_no_test_stays_missing",
+            "test_stale_manifest_does_not_block_runner_snapshot",
+            # Sets its own variable and still asserts the refusal (AC-009).
+            "test_explicit_record_cannot_forge_snapshot_or_ac_check",
+        ):
+            with self.subTest(test=name):
+                self.assertTrue(hasattr(LedgerTests, name))
+                done = subprocess.run(  # noqa: S603 - this interpreter, one test
+                    [
+                        sys.executable,
+                        "-m",
+                        "unittest",
+                        f"tests.test_agent_run_ledger.LedgerTests.{name}",
+                    ],
+                    cwd=ROOT,
+                    env={**os.environ, **self.CALLER},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("Ran 1 test", done.stderr)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,11 @@ sys.pycache_prefix = os.devnull
 from launcher import digests, state_dir, venv_warning  # noqa: E402
 
 VERSION = 1
+# The agent git guard directory: agent steps put it first on PATH, checks
+# never see it (#34, ADR-0021).
+GUARD = Path(__file__).resolve().parent / "guard"
+# Set for every workflow step; an agent step keeps them, a check does not.
+RUN_VARIABLES = ("BALLAST_SPEC_WORKFLOW", "SPECKIT_WORKFLOW_RUN_ID")
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 FEATURE = re.compile(r"specs/([1-9][0-9]*)-[a-z0-9]+(?:-[a-z0-9]+)*")
 MODES = ("human-gated", "autonomous", "chat")
@@ -194,13 +199,16 @@ ACCEPTANCE_TESTS = 100
 FIX_CYCLES = 3
 DRAFT_RETRIES = 2
 FIX_STATES = ("idle", "fix-pending", "review-pending")
-LIMIT_KINDS = ("agent-steps", "wall-time", "fix-cycles", "retries")
+# `check-timeout`: every failed feedback check timed out and no finding is
+# open, so only the operator can help (#146 ADR-0021).
+LIMIT_KINDS = ("agent-steps", "wall-time", "fix-cycles", "retries", "check-timeout")
 # How a limit block's condition starts (FR-023).
 LIMIT_LABELS = {
     "agent-steps": "agent-step limit",
     "wall-time": "wall-time limit",
     "fix-cycles": f"fix-cycle limit ({FIX_CYCLES})",
     "retries": f"draft retries ({DRAFT_RETRIES})",
+    "check-timeout": "check timeout",
 }
 FIX_CYCLE_STEPS = (
     "fix",
@@ -1252,6 +1260,8 @@ LIMIT_RECOVERY = {
     "continue human-gated.",
     "retries": "Read the refused draft and the validator's message in the agent "
     "logs, then resume, or continue human-gated.",
+    "check-timeout": "Raise [checks] timeout_minutes in ballast.toml or speed up "
+    "the named commands, run ballast trust, then resume, or continue human-gated.",
 }
 # A fixed limit before implementation (SEC2-002): nothing to continue yet.
 RESTART_RECOVERY = (
@@ -2131,6 +2141,32 @@ def confined_env(env: dict[str, str], integration: str | None) -> dict[str, str]
             and name not in CREDENTIAL_LOCATIONS
         )
     }
+
+
+def check_env(env: dict[str, str]) -> dict[str, str]:
+    """Return a check command's or acceptance check's environment, like CI's.
+
+    The secret filter, then without the agent git guard on `PATH` (this
+    install's, or any `spec_workflow/guard` another checkout put there),
+    `BALLAST_GIT` or the run variables (ADR-0021). A check gains nothing: its
+    bwrap confinement is built from the operator's environment, unchanged.
+    """
+    result = confined_env(env, None)
+    for name in ("BALLAST_GIT", *RUN_VARIABLES):
+        result.pop(name, None)
+    if "PATH" in result:
+        guard = os.path.normpath(GUARD)
+        result["PATH"] = os.pathsep.join(
+            entry
+            for entry in result["PATH"].split(os.pathsep)
+            if not entry
+            or (
+                os.path.normpath(entry) != guard
+                and Path(os.path.normpath(entry)).parts[-2:]
+                != ("spec_workflow", "guard")
+            )
+        )
+    return result
 
 
 def claude_homes(home: Path, env: dict[str, str]) -> list[Path]:

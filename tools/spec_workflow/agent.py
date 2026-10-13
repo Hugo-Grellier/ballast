@@ -105,7 +105,7 @@ AUTH_REASONS = {
 SETTINGS = HERE / "claude-settings.json"
 # The Chat-only additions to the headless rules (#20 contracts/step-runner.md).
 CHAT_SETTINGS = HERE / "claude-chat-settings.json"
-GUARD = HERE / "guard"
+GUARD = autonomy.GUARD
 # Commands a confined Claude step may also run: read-only ones (#37) and
 # chmod (#79), whose writes bubblewrap confines to the worktree and throwaway
 # mounts, none of which the launcher executes. Bubblewrap, not these rules,

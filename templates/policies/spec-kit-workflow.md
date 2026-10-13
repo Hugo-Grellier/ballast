@@ -502,10 +502,10 @@ runner contract for it. Every validator above still runs unchanged.
 | `record-decision --point P` | trusted `artifacts.py` | The draft was written by the immediately preceding agent step, passes the decision-draft contract and never claims human approval; the decision is appended to the hash-chained log in operator state and `autonomous/record.md` is re-rendered. Every later check fails if `record.md` differs from the log. |
 | `record-provisional-intent` | trusted `artifacts.py` | Writes the `workflow-provisional` block in `intent.md`, bound to the current spec digest; a later spec change makes it stale. With `--renew` (after decision resolutions) a changed spec blocks the run as stale intent; the runner never decides intent. In an Autonomous run every human approval block is refused. |
 | Reviews (`review-plan`, `review-implementation`, `review-specialists`, `reconcile-spec`) | confined agent on the other provider when available; Claude for every role when Codex's own sandbox cannot start inside `bwrap` (checked once at start, recorded in the run) | One entry per required review kind (security always); any `high` or `critical` finding, or a verdict other than `approved`, blocks; a reviewer that edits source blocks. |
-| `checks-implementation`, `checks-fix-N` (`run-checks --feedback`) | trusted `artifacts.py`, confined | The same `[checks]` commands as `run-checks`, as feedback for the fix loop: a failed command is recorded in operator state (`checks-feedback.jsonl`) and reaches the fix step only through the fix input, never as a block; a protected-input change, a tree change or the wall-time limit still blocks. A cycle step with nothing to do writes nothing. |
-| `fix-N` (`speckit.ballast.fix`), `record-fix-N`, `review-fix-N`, `review-specialists-fix-N`, `record-fix-review-N` (`record-decision --point implementation-review --recheck`) | confined agent (skipped by the wrapper unless the run's fix state asks for it), then trusted `artifacts.py` | The fix step changes only code, tests, `tasks.md` and `decisions.md` for the findings and failed checks the fix input lists; `record-fix` counts the cycle only after that step ran and the implementation contract still holds; the recheck records the reviews again, superseding the earlier ones, and sets the next fix state or blocks as `fix-cycle limit (3)`. |
+| `checks-implementation`, `checks-fix-N` (`run-checks --feedback`) | trusted `artifacts.py`, confined, in the [check environment](#autonomous-runs) | The same `[checks]` commands as `run-checks`, as feedback for the fix loop: a failed command is recorded in operator state (`checks-feedback.jsonl`) and reaches the fix step only through the fix input, never as a block; a protected-input change, a tree change or the wall-time limit still blocks. A cycle step with nothing to do writes nothing. |
+| `fix-N` (`speckit.ballast.fix`), `record-fix-N`, `review-fix-N`, `review-specialists-fix-N`, `record-fix-review-N` (`record-decision --point implementation-review --recheck`) | confined agent (skipped by the wrapper unless the run's fix state asks for it), then trusted `artifacts.py` | The fix step changes only code, tests, `tasks.md` and `decisions.md` for the findings and failed checks the fix input lists; `record-fix` counts the cycle only after that step ran and the implementation contract still holds; the recheck records the reviews again, superseding the earlier ones, and sets the next fix state or blocks as `fix-cycle limit (3)`. When every failed feedback check timed out and no finding is blocking or open to fix, the recorder (first record or recheck) blocks at once as `check-timeout` instead, without consuming a cycle. |
 | Draft retries | the trusted agent wrapper | After an Autonomous agent step, the recorder's own draft checks; a correctable refusal reruns the step with the message, at most twice, each attempt counted. |
-| `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. When the commands pass, it then runs each test `acceptance-evidence.json` maps, once, confined with the whole checkout read-only, within the check timeout and the wall time, and records one `runner-recorded` result per criterion and test in the ledger (ADR-0018 in the Ballast repository). A missing, malformed, stale, ignored or oversized (over 100 criterion-test pairs or 1 MiB) manifest, or no `.venv/bin/python`, runs none and is named in the run record, as is a test whose file is ignored or missing (not in the published tree); a failed test is recorded, not a block. |
+| `run-checks` | trusted `artifacts.py`, confined, in the [check environment](#autonomous-runs) | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. When the commands pass, it then runs each test `acceptance-evidence.json` maps, once, confined with the whole checkout read-only, within the check timeout and the wall time, and records one `runner-recorded` result per criterion and test in the ledger (ADR-0018 in the Ballast repository). A missing, malformed, stale, ignored or oversized (over 100 criterion-test pairs or 1 MiB) manifest, or no `.venv/bin/python`, runs none and is named in the run record, as is a test whose file is ignored or missing (not in the published tree); a failed test is recorded, not a block. |
 | Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. The publisher itself never merges, marks ready, releases or deploys. For a run whose operator set `[autonomous] completion = "ready"`, `run.py` then marks the PR ready for review after the checkpoint and packet when every condition holds ([PR completion](#autonomous-runs)); that is not an approval. |
 
 Agent steps in an Autonomous run run under `bwrap`: the host is read-only, the
@@ -529,7 +529,7 @@ in process, on the run's feature.
 | Interactive agent step | confined agent behind a wrapper-owned pty | Runs only after the launcher's checks and branch synchronization in the same invocation; anything its permission rules do not allow is denied without a prompt. |
 | Close of a `step` | trusted `chat.py` | The agent's scope is confirmed stopped, protected inputs are unchanged, the phase's postcondition passes and the step changed only its write scope (`specs/<f>/` before `implement`, `specs/<f>/reviews/` for a review). |
 | `approve`, `reject`, `resolve` | the operator, from a terminal | No step is active, the gate's precondition passes, and the operator types the confirmation; the human decision is bound to the artifact's digest and is current only while it matches. |
-| `checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry runs and its result is recorded with the tree it ran on; no `[checks]` table is recorded as unavailable. |
+| `checks` | trusted `artifacts.py`, confined, in the [check environment](#autonomous-runs) | Each `[checks] commands` entry runs and its result is recorded with the tree it ran on; no `[checks]` table is recorded as unavailable. |
 | `publish` | `run.py` as the operator | The final approval and the project checks are current for this tree; then the Autonomous publication path commits, pushes and writes a Chat section, rendered from operator records, into the single Draft PR, then runs the Draft PR checkpoint, which refreshes that PR and attempts the acceptance packet; a packet failure, or a PR that GitHub does not list yet, leaves the publication successful and names `ballast run checkpoint RUN` as the retry. |
 
 **Upstream candidates** (github/spec-kit; this workflow does not wait for them):
@@ -724,6 +724,36 @@ dispositions are agent-provisional, like every decision of the run. A run
 started before ballast-autonomous 1.2.0 has no fix step, so its findings block
 as before.
 
+**Check timeout.** `[checks] timeout_minutes` (default 30, from 1 to 240) is
+the timeout of each `[checks]` command and runner acceptance check, read only
+from the trusted `ballast.toml`; no command runs past the run's remaining wall
+time either. A fix step cannot change `ballast.toml`, so a timeout is not
+something it can fix: when every failed feedback check timed out and no review
+finding is blocking or open to fix, the implementation-review recorder blocks
+the run at once as an exhausted limit, `check-timeout`, without consuming a
+fix cycle, even at the last cycle. The block names each timed-out command and
+the timeout applied to it, or that the run's wall time ran out. To recover,
+raise `[checks] timeout_minutes` in `ballast.toml` or speed up the named
+commands, run `ballast trust`, then `ballast run resume RUN_ID`, or continue
+human-gated; the resume re-enters at the feedback checks step
+(`checks-implementation` or `checks-fix-N`), so the checks run again under the
+new timeout before the reviews. A timeout together with a non-timeout failure
+or an open finding keeps the fix loop, and a timed-out final `run-checks`
+blocks as a failed check (`postcondition`), as any failed check does.
+
+**Check environment.** Every `[checks]` command and every runner acceptance
+check, in Autonomous, Chat and human-gated runs alike, runs in an environment
+like CI: the agent git guard (`spec_workflow/guard`) is removed from `PATH`,
+wherever and however often it appears, and `BALLAST_GIT`,
+`BALLAST_SPEC_WORKFLOW` and `SPECKIT_WORKFLOW_RUN_ID` are unset; the other
+`PATH` entries keep their order and nothing is added. The confinement does not
+change: the commands still run under `bwrap` with a read-only host, hidden
+credential paths and secret-named variables dropped, the checkout writable
+except its protected inputs (read-only for acceptance checks). So a project's
+tests that run `git` or set the run variables behave as in CI. Agent steps keep
+the guard first on `PATH`, `BALLAST_GIT` and both run variables (ADR-0021 in
+the Ballast repository).
+
 **Draft retries.** Right after an agent step, the wrapper runs the recorder's
 own draft checks. When a draft breaks a rule the agent can correct in its own
 text (a length or format limit, a missing or misnamed draft, a missing path,
@@ -758,7 +788,8 @@ before it records anything and is resumed the same way. It then records the
 operator's resolution as a human decision of kind `block-resolution` (`--ref`,
 1–500 characters that must not read as an approval, or a default naming the
 block), and re-enters the workflow at the blocked step: the failed agent step
-or validator, or for a failed recorder the agent step whose drafts it records.
+or validator, or for a failed recorder the agent step whose drafts it records
+(for a `check-timeout` block, the feedback checks step before it).
 When an input changed during the block (the discovery brief, spec, intent,
 plan, tasks or decisions of the feature, or, once implementation started, any
 file outside the feature directory), the run re-enters at that input's

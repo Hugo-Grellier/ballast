@@ -152,7 +152,11 @@ class TasksTemplateTests(unittest.TestCase):
             self.assertIn(template[start : template.index("\n", start)], installed)
 
     def test_implementation_check_is_unchanged(self) -> None:
-        """check_implementation still requires every task done (D-07)."""
+        """check_implementation still requires every task done (D-07).
+
+        Runs the one contract test that asserts it; the rest of its class runs
+        in the suite on its own (#146 T022).
+        """
         import subprocess  # noqa: PLC0415
         import sys  # noqa: PLC0415
 
@@ -161,7 +165,10 @@ class TasksTemplateTests(unittest.TestCase):
                 sys.executable,
                 "-m",
                 "unittest",
-                "tests.test_spec_workflow.ArtifactContractTests",
+                (
+                    "tests.test_spec_workflow.ArtifactContractTests."
+                    "test_implementation_needs_completed_tasks_and_a_change"
+                ),
             ],
             cwd=ROOT,
             capture_output=True,
@@ -169,6 +176,7 @@ class TasksTemplateTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertIn("Ran 1 test", result.stderr)
 
 
 class PolicyWordingTests(unittest.TestCase):
@@ -764,6 +772,76 @@ class AutonomousStopRuleDocumentTests(unittest.TestCase):
         ):
             with self.subTest(document=name):
                 self.assertIsNone(autonomy.HUMAN_APPROVAL.search(value))
+
+
+class CheckEnvironmentDocumentTests(unittest.TestCase):
+    """#146 T027 [AC-019, AC-020]: the check environment and the timeout block."""
+
+    ADR = "docs/adr/0021-check-command-environment.md"
+
+    def autonomous_section(self) -> str:
+        spec_kit = (ROOT / "templates/policies/spec-kit-workflow.md").read_text()
+        section = spec_kit[spec_kit.index("## Autonomous runs") :]
+        return " ".join(section[: section.index("\n## ")].split())
+
+    def test_policy_describes_the_check_environment(self) -> None:
+        section = self.autonomous_section()
+        for text in (
+            (
+                "**Check environment.** Every `[checks]` command and every runner "
+                "acceptance check, in Autonomous, Chat and human-gated runs alike"
+            ),
+            "the agent git guard (`spec_workflow/guard`) is removed from `PATH`",
+            (
+                "`BALLAST_GIT`, `BALLAST_SPEC_WORKFLOW` and `SPECKIT_WORKFLOW_RUN_ID` "
+                "are unset"
+            ),
+            "still run under `bwrap`",
+            "secret-named variables dropped",
+            "Agent steps keep the guard first on `PATH`",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, section)
+
+    def test_policy_describes_the_timeout_and_its_block(self) -> None:
+        section = self.autonomous_section()
+        for text in (
+            "`[checks] timeout_minutes` (default 30, from 1 to 240)",
+            "read only from the trusted `ballast.toml`",
+            "`check-timeout`, without consuming a fix cycle",
+            (
+                "raise `[checks] timeout_minutes` in `ballast.toml` or speed up the "
+                "named commands, run `ballast trust`, then `ballast run resume RUN_ID`"
+            ),
+            "(`checks-implementation` or `checks-fix-N`)",
+            "a timed-out final `run-checks` blocks as a failed check (`postcondition`)",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, section)
+
+    def test_adr_0021_records_the_boundary(self) -> None:
+        adr = " ".join((ROOT / self.ADR).read_text().split())
+        self.assertIn("- Status: proposed", adr)
+        for text in (
+            "Extends: [ADR-0018](0018-runner-recorded-acceptance-checks.md)",
+            "`BALLAST_GIT`, `BALLAST_SPEC_WORKFLOW` and `SPECKIT_WORKFLOW_RUN_ID`",
+            "The bwrap argv does not change",
+            (
+                "Agent steps keep the guard first on `PATH`, `BALLAST_GIT` and both "
+                "run variables"
+            ),
+            "## Why this grants a check no authority",
+            "`check-timeout`",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, adr)
+        adr_0018 = ROOT / "docs/adr/0018-runner-recorded-acceptance-checks.md"
+        self.assertIn("(0021-check-command-environment.md)", adr_0018.read_text())
+        link = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+        for target in link.findall((ROOT / self.ADR).read_text()):
+            if "://" not in target:
+                with self.subTest(target=target):
+                    self.assertTrue((ROOT / self.ADR).parent.joinpath(target).exists())
 
 
 if __name__ == "__main__":

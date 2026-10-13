@@ -825,6 +825,12 @@ class HumanGatedSnapshotTests(RunCase):
         environment = run._environment("run1")  # noqa: SLF001
         self.assertFalse(set(environment) & set(run.draft_pr.TOKEN_VARIABLES))
 
+    def test_workflow_steps_keep_the_run_variables(self) -> None:
+        """#146 T005 [AC-006]: only check commands lose them."""
+        environment = run._environment("run1")  # noqa: SLF001
+        self.assertEqual(environment["BALLAST_SPEC_WORKFLOW"], "1")
+        self.assertEqual(environment["SPECKIT_WORKFLOW_RUN_ID"], "run1")
+
     def test_autonomous_start_still_fails_closed(self) -> None:
         (self.gh_dir / "FAIL_api").write_text("")
         code, _, err = self.start()

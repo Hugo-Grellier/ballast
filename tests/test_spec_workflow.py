@@ -5084,3 +5084,31 @@ class SetupBaselineLauncherTests(LauncherStateCase):
         )
         self.assertIn("no trusted baseline", self.refusal())
         self.assertNotIn("baseline_source", self.status())
+
+
+class AgentStepEnvironmentTests(unittest.TestCase):
+    """#146 T005 [AC-006]: agent steps keep the guard; only checks lose it."""
+
+    def test_agent_step_still_runs_git_through_the_guard(self) -> None:
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import agent  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(agent.GUARD, autonomy.GUARD)
+        caller = {
+            "PATH": os.pathsep.join(("/usr/local/bin", "/usr/bin")),
+            "BALLAST_SPEC_WORKFLOW": "1",
+            "SPECKIT_WORKFLOW_RUN_ID": "run42",
+        }
+        with (
+            patch.dict(os.environ, caller, clear=True),
+            patch.object(
+                agent.autonomy, "trusted_program", return_value=("/usr/bin/git", False)
+            ),
+        ):
+            env = agent._base_env(ROOT)  # noqa: SLF001
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(agent.GUARD))
+        self.assertEqual(env["BALLAST_GIT"], "/usr/bin/git")
+        self.assertEqual(env["BALLAST_SPEC_WORKFLOW"], "1")
+        self.assertEqual(env["SPECKIT_WORKFLOW_RUN_ID"], "run42")

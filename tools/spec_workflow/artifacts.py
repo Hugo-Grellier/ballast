@@ -2673,6 +2673,53 @@ def _open_to_fix(reviews: list[dict]) -> list[str]:
     ]
 
 
+def _timeout_only(feature: Feature, reviews: list[dict]) -> list[dict]:
+    """Return the latest feedback failures when no fix step could address them.
+
+    Every failed check timed out, and no finding is blocking or open to fix:
+    a fix step cannot change the trusted timeout (#146). Otherwise [].
+    """
+    failed = _failed_feedback(feature)
+    if (
+        not failed
+        or not all(r.get("timed_out") for r in failed)
+        or _blocking(reviews)
+        or _open_to_fix(reviews)
+    ):
+        return []
+    return failed
+
+
+def _timeout_condition(feature: Feature, failed: list[dict]) -> str:
+    """Name each timed-out command and the timeout applied to it."""
+    try:
+        configured = autonomy.parse_checks(autonomy.load_config(feature.root))
+        minutes = configured["timeout_minutes"]
+    except autonomy.AutonomyError:
+        minutes = autonomy.CHECK_TIMEOUT[2]
+    entries = []
+    for result in failed:
+        # A result from before #146 has no timeout_seconds: the configured one.
+        seconds = result.get("timeout_seconds", minutes * 60)
+        if isinstance(seconds, int) and seconds < minutes * 60:
+            entries.append(
+                f"check {result.get('command')!r} timed out when the run's wall "
+                f"time ran out ({seconds} s)"
+            )
+        else:
+            entries.append(
+                f"check {result.get('command')!r} timed out after "
+                f"{int(seconds) // 60} min"
+            )
+    reason = (
+        ", ".join(entries)
+        + "; no review finding is open, so a fix step cannot address it"
+    )
+    label = autonomy.LIMIT_LABELS["check-timeout"] + " reached: "
+    limit = 4000 - len(label)
+    return reason if len(reason) <= limit else reason[: limit - 3] + "..."
+
+
 def review_rule(feature: Feature, point: str, reviews: list[dict]) -> tuple[str, list]:
     """How a review point's recorder treats these reviews.
 
@@ -2893,6 +2940,23 @@ def record_decision(  # noqa: C901, PLR0912, PLR0915 - one guarded recorder
         _render_findings(feature, review)
     rule, reasons = review_rule(feature, point, reviews)
     evidence = sorted({review["report"] for review in reviews})
+    # Before any fix state or limit: an unaddressable timeout costs no cycle,
+    # on the first record and on a recheck alike (#146 F-002).
+    timed_out = (
+        _timeout_only(feature, reviews)
+        if point == "implementation-review" and fix_loop(feature)
+        else []
+    )
+    if timed_out:
+        _block(
+            feature,
+            "limit",
+            autonomy.limit_condition(
+                "check-timeout", _timeout_condition(feature, timed_out)
+            ),
+            evidence=evidence,
+            limit="check-timeout",
+        )
     if rule == "block":
         _block(
             feature,
@@ -3254,11 +3318,14 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
     `remaining`, when given, returns the seconds left before a deadline; an
     exhausted deadline raises ChecksExhaustedError before the next command,
     and no command may run past it. Without it (a Chat run, #20) only each
-    command's own timeout applies. With `keep_output` (#21 R3) a failed
+    command's own timeout applies; each result names the one applied
+    (`timeout_seconds`, #146). With `keep_output` (#21 R3) a failed
     command's result carries a bounded, printable `output_tail`. With
     `read_only` (#117) the whole checkout is read-only to the command.
+    Every command gets the check environment: no agent git guard, no
+    `BALLAST_GIT`, no run variables (ADR-0021); the sandbox is unchanged.
     """
-    env = autonomy.confined_env(dict(os.environ), None)
+    env = autonomy.check_env(dict(os.environ))
     results = []
     with tempfile.TemporaryDirectory(prefix="ballast-checks-") as private:
         for command in commands:
@@ -3276,6 +3343,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
             if left is not None and left <= 0:
                 raise ChecksExhaustedError
             timeout = timeout_minutes * 60
+            applied = timeout if left is None else min(timeout, left)
             started = time.monotonic()
             timed_out = False
             try:
@@ -3287,7 +3355,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                     text=True,
                     errors="replace",
                     input=stdin,
-                    timeout=timeout if left is None else min(timeout, left),
+                    timeout=applied,
                     check=False,
                 )
                 code = done.returncode
@@ -3306,6 +3374,7 @@ def run_commands(  # noqa: PLR0913 - one confined run, every input explicit
                 "seconds": round(time.monotonic() - started, 1),
                 "timed_out": timed_out,
                 "provenance": "runner",
+                "timeout_seconds": int(applied),
             }
             if keep_output and code != 0:
                 # Project output: kept in operator state, bounded and

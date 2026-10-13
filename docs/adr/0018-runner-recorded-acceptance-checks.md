@@ -3,6 +3,7 @@
 - Status: accepted (2026-10-08, by the operator's merge of its PR for the 1.0 release). Previously: proposed (2026-10-07, with the change for [#117](https://github.com/Hugo-Grellier/ballast/issues/117)). Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review; merging the PR is the human approval that accepts it.
 - Risk: R2 (what Ballast executes).
 - Extends: [ADR-0006](0006-review-packet-reads.md), whose rejected alternative "running the manifest's mapped tests from `run-checks`" this decision takes up, and [ADR-0017](0017-deferred-operator-tasks-and-unmapped-criteria.md), which left it to #117.
+- Extended by: [ADR-0021](0021-check-command-environment.md), which gives the acceptance checks and the check commands an environment like CI (no agent git guard on `PATH`, no `BALLAST_GIT` or run variables) inside the same confinement.
 
 ## Context
 

@@ -3929,6 +3929,86 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CheckEnvTests(unittest.TestCase):
+    """#146 T004 [AC-001, AC-004]: the environment every check runs in."""
+
+    def caller(self) -> dict[str, str]:
+        guard = str(autonomy.GUARD)
+        other = os.path.join("/x/.ballast", "spec_workflow", "guard")  # noqa: PTH118
+        return {
+            "PATH": os.pathsep.join(
+                (guard, "/usr/local/bin", "", other, "/usr/bin", guard + "/")
+            ),
+            "HOME": "/home/op",
+            "LANG": "C.UTF-8",
+            "UV_CACHE_DIR": "/cache/uv",
+            "BALLAST_GIT": "/usr/bin/git",
+            "BALLAST_SPEC_WORKFLOW": "1",
+            "SPECKIT_WORKFLOW_RUN_ID": "run42",
+            "GITHUB_TOKEN": "secret",
+        }
+
+    def test_guard_entries_and_run_variables_are_removed(self) -> None:
+        caller = self.caller()
+        before = dict(caller)
+        env = autonomy.check_env(caller)
+        self.assertEqual(caller, before)  # the argument is not mutated
+        self.assertEqual(
+            env["PATH"].split(os.pathsep), ["/usr/local/bin", "", "/usr/bin"]
+        )
+        for name in ("BALLAST_GIT", *autonomy.RUN_VARIABLES, "GITHUB_TOKEN"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, env)
+        self.assertEqual(
+            {k: v for k, v in env.items() if k != "PATH"},
+            {"HOME": "/home/op", "LANG": "C.UTF-8", "UV_CACHE_DIR": "/cache/uv"},
+        )
+        self.assertLessEqual(set(env), set(caller))  # nothing is added
+
+    def test_unset_or_empty_path_is_kept_as_is(self) -> None:
+        self.assertNotIn("PATH", autonomy.check_env({"HOME": "/h"}))
+        self.assertEqual(autonomy.check_env({"PATH": ""}), {"PATH": ""})
+        self.assertEqual(
+            autonomy.check_env({"PATH": str(autonomy.GUARD)}), {"PATH": ""}
+        )
+
+    def test_run_variables_and_the_agent_guard(self) -> None:
+        self.assertEqual(
+            autonomy.RUN_VARIABLES, ("BALLAST_SPEC_WORKFLOW", "SPECKIT_WORKFLOW_RUN_ID")
+        )
+        self.assertEqual(autonomy.GUARD, TOOLS / "guard")
+
+
+class CheckTimeoutLimitTests(unittest.TestCase):
+    """#146 T016 [AC-015]: the resumable `check-timeout` limit kind."""
+
+    def test_kind_label_and_recovery(self) -> None:
+        self.assertIn("check-timeout", autonomy.LIMIT_KINDS)
+        self.assertNotIn("check-timeout", autonomy.FIXED_LIMITS)
+        self.assertTrue(autonomy.resumable("limit", "check-timeout"))
+        self.assertEqual(autonomy.LIMIT_LABELS["check-timeout"], "check timeout")
+        self.assertEqual(
+            autonomy.LIMIT_RECOVERY["check-timeout"],
+            "Raise [checks] timeout_minutes in ballast.toml or speed up the named "
+            "commands, run ballast trust, then resume, or continue human-gated.",
+        )
+
+    def test_block_validates_and_resumes(self) -> None:
+        block = autonomy.make_block(
+            "limit",
+            autonomy.limit_condition("check-timeout", "check 'x' timed out"),
+            run_id="run42",
+            limit="check-timeout",
+        )
+        self.assertEqual(autonomy.validate_block(block), block)
+        self.assertEqual(
+            block["condition"], "check timeout reached: check 'x' timed out"
+        )
+        self.assertEqual(block["recovery"], autonomy.LIMIT_RECOVERY["check-timeout"])
+        self.assertEqual(block["command"], "ballast run resume run42")
+        self.assertEqual(autonomy.block_class(block), "exhausted limits")
+
+
 class RecoveryConstantsTests(unittest.TestCase):
     """#21 T003 [FR-022]: bounds of the fix loop, retries and the step default."""
 

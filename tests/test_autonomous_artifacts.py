@@ -1538,6 +1538,128 @@ class AcceptanceChecksTests(AcceptanceCase):
         self.assertEqual(self.checks(), [])
 
 
+def loaded_feature(root: Path) -> artifacts.Feature:
+    """Load run42's feature and run record as `artifacts.py --run run42` does."""
+    feature = artifacts.resolve_feature(root, "run42", None)
+    artifacts.load_run(feature)
+    return feature
+
+
+def guarded_caller() -> dict[str, str]:
+    """Return what a check's caller can carry: an agent step's guard and variables."""
+    return {
+        "PATH": os.pathsep.join((str(autonomy.GUARD), os.environ["PATH"])),
+        "BALLAST_GIT": "/usr/bin/git",
+        "BALLAST_SPEC_WORKFLOW": "1",
+        "SPECKIT_WORKFLOW_RUN_ID": "run42",
+        "GITHUB_TOKEN": "planted",
+    }
+
+
+class CheckEnvironmentTests(AcceptanceCase):
+    """#146 T007 [AC-001, AC-002, AC-003]: every check path gets check_env."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(patch.dict(os.environ, guarded_caller()))
+        self.operator = dict(os.environ)
+        self.launches: list[tuple[list[str], dict]] = []
+        self.built: list[tuple[list[str], dict]] = []
+        real_argv, real_run = autonomy.confined_argv, subprocess.run
+
+        def argv(*args: object, **kwargs: object) -> list[str]:
+            built = real_argv(*args, **kwargs)
+            self.built.append((built, kwargs))
+            return built
+
+        def run(command: object, *args: object, **kwargs: object) -> object:
+            if any(command is built for built, _ in self.built):
+                self.launches.append((command, kwargs))  # type: ignore[arg-type]
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return real_run(command, *args, **kwargs)  # type: ignore[call-overload]
+
+        self.enterContext(patch.object(autonomy, "confined_argv", side_effect=argv))
+        self.enterContext(patch.object(artifacts.subprocess, "run", side_effect=run))
+
+    def assert_check_env(self, count: int, *, writable: bool) -> None:
+        expected = autonomy.check_env(self.operator)
+        self.assertEqual(len(self.launches), count)
+        for (command, kwargs), (built, built_kwargs) in zip(
+            self.launches, self.built, strict=True
+        ):
+            env = kwargs["env"]
+            self.assertEqual(env, expected)
+            self.assertNotIn(str(autonomy.GUARD), env["PATH"].split(os.pathsep))
+            for name in ("BALLAST_GIT", *autonomy.RUN_VARIABLES, "GITHUB_TOKEN"):
+                self.assertNotIn(name, env)
+            # The sandbox is built from the operator's environment, as before.
+            self.assertIs(command, built)
+            self.assertEqual(built_kwargs["env"], self.operator)
+            self.assertIsNone(built_kwargs["integration"])
+            self.assertEqual(built_kwargs["writable_checkout"], writable)
+
+    def resolved(self, *, frozen: bool = True) -> artifacts.Feature:
+        if not frozen:
+            record = autonomy.read_run(self.root, "run42")
+            del record["frozen_tree"]
+            autonomy.write_run(self.root, record)
+        return loaded_feature(self.root)
+
+    def test_run_commands(self) -> None:
+        artifacts.run_commands(self.root, FEATURE, ["true", "echo x"], 1)
+        self.assert_check_env(2, writable=True)
+
+    def test_acceptance_checks(self) -> None:
+        feature = self.resolved()
+        artifacts._acceptance_checks(feature, feature.run, 1)  # noqa: SLF001
+        self.assert_check_env(2, writable=False)
+
+    def test_feedback_checks(self) -> None:
+        artifacts.run_checks(self.resolved(frozen=False), feedback=True)
+        self.assert_check_env(1, writable=True)
+
+    def test_final_checks_then_acceptance_checks(self) -> None:
+        artifacts.run_checks(self.resolved())
+        self.assertEqual(
+            [kwargs["writable_checkout"] for _, kwargs in self.built],
+            [True, False, False],
+        )
+        expected = autonomy.check_env(self.operator)
+        self.assertEqual([k["env"] for _, k in self.launches], [expected] * 3)
+
+    def test_project_checks(self) -> None:
+        artifacts.project_checks(self.root, FEATURE)
+        self.assert_check_env(1, writable=True)
+
+
+@unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
+class RealCheckEnvironmentTests(RecorderCase):
+    """#146 T008 [AC-005]: a check from a guarded caller finds the host git."""
+
+    def test_guarded_caller_reaches_the_host_git(self) -> None:
+        (self.bin / "bwrap").unlink()  # the real one, resolved from PATH
+        self.enterContext(patch.dict(os.environ, guarded_caller()))
+        [result] = artifacts.run_commands(
+            self.root,
+            FEATURE,
+            ["env; echo git=$(command -v git); exit 1"],
+            1,
+            keep_output=True,
+        )
+        output = result["output_tail"]
+        self.assertNotIn("spec_workflow/guard", output)
+        for name in (
+            "BALLAST_GIT=",
+            "BALLAST_SPEC_WORKFLOW=",
+            "SPECKIT_WORKFLOW_RUN_ID=",
+        ):
+            with self.subTest(name=name):
+                self.assertNotIn(name, output)
+        (git,) = [line for line in output.splitlines() if line.startswith("git=")]
+        self.assertTrue(git.startswith("git=/"), output)
+        self.assertNotEqual(Path(git.removeprefix("git=")).parent, autonomy.GUARD)
+
+
 class FinalAcceptanceTests(RecorderCase):
     """SC-002, FR-009: one current decision per point before final acceptance."""
 
@@ -2076,6 +2198,217 @@ class FixStateTests(FixLoopCase):
         self.step()
         self.failed(self.record("decision-resolution"), "finished fix loop")
         self.assertEqual(self.block()["category"], "postcondition")
+
+
+class TimeoutSecondsTests(RecorderCase):
+    """#146 T017 [AC-015]: each result records the timeout applied to it."""
+
+    def test_configured_or_remaining_timeout(self) -> None:
+        ran = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with patch.object(artifacts.subprocess, "run", return_value=ran) as run:
+            [result] = artifacts.run_commands(self.root, FEATURE, ["true"], 2)
+            self.assertEqual(result["timeout_seconds"], 120)
+            self.assertEqual(run.call_args.kwargs["timeout"], 120)
+            [result] = artifacts.run_commands(
+                self.root, FEATURE, ["true"], 2, remaining=lambda: 30.7
+            )
+        self.assertEqual(result["timeout_seconds"], 30)
+        self.assertFalse(result["timed_out"])
+        real = subprocess.run
+
+        def expired(command: list[str], *args: object, **kwargs: object) -> object:
+            if Path(command[0]).name == "bwrap":
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            return real(command, *args, **kwargs)  # type: ignore[call-overload]
+
+        with patch.object(artifacts.subprocess, "run", side_effect=expired):
+            [result] = artifacts.run_commands(
+                self.root, FEATURE, ["sleep 99"], 2, remaining=lambda: 30.7
+            )
+        self.assertEqual(
+            (result["exit"], result["timed_out"], result["timeout_seconds"]),
+            (124, True, 30),
+        )
+
+
+class CheckTimeoutBlockTests(FixLoopCase):
+    """#146 T018 [AC-015 to AC-018]: an unaddressable timeout blocks at once."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.root / "ballast.toml").write_text(
+            '[checks]\ncommands = ["uv run slow-a", "uv run slow-b", "true"]\n'
+            "timeout_minutes = 60\n"
+        )
+
+    @staticmethod
+    def result(command: str, **changes: object) -> dict:
+        return {
+            "command": command,
+            "exit": 0,
+            "seconds": 1.0,
+            "timed_out": False,
+            "provenance": "runner",
+            "timeout_seconds": 3600,
+            **changes,
+        }
+
+    def timed_out(self, command: str, seconds: int = 3600) -> dict:
+        return self.result(
+            command,
+            exit=124,
+            seconds=float(seconds),
+            timed_out=True,
+            timeout_seconds=seconds,
+            output_tail="",
+        )
+
+    def feedback(self, *results: dict, cycle: int = 0) -> None:
+        """Leave what `run-checks --feedback` leaves, the record re-rendered."""
+        autonomy.append_feedback(
+            self.root,
+            "run42",
+            {"cycle": cycle, "at": autonomy.now(), "results": list(results)},
+        )
+        record = autonomy.read_run(self.root, "run42")
+        (self.feature / "autonomous/record.md").write_text(
+            autonomy.render_run_record(self.root, record)
+        )
+
+    def both_timed_out(self, cycle: int = 0) -> None:
+        self.feedback(
+            self.timed_out("uv run slow-a"),
+            self.timed_out("uv run slow-b"),
+            self.result("true"),
+            cycle=cycle,
+        )
+
+    def review(self, findings: list | None = None) -> None:
+        # ballast.toml changed since the baseline: documentation is required.
+        self.step(self.reviews(findings, "approved", "documentation"), role="reviewer")
+
+    def recheck(self) -> subprocess.CompletedProcess[str]:
+        return self.check(
+            "record-decision", "--point", "implementation-review", "--recheck"
+        )
+
+    def assert_timeout_block(self, *entries: str) -> dict:
+        block = self.block()
+        self.assertEqual(
+            (block["category"], block["limit"]), ("limit", "check-timeout")
+        )
+        self.assertEqual(
+            block["condition"],
+            "check timeout reached: "
+            + ", ".join(entries)
+            + "; no review finding is open, so a fix step cannot address it",
+        )
+        self.assertEqual(block["recovery"], autonomy.LIMIT_RECOVERY["check-timeout"])
+        self.assertEqual(block["command"], "ballast run resume run42")
+        return block
+
+    SLOW = (
+        "check 'uv run slow-a' timed out after 60 min",
+        "check 'uv run slow-b' timed out after 60 min",
+    )
+
+    def test_first_record_blocks_without_a_cycle(self) -> None:
+        """(a) AC-015, SC-004."""
+        self.both_timed_out()
+        self.review()
+        self.failed(self.record("implementation-review"), "limit block")
+        self.assert_timeout_block(*self.SLOW)
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "idle"})
+        self.assertNotIn("frozen_tree", autonomy.read_run(self.root, "run42"))
+        self.assertEqual([e["point"] for e in self.decisions()], ["intent"])
+
+    def test_recheck_blocks_without_a_cycle(self) -> None:
+        """(b) Plan review F-002: the recheck applies the same rule."""
+        self.set_fix(1, "review-pending")
+        self.both_timed_out(cycle=1)
+        self.review()
+        self.failed(self.recheck(), "limit block")
+        self.assert_timeout_block(*self.SLOW)
+        self.assertEqual(self.fix_state(), {"cycles": 1, "state": "review-pending"})
+
+    def test_last_cycle_blocks_as_check_timeout(self) -> None:
+        """(c) Not `fix-cycles`: raising the timeout is the recovery."""
+        self.set_fix(3, "review-pending")
+        self.both_timed_out(cycle=3)
+        self.review()
+        self.failed(self.recheck(), "limit block")
+        self.assert_timeout_block(*self.SLOW)
+        self.assertEqual(self.fix_state(), {"cycles": 3, "state": "review-pending"})
+
+    def test_wall_time_cut_and_older_results(self) -> None:
+        """(d) Plan review F-001; a result without timeout_seconds (older run)."""
+        older = self.timed_out("uv run slow-b")
+        del older["timeout_seconds"]
+        self.feedback(self.timed_out("uv run slow-a", 1200), older)
+        self.review()
+        self.failed(self.record("implementation-review"), "limit block")
+        self.assert_timeout_block(
+            "check 'uv run slow-a' timed out when the run's wall time ran out (1200 s)",
+            "check 'uv run slow-b' timed out after 60 min",
+        )
+
+    def test_a_non_timeout_failure_starts_a_cycle(self) -> None:
+        """(e) AC-016."""
+        self.feedback(
+            self.timed_out("uv run slow-a"),
+            self.result("uv run slow-b", exit=1, output_tail="broken"),
+        )
+        self.review()
+        self.ok(self.record("implementation-review"))
+        self.assertIsNone(self.block())
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "fix-pending"})
+        self.assertEqual(
+            [(c["command"], c["timed_out"]) for c in self.fix_input()["checks"]],
+            [("uv run slow-a", True), ("uv run slow-b", False)],
+        )
+
+    def test_an_open_finding_starts_a_cycle(self) -> None:
+        """(f) AC-017: the open medium finding is the fix step's work."""
+        self.both_timed_out()
+        self.review([FINDING])
+        self.ok(self.record("implementation-review"))
+        self.assertIsNone(self.block())
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "fix-pending"})
+
+    def test_a_blocking_finding_keeps_the_existing_rules(self) -> None:
+        """(g) AC-017: a cycle while one remains, then the fix-cycle limit."""
+        high = {**FINDING, "severity": "high", "disposition": "resolved"}
+        self.both_timed_out()
+        self.review([high])
+        self.ok(self.record("implementation-review"))
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "fix-pending"})
+        self.set_fix(3, "review-pending")
+        self.both_timed_out(cycle=3)
+        self.review([high])
+        self.failed(self.recheck(), "limit block")
+        block = self.block()
+        self.assertEqual((block["category"], block["limit"]), ("limit", "fix-cycles"))
+        self.assertIn("engineering F-001 (high)", block["condition"])
+
+    def test_a_final_timeout_still_blocks_as_a_failed_check(self) -> None:
+        """(h) AC-018: the final run-checks path is unchanged."""
+        self.freeze()
+        real = subprocess.run
+
+        def run(command: list[str], *args: object, **kwargs: object) -> object:
+            if Path(command[0]).name == "bwrap":  # each confined check times out
+                raise subprocess.TimeoutExpired(command, 3600)
+            return real(command, *args, **kwargs)  # type: ignore[call-overload]
+
+        feature = loaded_feature(self.root)
+        with (
+            patch.object(artifacts.subprocess, "run", side_effect=run),
+            self.assertRaisesRegex(artifacts.BlockedError, "check commands failed"),
+        ):
+            artifacts.run_checks(feature)
+        block = self.block()
+        self.assertEqual(block["category"], "postcondition")
+        self.assertIn("'uv run slow-a' (timed out)", block["condition"])
 
 
 class RecordFixTests(FixLoopCase):
