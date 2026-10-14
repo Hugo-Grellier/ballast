@@ -288,23 +288,28 @@ def recover(cwd: Path, claim: Path, evidence: str) -> dict:
     created at the recorded branch and base; nothing is deleted or replaced.
     """
     record = admission.read(claim)
-    checkout = Path(record["checkout"])
+    # Never pass recorded strings to Git unchecked: they must be the exact shapes
+    # prepare() writes, and the checkout path is recomputed, not trusted.
+    branch, base = record.get("branch"), record.get("base_sha")
+    if (
+        claim.parent != state_directory(cwd)
+        or not isinstance(branch, str)
+        or not re.fullmatch(rf"issue-{record.get('issue')}-[0-9a-f]{{8}}", branch)
+        or not isinstance(base, str)
+        or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base)
+        or record.get("checkout") != str(claim.parent / "worktrees" / branch)
+    ):
+        worktree.fail("Claim identity is malformed; inspect it before recovery")
+    checkout = claim.parent / "worktrees" / branch
     if not checkout.exists() and record.get("status") in {"preparing", "setup_failed"}:
         worktree.repository(cwd, record["repository"])
-        branch = f"refs/heads/{record['branch']}"
         try:
-            worktree.git(cwd, "rev-parse", "--verify", "--quiet", branch)
-            worktree.git(cwd, "worktree", "add", str(checkout), record["branch"])
-        except RuntimeError:
             worktree.git(
-                cwd,
-                "worktree",
-                "add",
-                "-b",
-                record["branch"],
-                str(checkout),
-                record["base_sha"],
+                cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"
             )
+            worktree.git(cwd, "worktree", "add", str(checkout), branch)
+        except RuntimeError:
+            worktree.git(cwd, "worktree", "add", "-b", branch, str(checkout), base)
     worktree.validate(claim, ready=False)
     return admission.adopt(claim, evidence)
 
@@ -422,7 +427,13 @@ def parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace) -> dict:
     """Dispatch one subcommand."""
     cwd = args.cwd.resolve(strict=True)
+    # Refuse before any Git call follows a worker-writable gitfile.
+    if "ballast-v2" in cwd.parts:
+        worktree.fail("Run queue commands from the project checkout, not an issue")
     state = state_directory(cwd)
+    if cwd.is_relative_to(state):
+        # Issue checkouts are worker-writable, including their `.git` gitfile.
+        worktree.fail("Run queue commands from the project checkout, not an issue")
     if args.command == "create":
         worktree.repository(cwd, args.repo)
         spec = admission.QueueSpec(

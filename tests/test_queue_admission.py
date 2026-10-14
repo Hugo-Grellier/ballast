@@ -554,6 +554,20 @@ class QueueTests(unittest.TestCase):
         record = coordinate.publish(claim, "Fictional", self.root / "body.md")
         self.assertEqual(record["pr"]["head"], self.base)
 
+    def test_recovery_and_cli_refuse_untrusted_git_inputs(self) -> None:
+        self.queue([78])
+        claim = self.prepare(78)
+        worktree.mark(claim, "preparing")
+        record = json.loads(claim.read_text())
+        record["branch"] = "--upload-pack=touch /tmp/fictional"
+        claim.write_text(json.dumps(record))
+        with self.assertRaisesRegex(RuntimeError, "malformed"):
+            coordinate.recover(self.repo, claim, "inspected")
+        issue_checkout = Path(record["checkout"])
+        args = coordinate.parser().parse_args(["--cwd", str(issue_checkout), "status"])
+        with self.assertRaisesRegex(RuntimeError, "project checkout"):
+            coordinate.run(args)
+
 
 def response_account(kind: str) -> dict:
     """Account receipt in the scripted transcript's second position."""
