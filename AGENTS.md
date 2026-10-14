@@ -26,6 +26,17 @@ Read the [constitution](.specify/memory/constitution.md) when planning a signifi
 
 ## Issue and spec workflow
 
+### Ballast 2.0 development exception
+
+For Epic #174 and its 2.0 child issues, the operator explicitly instructed on
+2026-10-14: do not use Ballast to build 2.0. Use ordinary issue/branch/worktree
+development, direct verification commands and independent review; do not invoke
+`ballast` or Spec Kit for their development workflow. Preserve human merge and
+release approval. This scoped exception does not activate the unfinished v2
+runtime or change the workflow for unrelated v1 work.
+
+### Existing v1 workflow
+
 GitHub Issues track status, discussion, dependencies and implementation progress; they do not replace accepted product or feature intent. Read the issue and comments. Before `speckit.specify`, apply the [scope gate](docs/policies/spec-kit-workflow.md#scope-and-decomposition-gate): dispatch only an actionable leaf Issue, never an unresolved Epic. Use the full Spec Kit workflow for new features and meaningful behavior changes, the bugfix workflow for a small bounded fix, and the assess workflow for research or a spike. Before changing a feature, read its `intent.md`, `spec.md`, `plan.md`, `tasks.md`, review reports and unresolved `decisions.md` as applicable. The human approves intent, material plan changes and final acceptance. Tasks use explicit dependencies and execution waves, and each acceptance criterion has test or other verification evidence.
 
 For `Start #N`, `Fix #N`, `Investigate #N`, or `Continue #N`, use the [feature-intake skill](.agents/skills/ballast-feature-intake/SKILL.md). It inspects the Issue, applies the scope gate, reconciles approved GitHub setup, and hands off to the existing workflow. Start and resume feature runs only through `ballast run`; if it refuses, stop and report why.
