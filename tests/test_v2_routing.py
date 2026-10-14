@@ -214,7 +214,13 @@ class QualificationTests(unittest.TestCase):
         server = self.open_server(process)
         with (
             patch.object(
-                process, "wait", side_effect=[subprocess.TimeoutExpired("fake", 2), 0]
+                process,
+                "wait",
+                side_effect=[
+                    subprocess.TimeoutExpired("fake", 2),
+                    subprocess.TimeoutExpired("fake", 2),
+                    0,
+                ],
             ),
             patch.object(process, "kill", wraps=process.kill) as kill,
         ):
@@ -267,6 +273,15 @@ class QualificationTests(unittest.TestCase):
         server = self.open_server(process)
         with (
             patch.object(process, "poll", return_value=1),
+            self.assertRaisesRegex(routing.QualificationError, "unsuccessfully"),
+        ):
+            server.close()
+
+    def test_exit_failure_racing_with_shutdown_is_not_qualified(self) -> None:
+        server = self.open_server(MemoryProcess())
+        with (
+            patch.object(server.process, "poll", return_value=None),
+            patch.object(server.process, "wait", return_value=1),
             self.assertRaisesRegex(routing.QualificationError, "unsuccessfully"),
         ):
             server.close()

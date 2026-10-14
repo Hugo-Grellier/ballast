@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -134,18 +135,30 @@ class AppServer:
         """Reap the client and close pipes on success, failure or interruption."""
         self.closed.set()
         return_code = self.process.poll()
+        expected_signals = {0}
+        if self.process.stdin is not None:
+            with contextlib.suppress(OSError):
+                self.process.stdin.close()
         if return_code is None:
-            self.process.terminate()
             try:
-                self.process.wait(timeout=2)
+                return_code = self.process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=2)
+                self.process.terminate()
+                if os.name == "posix":
+                    expected_signals.add(-signal.SIGTERM)
+                try:
+                    return_code = self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    if os.name == "posix":
+                        expected_signals.add(-signal.SIGKILL)
+                    return_code = self.process.wait(timeout=2)
         self.reader.join(timeout=1)
-        for stream in (self.process.stdin, self.process.stdout):
-            if stream is not None:
-                stream.close()
-        if return_code not in (None, 0):
+        if self.reader.is_alive():
+            fail("App-server output shutdown could not be confirmed")
+        if self.process.stdout is not None:
+            self.process.stdout.close()
+        if return_code not in expected_signals:
             fail("App-server exited unsuccessfully")
 
 
