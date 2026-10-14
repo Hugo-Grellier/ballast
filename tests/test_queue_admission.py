@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -410,6 +411,52 @@ class QueueTests(unittest.TestCase):
         tokens = [worker["tokens"] for worker in item["workers"]]
         self.assertCountEqual(tokens, [{"totalTokens": 12}, "unavailable"])
         self.assertIn("admitted", [h["event"] for h in item["history"]])
+        self.assertEqual(
+            set(item["phases"]),
+            {"implement", "review", "worker_setup", "human_review_wait", "coordinator"},
+        )
+        self.assertEqual(view["summary"]["throughput"]["published"], 0)
+
+    def test_phase_waiting_and_regressions_from_fixed_history(self) -> None:
+        def at(offset: int) -> str:
+            return f"2026-01-01T00:{offset // 60:02d}:{offset % 60:02d}+00:00"
+
+        history = [
+            {"at": at(0), "event": "admitted"},
+            {"at": at(100), "event": "pr_wait", "evidence": "review approved"},
+            {"at": at(160), "event": "active", "evidence": "human asked rework"},
+            {"at": at(200), "event": "pr_wait", "evidence": "re-review approved"},
+            {"at": at(260), "event": "merged", "evidence": "GitHub merged"},
+        ]
+        workers = [
+            {"attempt": "a", "role": "implement", "setup": 2.0, "running": 30.0},
+            {"attempt": "a", "role": "review", "setup": 1.0, "running": 10.0},
+            {"attempt": "other", "role": "implement", "setup": 9.0, "running": 99.0},
+        ]
+        view = coordinate.issue_view(
+            {"attempt": "a", "history": history}, workers, at(3000)
+        )
+        self.assertEqual(view["elapsed"], 260)
+        self.assertEqual(
+            view["phases"],
+            {
+                "implement": 30.0,
+                "review": 10.0,
+                "worker_setup": 3.0,
+                "human_review_wait": 120.0,
+                "coordinator": 97.0,
+            },
+        )
+        self.assertEqual(view["reopened"], 1)
+        self.assertEqual(len(view["evidence"]), 4)
+        opened = datetime.fromisoformat(at(50)).timestamp()
+        controls = [
+            {"at": at(10), "event": "paused"},
+            {"at": at(40), "event": "running"},
+            {"at": at(50), "event": "quota_paused", "retry_at": opened + 20},
+        ]
+        paused = {"paused", "cancelled", "quota_paused"}
+        self.assertEqual(coordinate.waited(controls, paused, {"running"}, at(900)), 50)
 
     def test_corrupt_policy_fails_closed(self) -> None:
         self.queue([46])

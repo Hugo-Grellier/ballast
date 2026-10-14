@@ -127,6 +127,6 @@ deterministic cases above with temporary Git and scripted hosting/backend.
 Two independent review rounds found and closed recovery, fail-closed and
 transition gaps (release/recover operations, policy binding, transition table).
 Known gaps: stacked prerequisites are a coordinator exception without recorded
-merge order in the tool; observation lacks phase-level waiting and acceptance
-mapping (acceptance 8 partial). Representative live integration evidence is
-still to be recorded separately.
+merge order in the tool. Observation now derives per-phase working, setup,
+human-review and coordinator time, queue pause time, throughput, reopenings and
+the settlement evidence trail. Live evidence: `docs/evidence/queue.md`.

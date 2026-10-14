@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Direct isolated invocation loads only this operator-selected source tree.
@@ -338,49 +339,124 @@ def seconds(start: str, end: str) -> float:
     return (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
 
 
+def waited(history: list[dict], starts: set[str], stop: set[str], now: str) -> float:
+    """Sum spans opened by `starts` events until the next `stop` event or now.
+
+    An empty `stop` set closes a span at the next event of any kind.
+    """
+    total = 0.0
+    for index, entry in enumerate(history):
+        if entry["event"] not in starts:
+            continue
+        end = next(
+            (
+                later["at"]
+                for later in history[index + 1 :]
+                if not stop or later["event"] in stop
+            ),
+            now,
+        )
+        span = seconds(entry["at"], end)
+        if isinstance(entry.get("retry_at"), (int, float)):
+            # A known quota window ends on its own, without a control event.
+            opened = datetime.fromisoformat(entry["at"]).timestamp()
+            span = min(span, max(entry["retry_at"] - opened, 0))
+        total += span
+    return total
+
+
+def worker_view(directory: Path) -> dict:
+    """Split one worker's time into setup (until task accepted) and running."""
+    # A worker that died before its first result write is never "settled".
+    result = (
+        admission.read(directory / "result.json")
+        if (directory / "result.json").exists()
+        else {"worker": directory.name, "status": "unrecorded"}
+    )
+    log = directory / "events.jsonl"
+    events = (
+        [json.loads(line) for line in log.read_text().splitlines()]
+        if (log.exists())
+        else []
+    )
+    view = {key: result.get(key) for key in ("worker", "attempt", "role", "status")} | {
+        "tokens": result.get("tokens", "unavailable")
+    }
+    if not events:
+        return view | {"setup": "unavailable", "running": "unavailable"}
+    accepted = next((e["at"] for e in events if e["event"] == "task_accepted"), None)
+    first, last = events[0]["at"], events[-1]["at"]
+    return view | {
+        "setup": seconds(first, accepted or last),
+        "running": seconds(accepted, last) if accepted else 0.0,
+    }
+
+
+def issue_view(item: dict, workers: list[dict], now: str) -> dict:
+    """Phase times, reopenings and the evidence trail for one issue."""
+    history = item.get("history") or []
+    mine = [w for w in workers if w["attempt"] == item["attempt"]]
+    roles = [w["role"] for w in mine]
+    timed = [w for w in mine if isinstance(w["running"], float)]
+    phases = {
+        role: sum(w["running"] for w in timed if w["role"] == role)
+        for role in ("implement", "review")
+    }
+    phases["worker_setup"] = sum(w["setup"] for w in timed)
+    phases["human_review_wait"] = waited(history, {"pr_wait"}, set(), now)
+    finished = next(
+        (h["at"] for h in history if h["event"] in {"merged", "stopped"}), now
+    )
+    elapsed = seconds(history[0]["at"], finished) if history else 0.0
+    # The rest is coordinator time: checks, decisions and publication.
+    phases["coordinator"] = max(elapsed - sum(phases.values()), 0.0)
+    events = [h["event"] for h in history]
+    return {
+        "workers": mine,
+        "elapsed": elapsed if history else "unavailable",
+        "phases": phases,
+        "rework": max(roles.count("implement") - 1, 0),
+        "review_rounds": roles.count("review"),
+        # A PR sent back to active work after review is a regression signal.
+        "reopened": sum(
+            a == "pr_wait" and b == "active" for a, b in itertools.pairwise(events)
+        ),
+        "evidence": [
+            {"at": h["at"], "event": h["event"], "evidence": h["evidence"]}
+            for h in history
+            if "evidence" in h
+        ],
+    }
+
+
 def observe(state: Path) -> dict:
     """Derive throughput, waiting and rework from records; never invent values."""
     view = admission.status(state)
-    workers = []
-    for directory in sorted((state / "workers").glob("*")):
-        # A worker that died before its first result write is still unknown.
-        result = (
-            admission.read(directory / "result.json")
-            if (directory / "result.json").exists()
-            # Starting, or died before its first write: never "settled".
-            else {"worker": directory.name, "status": "unrecorded"}
-        )
-        log = directory / "events.jsonl"
-        lines = log.read_text().splitlines() if log.exists() else []
-        events = [json.loads(line) for line in lines]
-        workers.append(
-            {
-                "worker": result.get("worker"),
-                "attempt": result.get("attempt"),
-                "role": result.get("role"),
-                "status": result.get("status"),
-                "seconds": seconds(events[0]["at"], events[-1]["at"])
-                if events
-                else "unavailable",
-                "tokens": result.get("tokens", "unavailable"),
-            }
-        )
+    now = datetime.now(UTC).isoformat()
+    workers = [
+        worker_view(directory) for directory in sorted((state / "workers").glob("*"))
+    ]
     for item in view["issues"]:
-        mine = [w for w in workers if w["attempt"] == item["attempt"]]
-        history = item.get("history") or []
-        roles = [w["role"] for w in mine]
-        item.update(
-            workers=mine,
-            rework=max(roles.count("implement") - 1, 0),
-            review_rounds=roles.count("review"),
-            elapsed=seconds(history[0]["at"], history[-1]["at"])
-            if history
-            else "unavailable",
-        )
+        item.update(issue_view(item, workers, now))
+    queue = view["queue"] or {}
+    history = queue.get("history") or []
+    hours = seconds(history[0]["at"], now) / 3600 if history else 0.0
+    published = sum(item.get("pr") is not None for item in view["issues"])
+    merged = sum(i["activity"] == "merged" for i in view["issues"])
     view["summary"] = {
-        "merged": sum(i["activity"] == "merged" for i in view["issues"]),
+        "merged": merged,
         "awaiting_review": sum(i["activity"] == "pr_wait" for i in view["issues"]),
         "unknown_workers": sum(w["status"] == "unknown" for w in workers),
+        "reopened": sum(i["reopened"] for i in view["issues"]),
+        "queue_paused": waited(
+            history, {"paused", "cancelled", "quota_paused"}, {"running"}, now
+        ),
+        "throughput": {
+            "hours": hours,
+            "published": published,
+            "merged": merged,
+            "published_per_hour": published / hours if hours else "unavailable",
+        },
     }
     return view
 

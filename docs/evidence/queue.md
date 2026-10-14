@@ -60,6 +60,18 @@ A worker on #6 was told to edit, then run `sleep 120`. The coordinator recorded
   lock was removed, the worker result became `released`, and the partial edits
   stayed in the checkout. Both #6 claims were then settled `stopped`.
 
+## Phase timing from the live records
+
+`status` on the same records (taken while both PRs still awaited review):
+
+| Issue | Elapsed | Implement | Review | Worker setup | Human-review wait | Coordinator |
+| --- | --- | --- | --- | --- | --- | --- |
+| #3 | 1,575 s | 9 s | 19 s | 3 s | 1,472 s | 73 s |
+| #4 | 1,460 s | 11 s | 12 s | 1 s | 1,413 s | 22 s |
+
+Queue: 1 s paused (the pause check), 2 PRs published, 0 merged, 0 reopened. The
+cancellation queue reports #6 stopped after 98 s, 49 s of it running.
+
 ## Not exercised live
 
 - Quota pause: cannot be triggered on demand; covered by scripted

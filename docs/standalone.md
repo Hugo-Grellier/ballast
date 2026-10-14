@@ -193,9 +193,18 @@ cannot be recreated to reset its budget.
   the recorded branch and base. It verifies checkout, branch and base, refuses
   while a worker lock remains, and rechecks controls and the issue cap. It never
   deletes or replaces a checkout.
-- `status` projects the queue, used capacity, per-issue control history and
-  workers: role, outcome, elapsed time, token totals or `unavailable`, rework and
-  review rounds; a worker directory without a result is `unrecorded`. It never
-  deletes checkouts, merges or schedules work. Phase-level waiting time and a
-  mapping to acceptance evidence are not derived yet; read them from the claim
-  history and the PR.
+- `status` projects the queue, used capacity and per-issue control history,
+  derived only from recorded timestamps:
+  - per worker: role, outcome, setup (until the task was accepted) and running
+    seconds, token totals or `unavailable`; a directory without a result is
+    `unrecorded`;
+  - per issue: elapsed time split into `implement`, `review`, `worker_setup`,
+    `human_review_wait` (time in `pr_wait`) and `coordinator` (the rest: checks,
+    decisions, publication); rework, review rounds, `reopened` (a `pr_wait` sent
+    back to `active`, a regression signal) and the evidence trail of every
+    settlement;
+  - per queue: paused/cancelled/quota time (a known quota window ends on its
+    own) and throughput: hours, PRs published, merged and published per hour.
+
+  Compare runs by these fields. `status` never deletes checkouts, merges or
+  schedules work.
