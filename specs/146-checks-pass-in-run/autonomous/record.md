@@ -5,6 +5,7 @@ Run `a060b968` for #146 (`specs/146-checks-pass-in-run`). Generated from the ope
 ## Mode and risk
 
 - Mode start: autonomous at 2026-10-13T12:15:39+00:00 by operator
+- Mode lower: chat at 2026-10-14T07:37:06+00:00 by operator, decision HD-0003: block-resolved
 - Risk: R2 (scope-record); history: R2 at 2026-10-13T12:15:39+00:00
 - Limits (default): 240 minutes wall time, 40 agent steps
 - Spend: bounded by the agent-step limit; every agent step, retry and fix cycle counts; monetary spend is not measured
@@ -242,6 +243,7 @@ Reduced independence: reviews used the authoring provider.
 
 - HD-0001 at 2026-10-13T14:28:31+00:00 by operator: resolved the upstream-sync block at checks-fix-1; resumed in Autonomous at validate-plan; changed during the block: `outside`, `specs/146-checks-pass-in-run/decisions.md`, `specs/146-checks-pass-in-run/plan.md`, `specs/146-checks-pass-in-run/quickstart.md`, `specs/146-checks-pass-in-run/research.md`, `specs/146-checks-pass-in-run/tasks.md`; reference: Rebased on main (617df9c); our ADR renumbered 0021; T020 and D-001 applied outside any step, ballast trust re-recorded
 - HD-0002 at 2026-10-14T06:43:15+00:00 by operator: resolved the postcondition block at run-checks; resumed in Autonomous at validate-implementation; changed during the block: `outside`; reference: Final-check failure was a flake: full parallel suite green outside the run (24 modules, 1483 s); run leftovers committed (ca43664), trust re-recorded
+- HD-0003 at 2026-10-14T07:37:06+00:00 by operator: resolved the block; the run continued human-gated; reference: Autonomous wall-time budget (240 min) exhausted mid final checks (parallel suite cut at 1189.6 s; full suite green outside the run in 1483 s). Continuing in Chat to record runner checks without the run budget.
 
 ## Checks
 
