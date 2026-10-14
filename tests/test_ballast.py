@@ -922,6 +922,7 @@ class PrepareTriggerTests(unittest.TestCase):
                 symlinks=True,
                 ignore=shutil.ignore_patterns("__pycache__"),
             )
+        shutil.copy2(ROOT / "pyproject.toml", self.standard / "pyproject.toml")
         self.record_cache()
         state = operator_state(self)
         environment = patch.dict(

@@ -640,6 +640,7 @@ class ProjectTests(DoctorCase):
         """Fetch this repository's tools as the pinned version, as setup would."""
         standard = self.data / "ballast/standard" / (ref or self.REF)
         shutil.copytree(ROOT / "tools", standard / "tools")
+        shutil.copy2(ROOT / "pyproject.toml", standard / "pyproject.toml")
         return standard
 
     def install(self, standard: Path) -> None:
