@@ -4693,6 +4693,7 @@ class HeadlessStepTests(RelayCase):
         self.assertIn(f"Next: ballast run approve {run_id} intent\n", step.out)
         self.assertFalse((launcher.state_dir(self.root) / "in-progress").exists())
 
+    @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
     def test_a_headless_step_cannot_reach_operator_records_under_real_bwrap(
         self,
     ) -> None:
