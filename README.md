@@ -20,11 +20,17 @@ and release tags. The 2.0 release and migration still require human approval.
 | [docs/evidence/codex-routing.md](docs/evidence/codex-routing.md) | Real configuration qualification and its limits |
 | [docs/research/orca-workflow.md](docs/research/orca-workflow.md) | Orca practices and solo-maintainer tradeoffs |
 
-The foundation qualifies explicit Codex configuration without sending a model
-task. Standalone issue execution, bounded queue/recovery, optional Orca integration
-and retirement of the old installer/runner are separate dependent PRs in
-[the 2.0 epic](https://github.com/Hugo-Grellier/ballast/issues/174). Instructions
-alone do not implement those runtime guarantees.
+The [standalone adapter](docs/standalone.md) uses [tools/worktree.py](tools/worktree.py)
+to claim and prepare one issue, and [tools/worker.py](tools/worker.py) to execute a
+fresh worker with explicit routing verified before task input. The existing agent
+coordinates questions/planning, checks, independent review and publication.
+[Live evidence](docs/evidence/standalone.md) records a fictional issue-to-ready-PR
+scenario with meaningful checks, actual child/launcher routing contrast and CI.
+
+Bounded queue/recovery, optional Orca integration and retirement of the old
+installer/runner remain separate dependent PRs in
+[the 2.0 epic](https://github.com/Hugo-Grellier/ballast/issues/174).
+This is not yet a complete or released 2.0 runtime.
 
 Develop with ordinary Git/worktrees, direct checks and independent review.
 Do not use Ballast 1.x or Spec Kit to build 2.0. See the root agent instructions.

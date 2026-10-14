@@ -47,6 +47,9 @@ def fail(reason: str) -> NoReturn:
 class AppServer:
     """Bounded, task-free JSON-lines connection to an installed Codex client."""
 
+    methods = frozenset({"initialize", "initialized", "model/list", "thread/start"})
+    options: tuple[str, ...] = ()
+
     def __init__(self, executable: str, cwd: Path, timeout: float) -> None:
         """Start the client with pipes; never evaluate a shell command."""
         self.deadline = time.monotonic() + timeout
@@ -54,7 +57,7 @@ class AppServer:
         self.sequence = 0
         self.closed = threading.Event()
         self.process = subprocess.Popen(  # noqa: S603 -- caller's resolved CLI, fixed argv, no shell
-            [executable, "app-server", "--listen", "stdio://"],
+            [executable, "app-server", "--listen", "stdio://", *self.options],
             cwd=cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -92,12 +95,7 @@ class AppServer:
 
     def send(self, message: dict) -> None:
         """Write one protocol message; task input has no allowed method."""
-        if message.get("method") not in {
-            "initialize",
-            "initialized",
-            "model/list",
-            "thread/start",
-        }:
+        if message.get("method") not in self.methods:
             fail("Method is outside the qualification allowlist")
         stream = self.process.stdin
         if stream is None:
@@ -114,22 +112,31 @@ class AppServer:
         request_id = f"qualify-{self.sequence}"
         self.send({"id": request_id, "method": method, "params": params})
         while True:
-            remaining = self.deadline - time.monotonic()
-            if remaining <= 0:
-                fail("App-server qualification timed out")
-            try:
-                message = self.messages.get(timeout=remaining)
-            except queue.Empty:
-                fail("App-server qualification timed out")
-            if not isinstance(message, dict):
-                fail("App-server ended or returned malformed JSON")
+            message = self.receive()
             if "id" not in message and isinstance(message.get("method"), str):
+                self.notification(message)
                 continue
             if message.get("id") != request_id or "method" in message:
                 fail("Unexpected app-server response")
             if "error" in message or not isinstance(message.get("result"), dict):
                 fail("App-server rejected qualification or returned a malformed result")
             return message["result"]
+
+    def receive(self) -> dict:
+        """Read one bounded message within the session deadline."""
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            fail("App-server qualification timed out")
+        try:
+            message = self.messages.get(timeout=remaining)
+        except queue.Empty:
+            fail("App-server qualification timed out")
+        if not isinstance(message, dict):
+            fail("App-server ended or returned malformed JSON")
+        return message
+
+    def notification(self, message: dict) -> None:
+        """Ignore task-free notifications; execution overrides this hook."""
 
     def close(self) -> None:
         """Reap the client and close pipes on success, failure or interruption."""
