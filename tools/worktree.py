@@ -34,8 +34,12 @@ def command(argv: list[str], cwd: Path) -> str:
     return result.stdout.strip()
 
 
-def git(cwd: Path, *args: str) -> str:
-    """Run Git without checkout hooks or an external filesystem monitor."""
+def git(cwd: Path, *args: str, git_dir: Path | None = None) -> str:
+    """Run Git without checkout hooks or an external filesystem monitor.
+
+    A pinned ``git_dir`` keeps Git from following the worker-writable gitfile.
+    """
+    pinned = ["--git-dir", str(git_dir), "--work-tree", str(cwd)] if git_dir else []
     return command(
         [
             "git",
@@ -43,17 +47,18 @@ def git(cwd: Path, *args: str) -> str:
             f"core.hooksPath={os.devnull}",
             "-c",
             "core.fsmonitor=false",
+            *pinned,
             *args,
         ],
         cwd,
     )
 
 
-def repository(cwd: Path, expected: str) -> None:
+def repository(cwd: Path, expected: str, git_dir: Path | None = None) -> None:
     """Require an unambiguous credential-free GitHub origin identity."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", expected):
         fail("Repository must be an explicit owner/name")
-    remote = git(cwd, "remote", "get-url", "origin")
+    remote = git(cwd, "remote", "get-url", "origin", git_dir=git_dir)
     match = re.fullmatch(
         r"(?:https://github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
         remote,
@@ -179,19 +184,21 @@ def validate(claim: Path) -> dict:
     ):
         fail("Issue claim is malformed")
     cwd = Path(record["checkout"]).resolve(strict=True)
-    common = Path(git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    # Derive Git metadata from the claim, never from the checkout a worker writes.
+    common = claim.resolve().parent.parent
+    admin = common / "worktrees" / cwd.name
     if (
         claim.resolve() != common / "ballast-v2" / f"issue-{record['issue']}.json"
         or record["status"] != "ready"
+        or not admin.is_dir()
+        or (admin / "gitdir").read_text().strip() != str(cwd / ".git")
     ):
         fail("Claim is not ready or belongs to another Git repository")
-    repository(cwd, record["repository"])
-    if (
-        git(cwd, "rev-parse", "--show-toplevel") != str(cwd)
-        or git(cwd, "branch", "--show-current") != record["branch"]
-    ):
+    record["git_dir"] = str(admin)
+    repository(cwd, record["repository"], git_dir=admin)
+    if git(cwd, "branch", "--show-current", git_dir=admin) != record["branch"]:
         fail("Checkout or branch differs from its claim")
-    git(cwd, "merge-base", "--is-ancestor", record["base_sha"], "HEAD")
+    git(cwd, "merge-base", "--is-ancestor", record["base_sha"], "HEAD", git_dir=admin)
     return record
 
 

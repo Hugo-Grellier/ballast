@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -159,6 +160,21 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "branch"):
             worktree.validate(self.claim)
 
+    def test_worker_written_gitfile_cannot_run_host_commands(self) -> None:
+        # A writing worker controls its checkout, including the `.git` gitfile.
+        evil = self.root / "evil.git"
+        shutil.copytree(self.repo / ".git", evil)
+        marker = self.root / "executed"
+        with (evil / "config").open("a") as stream:
+            stream.write(f'[filter "fixture"]\n\tclean = touch {marker}; cat\n')
+        (self.cwd / ".git").write_text(f"gitdir: {evil}\n")
+        (self.cwd / ".gitattributes").write_text("* filter=fixture\n")
+        time.sleep(0.01)
+        (self.cwd / "example.txt").write_text("changed\n")
+        result = self.run_worker(self.script())
+        self.assertFalse(marker.exists())
+        self.assertEqual(result["head_after"], self.base)
+
     def test_stale_base_and_setup_failure_preserve_state(self) -> None:
         self.base = "different"
         with self.assertRaisesRegex(RuntimeError, "stale"):
@@ -168,10 +184,10 @@ class ExecutionTests(unittest.TestCase):
         self.claim.unlink()
         native = worktree.git
 
-        def broken(cwd: Path, *args: str) -> str:
+        def broken(cwd: Path, *args: str, **kwargs: object) -> str:
             if args[0] == "worktree":
                 worktree.fail("Fictional setup failure")
-            return native(cwd, *args)
+            return native(cwd, *args, **kwargs)
 
         with (
             patch.object(worktree, "git", side_effect=broken),

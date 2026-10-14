@@ -250,6 +250,7 @@ def execute(
     check_launch(model, effort, timeout)
     record = worktree.validate(claim)
     cwd = Path(record["checkout"])
+    git_dir = Path(record["git_dir"])
     text = read_task(task)
     executable = shutil.which("codex")
     if executable is None:
@@ -270,8 +271,10 @@ def execute(
     }
     try:
         event(directory, "created", role=role, model=model, effort=effort)
-        head = worktree.git(cwd, "rev-parse", "HEAD")
-        if role == "review" and worktree.git(cwd, "status", "--porcelain"):
+        head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+        if role == "review" and worktree.git(
+            cwd, "status", "--porcelain", git_dir=git_dir
+        ):
             codex.fail("Independent review requires a clean, committed head")
         with contextlib.closing(
             WorkerServer(str(Path(executable).resolve()), cwd, timeout)
@@ -290,10 +293,11 @@ def execute(
         result.update(
             status="completed",
             head_before=head,
-            head_after=worktree.git(cwd, "rev-parse", "HEAD"),
+            head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),
         )
         if role == "review" and (
-            result["head_after"] != head or worktree.git(cwd, "status", "--porcelain")
+            result["head_after"] != head
+            or worktree.git(cwd, "status", "--porcelain", git_dir=git_dir)
         ):
             codex.fail("Reviewed checkout changed; review evidence is invalid")
         (directory / "output.txt").write_text(output)
