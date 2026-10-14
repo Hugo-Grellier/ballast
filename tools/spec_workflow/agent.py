@@ -144,7 +144,7 @@ EXIT_AUTH = 6
 # stopped: a resumable `interrupted` stop (#147, D-07).
 EXIT_USAGE_LIMIT = 7
 EXIT_USAGE = 2
-# A headless Chat step runs under the Autonomous confinement (#147, ADR-0020).
+# A headless Chat step runs under the Autonomous confinement (#147, ADR-0021).
 CONFINED = "--confined"
 EXIT_INTERRUPTED = 130
 PR_SET_CHILD_SUBREAPER = 36

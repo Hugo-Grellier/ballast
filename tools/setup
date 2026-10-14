@@ -32,7 +32,7 @@ configuration a human reviewed and no agent has run there (ADR-0015,
 
 `--refresh` is run by the global `ballast` command before `run`, `ledger` or
 `intake` when the launcher would refuse changed protected inputs or a pin
-that differs from the installation (ADR-0020). Under the exclusive lock, and
+that differs from the installation (ADR-0021). Under the exclusive lock, and
 refusing with a marker or an unfinished attempt, it asks `setup_trust` whether
 every change came from the reviewed repository's default branch, installs
 the current configuration, and records a `default-branch` baseline only after
@@ -601,7 +601,7 @@ class Setup:
         """After a skipped `settle`, refresh a baseline that names a repository.
 
         An operator's setup after pulling a merged change then needs no
-        `ballast trust` either (ADR-0020, FR-001). None when not attempted.
+        `ballast trust` either (ADR-0021, FR-001). None when not attempted.
         """
         if (
             not self.records_trust
@@ -624,7 +624,7 @@ class Setup:
         refuse changed inputs or a pin that differs from the installation. It
         decides eligibility before installing anything, regenerates the
         installation for the current ballast.toml and pin, and records only
-        after a verified re-snapshot (ADR-0020). Never prompts.
+        after a verified re-snapshot (ADR-0021). Never prompts.
         """
         try:
             state = launcher.state_dir(self.root)

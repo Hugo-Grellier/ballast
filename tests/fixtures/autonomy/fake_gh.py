@@ -13,11 +13,20 @@ edit` copies the body to `pr-body.md`. After serving `<name>.json`, a
 status` succeeds only when `auth.ok` exists. A missing file is an HTTP 404.
 `FAIL_<word>` files make the matching subcommand fail, printing their content
 (or `simulated failure`).
+
+PR completion (#141): `pr ready N --repo OWNER/NAME` sets `draft` to false in
+the served `repos_OWNER_NAME_pulls_N.json`, unless `ready-keeps-draft` exists
+(an unverified ready); with `ready-then-fail` it then exits non-zero (the
+forge applied a request it reported as failed). When `head-sha` exists, a
+served PR's `head.sha` is its content, or with `auto` the branch's commit in
+the bare repository standing in for GitHub (`OWNER/NAME.git` here): the commit
+publication pushed.
 """
 
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -58,12 +67,36 @@ def copy_body() -> None:
         shutil.copyfile(body, data / "pr-body.md")
 
 
+def fill_head(path: Path) -> None:
+    """Set a served PR's head.sha from `head-sha`, when both exist."""
+    marker = data / "head-sha"
+    if not marker.is_file() or not path.is_file():
+        return
+    pr = json.loads(path.read_text(encoding="utf-8"))
+    head = pr.get("head") if isinstance(pr, dict) else None
+    if not isinstance(head, dict):
+        return
+    sha = marker.read_text(encoding="utf-8").strip()
+    if sha == "auto":
+        repo = (head.get("repo") or {}).get("full_name", "")
+        git_dir, ref = str(data / f"{repo}.git"), f"refs/heads/{head.get('ref')}"
+        sha = subprocess.run(  # noqa: S603
+            ["git", "--git-dir", git_dir, "rev-parse", ref],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    head["sha"] = sha
+    path.write_text(json.dumps(pr), encoding="utf-8")
+
+
 if args[:1] == ["api"]:
     path, _, query = args[-1].partition("?")
     pages = [item for item in query.split("&") if item.startswith("page=")]
     if pages and pages != ["page=1"]:
         sys.stdout.write("[]")
     else:
+        fill_head(data / (path.replace("/", "_") + ".json"))
         serve(path.replace("/", "_") + ".json", slurp="--slurp" in args)
 elif args[:2] == ["repo", "view"]:
     serve("repo.json")
@@ -99,6 +132,16 @@ elif args[:2] == ["pr", "create"]:
     sys.stdout.write("https://github.com/acme/demo/pull/7\n")
 elif args[:2] == ["pr", "edit"]:
     copy_body()
+elif args[:2] == ["pr", "ready"]:
+    repo = args[args.index("--repo") + 1]
+    served = data / f"repos_{repo.replace('/', '_')}_pulls_{args[2]}.json"
+    pr = json.loads(served.read_text(encoding="utf-8"))
+    if not (data / "ready-keeps-draft").exists():
+        pr["draft"] = False
+    served.write_text(json.dumps(pr), encoding="utf-8")
+    if (data / "ready-then-fail").exists():
+        sys.stderr.write("HTTP 502: Bad Gateway\n")
+        sys.exit(1)
 elif args[:2] == ["auth", "status"]:
     if not (data / "auth.ok").exists():
         sys.stderr.write("You are not logged into any GitHub hosts.\n")

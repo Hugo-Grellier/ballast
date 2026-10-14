@@ -6,7 +6,7 @@
 
 **Risk**: R2. The plan touches four [R2 boundaries](../../docs/policies/project/workflow.md#r2-boundaries): the launcher's trust model (a new baseline source), the headless-agent permission model (who may run which `ballast` command, and a confined headless Chat step), what `ballast` executes or downloads (the pre-launcher refresh fetches the pinned standard and runs setup), and the paths setup installs (regeneration during refresh).
 
-This is Autonomous run `2e651132`. Every design decision below is agent-provisional, not human-approved, and merging the PR is the single human approval (BL-INV-006). D-01, D-03, D-04 and D-05 are settled from the Issue body; D-02 is the operator's block resolution HD-0002 (option A); D-06 and D-07 are agent-provisional (PD-0002, PD-0003). D-08 is the operator's resolution of plan-review F-001 (HD-0003): a relayed `resume` or `continue` of a decision-carrying block needs `--ref`. D-09 is the operator's resolution at the tasks gate (HD-0004): `ballast trust` keeps today's terminal-free behavior, so the agent session may run it outside a step, never inside one. The second plan review's findings are folded into the design: F-001 (engine gates prompt only at a terminal) in research R8, the ADR-0020 content list and the AC-011 test; F-002 (a human-gated run records no relayed actor) and F-003 (`continue` takes only Autonomous sources) in [cli.md](contracts/cli.md#agent-command-matrix). Two agent inferences narrow D-02 and are listed for merge review in [research R2](research.md#r2-refresh-eligibility-fr-001-fr-003-ac-002-ac-005-ac-006):
+This is Autonomous run `2e651132`. Every design decision below is agent-provisional, not human-approved, and merging the PR is the single human approval (BL-INV-006). D-01, D-03, D-04 and D-05 are settled from the Issue body; D-02 is the operator's block resolution HD-0002 (option A); D-06 and D-07 are agent-provisional (PD-0002, PD-0003). D-08 is the operator's resolution of plan-review F-001 (HD-0003): a relayed `resume` or `continue` of a decision-carrying block needs `--ref`. D-09 is the operator's resolution at the tasks gate (HD-0004): `ballast trust` keeps today's terminal-free behavior, so the agent session may run it outside a step, never inside one. The second plan review's findings are folded into the design: F-001 (engine gates prompt only at a terminal) in research R8, the ADR-0021 content list and the AC-011 test; F-002 (a human-gated run records no relayed actor) and F-003 (`continue` takes only Autonomous sources) in [cli.md](contracts/cli.md#agent-command-matrix). Two agent inferences narrow D-02 and are listed for merge review in [research R2](research.md#r2-refresh-eligibility-fr-001-fr-003-ac-002-ac-005-ac-006):
 
 - The any-bytes rule applies only to refreshing an existing baseline of the same repository.
 - `.venv` changes are never attributable.
@@ -41,7 +41,7 @@ Four changes remove every operator command that carries no decision, without wea
    - A confirmed-stopped usage-limit exit becomes a resumable `interrupted` stop.
    - Autonomous start offers an Issue-named branch at a terminal and prints the command without one.
 
-A new ADR-0020 records the agent command matrix, the actor rule and the refresh. It supersedes the terminal-only parts of ADR-0004 and ADR-0009, and amends ADR-0015 and ADR-0010. Constitution 1.3.0 amends BL-INV-002 ([constitution-amendment.md](constitution-amendment.md)). Decisions R1 to R14 are in [research.md](research.md).
+A new ADR-0021 records the agent command matrix, the actor rule and the refresh. It supersedes the terminal-only parts of ADR-0004 and ADR-0009, and amends ADR-0015 and ADR-0010. Constitution 1.3.0 amends BL-INV-002 ([constitution-amendment.md](constitution-amendment.md)). Decisions R1 to R14 are in [research.md](research.md).
 
 ## Technical Context
 
@@ -119,7 +119,7 @@ No NEEDS CLARIFICATION remains.
 | 6. Portable, dependency-free tools | Standard library only. `actor.py` is imported from the trusted installed tools, inside the baseline like `chat.py`. |
 | 7. Generic by default | No project names. The branch proposal uses the feature directory, and messages are generic. |
 | 8. Executable evidence | Every AC maps to a test in [quickstart.md](quickstart.md), including every refusal and tamper path in FR-019 ([contracts/trust-refresh.md](contracts/trust-refresh.md#refusal-and-tamper-tests-required-fr-019-sc-005)). |
-| 9. A provisional decision is never human approval (BL-INV-006) | Relayed approvals are refused in Autonomous runs, never rendered as operator-typed, and quote no chat text. This plan, ADR-0020 (proposed until merge) and the amendment are agent-provisional. |
+| 9. A provisional decision is never human approval (BL-INV-006) | Relayed approvals are refused in Autonomous runs, never rendered as operator-typed, and quote no chat text. This plan, ADR-0021 (proposed until merge) and the amendment are agent-provisional. |
 
 ## Architecture Boundaries
 
@@ -141,10 +141,10 @@ No NEEDS CLARIFICATION remains.
   - Contracts: [trust-refresh.md](contracts/trust-refresh.md), [cli.md](contracts/cli.md).
 - **Architecture references**:
   - [constitution](../../.specify/memory/constitution.md) BL-INV-002, BL-INV-003, BL-INV-006 and governance;
-  - [ADR-0004](../../docs/adr/0004-autonomous-provisional-decisions.md), [ADR-0005](../../docs/adr/0005-launcher-branch-synchronization.md), [ADR-0008](../../docs/adr/0008-verified-cache-and-update-preview.md), [ADR-0009](../../docs/adr/0009-chat-mode-operator-driven-steps.md), [ADR-0010](../../docs/adr/0010-autonomous-resume-and-bounded-recovery.md), [ADR-0015](../../docs/adr/0015-setup-recorded-trust-baseline.md), [ADR-0016](../../docs/adr/0016-privileged-action-kinds-and-policy-refresh.md) (`--refresh-policy` reads `ballast.toml` only from a `trust` baseline: unchanged, and stated in ADR-0020);
+  - [ADR-0004](../../docs/adr/0004-autonomous-provisional-decisions.md), [ADR-0005](../../docs/adr/0005-launcher-branch-synchronization.md), [ADR-0008](../../docs/adr/0008-verified-cache-and-update-preview.md), [ADR-0009](../../docs/adr/0009-chat-mode-operator-driven-steps.md), [ADR-0010](../../docs/adr/0010-autonomous-resume-and-bounded-recovery.md), [ADR-0015](../../docs/adr/0015-setup-recorded-trust-baseline.md), [ADR-0016](../../docs/adr/0016-privileged-action-kinds-and-policy-refresh.md) (`--refresh-policy` reads `ballast.toml` only from a `trust` baseline: unchanged, and stated in ADR-0021);
   - [technical spec §37 and §9.1](../TECHNICAL-SPEC.md).
 - **Proposed architecture decisions** (agent-provisional; written with the implementation, accepted only when the PR merges):
-  1. **ADR-0020 Agent sessions run mechanical commands and relay decisions within the run's autonomy.** It records:
+  1. **ADR-0021 Agent sessions run mechanical commands and relay decisions within the run's autonomy.** It records:
      - the agent command matrix ([cli.md](contracts/cli.md#agent-command-matrix));
      - the actor rule;
      - the default-branch refresh and its conditions;
@@ -172,8 +172,8 @@ No NEEDS CLARIFICATION remains.
 | `tools/spec_workflow/agent.py` | `--confined` for Chat headless steps; usage-limit classification without a configured fallback; `EXIT_USAGE_LIMIT`; `BALLAST_AGENT_STEP=1` in every step environment. |
 | `tools/spec_workflow/branch_sync.py` | `RECOVERY["protected-input"]` text. |
 | `ballast.toml` (this repository) | Unchanged: the comment above `[autonomous]` stays accurate because `trust` keeps working without a terminal (D-09). |
-| `docs/adr/0020-agent-sessions-relay-decisions.md` | New; proposed until merge. |
-| `docs/adr/0004-…`, `0009-…`, `0010-…`, `0015-…` | One "superseded in part" or "amended by ADR-0020" note beside each affected clause. |
+| `docs/adr/0021-agent-sessions-relay-decisions.md` | New; proposed until merge. |
+| `docs/adr/0004-…`, `0009-…`, `0010-…`, `0015-…` | One "superseded in part" or "amended by ADR-0021" note beside each affected clause. |
 | `.specify/memory/constitution.md` | BL-INV-002, version 1.3.0, history entry. |
 | `templates/policies/spec-kit-workflow.md`, `templates/policies/workflow.md`, and their `docs/policies/` mirrors | Agent command matrix, relayed decisions, batch approval, headless Chat step, refresh, recovery texts. |
 | `AGENTS.md`, `templates/AGENTS.md`, `templates/init/agents-section.md` | Replace "an agent never runs `ballast run`" with the session and step distinction, plus the relay rules. |

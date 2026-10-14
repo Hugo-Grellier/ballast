@@ -4,7 +4,8 @@
     ballast run start [--local-fallback MODEL] -i idea="Issue #N: ..." \
         -i feature_directory=specs/N-slug [-i integration=claude|codex]
     ballast run start --mode autonomous [--wall-time MINUTES] \
-        [--max-agent-steps N] [--local-fallback MODEL] -i issue=N \
+        [--max-agent-steps N] [--completion draft|ready] \
+        [--local-fallback MODEL] -i issue=N \
         -i idea="Issue #N: ..." -i feature_directory=specs/N-slug \
         [-i integration=auto|claude|codex]
     ballast run resume RUN_ID [--local-fallback MODEL|off] \
@@ -42,7 +43,7 @@ interactive in chat mode (or confined with `--headless`) and headless in
 human-gated mode; every gate needs `approve` (see chat.py and
 docs/policies/spec-kit-workflow.md).
 
-Who decided (#147, ADR-0020): `start`, `resume`, `continue` and a Chat
+Who decided (#147, ADR-0021): `start`, `resume`, `continue` and a Chat
 `approve` record the operator when stdin and stdout are terminals, or the
 operator's agent session named by `--relayed-by SESSION`, which every other
 command refuses; without either they are refused before anything is
@@ -121,6 +122,17 @@ prints its one-line outcome, then the acceptance packet's line (packet.py,
 imported with draft_pr); nothing the checkpoint does changes the exit
 status. The workflow engine, and so every agent step, never
 receives the GitHub token variables in draft_pr.TOKEN_VARIABLES.
+
+PR completion (#141, completion.py, imported here before any agent step):
+when the trusted ballast.toml sets `[autonomous] completion = "ready"`, the
+invocation that published an Autonomous run then evaluates the run's
+eligibility from operator records, marks the PR ready for review as the
+operator only when every condition holds, and prints one `PR completion:`
+line. `--completion draft` narrows one run; `--completion ready` cannot
+widen ballast.toml and refuses the start. `resume --refresh-policy` re-reads
+`completion` and keeps the start flag. Checkpoints, Chat and human-gated
+runs never mark a PR ready, and the step never changes the exit status.
+Marking ready is not an approval: merging stays the only human approval.
 """
 
 from __future__ import annotations
@@ -161,6 +173,7 @@ import actor  # noqa: E402
 import autonomy  # noqa: E402
 import branch_sync  # noqa: E402
 import chat  # noqa: E402
+import completion  # noqa: E402
 import demo  # noqa: E402
 import draft_pr  # noqa: E402
 import fallback  # noqa: E402
@@ -216,7 +229,7 @@ COMMANDS = {
 }
 
 
-# ADR-0020: the operator's agent session names itself when it relays.
+# ADR-0021: the operator's agent session names itself when it relays.
 RELAYED_BY = "--relayed-by"
 
 
@@ -628,7 +641,7 @@ def _run_feature(run_id: str) -> str | None:
     return record["feature"] if record else None
 
 
-# Set by the launcher once after a default-branch trust refresh (ADR-0020).
+# Set by the launcher once after a default-branch trust refresh (ADR-0021).
 REFRESHED = "BALLAST_REFRESHED"
 _refresh: dict[str, str] | None = None
 
@@ -669,13 +682,15 @@ def _ledger_refresh(run_id: str) -> None:
         sys.stderr.write(f"ballast: ledger trust_refresh not recorded: {error}\n")
 
 
-def _checkpoint(run_id: str) -> None:
+def _checkpoint(run_id: str) -> draft_pr.Outcome | None:
     """Run the Draft PR checkpoint once, last in the invocation (DEC-0007).
 
     Never assigns status: a PR failure must not change the run's result.
     After an Autonomous publication it finds and reuses the publisher's PR.
+    Returns the outcome for PR completion, or None when the step raised.
     """
     _ledger_refresh(run_id)
+    outcome = None
     try:
         outcome = draft_pr.checkpoint(ROOT, run_id)
         line = draft_pr.format_line(outcome)
@@ -684,6 +699,28 @@ def _checkpoint(run_id: str) -> None:
     except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001
         line = f"Draft PR: failed-retryable (internal-error) ({type(error).__name__})"
     sys.stdout.write(line + "\n")
+    return outcome
+
+
+# This invocation's successful Autonomous publication, by run ID (#141 R1):
+# only the invocation that published evaluates PR completion. Never persisted.
+_PUBLISHED: dict[str, dict] = {}
+
+
+def _complete(run_id: str, outcome: draft_pr.Outcome | None) -> None:
+    """Evaluate PR completion after this invocation's publication (#141).
+
+    Nothing happens without a publication in this invocation. A checkpoint
+    that skipped (the tamper or unfinished-step marker exists) or raised
+    published no packet, so a reported run keeps its Draft with that reason.
+    The step never changes the exit status or the run's records.
+    """
+    publication = _PUBLISHED.pop(run_id, None)
+    if publication is None:
+        return
+    built = outcome.packet if outcome and outcome.state != "skipped" else None
+    with contextlib.suppress(Exception, KeyboardInterrupt):
+        completion.complete(ROOT, run_id, publication, built)
 
 
 def _archive_operator(run_id: str) -> None:
@@ -758,9 +795,12 @@ def _set_local_fallback(run_id: str, value: str | None) -> None:
         )
 
 
+COMPLETION = "--completion"
+
+
 def _split_mode(options: list[str]) -> tuple[dict[str, str], list[str]] | str:
-    """Take --mode, --wall-time, --max-agent-steps and --local-fallback out."""
-    flags = {"--mode", "--wall-time", "--max-agent-steps", LOCAL_FALLBACK}
+    """Take --mode, the limits, --completion and --local-fallback out."""
+    flags = {"--mode", "--wall-time", "--max-agent-steps", COMPLETION, LOCAL_FALLBACK}
     found: dict[str, str] = {}
     rest: list[str] = []
     index = 0
@@ -883,6 +923,9 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         policy, defaults, warnings = autonomy.parse_policy(config)
         for warning in warnings:
             sys.stderr.write(f"ballast: {warning}\n")
+        widened = _completion(flags, policy)
+        if widened is not None:
+            return _refuse(widened)
         autonomy.parse_checks(config)
         limits = autonomy.resolve_limits(
             defaults,
@@ -945,6 +988,25 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
     _set_local_fallback(run_id, local)
     with _invocation_lock(run_id):
         return _run_autonomous(run_id, record, result, inputs, specify, snapshot)
+
+
+def _completion(flags: dict[str, str], policy: dict) -> str | None:
+    """Apply the start's completion flag to the policy; a refusal reason, or None.
+
+    #141: the start flag only narrows ballast.toml, refused before any record
+    is written; the snapshot gains fields only when either is set.
+    """
+    flag, configured = flags.get(COMPLETION), policy.get("completion_configured")
+    if flag == "ready" and configured != "ready":
+        return (
+            "--completion ready cannot widen ballast.toml [autonomous] "
+            f"completion ({configured or 'draft'})"
+        )
+    if flag is not None:
+        policy["completion_flag"] = flag
+    if flag is not None or configured is not None:
+        policy["completion"] = autonomy.completion_policy(configured, flag)
+    return None
 
 
 def _current_branch() -> str:
@@ -1099,7 +1161,7 @@ def _run_autonomous(  # noqa: PLR0913, PLR0917 - the start's checked values
         return _finish(run_id, status)
     finally:
         _archive_operator(run_id)
-        _checkpoint(run_id)
+        _complete(run_id, _checkpoint(run_id))
 
 
 def _input(options: list[str], name: str) -> str | None:
@@ -1386,6 +1448,7 @@ def _publish(run_id: str) -> int:
     record = autonomy.read_run(ROOT, run_id)
     autonomy.set_status(record, "published")
     autonomy.write_run(ROOT, record)
+    _PUBLISHED[run_id] = result
     sys.stdout.write(
         f"Draft PR: {result['url']}\nEvery intermediate decision is "
         "agent-provisional; merging the PR is the only human approval.\n"
@@ -1576,7 +1639,13 @@ def _publish_command(options: list[str]) -> int:  # noqa: PLR0911 - complexity i
         )
     try:
         with _invocation_lock(run_id):
-            return _publish(run_id)
+            code = _publish(run_id)
+            # #141 R2: only a reported run's retry also runs the checkpoint
+            # and packet, which PR completion needs; any other keeps today's.
+            if code == 0 and completion.reported(record["eligibility"]["policy"]):
+                _complete(run_id, _checkpoint(run_id))
+            _PUBLISHED.pop(run_id, None)
+            return code
     except LockHeld as held:
         return _refuse(str(held))
     except autonomy.AutonomyError as error:
@@ -1982,7 +2051,14 @@ def _chat_resume_refusal(run_id: str, record: dict | None) -> str | None:
     return None
 
 
-RESUME_FLAGS = {"-i", "--input", "--mode", "--wall-time", "--max-agent-steps"}
+RESUME_FLAGS = {
+    "-i",
+    "--input",
+    "--mode",
+    "--wall-time",
+    "--max-agent-steps",
+    COMPLETION,
+}
 # Re-reads `[autonomous]` from the operator-trusted ballast.toml (#95).
 REFRESH_POLICY = "--refresh-policy"
 
@@ -2103,7 +2179,7 @@ def _block_step(
     A failed agent step or validator is re-run; a failed recorder re-runs
     the agent step whose drafts it records (the first reviewer step for the
     implementation reviews). A failed implementation postcondition reruns
-    `implement`, whose validator then runs again (#147 R12, ADR-0020).
+    `implement`, whose validator then runs again (#147 R12, ADR-0021).
     """
     if failed is None or failed not in steps:
         return None
@@ -2334,6 +2410,14 @@ def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915 - one guar
             return _refuse(f"run {run_id}: {error}")
         for warning in warnings:
             sys.stderr.write(f"ballast: {warning}\n")
+        # #141: the start flag still narrows the refreshed completion policy.
+        flag = record["eligibility"]["policy"].get("completion_flag")
+        if flag is not None:
+            policy["completion_flag"] = flag
+        if flag is not None or "completion_configured" in policy:
+            policy["completion"] = autonomy.completion_policy(
+                policy.get("completion_configured"), flag
+            )
         # A narrowing refresh must not resume a run it no longer allows.
         try:
             decisions = autonomy.read_decisions(ROOT, run_id)
@@ -2439,7 +2523,7 @@ def _resume_engine(run_id: str, reentry: str, pin: dict, specify: str) -> int:
         return _finish(run_id, status)
     finally:
         _archive_operator(run_id)
-        _checkpoint(run_id)
+        _complete(run_id, _checkpoint(run_id))
 
 
 def _point_feature(feature: str | None) -> int | None:
@@ -2483,6 +2567,10 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
             return _refuse("--mode must be human-gated, autonomous or chat")
         if mode != "autonomous" and set(flags) & {"--wall-time", "--max-agent-steps"}:
             return _refuse("--wall-time and --max-agent-steps need --mode autonomous")
+        if COMPLETION in flags and mode != "autonomous":
+            return _refuse("--completion needs --mode autonomous")
+        if flags.get(COMPLETION, "draft") not in autonomy.COMPLETIONS:
+            return _refuse("--completion must be draft or ready")
         if LOCAL_FALLBACK in flags and mode == "chat":
             return _refuse(CHAT_FALLBACK)
         try:

@@ -27,7 +27,7 @@ Inside a confined agent step, `tests.test_agent_run_ledger` cases that pass thro
 
 **Plan review findings settled here** ([reviews/plan.md](reviews/plan.md)):
 
-- F-001: T023 adds a test showing that a terminal-less, relayed human-gated `start` or `resume` with piped stdin pauses at a Spec Kit engine gate and records no approval. T041 names ADR-0020's dependency on engine gates prompting only at a terminal (ADR-0004 context).
+- F-001: T023 adds a test showing that a terminal-less, relayed human-gated `start` or `resume` with piped stdin pauses at a Spec Kit engine gate and records no approval. T041 names ADR-0021's dependency on engine gates prompting only at a terminal (ADR-0004 context).
 - F-002: a human-gated `start` or `resume` writes no operator run record today and gains none. `--relayed-by` is accepted and validated there, so only the actor rule's refusal applies, and the gate decisions themselves stay terminal-only at the engine gate. The contract matrix's "Recorded actor" cell for those rows says so (T001, already applied). FR-011 is met because nothing in a human-gated run records a decision as relayed.
 - F-003: the contract marks `continue` as Autonomous-source only (stopped, completed or published Autonomous runs) and notes that `continue` already requires `--ref` (T001, already applied). T022 asserts which refusal fires: the D-08 message for `resume`, and today's argument refusal for `continue` without `--ref`.
 
@@ -310,7 +310,7 @@ No other setup: the tools stay standard-library-only, and no dependency or direc
 
 **Purpose**: The ADR, the constitution amendment and the operator-facing documents, consistent with `actor.py`. Edit policies only at `templates/policies/`. `docs/policies/*.md` outside `project/` are git-ignored installed copies that follow the pinned release, so do not edit them.
 
-- [x] T041 [P] Write `docs/adr/0020-agent-sessions-relay-decisions.md` (status: proposed, agent-provisional until merge), following the format of `docs/adr/0019-feature-local-ui-states.md`. Cover:
+- [x] T041 [P] Write `docs/adr/0021-agent-sessions-relay-decisions.md` (status: proposed, agent-provisional until merge), following the format of `docs/adr/0019-feature-local-ui-states.md`. Cover:
   - the agent command matrix, as the same command names as `actor.py`'s matrix, with the decision-free block categories;
   - the actor rule (R7);
   - the default-branch refresh and its conditions (R1 to R5), including both narrowings for merge review;
@@ -320,7 +320,7 @@ No other setup: the tools stay standard-library-only, and no dependency or direc
   - residual risks: branch protection on the pinned default branch is the review of configuration changes; a relayed approval or `--ref` is an unverifiable labeled claim; the terminal test is not proof of a human, since an agent session can allocate a pseudo-terminal (first plan review); `ballast trust` has no terminal test (D-09), so on a checkout the operator's agent session set up, that session can vouch for its own protected-input changes outside a step, and only the step boundary (the `in-progress` marker, the sandbox hiding operator state) keeps a confined agent from doing so; `.venv` changes still need trust; `BALLAST_AGENT_STEP` is not a boundary.
 
   Add "Supersedes in part: ADR-0004, ADR-0009" and "Amends: ADR-0010, ADR-0015" lines. (depends on T002)
-- [x] T042 Add a one-line "superseded in part by ADR-0020" or "amended by ADR-0020" note beside the affected clauses:
+- [x] T042 Add a one-line "superseded in part by ADR-0021" or "amended by ADR-0021" note beside the affected clauses:
   - in `docs/adr/0004-autonomous-provisional-decisions.md`, at the rejected alternative "piping approvals";
   - in `docs/adr/0009-chat-mode-operator-driven-steps.md`, at D-1 and D-4;
   - in `docs/adr/0010-autonomous-resume-and-bounded-recovery.md`, at the re-entry rule;
@@ -332,9 +332,9 @@ No other setup: the tools stay standard-library-only, and no dependency or direc
 - [x] T047 [P] Update `README.md` and `specs/TECHNICAL-SPEC.md` §37 and §9.1 with the same content in user and architecture form: the refresh, the actor rule, batch approval, headless Chat steps, and that an older global CLI never refreshes (`ballast self-install`) (FR-018). (depends on T041)
 - ~~T048~~ Dropped (D-09): `ballast.toml` is unchanged because `trust` keeps working without a terminal.
 - [x] T049 Add `AgentCommandMatrixDocumentTests` to `tests/test_governance.py`, following its `LocalFallbackDocumentTests` pattern:
-  - the policy table in `templates/policies/spec-kit-workflow.md` and ADR-0020 name exactly the commands of `actor.py`'s matrix, with agent-runnable and operator-reserved sets compared as sets, and the decision-free categories (AC-007);
-  - ADR-0020 carries its supersedes and amends lines, each autonomy level's commands, the pseudo-terminal residual risk and the D-09 residual risk that `trust` has no terminal test (AC-009);
-  - the policy table, ADR-0020, `AGENTS.md` and its templates never call `ballast trust` terminal-only or operator-reserved (D-09);
+  - the policy table in `templates/policies/spec-kit-workflow.md` and ADR-0021 name exactly the commands of `actor.py`'s matrix, with agent-runnable and operator-reserved sets compared as sets, and the decision-free categories (AC-007);
+  - ADR-0021 carries its supersedes and amends lines, each autonomy level's commands, the pseudo-terminal residual risk and the D-09 residual risk that `trust` has no terminal test (AC-009);
+  - the policy table, ADR-0021, `AGENTS.md` and its templates never call `ballast trust` terminal-only or operator-reserved (D-09);
   - `constitution-amendment.md` states version 1.3.0, the new BL-INV-002 text and an amendment-history entry with reason and compatibility (FR-014); the live constitution is checked at merge (T043);
   - `AGENTS.md`, `templates/AGENTS.md`, `templates/init/agents-section.md` and the intake skill no longer say an agent never runs `ballast run` (FR-018);
   - the existing link checks pass for the new ADR. (depends on T042, T044, T045, T046, T047)
@@ -422,7 +422,7 @@ Wave 2:
   T012      [US1] launcher.py provenance, settings, status (depends on T008)
   T018 [P]  [US1] branch_sync.py text (depends on T011)
   T023      [US2] AgentStepEnvironmentTests, RelayedHumanGatedTests (depends on T008)
-  T041 [P]  ADR-0020 (depends on T002)
+  T041 [P]  ADR-0021 (depends on T002)
 
 Wave 3:
   T005      RelayedRecordSchemaTests (depends on T003, T004)
@@ -501,7 +501,7 @@ Wave 15:
 2. US2: relays and labeled records (SC-002, SC-004).
 3. US3: batch approval (SC-003).
 4. US4: recovery paths.
-5. The governing documents and the evidence map. Everything ships in one PR, since ADR-0020 and the constitution amendment govern all four stories.
+5. The governing documents and the evidence map. Everything ships in one PR, since ADR-0021 and the constitution amendment govern all four stories.
 
 ---
 

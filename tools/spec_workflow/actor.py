@@ -1,6 +1,6 @@
 """Who recorded a decision: the operator at a terminal, or a relaying agent session.
 
-ADR-0020 (#147). Every operator-state record that says who acted (human
+ADR-0021 (#147). Every operator-state record that says who acted (human
 decisions `HD-NNNN` and mode-history entries) takes its actor from
 `resolve`, and every command an agent session may run is in `MATRIX`:
 
@@ -87,7 +87,7 @@ class Row:
     modes: dict[str, str]
 
 
-# The agent command matrix (ADR-0020). The policy table and the ADR name
+# The agent command matrix (ADR-0021). The policy table and the ADR name
 # exactly these commands; tests/test_governance.py keeps them equal.
 MATRIX = (
     Row(

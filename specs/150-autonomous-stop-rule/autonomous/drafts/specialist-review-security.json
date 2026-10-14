@@ -1,0 +1,34 @@
+{
+  "point": "specialist-review",
+  "decision": "accept-finding",
+  "summary": "Security recheck after fix cycle 3: self-resume now keeps the PR a Draft; three medium gaps for R2 leaves #153/#154 accepted provisionally. Approved.",
+  "basis": "Reviewed the whole change against d215a63 with docs/policies/security.md (no project overlay exists) and the R2 boundaries. No tools/, .agents/ or .github/ file changed. Fix cycle 3 makes a self-resume count as a resolved block for ADR-0019 condition (11), so an unattended resume can no longer be marked ready; the runner event stays non-human, keeping BL-INV-006. Pre-merge authority and runner invariants still block; trust in authors comes only from operator data. Three medium statements remain unstated (resume trigger source, limit-time publication guards, high findings pushed as Draft). No cycle remains, each belongs to an R2 leaf with its own security review, and nothing acts before merge.",
+  "evidence": [
+    "specs/150-autonomous-stop-rule/reviews/security.md",
+    "docs/adr/0020-autonomous-stop-rule.md",
+    "docs/adr/0019-autonomous-pr-completion.md",
+    "docs/adr/0010-autonomous-resume-and-bounded-recovery.md",
+    "docs/adr/0016-privileged-action-kinds-and-policy-refresh.md",
+    "docs/policies/project/workflow.md",
+    "specs/150-autonomous-stop-rule/decisions.md"
+  ],
+  "artifact": "docs/adr/0020-autonomous-stop-rule.md",
+  "model": "claude-opus-5-5",
+  "material": false,
+  "supersedes": null,
+  "privileged_actions": [],
+  "review": {
+    "kind": "security",
+    "verdict": "approved",
+    "report": "specs/150-autonomous-stop-rule/reviews/security.md",
+    "findings": [
+      {"id": "F-001", "severity": "medium", "label": "architecture-issue", "disposition": "accepted-provisionally", "reason": "Unchanged: Self-resume does not say the resume is armed only by the operator's own invocation through the trusted launcher, or that a usage limit is recognized from data the confined agent cannot write. ADR-0010's lock, sync and re-entry still bind it; #154 is R2 with its own security review and no code here acts before merge.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md", "docs/adr/0010-autonomous-resume-and-bounded-recovery.md"]},
+      {"id": "F-002", "severity": "medium", "label": "architecture-issue", "disposition": "accepted-provisionally", "reason": "Unchanged: Limit outcome publishes in any phase without saying the pre-publication guards (protected-input/tamper verification, record re-render, ADR-0016 privileged actions) still apply. The stop rule's tamper block partly covers it; #153 is R2 and implements it, and the Delivery bullet keeps today's blocks until then.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md"]},
+      {"id": "F-003", "severity": "info", "label": "spec-ambiguity", "disposition": "open", "reason": "Unchanged: a trusted author's Issue body can later be edited by collaborators with triage or write access; the ready-for-agent label has the same exposure, so no new risk. #152 may pin trust to the Issue state at intake.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md"]},
+      {"id": "F-004", "severity": "medium", "label": "architecture-issue", "disposition": "accepted-provisionally", "reason": "Unchanged: a high finding left after the fix cycles or at plan review/reconciliation goes to the limit outcome, so its branch is pushed and can run CI where today it blocks. ADR-0019 conditions (7) and (9) keep such a PR a Draft; documentation-only here and #153 is R2.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md", "docs/adr/0019-autonomous-pr-completion.md"]},
+      {"id": "F-005", "severity": "medium", "label": "architecture-issue", "disposition": "resolved", "reason": "Fix cycle 3 states that a self-resume counts as a block resolved during the run for ADR-0019 condition (11), so an unattended resume keeps the PR a Draft; test_self_resume checks it.", "evidence": ["docs/adr/0020-autonomous-stop-rule.md", "tests/test_governance.py"]}
+    ],
+    "required_kinds": []
+  },
+  "assumption": null
+}

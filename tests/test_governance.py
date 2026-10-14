@@ -36,7 +36,7 @@ class GovernanceTests(unittest.TestCase):
             text,
         )
         self.assertIn("**1.2.0** (2026-10-06, #55)", text)
-        # #147, ADR-0020: and a refresh from the reviewed default branch.
+        # #147, ADR-0021: and a refresh from the reviewed default branch.
         self.assertIn("refreshing an existing baseline under the conditions", text)
         self.assertIn("**1.3.0** (2026-10-13, #147)", text)
 
@@ -497,7 +497,7 @@ MATRIX_ROW = re.compile(r"^\| `(ballast [^`]+)` \| ([^|]+) \|", re.MULTILINE)
 class AgentCommandMatrixDocumentTests(unittest.TestCase):
     """#147 T049 [AC-007, AC-009, FR-014, FR-018]: one matrix, three documents."""
 
-    ADR = "docs/adr/0020-agent-sessions-relay-decisions.md"
+    ADR = "docs/adr/0021-agent-sessions-relay-decisions.md"
     POLICY = "templates/policies/spec-kit-workflow.md"
     AGENTS = (
         "AGENTS.md",
@@ -544,7 +544,7 @@ class AgentCommandMatrixDocumentTests(unittest.TestCase):
                 self.assertNotIn("An agent never runs it", text)
                 self.assertNotRegex(text, r"`ballast trust`[^.]*terminal only")
 
-    def test_adr_0020(self) -> None:
+    def test_adr_0021(self) -> None:
         """AC-009: what it supersedes and amends, each level, and its risks."""
         adr = " ".join(self.text(self.ADR).split())
         for text in (
@@ -571,7 +571,7 @@ class AgentCommandMatrixDocumentTests(unittest.TestCase):
         ):
             with self.subTest(adr=earlier):
                 self.assertIn(
-                    "(0020-agent-sessions-relay-decisions.md)",
+                    "(0021-agent-sessions-relay-decisions.md)",
                     self.text(f"docs/adr/{earlier}"),
                 )
         link = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
@@ -605,6 +605,299 @@ class AgentCommandMatrixDocumentTests(unittest.TestCase):
                 self.assertNotIn("never runs `ballast run` commands", text)
                 self.assertIn("--relayed-by", text)
                 self.assertRegex(text, r"`ballast run reject`, `resolve`")
+
+
+class AutonomousStopRuleDocumentTests(unittest.TestCase):
+    """#150 [AC-001 to AC-011, FR-008, FR-009, FR-012]: the Autonomous stop rule.
+
+    ADR-0020 states the rule, ADR-0004 and ADR-0010 point to it, and the policy
+    template and technical spec reference it without restating it.
+    """
+
+    ADR = "docs/adr/0020-autonomous-stop-rule.md"
+    ADR_0004 = "docs/adr/0004-autonomous-provisional-decisions.md"
+    ADR_0010 = "docs/adr/0010-autonomous-resume-and-bounded-recovery.md"
+    POLICY = "templates/policies/spec-kit-workflow.md"
+    TECHNICAL_SPEC = "specs/TECHNICAL-SPEC.md"
+    NOTE = "*Amended by [ADR-0020](0020-autonomous-stop-rule.md):"
+    STATUS = "**Status (#150, Autonomous stop rule):**"
+
+    def folded(self, name: str) -> str:
+        return " ".join((ROOT / name).read_text(encoding="utf-8").split())
+
+    def decision_bullet(self, lead: str) -> str:
+        text = (ROOT / self.ADR).read_text(encoding="utf-8")
+        decision = text[text.index("\n## Decision\n") :]
+        decision = decision[: decision.index("\n## ", 1)]
+        start = decision.index(f"\n- **{lead}.**")
+        end = decision.find("\n- ", start + 1)
+        return " ".join(decision[start : end if end != -1 else None].split())
+
+    def adr_bullet(self, name: str, lead: str) -> str:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        start = text.index(f"\n- **{lead}**")
+        end = min(
+            i
+            for i in (text.find("\n- ", start + 1), text.find("\n\n", start))
+            if i >= 0
+        )
+        return " ".join(text[start:end].split())
+
+    def paragraph(self, name: str, opening: str) -> str:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        start = text.index(f"\n{opening}") + 1
+        end = text.find("\n\n", start)
+        return " ".join(text[start : end if end != -1 else None].split())
+
+    def assert_phrases(self, text: str, phrases: tuple[str, ...]) -> None:
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_adr_0020_header_and_sections(self) -> None:
+        text = (ROOT / self.ADR).read_text(encoding="utf-8")
+        lines = text.splitlines()
+        self.assertEqual(
+            lines[0],
+            "# ADR-0020: Autonomous runs stop only for authority that takes effect "
+            "before merge",
+        )
+        status = next(line for line in lines if line.startswith("- Status:"))
+        self.assert_phrases(
+            status,
+            (
+                "- Status: accepted (2026-10-13",
+                "agent-provisional",
+                "until the operator merges the PR",
+            ),
+        )
+        self.assertTrue(any(line.startswith("- Risk: R2") for line in lines))
+        self.assertIn(
+            "- Feature: [150-autonomous-stop-rule]"
+            "(../../specs/150-autonomous-stop-rule/spec.md)",
+            text,
+        )
+        amends = [line for line in lines if line.startswith("- Amends:")]
+        self.assertEqual(len(amends), 1)
+        self.assert_phrases(
+            amends[0],
+            (
+                "[ADR-0004](0004-autonomous-provisional-decisions.md)",
+                "[ADR-0010](0010-autonomous-resume-and-bounded-recovery.md)",
+            ),
+        )
+        headings = [
+            "## Context",
+            "## Decision",
+            "## Consequences",
+            "## Rejected alternatives",
+        ]
+        self.assertEqual([line for line in lines if line in headings], headings)
+
+    def test_stop_rule(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Stop rule"),
+            (
+                "takes effect before merge",
+                "run authority",
+                "launcher execution",
+                "external writes",
+                "credentials",
+                "an invariant the runner enforces",
+                "material provisional decision",
+                "top of the PR",
+            ),
+        )
+
+    def test_what_still_blocks(self) -> None:
+        bullet = self.decision_bullet("What still blocks")
+        self.assert_phrases(
+            bullet,
+            tuple(
+                f"`{category}`"
+                for category in (
+                    "credential",
+                    "permission",
+                    "forge",
+                    "ineligible",
+                    "secret-provisioning",
+                    "external-write",
+                    "tamper",
+                    "unfinished-step",
+                    "postcondition",
+                    "decision",
+                    "contradiction",
+                    "limit",
+                    "review-finding",
+                    "interrupted",
+                    "upstream-sync",
+                )
+            ),
+        )
+        limit = bullet[bullet.index("*Limit outcome instead of a block:*") :]
+        limit = limit[: limit.index("*Not a decision")]
+        self.assert_phrases(
+            limit,
+            ("plan review or spec reconciliation", "failed final `run-checks`"),
+        )
+        self.assertIn("A failed `[checks]` command is not a `postcondition`", bullet)
+
+    def test_trusted_author(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Trusted author"),
+            (
+                "`ready-for-agent`",
+                "operator-controlled",
+                "never from the Issue or an agent-writable file",
+                "#152",
+            ),
+        )
+
+    def test_limit_outcome(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Limit outcome"),
+            (
+                "agent steps",
+                "wall time",
+                "fix cycles",
+                "draft retries",
+                "in any phase",
+                "Draft PR",
+                "open findings",
+                "failed checks",
+                "`unverified`",
+                "#153",
+            ),
+        )
+
+    def test_self_resume(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Self-resume"),
+            (
+                "provider usage limit",
+                "without an operator `block-resolution` record",
+                "runner event",
+                "never a human decision",
+                "mode, risk, limits and integrations",
+                "condition (11)",
+                "stays a Draft",
+                "#154",
+            ),
+        )
+
+    def test_residual_risk(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Residual risk"),
+            (
+                "decisions concentrated at the merge",
+                "material-decision cap",
+                "cap was reached",
+                "#151",
+                "#153",
+            ),
+        )
+
+    def test_invariants_and_delivery(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Invariants"),
+            ("BL-INV-003 and BL-INV-006", "no constitution amendment"),
+        )
+        self.assertIn("#151, #152, #153 and #154", self.decision_bullet("Delivery"))
+
+    def test_adr_0020_links_resolve(self) -> None:
+        link = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+        path = ROOT / self.ADR
+        for target in link.findall(path.read_text(encoding="utf-8")):
+            if "://" not in target:
+                with self.subTest(target=target):
+                    self.assertTrue((path.parent / target).exists())
+
+    def test_adr_0004_note(self) -> None:
+        bullet = self.adr_bullet(self.ADR_0004, "Continuation as a gate-only workflow")
+        self.assertIn(self.NOTE, bullet)
+        note = bullet[bullet.index(self.NOTE) :]
+        self.assert_phrases(note, ("Autonomous run blocks only for",))
+
+    def test_adr_0010_notes(self) -> None:
+        text = self.folded(self.ADR_0010)
+        self.assertEqual(text.count(self.NOTE), 3)
+        resume = self.adr_bullet(self.ADR_0010, "Autonomous resume")
+        self.assertIn(self.NOTE, resume)
+        self.assert_phrases(
+            resume[resume.index(self.NOTE) :],
+            ("provider usage limit", "`block-resolution`"),
+        )
+        fix_loop = self.adr_bullet(self.ADR_0010, "Bounded fix loop")
+        self.assertIn(self.NOTE, fix_loop)
+        self.assertIn("Draft PR", fix_loop[fix_loop.index(self.NOTE) :])
+        consequences = text[text.index("## Consequences") :]
+        consequences = consequences[: consequences.index("## Rejected alternatives")]
+        runs_out = consequences[consequences.index("a run that runs out blocks") :]
+        runs_out = runs_out[: runs_out.index(" - ")]
+        self.assertIn(self.NOTE, runs_out)
+        self.assertIn("Draft PR", runs_out[runs_out.index(self.NOTE) :])
+
+    def test_chat_runs_unaffected(self) -> None:
+        self.assert_phrases(
+            self.decision_bullet("Chat runs"),
+            ("Chat runs are unaffected", "every Chat gate needs the operator"),
+        )
+        adr_0009 = (
+            ROOT / "docs/adr/0009-chat-mode-operator-driven-steps.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("0020", adr_0009)
+
+    def test_policy_cites_adr_0020(self) -> None:
+        text = (ROOT / self.POLICY).read_text(encoding="utf-8")
+        section = text[text.index("\n## Autonomous runs\n") :]
+        section = section[: section.index("\n## ", 1)]
+        table = section.index("| unsafe uncertainty |")
+        stop_rule = section.index("\n**Stop rule.**")
+        self.assertLess(table, stop_rule)
+        paragraph = self.paragraph(self.POLICY, "**Stop rule.**")
+        self.assert_phrases(
+            paragraph, ("ADR-0020 in the Ballast repository", "later Ballast releases")
+        )
+        self.assertNotIn("](", paragraph)
+        self.assertNotIn("takes effect before merge", " ".join(section.split()))
+        for issue in range(150, 155):
+            with self.subTest(issue=issue):
+                self.assertNotIn(f"#{issue}", text)
+
+    def test_technical_spec_links_adr_0020(self) -> None:
+        text = (ROOT / self.TECHNICAL_SPEC).read_text(encoding="utf-8")
+        self.assertLess(
+            text.index("may still block a run."), text.index(f"\n{self.STATUS}")
+        )
+        paragraph = self.paragraph(self.TECHNICAL_SPEC, self.STATUS)
+        self.assert_phrases(
+            paragraph, ("(../docs/adr/0020-autonomous-stop-rule.md)", "#151", "#154")
+        )
+        self.assertNotIn("takes effect before merge", paragraph)
+
+    def test_no_human_approval_wording(self) -> None:
+        import sys  # noqa: PLC0415
+
+        sys.path.insert(0, str(ROOT / "tools/spec_workflow"))
+        try:
+            import autonomy  # noqa: PLC0415
+        finally:
+            sys.path.pop(0)
+        resume = self.adr_bullet(self.ADR_0010, "Autonomous resume")
+        fix_loop = self.adr_bullet(self.ADR_0010, "Bounded fix loop")
+        continuation = self.adr_bullet(
+            self.ADR_0004, "Continuation as a gate-only workflow"
+        )
+        for name, value in (
+            ("ADR-0020", self.folded(self.ADR)),
+            ("ADR-0004 note", continuation[continuation.index(self.NOTE) :]),
+            ("ADR-0010 resume note", resume[resume.index(self.NOTE) :]),
+            ("ADR-0010 fix-loop note", fix_loop[fix_loop.index(self.NOTE) :]),
+            ("policy", self.paragraph(self.POLICY, "**Stop rule.**")),
+            ("technical spec", self.paragraph(self.TECHNICAL_SPEC, self.STATUS)),
+        ):
+            with self.subTest(document=name):
+                self.assertIsNone(autonomy.HUMAN_APPROVAL.search(value))
 
 
 if __name__ == "__main__":

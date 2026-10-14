@@ -17,7 +17,7 @@ interactive step runs under bubblewrap, which hides operator state.
   the mode. Nothing stores a "blocked" flag.
 - Gates open only through `approve`, bound to the artifact's digest: at a
   TTY with one typed confirmation for every gate named, or relayed by the
-  operator's agent session after a yes in chat (`--relayed-by`, ADR-0020),
+  operator's agent session after a yes in chat (`--relayed-by`, ADR-0021),
   which is recorded and shown as relayed and accepted only while the run's
   mode is chat. Agent output never opens one; `reject`, `resolve` and `mode`
   stay at the operator's terminal.
@@ -1452,7 +1452,7 @@ def _new_run(  # noqa: PLR0913 - one record, every field explicit
 def start(root: Path, options: list[str], who: actor.Actor = actor.OPERATOR) -> int:
     """`ballast run start --mode chat`: record, synchronize, summarize; no agent.
 
-    `who` started it: the operator, or a relaying agent session (ADR-0020).
+    `who` started it: the operator, or a relaying agent session (ADR-0021).
     """
     inputs = _start_inputs(options)
     feature = inputs.get("feature_directory", "")
@@ -1860,7 +1860,7 @@ def run_step(  # noqa: C901, PLR0912, PLR0913, PLR0915 - the lifecycle, in order
     """`ballast run step RUN PHASE [--headless]`: the step-runner lifecycle.
 
     In chat mode a step is interactive at the operator's terminal, or with
-    `headless` runs under the Autonomous confinement (ADR-0020), after which
+    `headless` runs under the Autonomous confinement (ADR-0021), after which
     the next pending gates and the batch approval are printed.
     """
     if phase not in PHASES:
@@ -3070,7 +3070,7 @@ def change_mode(root: Path, run_id: str, target: str, reason: str | None) -> int
         raise Refused(EXIT_REFUSED, "mode needs --reason TEXT")
     if not autonomy.RUN_ID.fullmatch(run_id or ""):
         raise Refused(EXIT_REFUSED, "a valid RUN_ID is required")
-    # ADR-0020: switching a human-gated run to chat would open relayed
+    # ADR-0021: switching a human-gated run to chat would open relayed
     # approvals on it, so the operator types the switch at a terminal.
     _terminal("mode")
     try:

@@ -21,7 +21,7 @@ that refusal (`"refusal_kind"`: `inputs-changed`, `pin-mismatch`, `tamper`,
 exists (with `"baseline_commit"` for a default-branch one); it writes nothing,
 so `ballast doctor` and the global `ballast` command can call it before trust.
 The global command runs the pinned standard's `setup --refresh` on
-`inputs-changed` or `pin-mismatch` (ADR-0020): it records a `default-branch`
+`inputs-changed` or `pin-mismatch` (ADR-0021): it records a `default-branch`
 baseline only when every change came from the reviewed repository's default
 branch, and the comparison below stays the same check.
 
@@ -355,7 +355,7 @@ def record_baseline(
 
     The only writer of `trusted.json`. It decides nothing about eligibility:
     `ballast trust` (the operator), `setup_trust` (setup and preparation,
-    under ADR-0015's conditions) and its default-branch refresh (ADR-0020)
+    under ADR-0015's conditions) and its default-branch refresh (ADR-0021)
     call it. `repository` is the reviewed `[github] repository` of the
     recorded `ballast.toml`, case-folded; a refresh needs it. The provenance
     is bound to the exact baseline bytes, so a crash between the two writes
@@ -417,7 +417,7 @@ def baseline_source(state: Path) -> str | None:
 def refresh_repository(state: Path) -> str | None:
     """Return the reviewed repository a bound baseline names, case-folded.
 
-    A refresh counts only this repository's default branch (ADR-0020); a
+    A refresh counts only this repository's default branch (ADR-0021); a
     legacy, unbound or unnamed baseline makes the checkout ineligible.
     """
     _, record = _provenance(state)

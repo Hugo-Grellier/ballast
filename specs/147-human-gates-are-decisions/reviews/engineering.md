@@ -3,7 +3,7 @@
 - Review: engineering
 - Run: Autonomous `2e651132`, implementation review, fix cycle 0 of 3 used
 - Reviewer: claude/claude-opus-5-5 (same provider as the author: reduced independence)
-- Scope: the working-tree diff against `09fb427` (36 tracked files changed, plus the new `tools/spec_workflow/actor.py`, ADR-0020 and the feature directory)
+- Scope: the working-tree diff against `09fb427` (36 tracked files changed, plus the new `tools/spec_workflow/actor.py`, ADR-0021 and the feature directory)
 
 ## What was read
 

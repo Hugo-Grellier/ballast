@@ -153,6 +153,31 @@ PACKET_REASONS: dict[str, frozenset[str]] = {
     ),
 }
 PACKET_COUNTS = ("verified", "failed", "not_run", "stale", "missing")
+# PR completion (#141, completion.py): the twelve condition codes in order,
+# then the outcome-only codes.
+COMPLETION_REASONS = (
+    "mode",
+    "policy-draft",
+    "risk",
+    "privileged-action",
+    "no-final-acceptance",
+    "not-converged",
+    "open-finding",
+    "checks",
+    "packet",
+    "material-change",
+    "block-resolved",
+    "head-moved",
+    "pr-changed",
+    "pr-unreadable",
+    "forge-failed",
+    "forge-unverified",
+    "internal-error",
+)
+COMPLETION_OUTCOMES = frozenset({"ready", "draft", "unverified"})
+# The reasons that may carry a Draft PR `failed-retryable` cause code.
+COMPLETION_CAUSED = frozenset({"forge-failed", "pr-unreadable"})
+MAX_LABELS = 16
 SOURCES = {
     "runner",
     "client-counter",
@@ -283,6 +308,11 @@ ENUM_FIELDS: dict[str, dict[str, set[str]]] = {
         "outcome": set(PACKET_REASONS),
         "reason": set().union(*PACKET_REASONS.values()),
     },
+    "pr_completion": {
+        "outcome": set(COMPLETION_OUTCOMES),
+        "reasons": set(COMPLETION_REASONS),
+        "cause": set(PR_REASONS["failed-retryable"]),
+    },
 }
 
 # No opaque payload, prose, argv, or output field is accepted. A question mark
@@ -305,7 +335,7 @@ FIELDS: dict[str, dict[str, str]] = {
         "exit_code?": "int",
         "log_line": "int",
     },
-    # `actor` and `relayed_by`: who decided a Chat gate (#147, ADR-0020).
+    # `actor` and `relayed_by`: who decided a Chat gate (#147, ADR-0021).
     "gate": {
         "step_id": "label",
         "choice": "label",
@@ -458,6 +488,14 @@ FIELDS: dict[str, dict[str, str]] = {
     },
     # The trust baseline was refreshed from the reviewed default branch (#147).
     "trust_refresh": {"repository": "label", "branch": "ref", "commit": "oid"},
+    # One reported PR completion (#141); `reasons` lists failed conditions.
+    "pr_completion": {
+        "outcome": "label",
+        "pr_number": "int",
+        "commit": "oid",
+        "reasons?": "labels",
+        "cause?": "label",
+    },
 }
 # Written only by the runner, its Draft PR checkpoint, its branch
 # synchronization or `ballast run demo`, never by `record`.
@@ -472,6 +510,7 @@ RUNNER_ONLY = frozenset(
         "acceptance_packet",
         "demo_capture",
         "trust_refresh",
+        "pr_completion",
     }
 )
 DEMO_SCENARIO = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -619,6 +658,13 @@ def _valid_value(kind: str, value: object) -> bool:
         return type(value) is int and value >= 0
     if kind == "bool":
         return type(value) is bool
+    if kind == "labels":
+        return (
+            isinstance(value, list)
+            and 1 <= len(value) <= MAX_LABELS
+            and len(set(map(str, value))) == len(value)
+            and all(_valid_value("label", item) for item in value)
+        )
     if not isinstance(value, str):
         return False
     pattern = {
@@ -698,7 +744,10 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
         if field_type is None or not _valid_value(field_type, value):
             fail(f"invalid {key}")
     for key, options in ENUM_FIELDS.get(event["kind"], {}).items():
-        if key in data and data[key] not in options:
+        # A `labels` field is checked element by element.
+        values = data.get(key)
+        items = values if isinstance(values, list) else [values]
+        if key in data and not set(items) <= options:
             fail(f"unknown {key}")
     if event["kind"] == "run" and data["action"] == "ended" and "status" not in data:
         fail("run end needs status")
@@ -725,6 +774,8 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
         _validate_packet(data)
     if event["kind"] == "demo_capture" and data["pr_number"] < 1:
         fail("invalid pr_number")
+    if event["kind"] == "pr_completion":
+        _validate_completion(data)
     required_source = {
         "run": "runner",
         "step": "runner",
@@ -733,6 +784,7 @@ def validate(event: object) -> None:  # noqa: C901, PLR0912, PLR0915 - Explicit 
         "branch_sync": "runner",
         "acceptance_packet": "runner",
         "demo_capture": "runner",
+        "pr_completion": "runner",
         "usage": "client-counter",
         "human_action": "operator-attested",
     }.get(event["kind"])
@@ -794,6 +846,19 @@ def _validate_packet(data: dict[str, Any]) -> None:
         fail(f"{data['outcome']} needs the PR, commits, digest and counts")
     if "reason" in data and data["reason"] not in PACKET_REASONS[data["outcome"]]:
         fail(f"reason does not apply to {data['outcome']}")
+
+
+def _validate_completion(data: dict[str, Any]) -> None:
+    """Apply PR completion's cross-field rules (#141 output-and-ledger)."""
+    reasons = data.get("reasons", [])
+    if data["outcome"] == "ready" and "reasons" in data:
+        fail("ready takes no reasons")
+    if data["outcome"] != "ready" and "reasons" not in data:
+        fail(f"{data['outcome']} needs reasons")
+    if data["outcome"] == "unverified" and reasons != ["forge-unverified"]:
+        fail("unverified needs exactly the reason forge-unverified")
+    if "cause" in data and not COMPLETION_CAUSED & set(reasons):
+        fail("cause needs reason forge-failed or pr-unreadable")
 
 
 def new_event(  # noqa: PLR0913, PLR0917 - Event identity has six fixed fields.
@@ -2156,6 +2221,13 @@ def report(  # noqa: C901, PLR0911, PLR0912, PLR0915 - Five evidence dimensions 
         if packets
         else {"available": False, "reason": "no packet recorded"}
     )
+    # Only a run whose operator opted in records one (#141), so no default.
+    completions = [event for event in events if event["kind"] == "pr_completion"]
+    if completions:
+        result["pr_completion"] = {
+            **completions[-1]["data"],
+            "observed_at": completions[-1]["observed_at"],
+        }
     demos: dict[str, dict[str, Any]] = {}
     for event in events:
         if event["kind"] == "demo_capture":
@@ -2875,6 +2947,7 @@ def _text_report(data: dict[str, Any]) -> str:
         "pull_request",
         "branch_sync",
         "acceptance_packet",
+        "pr_completion",
         "demo_capture",
     ):
         if name in data:

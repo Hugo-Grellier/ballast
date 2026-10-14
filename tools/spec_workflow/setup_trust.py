@@ -24,7 +24,7 @@ and nothing reaches the network before the last):
    checkout's Git configuration.
 
 `refresh_eligible` and `record_refresh` refresh an existing baseline after a
-protected-input change (ADR-0020, `setup --refresh`, which the global `ballast`
+protected-input change (ADR-0021, `setup --refresh`, which the global `ballast`
 command runs before the launcher). The live default branch of the reviewed
 repository the baseline names counts as reviewed for any bytes, so the refresh
 records a `default-branch` baseline only when, in this order:
@@ -824,7 +824,7 @@ def settle(
     return Verdict("recorded", _describe(reference), len(snapshot), mode)
 
 
-# --- the default-branch refresh (ADR-0020) -----------------------------------
+# --- the default-branch refresh (ADR-0021) -----------------------------------
 
 NOT_REFRESHED = "the operator reviews and runs ballast trust"
 NO_NAMED_BASELINE = (

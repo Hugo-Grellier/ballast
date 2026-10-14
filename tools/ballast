@@ -34,7 +34,7 @@ damaged one again. Only `setup` and `preview` download, and `run`, `ledger`
 or `intake` when the launcher would refuse changed protected inputs or a pin
 that differs from the installation: they then fetch the pinned version and run
 its `tools/setup --refresh`, which records a trust baseline only for changes
-that came from the reviewed default branch (ADR-0020), then run the launcher
+that came from the reviewed default branch (ADR-0021), then run the launcher
 as before. Every other command runs the launcher of an already fetched version.
 The first `run`, `ledger` or `intake` in a new worktree prepares its
 installation from a verified installation on this machine, without
@@ -1880,7 +1880,7 @@ def before_launcher(root: Path, standard: Path, command: str) -> int:
 
 
 # Launcher refusals after which the pinned standard's setup may refresh the
-# trust baseline from the reviewed default branch (ADR-0020).
+# trust baseline from the reviewed default branch (ADR-0021).
 REFRESHABLE = ("inputs-changed", "pin-mismatch")
 
 

@@ -777,6 +777,95 @@ class PolicyTests(AutonomyCase):
         # Words that merely begin like one are not forbidden.
         self.assertFalse(autonomy.never_authorized("merged-docs check"))
 
+    def test_completion_keys(self) -> None:
+        """#141 T007 [FR-001, FR-006]: each valid value is stored as set."""
+        for completion in autonomy.COMPLETIONS:
+            for severity in autonomy.COMPLETION_SEVERITIES:
+                with self.subTest(completion=completion, severity=severity):
+                    policy, _, warnings = self.policy(
+                        f'[autonomous]\ncompletion = "{completion}"\n'
+                        f'completion_max_severity = "{severity}"\n'
+                    )
+                    self.assertEqual(
+                        (
+                            policy["completion_configured"],
+                            policy["completion_max_severity"],
+                        ),
+                        (completion, severity),
+                    )
+                    self.assertEqual(warnings, [])
+                    self.assertNotIn("completion", policy)
+
+    def test_unknown_completion_values_narrow_with_a_warning(self) -> None:
+        """#141 T007 [FR-002, FR-006]: never `ready`, never wider than `low`."""
+        import tomllib  # noqa: PLC0415
+
+        for key, value, stored in (
+            ("completion", '"Ready"', "draft"),
+            ("completion", '"merge"', "draft"),
+            ("completion", "1", "draft"),
+            ("completion", "true", "draft"),
+            ("completion_max_severity", '"medium"', "low"),
+            ("completion_max_severity", '"critical"', "low"),
+            ("completion_max_severity", "1", "low"),
+        ):
+            with self.subTest(key=key, value=value):
+                policy, _, warnings = self.policy(f"[autonomous]\n{key} = {value}\n")
+                field = "completion_configured" if key == "completion" else key
+                self.assertEqual(policy[field], stored)
+                shown = repr(tomllib.loads(f"v = {value}")["v"])
+                self.assertEqual(
+                    warnings,
+                    [f"ignored [autonomous] {key} {shown}: cannot widen eligibility"],
+                )
+
+    def test_no_completion_key_leaves_the_snapshot_unchanged(self) -> None:
+        """#141 T007 [FR-013]: no new field without the keys."""
+        for table in ("", "[autonomous]\n", '[autonomous]\nrisk = ["R1"]\n'):
+            with self.subTest(table=table):
+                policy, _, warnings = self.policy(table)
+                self.assertEqual(
+                    set(policy),
+                    {"risk", "excluded_boundaries", "authorized_privileged_actions"},
+                )
+                self.assertEqual(warnings, [])
+
+    def test_completion_policy_only_narrows(self) -> None:
+        """#141 T007 [FR-003, AC-015, AC-016]: every (configured, flag) pair."""
+        for configured, flag, effective in (
+            (None, None, "draft"),
+            (None, "draft", "draft"),
+            (None, "ready", "draft"),
+            ("draft", None, "draft"),
+            ("draft", "draft", "draft"),
+            ("draft", "ready", "draft"),
+            ("ready", None, "ready"),
+            ("ready", "draft", "draft"),
+            ("ready", "ready", "ready"),
+        ):
+            with self.subTest(configured=configured, flag=flag):
+                self.assertEqual(
+                    autonomy.completion_policy(configured, flag), effective
+                )
+
+    def test_mark_ready_is_never_authorizable(self) -> None:
+        """#141 T007 [AC-017, FR-015]: no policy authorizes marking ready."""
+        policy, _, warnings = self.policy(
+            '[autonomous]\ncompletion = "ready"\n'
+            'authorized_privileged_actions = ["mark-ready", "mark ready: own PR"]\n'
+        )
+        self.assertEqual(policy["authorized_privileged_actions"], [])
+        self.assertEqual(sum("cannot widen" in w for w in warnings), 2)
+        for action in ("mark-ready", "mark ready", "mark-ready: the run's own PR"):
+            with self.subTest(action=action):
+                self.assertTrue(autonomy.never_authorized(action))
+                self.assertEqual(
+                    autonomy.unauthorized_actions(
+                        [action], {"authorized_privileged_actions": [action]}
+                    ),
+                    [action],
+                )
+
     def test_limit_precedence_and_ranges(self) -> None:
         _, defaults, _ = self.policy(
             "[autonomous]\nwall_time_minutes = 120\nmax_agent_steps = 24\n"
@@ -3274,6 +3363,39 @@ class PublisherTests(AutonomyCase):
         self.assertEqual(len(create), 1)
         self.assertIn("--draft", create[0])
 
+    def test_success_names_the_pr_for_completion(self) -> None:
+        """#141 T007: the publication's PR and pushed commit; never `pr ready`."""
+        result = autonomy.publish(self.root, "run42")
+        self.assertTrue(result["ok"], result)
+        head = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(
+            {k: result[k] for k in ("repo", "number", "commit", "base", "branch")},
+            {
+                "repo": "acme/demo",
+                "number": 7,
+                "commit": head,
+                "base": "main",
+                "branch": "27-demo-run",
+            },
+        )
+        self.assertEqual(
+            (result["category"], result["message"], result["url"]),
+            (None, "published", "https://github.com/acme/demo/pull/7"),
+        )
+        self.assertNotIn(["pr", "ready"], [c[:2] for c in self.gh_calls()])
+
+    def test_a_declared_mark_ready_refuses_publication(self) -> None:
+        """#141 AC-017: `mark-ready` stays a never-authorizable kind."""
+        self.assertIn("mark ready", autonomy.NEVER_AUTHORIZED)
+        self.assertIn("mark-ready", autonomy.ACTION_KINDS)
+        autonomy.append_decision(
+            self.root,
+            "run42",
+            {**fixed_decision(1, "tasks"), "privileged_actions": ["mark-ready"]},
+        )
+        self.refused("ineligible", "privileged action mark-ready before merge")
+        self.assertNotIn(["pr", "ready"], [c[:2] for c in self.gh_calls()])
+
     def test_argv_never_merges_or_forces(self) -> None:
         _install(FIXTURES / "fake_git.py", self.bin / "git")
         os.environ["FAKE_GIT_LOG"] = str(self.base / "git.log")
@@ -4135,6 +4257,21 @@ class RecoveryRenderTests(unittest.TestCase):
             "- Spend: bounded by the agent-step limit; every agent step, retry and "
             "fix cycle counts; monetary spend is not measured",
             record,
+        )
+
+    def test_policy_text_shows_the_completion_policy_when_present(self) -> None:
+        """#141 F-05: a refreshed policy line names completion and its threshold."""
+        policy = {
+            "risk": ["R0", "R1"],
+            "excluded_boundaries": [],
+            "authorized_privileged_actions": [],
+        }
+        before = "(risk `R0`, `R1`; excluded boundaries none; authorized actions none)"
+        self.assertEqual(autonomy._policy_text(policy), before)  # noqa: SLF001
+        policy.update(completion="ready", completion_max_severity="info")
+        self.assertEqual(
+            autonomy._policy_text(policy),  # noqa: SLF001
+            before[:-1] + "; completion `ready`; severity threshold `info`)",
         )
 
     def test_fix_loop_section(self) -> None:

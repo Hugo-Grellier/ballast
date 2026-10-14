@@ -1,4 +1,4 @@
-# ADR-0020: Agent sessions run mechanical commands and relay decisions within the run's autonomy
+# ADR-0021: Agent sessions run mechanical commands and relay decisions within the run's autonomy
 
 - Status: proposed (2026-10-13, with the change for [#147](https://github.com/Hugo-Grellier/ballast/issues/147)). Agent-provisional in Autonomous run `2e651132`; merging the PR is the human approval that accepts it.
 - Risk: R2 (the launcher's trust model, headless-agent permissions, what `ballast` executes, the paths setup installs).

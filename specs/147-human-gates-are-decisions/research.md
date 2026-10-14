@@ -207,7 +207,7 @@ No NEEDS CLARIFICATION remained in the Technical Context. R1 to R14 record the d
 
 ## Governing documents (FR-013, FR-014, FR-018)
 
-- **New ADR**: [ADR-0020](../../docs/adr/0020-agent-sessions-relay-decisions.md), "Agent sessions run mechanical commands and relay decisions within the run's autonomy". It is proposed and agent-provisional until merge, and covers:
+- **New ADR**: [ADR-0021](../../docs/adr/0021-agent-sessions-relay-decisions.md), "Agent sessions run mechanical commands and relay decisions within the run's autonomy". It is proposed and agent-provisional until merge, and covers:
   - the agent command matrix (R8);
   - the actor rule (R7);
   - the default-branch refresh (R1 to R5);

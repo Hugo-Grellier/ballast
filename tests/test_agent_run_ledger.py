@@ -336,6 +336,147 @@ class LedgerTests(unittest.TestCase):
         )
         self.assertNotIn("pull_request", ledger.aggregate(self.root))
 
+    COMPLETION = {"pr_number": 7, "commit": "a" * 40}  # noqa: RUF012 - read-only
+
+    def completion(self, data: dict[str, object]) -> dict[str, object]:
+        return ledger.new_event(
+            "run_1", FEATURE, "pr_completion", "runner", {**self.COMPLETION, **data}
+        )
+
+    def test_pr_completion_events_accept_each_outcome(self) -> None:
+        """#141 T008 [FR-010]: ready, draft with reasons, unverified."""
+        valid = [
+            {"outcome": "ready"},
+            {"outcome": "draft", "reasons": ["risk"]},
+            {"outcome": "draft", "reasons": list(ledger.COMPLETION_REASONS[:16])},
+            {"outcome": "draft", "reasons": ["forge-failed"], "cause": "gh-forbidden"},
+            {
+                "outcome": "draft",
+                "reasons": ["risk", "pr-unreadable"],
+                "cause": "github-unreachable",
+            },
+            {"outcome": "unverified", "reasons": ["forge-unverified"]},
+        ]
+        for data in valid:
+            with self.subTest(data=data):
+                self.assertEqual(
+                    self.completion(data)["data"], {**self.COMPLETION, **data}
+                )
+
+    def test_pr_completion_events_reject_values_outside_the_schema(self) -> None:
+        """#141 T008: reasons, causes and outcomes follow the contract."""
+        cases = {
+            "ready with reasons": {"outcome": "ready", "reasons": ["risk"]},
+            "draft without reasons": {"outcome": "draft"},
+            "unknown outcome": {"outcome": "merged"},
+            "unknown reason": {"outcome": "draft", "reasons": ["approved"]},
+            "duplicate reasons": {"outcome": "draft", "reasons": ["risk", "risk"]},
+            "too many reasons": {
+                "outcome": "draft",
+                "reasons": list(ledger.COMPLETION_REASONS),
+            },
+            "empty reasons": {"outcome": "draft", "reasons": []},
+            "reasons as text": {"outcome": "draft", "reasons": "risk"},
+            "cause without forge-failed": {
+                "outcome": "draft",
+                "reasons": ["risk"],
+                "cause": "gh-forbidden",
+            },
+            "unknown cause": {
+                "outcome": "draft",
+                "reasons": ["forge-failed"],
+                "cause": "rate-limited",
+            },
+            "unverified with other reasons": {
+                "outcome": "unverified",
+                "reasons": ["forge-unverified", "risk"],
+            },
+            "unverified with a cause": {
+                "outcome": "unverified",
+                "reasons": ["forge-unverified"],
+                "cause": "github-error",
+            },
+            "unverified without reasons": {"outcome": "unverified"},
+            "bad commit": {"outcome": "ready", "commit": "HEAD"},
+            "free text": {"outcome": "ready", "note": "ready to merge"},
+        }
+        self.assertGreater(len(ledger.COMPLETION_REASONS), 16)
+        for name, data in cases.items():
+            with self.subTest(name=name), self.assertRaises(ledger.LedgerError):
+                self.completion(data)
+        with self.assertRaisesRegex(ledger.LedgerError, "requires runner"):
+            ledger.new_event(
+                "run_1",
+                FEATURE,
+                "pr_completion",
+                "operator-attested",
+                {**self.COMPLETION, "outcome": "ready"},
+            )
+
+    def test_pr_completion_is_runner_only(self) -> None:
+        """#141 T008: `ballast ledger record` refuses the kind."""
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            redirect_stderr(output),
+            self.assertRaises(SystemExit),
+        ):
+            ledger.main(
+                [
+                    "record",
+                    "run_1",
+                    "pr_completion",
+                    "--source",
+                    "runner",
+                    "--data",
+                    json.dumps({**self.COMPLETION, "outcome": "ready"}),
+                ]
+            )
+        self.assertIn("invalid choice", output.getvalue())
+        with self.assertRaisesRegex(ledger.LedgerError, "runner or snapshot"):
+            ledger._record(  # noqa: SLF001
+                self.root,
+                "run_1",
+                FEATURE,
+                "pr_completion",
+                "runner",
+                {**self.COMPLETION, "outcome": "ready"},
+            )
+
+    def test_report_shows_the_latest_pr_completion_only_when_recorded(self) -> None:
+        """#141 T008: no default entry, so an unconfigured report is unchanged."""
+        self.write_run([], None)
+        ledger.import_run(self.root, "run_1")
+        self.assertNotIn("pr_completion", ledger.report(self.root, "run_1"))
+        for event_id, data in (
+            ("c1", {"outcome": "draft", "reasons": ["checks"]}),
+            ("c2", {"outcome": "ready"}),
+        ):
+            ledger.append(
+                self.root,
+                ledger.new_event(
+                    "run_1",
+                    FEATURE,
+                    "pr_completion",
+                    "runner",
+                    {**self.COMPLETION, **data},
+                    event_id,
+                ),
+            )
+        events, problems = ledger.read(self.root, "run_1")
+        self.assertEqual(problems, [])
+        report = ledger.report(self.root, "run_1")
+        self.assertEqual(
+            report["pr_completion"],
+            {**events[-1]["data"], "observed_at": events[-1]["observed_at"]},
+        )
+        text = ledger._text_report(report)  # noqa: SLF001
+        self.assertEqual(
+            [line for line in text.splitlines() if line.startswith("pr_completion:")],
+            [f"pr_completion: {json.dumps(report['pr_completion'], sort_keys=True)}"],
+        )
+        self.assertNotIn("pr_completion", ledger.aggregate(self.root))
+
     SYNC = {  # noqa: RUF012 - read-only fixture
         "base_ref": "main",
         "base_before": "a" * 40,

@@ -351,7 +351,7 @@ Bytecode is excluded from the baseline because no workflow tool reads it.
 
 **Setup-recorded baseline.** `ballast trust`, run by the operator or the
 operator's agent session outside a step, records a baseline after a review.
-Setup also records one after a default-branch refresh (ADR-0020, below), and
+Setup also records one after a default-branch refresh (ADR-0021, below), and
 in one more case: the operator's own
 `ballast setup` (and a new worktree's first-command preparation, which installs
 from a verified local copy) may also record it (ADR-0015). They record it only
@@ -381,7 +381,7 @@ refuses it; see [Agent sessions](#agent-sessions-and-relayed-decisions)). It
 also refuses when `.ballast/spec_workflow/claude-settings.json` differs from
 what `ballast.toml` produces: run `ballast setup`, review, then `ballast trust`.
 
-**Automatic refresh from the default branch (ADR-0020).** A change merged on
+**Automatic refresh from the default branch (ADR-0021).** A change merged on
 the default branch of the reviewed repository needs neither `ballast trust`
 nor `ballast setup`. Before `ballast run`, `ledger` or `intake`, the global
 `ballast` command asks the launcher why it would refuse; on changed protected
@@ -540,7 +540,7 @@ runner contract for it. Every validator above still runs unchanged.
 | `fix-N` (`speckit.ballast.fix`), `record-fix-N`, `review-fix-N`, `review-specialists-fix-N`, `record-fix-review-N` (`record-decision --point implementation-review --recheck`) | confined agent (skipped by the wrapper unless the run's fix state asks for it), then trusted `artifacts.py` | The fix step changes only code, tests, `tasks.md` and `decisions.md` for the findings and failed checks the fix input lists; `record-fix` counts the cycle only after that step ran and the implementation contract still holds; the recheck records the reviews again, superseding the earlier ones, and sets the next fix state or blocks as `fix-cycle limit (3)`. |
 | Draft retries | the trusted agent wrapper | After an Autonomous agent step, the recorder's own draft checks; a correctable refusal reruns the step with the message, at most twice, each attempt counted. |
 | `run-checks` | trusted `artifacts.py`, confined | Each `[checks] commands` entry in `ballast.toml` exits 0 within its timeout; code outside `specs/<f>/` still equals the tree frozen at implementation review before the checks, the checks change no tracked or unignored file, and protected inputs are unchanged afterwards; the tree digest is frozen for publication. When the commands pass, it then runs each test `acceptance-evidence.json` maps, once, confined with the whole checkout read-only, within the check timeout and the wall time, and records one `runner-recorded` result per criterion and test in the ledger (ADR-0018 in the Ballast repository). A missing, malformed, stale, ignored or oversized (over 100 criterion-test pairs or 1 MiB) manifest, or no `.venv/bin/python`, runs none and is named in the run record, as is a test whose file is ignored or missing (not in the published tree); a failed test is recorded, not a block. |
-| Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. It never merges, marks ready, releases or deploys. |
+| Publication | `run.py` as the operator, after the workflow completes | Commits the changes since the recorded `HEAD` with hooks and filters disabled, pushes the branch without force and opens one Draft PR whose body lists every provisional decision. It runs `gh` and `git` as the [Draft PR](#draft-pr) checkpoint does, for the `[github] repository` pinned in `ballast.toml`, and refuses an `origin` other than that repository. It pushes the commit to that repository's URL from a throwaway repository with an empty configuration, so nothing in the checkout's Git configuration (remotes, URL rewrites, includes, SSH command, credential helper, hooks) applies to the push. When the branch's only open PR is the one the checkpoint opened for this feature and it is still a draft to the default branch, the publisher adopts it instead of opening another. It re-reads the body just before editing and adds or replaces only its own summary section, so no other text is lost. A body that changed meanwhile is left alone, and `ballast run publish` retries. Every PR it creates or adopts is read back and must be an open draft from this branch to the default branch. The publisher itself never merges, marks ready, releases or deploys. For a run whose operator set `[autonomous] completion = "ready"`, `run.py` then marks the PR ready for review after the checkpoint and packet when every condition holds ([PR completion](#autonomous-runs)); that is not an approval. |
 
 Agent steps in an Autonomous run run under `bwrap`: the host is read-only, the
 worktree is writable except its protected inputs, and the operator state,
@@ -647,6 +647,61 @@ by merging the Draft PR, after reading every provisional decision in its body
 and in `specs/<f>/autonomous/record.md`. The human-gated lifecycle above is
 unchanged.
 
+**PR completion.** By default the run ends with a Draft PR. An operator can opt
+in, in `ballast.toml`, to the runner marking it ready for review (ADR-0019 in
+the Ballast repository):
+
+```toml
+[autonomous]
+completion = "ready"             # "draft" (default) or "ready"
+completion_max_severity = "low"  # "low" (default), "info" or "none"
+```
+
+`ballast run start --mode autonomous --completion draft` narrows one run to a
+Draft; `--completion ready` cannot widen `ballast.toml` and refuses the start
+before anything is recorded. An unknown value of either key counts as its
+default, with a "cannot widen eligibility" warning. The run's policy snapshot
+records the configured value, the flag and the effective value. Only for a run
+whose `ballast.toml` set `completion = "ready"`, the invocation that published
+(`start`, `resume`, or a `ballast run publish` retry, which then also runs the
+checkpoint and packet) evaluates, after the Draft PR checkpoint and acceptance
+packet, these conditions from operator records only, in order: (1) the run is
+Autonomous at publication; (2) the effective policy is `ready`; (3) risk R0 or
+R1 with no R2 boundary declared; (4) no privileged action declared; (5) final acceptance recorded; (6) the
+recorded spec-reconciliation review approved; (7) no `open` or
+`accepted-provisionally` finding above `completion_max_severity` (`low` allows
+`low` and `info`, `info` only `info`, `none` none); (8) the `[checks]`
+commands passed in `run-checks` on the published tree; (9) the acceptance
+packet was published at the pushed commit with every criterion `verified`;
+(10) no material provisional change; (11) no block resolved during the run, so
+a resumed run stays a Draft; (12) the PR read back is still the run's open
+Draft at the pushed commit. Agent-written files, drafts and the checkout's
+`ballast.toml` are never read for this. When every condition holds, the runner
+runs `gh pr ready <n> --repo <OWNER/NAME>` as the operator, as the
+[Draft PR](#draft-pr) checkpoint runs `gh`, and reads the PR back. It prints
+one line:
+
+```text
+PR completion: ready-for-review #<n> <url>; merging stays the only human approval
+PR completion: draft #<n> <url>: <reason>[; <reason>]...
+PR completion: unverified #<n> <url>: the forge did not report the PR ready at the published commit
+```
+
+A `draft` line names every failed condition, or a forge failure with its cause
+code; `unverified` means GitHub did not show the PR ready at the pushed commit
+after `gh pr ready` was issued, for example after a push in between, or after a
+failed or interrupted call that GitHub may still have applied. Once the
+request is issued, a Draft is reported only when GitHub still shows the run's
+Draft at the pushed commit. The runner
+records the same outcome as one `pr_completion` ledger event. The step never
+changes the exit status, the run's status or its block. Without the opt-in,
+nothing of this runs, prints or records. Marking a PR ready is not an
+approval: merging stays the only human approval, and agents still cannot mark
+a PR ready (`mark-ready` is never authorized). To continue a run whose PR the
+runner marked ready in Chat (`ballast run continue RUN --mode chat`), first
+convert the PR back to a Draft with `gh pr ready --undo <n>`: Chat adoption
+needs a Draft PR.
+
 **Blocks.** When an agent cannot decide safely, a check or review fails, a limit
 runs out, a protected input changes, publication fails, the agent CLI cannot
 authenticate or the run becomes ineligible, the run stops with a block: a
@@ -661,6 +716,11 @@ point. Every block names its class, printed as
 | missing authority | `permission`, `ineligible`, `forge`, `credential` |
 | exhausted limits | `limit` (the agent-step limit, the wall-time limit, the three fix cycles, or the two draft retries) |
 | unsafe uncertainty | `decision`, `postcondition`, `tamper`, `unfinished-step`, `interrupted`, `upstream-sync` |
+
+**Stop rule.** ADR-0020 in the Ballast repository is the authority for when
+an Autonomous run stops and what it does instead of stopping, and later Ballast
+releases deliver it. Until a release you pin does, the blocks, limits and
+resume this section describes apply as written.
 
 A confined Claude or Codex step reads the operator's login without its refresh
 token, so it can never rotate the operator out of their session. When the
@@ -740,7 +800,7 @@ file outside the feature directory), the run re-enters at that input's
 validator instead, when it comes earlier, so no stale intent, baseline or
 review is trusted. The implementation baseline is never retaken. Resume keeps
 the mode, risk, limits, integrations and fix-cycle count recorded at start, and
-refuses `-i`, `--mode`, `--wall-time` and `--max-agent-steps`.
+refuses `-i`, `--mode`, `--wall-time`, `--max-agent-steps` and `--completion`.
 
 A run also keeps the `[autonomous]` policy it started with, so authorizing an
 action in `ballast.toml` does not reach a run blocked `ineligible`. After
@@ -750,7 +810,9 @@ only when its bytes equal the baseline `ballast trust` recorded (a baseline
 setup recorded, one without provenance, or none, refuses), replaces the run's
 policy snapshot, and
 records the previous and new policy with the block resolution, where the
-record shows it. A refreshed policy that no longer allows the run's risk,
+record shows it. The refresh also re-reads `completion` and
+`completion_max_severity`, and a `--completion` start flag still narrows the
+refreshed value. A refreshed policy that no longer allows the run's risk,
 boundaries or declared actions refuses the resume and records nothing.
 Limits never change. A block
 resolution is not an approval of any provisional decision: every decision made
@@ -985,7 +1047,7 @@ attached to, quoted in or linked from an Issue or a PR.
 ## Agent sessions and relayed decisions
 
 A human gate asks for a decision; a command that carries none is for the
-operator's agent session (ADR-0020). "Agent session" means the operator's own
+operator's agent session (ADR-0021). "Agent session" means the operator's own
 Claude Code or Codex session, outside any `ballast run` step. An agent inside a
 step runs no `ballast` command: the `in-progress` marker refuses every
 launcher command but `status` while a step runs, and the step's sandbox hides
@@ -1349,7 +1411,9 @@ that PR, including one a human opened by hand from the same branch.
 - The checkpoint never pushes: publishing the branch stays your action, except
   for an Autonomous run's publisher. It never
   changes the title, base, labels, reviewers or draft state, and never marks a
-  PR ready, merges, closes or reopens one.
+  PR ready, merges, closes or reopens one. Only the Autonomous
+  [PR completion](#autonomous-runs) step, for a run whose operator opted in,
+  may mark a PR ready, and a later checkpoint reuses that PR as it is.
 - The checkpoint never changes the run's exit status or step state. Every state
   is recomputed from Git and GitHub at the next invocation.
 
