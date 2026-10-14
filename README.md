@@ -1,5 +1,38 @@
 # Ballast
 
+## Ballast 2.0 development
+
+
+The rewrite happens in the normal repository layout. Each leaf issue has its
+own branch and worktree; the PR stack isolates development from `main`.
+There is no separate successor product tree. Released v1 remains in Git history
+and release tags. The 2.0 release and migration still require human approval.
+
+| Location | Purpose |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | Instructions for working on this repository |
+| [docs/issue-workflow.md](docs/issue-workflow.md) | Scope, decomposition, questions/planning, implementation and publication |
+| [docs/pair-review.md](docs/pair-review.md) | Independent review and bounded repair |
+| [docs/model-routing.md](docs/model-routing.md) | Explicit provider/model/effort and pre-task verification |
+| [docs/execution.md](docs/execution.md) | Worktrees, ownership, limits and recovery contract |
+| [docs/orca-execution.md](docs/orca-execution.md) | Optional Orca adapter contract |
+| [tools/codex.py](tools/codex.py) | Codex capability/configuration probe and shared transport |
+| [docs/evidence/codex-routing.md](docs/evidence/codex-routing.md) | Real configuration qualification and its limits |
+| [docs/research/orca-workflow.md](docs/research/orca-workflow.md) | Orca practices and solo-maintainer tradeoffs |
+
+The foundation qualifies explicit Codex configuration without sending a model
+task. Standalone issue execution, bounded queue/recovery, optional Orca integration
+and retirement of the old installer/runner are separate dependent PRs in
+[the 2.0 epic](https://github.com/Hugo-Grellier/ballast/issues/174). Instructions
+alone do not implement those runtime guarantees.
+
+Develop with ordinary Git/worktrees, direct checks and independent review.
+Do not use Ballast 1.x or Spec Kit to build 2.0. See the root agent instructions.
+The final migration updates adoption templates and removes retired v1 tooling
+and the usage documentation below. No parallel product folder is needed.
+
+## Released 1.x usage
+
 Ballast keeps a repository steady while AI coding agents move fast. It is a reusable, repository-level baseline: a Spec Kit feature workflow with deterministic artifact checks, a bounded headless-agent runner, review skills, engineering policies, and agent instruction templates.
 
 This repository is the source of the standard. Projects pin a version and install it into git-ignored paths with `ballast setup`; only `AGENTS.md` and the PR template are copied once, because agents and GitHub read them from committed files.
