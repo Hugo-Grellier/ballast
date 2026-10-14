@@ -1892,6 +1892,11 @@ def _reentry(run_id: str, record: dict, block: dict) -> tuple[str, list[str]]:
     if step is None:
         message = f"run {run_id}'s workflow state names no step to resume at"
         raise RuntimeError(message)
+    if block.get("limit") == "check-timeout":
+        # The remedy is in ballast.toml, which no re-entry input covers: the
+        # checks run again before the review is recorded (#146).
+        earlier = reversed(steps[: steps.index(step)])
+        step = next((s for s in earlier if s.startswith("checks-")), step)
     recorded = block.get("inputs") or {}
     current = _block_inputs(run_id, record["feature"]) if recorded else {}
     changed = sorted(

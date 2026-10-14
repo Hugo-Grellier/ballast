@@ -2007,6 +2007,43 @@ class FixStateTests(FixLoopCase):
         self.assertEqual(check["exit"], 1)
         self.assertIn("broken", check["output_tail"])
 
+    def timed_out_feedback(self) -> None:
+        autonomy.append_feedback(
+            self.root,
+            "run42",
+            {
+                "cycle": 0,
+                "at": autonomy.now(),
+                "results": [
+                    {"command": "slow", "exit": 124, "seconds": 60.0, "timed_out": True}
+                ],
+            },
+        )
+        # Re-rendered as run-checks does, so the committed record still matches.
+        (self.feature / "autonomous/record.md").write_text(
+            autonomy.render_run_record(self.root, autonomy.read_run(self.root, "run42"))
+        )
+
+    def test_timed_out_check_with_no_open_finding_blocks_at_once(self) -> None:
+        """#146: a fix cycle cannot shorten the checks, so none is spent."""
+        self.timed_out_feedback()
+        self.step(self.reviews(), role="reviewer")
+        self.failed(self.record("implementation-review"), "limit block")
+        block = self.block()
+        self.assertEqual(
+            (block["category"], block["limit"]), ("limit", "check-timeout")
+        )
+        self.assertIn("check 'slow' (timed out)", block["condition"])
+        self.assertEqual(block["command"], "ballast run resume run42")
+        self.assertEqual(self.fix_state(), {"cycles": 0, "state": "idle"})
+
+    def test_timed_out_check_with_an_open_finding_still_needs_a_fix(self) -> None:
+        self.timed_out_feedback()
+        self.step(self.reviews([FINDING]), role="reviewer")
+        self.ok(self.record("implementation-review"))
+        self.assertEqual(self.fix_state()["state"], "fix-pending")
+        self.assertTrue(self.fix_input()["checks"][0]["timed_out"])
+
     def test_high_finding_and_verdict_need_a_fix_while_a_cycle_remains(self) -> None:
         high = {**FINDING, "severity": "high", "disposition": "resolved"}
         self.step(self.reviews([high], verdict="changes-requested"), role="reviewer")

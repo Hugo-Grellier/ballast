@@ -8,6 +8,7 @@ extra_allow = [
   "Bash(uv run --locked ruff check*)",
   "Bash(uv run --locked ruff format*)",
   "Bash(uv run --locked python -m unittest *)",
+  "Bash(uv run --locked python tests/parallel.py *)",
 ]
 
 [github]
@@ -17,9 +18,9 @@ repository = "Hugo-Grellier/ballast"
 commands = [
   "uv run --locked ruff check",
   "uv run --locked ruff format --check",
-  "uv run --locked python -m unittest tests/test_*.py",
+  "uv run --locked python tests/parallel.py tests/test_*.py",
 ]
-timeout_minutes = 30
+timeout_minutes = 60
 
 # Privileged actions the operator authorizes before merge in Autonomous runs
 # (operator decision 2026-10-06: the driving agent runs `ballast trust` on

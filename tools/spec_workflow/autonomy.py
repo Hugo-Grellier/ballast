@@ -194,13 +194,14 @@ ACCEPTANCE_TESTS = 100
 FIX_CYCLES = 3
 DRAFT_RETRIES = 2
 FIX_STATES = ("idle", "fix-pending", "review-pending")
-LIMIT_KINDS = ("agent-steps", "wall-time", "fix-cycles", "retries")
+LIMIT_KINDS = ("agent-steps", "wall-time", "fix-cycles", "retries", "check-timeout")
 # How a limit block's condition starts (FR-023).
 LIMIT_LABELS = {
     "agent-steps": "agent-step limit",
     "wall-time": "wall-time limit",
     "fix-cycles": f"fix-cycle limit ({FIX_CYCLES})",
     "retries": f"draft retries ({DRAFT_RETRIES})",
+    "check-timeout": "check timeout ([checks] timeout_minutes)",
 }
 FIX_CYCLE_STEPS = (
     "fix",
@@ -1252,6 +1253,8 @@ LIMIT_RECOVERY = {
     "continue human-gated.",
     "retries": "Read the refused draft and the validator's message in the agent "
     "logs, then resume, or continue human-gated.",
+    "check-timeout": "Speed up the checks, or raise [checks] timeout_minutes in "
+    "ballast.toml and run `ballast trust`, then resume, or continue human-gated.",
 }
 # A fixed limit before implementation (SEC2-002): nothing to continue yet.
 RESTART_RECOVERY = (
