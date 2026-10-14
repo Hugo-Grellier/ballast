@@ -335,6 +335,30 @@ def check_launch(model: str, effort: str, timeout: float) -> None:
         codex.fail("Worker model and effort must be explicit identifiers")
 
 
+def survivors(cwd: Path) -> list[int]:
+    """List processes still running inside the checkout; Linux /proc only."""
+    proc = Path("/proc")
+    if not (proc / "self" / "cwd").exists():
+        codex.fail("Cannot confirm worker processes stopped on this host")
+    found = []
+    for entry in proc.iterdir():
+        if entry.name.isdigit():
+            with contextlib.suppress(OSError):
+                where = (entry / "cwd").readlink()
+                if where == cwd or cwd in where.parents:
+                    found.append(int(entry.name))
+    return found
+
+
+def await_quiet(cwd: Path) -> None:
+    """Settle only when nothing still runs in the checkout; else stay unknown."""
+    deadline = time.monotonic() + INTERRUPT_SECONDS
+    while survivors(cwd):
+        if time.monotonic() >= deadline:
+            codex.fail("Processes still run in the checkout; outcome unknown")
+        time.sleep(POLL_SECONDS)
+
+
 def record_outcome(
     server: WorkerServer,
     claim: Path,
@@ -410,7 +434,9 @@ def execute(
             worktree.write_record(directory / "result.json", result)
             event(directory, "task_dispatched")
             outcome, kind = run_turn(server, cwd, text, directory, result)
-        # Close/reap must succeed before calling the worker settled.
+        # Close/reap must succeed before calling the worker settled. Sandboxed
+        # tool commands run in their own session and can outlive the client.
+        await_quiet(cwd)
         result.update(
             head_before=head,
             head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),

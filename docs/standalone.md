@@ -163,7 +163,9 @@ cannot be recreated to reset its budget.
 - `control paused|running|cancelled --reason TEXT` records a control. Pause
   blocks new admissions and turns. Cancel makes live workers send
   `turn/interrupt` and wait at most 30 seconds for terminal evidence; otherwise
-  the worker stays `unknown` with its lock. `running` after a pause also clears
+  the worker stays `unknown` with its lock. Sandboxed tool commands can outlive
+  the client, so any worker settles only once no process runs inside its
+  checkout (Linux `/proc`; elsewhere the outcome stays `unknown`). `running` after a pause also clears
   a quota pause. A cancelled queue is not resumed by a control.
 - A structured `usageLimitExceeded`/`rateLimitExceeded` turn error settles the
   worker as `quota` and pauses dispatch until the backend-reported window reset,

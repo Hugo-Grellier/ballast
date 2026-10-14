@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -13,7 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_standalone_execution as standalone
-from tools import admission, codex, coordinate, worktree
+from tools import admission, codex, coordinate, worker, worktree
 
 REPO = "example/fixture"
 
@@ -567,6 +568,27 @@ class QueueTests(unittest.TestCase):
         args = coordinate.parser().parse_args(["--cwd", str(issue_checkout), "status"])
         with self.assertRaisesRegex(RuntimeError, "project checkout"):
             coordinate.run(args)
+
+    def test_surviving_sandbox_process_keeps_worker_unknown(self) -> None:
+        self.queue([79])
+        claim = self.prepare(79)
+        with (
+            patch.object(worker, "survivors", return_value=[4242]),
+            patch.object(worker, "INTERRUPT_SECONDS", 0),
+            self.assertRaisesRegex(codex.QualificationError, "still run"),
+        ):
+            self.worker_on(claim)
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    @unittest.skipUnless(Path("/proc/self/cwd").exists(), "Linux /proc required")
+    def test_survivors_finds_a_process_inside_the_checkout(self) -> None:
+        checkout = Path(json.loads(self.prepare(80).read_text())["checkout"])
+        process = subprocess.Popen(["sleep", "30"], cwd=checkout / "")  # noqa: S607
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        time.sleep(0.1)
+        self.assertIn(process.pid, worker.survivors(checkout))
+        self.assertNotIn(process.pid, worker.survivors(self.root / "elsewhere"))
 
 
 def response_account(kind: str) -> dict:

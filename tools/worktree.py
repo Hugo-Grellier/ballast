@@ -233,9 +233,13 @@ def main() -> int:
         RuntimeError,
         subprocess.SubprocessError,
     ) as error:
-        sys.stderr.write(
-            f"Preparation blocked: {type(error).__name__}; inspect local state\n"
+        # Admission reasons are fixed strings without private payloads.
+        reason = (
+            str(error)
+            if isinstance(error, admission.AdmissionError)
+            else f"{type(error).__name__}; inspect local state"
         )
+        sys.stderr.write(f"Preparation blocked: {reason}\n")
         return 1
     sys.stdout.write(json.dumps({"local_only": True, "claim": str(claim)}) + "\n")
     return 0
