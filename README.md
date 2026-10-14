@@ -108,6 +108,18 @@ The first `ballast run`, `ballast ledger` or `ballast intake` in a new Git workt
 
 `ballast trust` records, for the repository `ballast.toml` pins, the digests of that `ballast.toml` and constitution, and prints a line when it adds one; setup counts the default branch only when the checkout's files equal a configuration you reviewed for that same repository, so a changed default branch needs one `ballast trust` per machine again and a commit that repoints `[github] repository` to another reviewed repository gains nothing. A repository stays "reviewed" until you remove it from `$XDG_STATE_HOME/ballast/reviewed-repositories.json` (`ballast doctor` lists them), so protect its default branch with review and remove the entry if the repository changes hands. `ballast setup --check`, `ballast doctor` and `ballast init` never record a baseline. A pin bump or `[agents.permissions]` change that is not yet on the default branch leaves `ballast.toml` different from it, so review it and run `ballast trust`. A baseline recorded from your own earlier one is marked as recorded by setup, so a later setup that records again needs the network (the default branch) or `ballast trust`, not your old baseline. After setup recorded a baseline, the launcher compares it exactly as for `ballast trust`, so any later change to a protected input is refused. `ballast doctor` shows who recorded it (`baseline recorded by ballast setup` or `ballast trust`).
 
+### Merged changes refresh trust by themselves
+
+A change merged on the pinned repository's default branch, such as a new `extra_allow` rule, a pin bump or a constitution edit, needs neither `ballast trust` nor `ballast setup` once you pull it. Before `ballast run`, `ballast ledger` or `ballast intake`, `ballast` asks the launcher why it would refuse; on changed protected inputs or a pin that differs from the installation it runs the pinned version's `setup --refresh`, which reinstalls for the current `ballast.toml` and records a baseline marked `default-branch` only when:
+
+- your baseline names the repository `ballast.toml` pins, and you ran `ballast trust` for it on this machine (a baseline from before this version names none: one `ballast trust` first);
+- every changed input is either installed by setup or committed unchanged and equal to that repository's default branch, read live as for setup above;
+- no `BALLAST_TAMPERED` or unfinished-step marker exists, and the reinstalled agent settings are exactly what `ballast.toml` produces.
+
+It prints `refreshed the trust baseline from OWNER/NAME BRANCH at COMMIT …`, and the first `ballast run` afterwards prints `trust baseline refreshed from OWNER/NAME BRANCH at COMMIT` once and records it in the run's ledger. To refresh, `ballast run`, `ledger` and `intake` may now download the newly pinned version; when that fails they skip the refresh. Otherwise it prints `not refreshed: <reason>` and changes nothing, and the launcher asks for `ballast trust` as before: a local edit, a commit only on your branch, a `.venv` change or a repointed `[github] repository` always does. A plain `ballast setup` refreshes the same way. A `ballast` command older than this version never refreshes; `ballast self-install` updates it. Branch protection on that default branch is therefore what reviews configuration changes for checkouts that already trust the repository.
+
+`ballast trust` itself refuses when `.ballast/spec_workflow/claude-settings.json` differs from what `ballast.toml` produces (run `ballast setup`, review, then trust), and `ballast discard-runs` names `ballast trust` only when the protected inputs actually changed.
+
 ### Running the workflow
 
 Headless agent steps need Linux with a systemd user session. The operator entry point must live outside the checkout, because an agent can rewrite anything inside it. `ballast` therefore runs the launcher of the project's pinned version from `$XDG_DATA_HOME/ballast/standard/<ref>/`, never from the checkout:
@@ -118,7 +130,7 @@ ballast run start|resume ...
 ballast ledger snapshot|check|report ...
 ```
 
-Only `setup` and `preview` download; the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, unless setup recorded the baseline for it (see above). To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
+Only `setup` and `preview` download, and `run`, `ledger` or `intake` when they refresh after a merged pin change (see [Merged changes refresh trust by themselves](#merged-changes-refresh-trust-by-themselves)); the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, unless setup recorded the baseline for it or the change came from the default branch and was refreshed (see above). To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
 
 Before the first agent step of every `ballast run start`, `resume` or `continue`, and of every Chat `step`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
 
@@ -169,16 +181,22 @@ Chat mode lets you work through a feature in conversation, one step at a time, w
 ```bash
 ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: OUTCOME"]
 ballast run step RUN_ID PHASE [--kind KIND]   # specify, clarify, plan, tasks, analyze, implement, ...
+ballast run step RUN_ID PHASE --headless      # the same step without a terminal, confined
 ballast run status RUN_ID                     # where the run stands and what is allowed next
-ballast run approve RUN_ID GATE               # from your terminal; reject ... --reason TEXT
-ballast run resolve RUN_ID DEC-NNNN
+ballast run approve RUN_ID GATE [GATE ...]    # or --through GATE; one typed confirmation
+ballast run reject RUN_ID GATE --reason TEXT  # from your terminal
+ballast run resolve RUN_ID DEC-NNNN           # from your terminal
 ballast run checks RUN_ID
-ballast run mode RUN_ID chat|human-gated --reason TEXT
+ballast run mode RUN_ID chat|human-gated --reason TEXT   # from your terminal, typed
 ballast run publish RUN_ID                    # Draft PR with the Chat section, then the packet
 ballast run checkpoint RUN_ID                 # refresh the Draft PR and packet, no agent
 ```
 
-A step is an interactive Claude or Codex session for one phase. It runs with the headless permission rules (anything else is denied, never prompted) under the same `bwrap` confinement as an Autonomous step, so Chat needs `bwrap` too. When the session ends (`/exit`, or `Ctrl-]` twice), Ballast confirms the agent is gone and checks the phase's artifact. Every gate needs your `ballast run approve` from a terminal; nothing the agent writes or says approves anything. Leave whenever you like: `status` and the next `step` pick the run up later, from any terminal, after the full preflight. `ballast run continue RUN_ID ... --mode chat` continues a stopped Autonomous run in Chat. Conversation logs stay local. Working in a plain agent session outside `ballast run` gives none of these guarantees.
+A step is an interactive Claude or Codex session for one phase. It runs with the headless permission rules (anything else is denied, never prompted) under the same `bwrap` confinement as an Autonomous step, so Chat needs `bwrap` too. When the session ends (`/exit`, or `Ctrl-]` twice), Ballast confirms the agent is gone and checks the phase's artifact. `--headless` runs the step without a terminal under the same confinement and then lists the gates ready for approval. Every gate needs `ballast run approve`: typed at your terminal, where several gates take one confirmation, or relayed by your own agent session after your yes in chat (`--relayed-by SESSION`), which the record, `status` and the PR show as relayed. Nothing the agent writes or says approves anything, and `reject`, `resolve` and `mode` stay at your terminal. Leave whenever you like: `status` and the next `step` pick the run up later, from any terminal, after the full preflight. `ballast run continue RUN_ID ... --mode chat` continues a stopped Autonomous run in Chat. Conversation logs stay local.
+
+### Driving runs from your agent session
+
+You can drive every run from your own Claude Code or Codex session: it runs the commands that carry no decision (setup, status, a headless Chat step, publish, `discard-runs`) and relays your decisions within the run's autonomy, naming itself with `--relayed-by SESSION` on `ballast run start`, `resume`, `continue` and `approve`. A terminal-less command that records a decision without that flag is refused, so no relay ever reads as typed by you. An approval is relayed only in a Chat run; a resume of a block that carries a decision only with `--ref` naming your answer; a human-gated run's gates and an Autonomous run's merge stay yours. An agent inside a `ballast run` step can run no `ballast` command. The [Agent sessions section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#agent-sessions-and-relayed-decisions) lists every command. Working in a plain agent session outside `ballast run` gives none of the run's guarantees.
 
 ### Updating the pinned version
 
@@ -188,7 +206,7 @@ Pin changes stay manual and reviewed in Git. Update the `ballast` command first 
 ballast preview vX.Y.Z      # what moving the pin would do; changes nothing
 # set ref = "vX.Y.Z" under [standard] in ballast.toml, review and commit it
 ballast setup               # the previous installation stays until the new one verifies
-ballast trust               # after reviewing the changed protected inputs it lists; a pin bump not yet on the default branch always needs it
+ballast trust               # after reviewing the changed protected inputs it lists; once the pin bump is merged on the default branch, the next run refreshes trust instead
 ```
 
 Then run the project's checks. `ballast preview` (add `--json` for scripts) names the pinned, installed and target versions and the CLI version the target needs, lists each unfinished run with whether the target can resume it, the installed paths it would add, change or remove, any ignore-rule change, and the exact steps above. It builds the target in a disposable directory, so it may need network, and exits 1 when something must happen first, such as finishing or discarding a run the target cannot resume.

@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "spec_digest": "58fd193e48f3ed3b7b7929957b5029cb4bdfc1f78607d12f8cabe59003281ca5",
+  "criteria": {
+    "AC-001": [
+      "tests.test_setup_trust.RefreshRecordTests.test_a_merged_extra_allow_rule_is_refreshed",
+      "tests.test_setup_trust.RefreshRecordTests.test_a_merged_pin_change_is_refreshed",
+      "tests.test_setup_trust.RefreshRecordTests.test_a_plain_setup_refreshes_after_a_pull",
+      "tests.test_ballast.RefreshTriggerTests.test_refreshes_on_changed_inputs_and_a_pin_mismatch",
+      "tests.test_ballast.RefreshTriggerTests.test_setup_runs_only_from_the_verified_cache",
+      "tests.test_spec_workflow.RefreshStatusTests.test_refusal_kinds",
+      "tests.test_spec_workflow.RefreshStatusTests.test_the_first_run_after_a_refresh_is_told_once",
+      "tests.test_spec_workflow.RefreshStatusTests.test_run_prints_the_line_and_records_it_once",
+      "tests.test_branch_sync.TrustBoundaryTests.test_protected_input_from_the_base_fails_closed"
+    ],
+    "AC-002": [
+      "tests.test_setup_trust.RefreshEligibilityTests.test_an_uncommitted_edit",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_a_branch_commit_absent_on_the_default_branch",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_a_changed_venv"
+    ],
+    "AC-003": [
+      "tests.test_spec_workflow.TrustSettingsTests.test_stale_settings_are_refused",
+      "tests.test_spec_workflow.TrustSettingsTests.test_edited_settings_are_refused",
+      "tests.test_spec_workflow.TrustSettingsTests.test_malformed_permissions_are_refused"
+    ],
+    "AC-004": [
+      "tests.test_setup_trust.RefreshRecordTests.test_settings_that_differ_after_the_regeneration_record_nothing",
+      "tests.test_setup.RefreshSetupTests.test_only_the_agent_settings_depend_on_ballast_toml",
+      "tests.test_setup.RefreshSetupTests.test_one_producer_writes_the_agent_settings"
+    ],
+    "AC-005": [
+      "tests.test_setup_trust.RefreshEligibilityTests.test_repointed_to_an_unreviewed_repository",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_repointed_to_another_reviewed_repository",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_legacy_provenance_without_a_repository"
+    ],
+    "AC-006": [
+      "tests.test_setup_trust.RefreshEligibilityTests.test_offline",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_a_timeout",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_an_insteadof_rewrite",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_a_tamper_marker",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_the_in_progress_marker",
+      "tests.test_setup_trust.RefreshEligibilityTests.test_eligibility_refuses_markers_without_the_network"
+    ],
+    "AC-007": [
+      "tests.test_governance.AgentCommandMatrixDocumentTests.test_the_tables_name_exactly_the_matrix",
+      "tests.test_governance.AgentCommandMatrixDocumentTests.test_trust_is_never_operator_reserved",
+      "tests.test_autonomy.ActorTests.test_matrix"
+    ],
+    "AC-008": [
+      "tests.test_chat_mode.AgentSessionEndToEndTests.test_a_chat_run_needs_no_terminal_until_the_merge"
+    ],
+    "AC-009": [
+      "tests.test_governance.AgentCommandMatrixDocumentTests.test_adr_0020",
+      "tests.test_governance.AgentCommandMatrixDocumentTests.test_the_constitution_amendment"
+    ],
+    "AC-010": [
+      "tests.test_chat_mode.RelayedApprovalTests.test_a_relayed_approval_is_recorded_and_shown_as_relayed",
+      "tests.test_autonomy.RelayedRecordSchemaTests.test_renderers_say_relayed"
+    ],
+    "AC-011": [
+      "tests.test_chat_mode.RelayedApprovalTests.test_a_relay_in_a_human_gated_run_is_refused",
+      "tests.test_spec_workflow.RelayedHumanGatedTests.test_a_relayed_resume_runs_and_records_nothing"
+    ],
+    "AC-012": [
+      "tests.test_autonomous_run.RelayedStartTests.test_a_relayed_approval_on_an_autonomous_run_is_refused"
+    ],
+    "AC-013": [
+      "tests.test_autonomous_run.RelayedStartTests.test_a_relayed_start_is_recorded_as_relayed",
+      "tests.test_autonomy.RelayedRecordSchemaTests.test_mode_history"
+    ],
+    "AC-014": [
+      "tests.test_chat_mode.StepBoundaryTests.test_an_agent_relaying_from_inside_a_step_is_refused",
+      "tests.test_spec_workflow.AgentStepEnvironmentTests.test_every_command_but_status_is_refused_in_a_step"
+    ],
+    "AC-015": [
+      "tests.test_chat_mode.HeadlessStepTests.test_a_headless_chat_step_runs_confined_and_names_the_next_gates",
+      "tests.test_chat_mode.HeadlessStepTests.test_without_bwrap_a_headless_chat_step_is_refused",
+      "tests.test_chat_mode.HeadlessStepTests.test_a_terminal_less_interactive_step_names_headless"
+    ],
+    "AC-016": [
+      "tests.test_chat_mode.RelayedApprovalTests.test_reject_is_never_relayed",
+      "tests.test_chat_mode.RelayedApprovalTests.test_mode_needs_a_terminal_and_the_typed_text",
+      "tests.test_spec_workflow.AgentStepEnvironmentTests.test_trust_inside_a_step_writes_no_baseline",
+      "tests.test_spec_workflow.AgentStepEnvironmentTests.test_trust_without_a_terminal_outside_a_step_still_records"
+    ],
+    "AC-017": [
+      "tests.test_chat_mode.BatchApprovalTests.test_four_gates_take_one_confirmation",
+      "tests.test_chat_mode.BatchApprovalTests.test_a_single_gate_keeps_its_prompt"
+    ],
+    "AC-018": [
+      "tests.test_chat_mode.BatchApprovalTests.test_through_selects_the_pending_and_stale_gates"
+    ],
+    "AC-019": [
+      "tests.test_chat_mode.BatchApprovalTests.test_every_refusal_records_nothing",
+      "tests.test_chat_mode.BatchApprovalTests.test_an_active_step_records_nothing",
+      "tests.test_chat_mode.BatchApprovalTests.test_a_digest_moved_while_confirming_records_nothing",
+      "tests.test_chat_mode.BatchApprovalTests.test_a_crash_before_the_atomic_write_records_nothing",
+      "tests.test_autonomy.RelayedRecordSchemaTests.test_crash_before_the_atomic_write_changes_nothing"
+    ],
+    "AC-020": [
+      "tests.test_chat_mode.BatchApprovalTests.test_batches_follow_the_actor_rule"
+    ],
+    "AC-021": [
+      "tests.test_spec_workflow.DiscardRunsArgumentTests.test_help_prints_usage_and_changes_nothing"
+    ],
+    "AC-022": [
+      "tests.test_spec_workflow.DiscardRunsArgumentTests.test_unknown_arguments_are_refused"
+    ],
+    "AC-023": [
+      "tests.test_spec_workflow.DiscardRunsArgumentTests.test_unchanged_inputs_need_no_trust",
+      "tests.test_spec_workflow.DiscardRunsArgumentTests.test_changed_inputs_still_name_trust",
+      "tests.test_spec_workflow.DiscardRunsArgumentTests.test_a_tamper_marker_prints_the_tamper_recovery"
+    ],
+    "AC-024": [
+      "tests.test_autonomous_recovery.PostconditionReentryTests.test_resume_reruns_implement_then_its_validator",
+      "tests.test_autonomous_recovery.PostconditionReentryTests.test_other_validators_rerun_themselves"
+    ],
+    "AC-025": [
+      "tests.test_agent_run_ledger.UsageLimitStopTests.test_a_confirmed_stop_is_interrupted_and_resumable",
+      "tests.test_agent_run_ledger.UsageLimitStopTests.test_a_human_gated_step_exits_the_same_way"
+    ],
+    "AC-026": [
+      "tests.test_agent_run_ledger.UsageLimitStopTests.test_a_dead_wrapper_keeps_the_unfinished_step",
+      "tests.test_agent_run_ledger.UsageLimitStopTests.test_an_unconfirmed_stop_is_not_a_usage_limit"
+    ],
+    "AC-027": [
+      "tests.test_autonomous_run.IssueBranchOfferTests.test_typing_switch_creates_the_branch_and_starts",
+      "tests.test_autonomous_run.IssueBranchOfferTests.test_the_one_local_issue_branch_is_proposed",
+      "tests.test_autonomous_run.IssueBranchOfferTests.test_any_other_answer_stops_with_head_unchanged",
+      "tests.test_autonomous_run.IssueBranchOfferTests.test_without_a_terminal_or_relayed_it_prints_the_commands"
+    ],
+    "AC-028": [
+      "tests.test_autonomous_recovery.RelayedResumeTests.test_every_category_follows_the_rule",
+      "tests.test_autonomous_recovery.RelayedResumeTests.test_a_decision_block_is_relayed_with_the_operators_answer",
+      "tests.test_autonomous_recovery.RelayedResumeTests.test_a_relayed_continue_without_ref_hits_todays_argument_rule",
+      "tests.test_autonomy.ActorTests.test_decision_free_is_pinned",
+      "tests.test_autonomy.ActorTests.test_allowed"
+    ]
+  }
+}

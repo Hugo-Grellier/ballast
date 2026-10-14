@@ -26,6 +26,7 @@ import subprocess
 import sys
 import termios
 import time
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -56,6 +57,7 @@ try:
 finally:
     sys.path.pop(0)
 
+RELAYED = "--relayed-by"
 FAKE_TUI = ROOT / "tests/fixtures/chat/fake_tui.py"
 FAKE_GIT = FIXTURES / "fake_git.py"
 LAUNCHER = TOOLS / "launcher.py"
@@ -221,7 +223,7 @@ class ChatCase(AutonomyCase):
     def ballast(  # noqa: C901, PLR0912, PLR0915 - one driver for both modes
         self,
         *args: str,
-        tty: bool = False,
+        tty: bool | None = None,
         keys: tuple = (),
         timeout: float = 120,
     ) -> SimpleNamespace:
@@ -231,7 +233,16 @@ class ChatCase(AutonomyCase):
         open, so the terminal attributes can be read before and after. `keys`
         is a script of ("wait", bytes), ("send", bytes), ("sleep", seconds),
         ("signal", number) and ("resize", (columns, rows)) items, run in order.
+        By default `run start` and `continue` run on a pty: these tests are
+        about the operator at a terminal, and without one the actor rule
+        refuses them (#147 T028; RelayedApprovalTests cover relays). `resume`
+        does not: on a pty a human-gated engine gate would wait for an answer.
         """
+        if tty is None:
+            tty = (
+                args[:2] in {("run", "start"), ("run", "continue")}
+                and RELAYED not in args
+            )
         argv = [sys.executable, "-IS", str(LAUNCHER), *args]
         env = dict(os.environ)
         if not tty:
@@ -329,6 +340,8 @@ class ChatCase(AutonomyCase):
             code=os.waitstatus_to_exitcode(status),
             text=output.decode("utf-8", "replace"),
             out=output.decode("utf-8", "replace"),
+            # A pty merges the streams: stderr is part of `out` and `text`.
+            err=output.decode("utf-8", "replace"),
             before=before,
             after=after,
             pid=pid,
@@ -493,6 +506,36 @@ class ChatCase(AutonomyCase):
 
     def chat_run(self, run_id: str) -> chat.Run:
         return chat.Run(self.root, autonomy.read_run(self.root, run_id))
+
+    def mode_switch(self, run_id: str, target: str, reason: str) -> SimpleNamespace:
+        """`ballast run mode` through the launcher on a pty, typing the confirmation.
+
+        #147: `mode` needs a terminal and the typed text `mode RUN TARGET`.
+        """
+        return self.ballast(
+            "run",
+            "mode",
+            run_id,
+            target,
+            "--reason",
+            reason,
+            tty=True,
+            keys=(
+                ("wait", b"to confirm"),
+                ("send", f"mode {run_id} {target}\r".encode()),
+            ),
+        )
+
+    def switch(self, run_id: str, target: str, reason: str = "x") -> SimpleNamespace:
+        """`ballast run mode` in process at a terminal, typing `mode RUN TARGET`."""
+        return self.call(
+            chat.change_mode,
+            self.root,
+            run_id,
+            target,
+            reason,
+            typed=f"mode {run_id} {target}\n",
+        )
 
     # --- artifacts the artifacts.py checks accept --------------------------------
 
@@ -1204,11 +1247,19 @@ class StepEntryTests(ChatCase):
         (self.root / ".claude/settings.json").write_text("{}")
         # tools/setup merges the project's [agents.permissions] into the
         # installed headless settings; a Chat step must keep those rules too.
+        # #147: as setup does, from ballast.toml, so `trust` accepts the result.
+        config = self.root / "ballast.toml"
+        config.write_text(
+            config.read_text()
+            + '\n[agents.permissions]\nextra_deny = ["Edit(./secrets/**)"]\n'
+            + 'extra_allow = ["Bash(make test)"]\n'
+        )
         installed = self.root / ".ballast/spec_workflow/claude-settings.json"
+        installed.write_bytes(
+            launcher.generated_settings(ROOT, tomllib.loads(config.read_text()))
+        )
         headless = json.loads(installed.read_text())
-        headless["permissions"]["deny"].append("Edit(./secrets/**)")
-        headless["permissions"]["allow"].append("Bash(make test)")
-        installed.write_text(json.dumps(headless))
+        self.commit_all("permissions")
         self.trust()
         run_id, report = self.specify("-i", "model=fake-model")
         prompt = chat._prompt(self.chat_run(run_id), "specify", None, "claude")  # noqa: SLF001
@@ -2474,7 +2525,10 @@ class ApprovalTests(ChatCase):
         before = self.snapshot(run_id)
         result = self.ballast("run", "approve", run_id, "scope")
         self.assertEqual(result.code, 2, result.text)
-        self.assertIn("needs a terminal", result.text)
+        # #147 R7: without a terminal the actor rule asks for the relaying session.
+        self.assertIn(
+            "without a terminal, name the relaying agent session", result.text
+        )
         self.assertEqual(self.snapshot(run_id), before)
         result = self.ballast(
             "run",
@@ -2505,6 +2559,7 @@ class ApprovalTests(ChatCase):
                     "step_id": "scope-gate",
                     "choice": "approve",
                     "log_line": gates[0]["log_line"],
+                    "actor": "operator",  # #147: who decided
                 }
             ],
         )
@@ -2729,7 +2784,7 @@ class HeadlessForgeryTests(ChatCase):
         """#20 SEC-007: a headless wrapper killed before its check closes nothing."""
         run_id = self.start()
         self.approve_in_process(run_id, "scope")
-        result = self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
+        result = self.switch(run_id, "human-gated")
         self.assertEqual(result.code, 0, result.text)
         killed = {
             "exit_code": None,
@@ -2771,7 +2826,7 @@ class HeadlessForgeryTests(ChatCase):
     def assert_credential_block(self, argv: list[str]) -> str:
         run_id = self.start()
         self.approve_in_process(run_id, "scope")
-        result = self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
+        result = self.switch(run_id, "human-gated")
         self.assertEqual(result.code, 0, result.text)
         failed = {
             "exit_code": agent.EXIT_AUTH,
@@ -2795,9 +2850,7 @@ class HeadlessForgeryTests(ChatCase):
     def test_headless_step_keeps_todays_argv(self) -> None:
         run_id = self.start()
         self.approve_in_process(run_id, "scope")
-        result = self.call(
-            chat.change_mode, self.root, run_id, "human-gated", "headless specify"
-        )
+        result = self.switch(run_id, "human-gated", "headless specify")
         self.assertEqual(result.code, 0, result.text)
         self.scenario([["write", f"{FEATURE}/spec.md", SPEC]])
         bwrap_log = self.base / "bwrap.log"
@@ -2858,7 +2911,8 @@ class HeadlessForgeryTests(ChatCase):
             ("mode", run_id, "human-gated", "--reason", "x"),
         ):
             with self.subTest(args=args):
-                result = self.ballast("run", *args)
+                # #147: `mode` needs a terminal before it reads the record.
+                result = self.ballast("run", *args, tty=args[0] == "mode")
                 self.assertEqual(result.code, 2, result.text)
                 self.assertIn("breaks the hash chain", result.text)
         result = self.step(run_id, "specify", [["print", "ran"]])
@@ -2966,7 +3020,7 @@ class ResolutionTests(ChatCase):
         with patch.object(autonomy, "append_decision", side_effect=refuse):
             self.through_final(run_id)
             self.call(chat.status, self.root, run_id)
-            self.call(chat.change_mode, self.root, run_id, "human-gated", "x")
+            self.assertEqual(self.switch(run_id, "human-gated").code, 0)
         self.assertFalse(autonomy.read_decisions(self.root, run_id))
 
     def test_resolution_text_is_shown_without_control_bytes(self) -> None:
@@ -3745,9 +3799,11 @@ class PublishTests(ChatCase):
         ]
         skeleton = [line.format(run=run_id) for line in CONTRACT_SKELETON]
         self.assertEqual([line for line in lines if line in skeleton], skeleton)
+        # #147 FR-011: the sentence no longer claims every decision was typed.
         self.assertIn(
             "Mode: chat (driven by the operator; every gate decision below was "
-            "made by the operator through `ballast run approve` or `reject`, and "
+            "made through `ballast run approve` or `reject`, by the operator at a "
+            "terminal or relayed by the operator's agent session as marked, and "
             "publishing needs every gate's latest approval current).",
             body,
         )
@@ -4050,7 +4106,7 @@ class ModeSwitchTests(ChatCase):
         ):
             with self.subTest(target=target):
                 before = {name: self.raw(run_id, name) for name in names}
-                result = self.ballast("run", "mode", run_id, target, "--reason", reason)
+                result = self.mode_switch(run_id, target, reason)
                 self.assertEqual(result.code, 0, result.text)
                 for name in names:
                     self.assertTrue(
@@ -4086,9 +4142,7 @@ class ModeSwitchTests(ChatCase):
         self.approve_in_process(run_id, "scope")
         self.feature_file("spec.md", SPEC)
         self.approve_in_process(run_id, "intent")
-        self.assertEqual(
-            self.call(chat.change_mode, self.root, run_id, "human-gated", "x").code, 0
-        )
+        self.assertEqual(self.switch(run_id, "human-gated").code, 0)
         self.scenario([["write", f"{FEATURE}/plan.md", PLAN]])
         result = self.ballast("run", "step", run_id, "plan")
         self.assertEqual(result.code, 0, result.text)
@@ -4113,9 +4167,7 @@ class ModeSwitchTests(ChatCase):
         self.paused_engine()
         self.advance_base({"base.txt": "b\n"})
         self.edit("README.md", "dirty\n")
-        result = self.ballast(
-            "run", "mode", "eng00001", "chat", "--reason", "talk it through"
-        )
+        result = self.mode_switch("eng00001", "chat", "talk it through")
         self.assertEqual(result.code, 0, result.text)
         (run_id,) = self.run_ids()
         self.assertFalse(self.agent_ran())
@@ -4150,9 +4202,7 @@ class ModeSwitchTests(ChatCase):
         artifacts.record_intent(feature)
         self.feature_file("plan.md", PLAN)
         state = (engine / "state.json").read_bytes()
-        result = self.ballast(
-            "run", "mode", "eng00001", "chat", "--reason", "talk it through"
-        )
+        result = self.mode_switch("eng00001", "chat", "talk it through")
         self.assertEqual(result.code, 0, result.text)
         (run_id,) = self.run_ids()
         record = self.record(run_id).run
@@ -4444,3 +4494,582 @@ class ContinueTests(ChatCase):
         self.assertIn(
             "DEC-0001: proposal without a current human resolution", status.out
         )
+
+
+SESSION = "claude-code:t1"
+HUMAN_GATED_RELAY = (
+    "ballast: refusing: a human-gated run takes approvals only from the operator "
+    "at a terminal; nothing was recorded"
+)
+NO_SESSION = (
+    "ballast: refusing: without a terminal, name the relaying agent session with "
+    "--relayed-by SESSION; nothing was recorded"
+)
+
+
+class RelayCase(ChatCase):
+    """A Chat run started by the operator's agent session, without a terminal."""
+
+    def start_relayed(self) -> str:
+        result = self.ballast(
+            "run",
+            "start",
+            "--mode",
+            "chat",
+            "-i",
+            f"feature_directory={FEATURE}",
+            "-i",
+            "integration=claude",
+            RELAYED,
+            SESSION,
+        )
+        self.assertEqual(result.code, 0, result.text)
+        return self.run_ids()[-1]
+
+    def relay(self, run_id: str, *gates: str) -> SimpleNamespace:
+        return self.ballast("run", "approve", run_id, *gates, RELAYED, SESSION)
+
+    def decisions(self, run_id: str) -> bytes:
+        return self.raw(run_id, "human-decisions.jsonl")
+
+
+class RelayedApprovalTests(RelayCase):
+    """#147 T019 [AC-010, AC-011, AC-016, SC-004]: relays are labeled, or refused."""
+
+    def test_a_relayed_approval_is_recorded_and_shown_as_relayed(self) -> None:
+        run_id = self.start_relayed()
+        start = self.record(run_id).run["mode_history"][0]
+        self.assertEqual((start["by"], start["relayed_by"]), ("relayed", SESSION))
+        result = self.relay(run_id, "scope")
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn("scope approved at sha256:", result.text)
+        self.assertIn(f"relayed by agent session {SESSION}", result.text)
+        (decision,) = self.record(run_id).humans
+        self.assertEqual(
+            (decision["by"], decision["relayed_by"], decision["ref"]),
+            ("relayed", SESSION, "relayed approve scope"),
+        )
+        status = self.ballast("run", "status", run_id)
+        self.assertEqual(status.code, 0, status.text)
+        self.assertIn(
+            f"  - scope: approved, current ({decision['id']}), relayed by agent "
+            f"session {SESSION}",
+            status.out,
+        )
+        self.assertIn(f"by agent session {SESSION} (relayed)", status.out)
+        section = chat.publish_section(self.root, self.record(run_id).run)
+        self.assertIn(
+            f"{decision['id']} relayed by agent session {SESSION} (current)", section
+        )
+        for text in (status.out, section):
+            self.assertNotIn("by operator", text)
+            self.assertNotIn("approved by the operator", text)
+        gates = [e["data"] for e in self.ledger(run_id) if e["kind"] == "gate"]
+        self.assertEqual(
+            [(g["actor"], g["relayed_by"]) for g in gates], [("relayed", SESSION)]
+        )
+
+    def test_a_relay_in_a_human_gated_run_is_refused(self) -> None:
+        """AC-011, including a Chat run switched to human-gated."""
+        run_id = self.start()
+        result = self.switch(run_id, "human-gated")
+        self.assertEqual(result.code, 0, result.text)
+        before = self.decisions(run_id)
+        refused = self.relay(run_id, "scope")
+        self.assertEqual(refused.code, 2)
+        self.assertEqual(refused.err, HUMAN_GATED_RELAY + "\n")
+        self.assertEqual(self.decisions(run_id), before)
+        # A ballast-feature engine run has no Chat record: human-gated too.
+        engine = self.relay("eng00001", "plan")
+        self.assertEqual(engine.err, HUMAN_GATED_RELAY + "\n")
+
+    def test_a_terminal_less_approval_names_its_session_or_is_refused(self) -> None:
+        run_id = self.start()
+        before = self.decisions(run_id)
+        refused = self.ballast("run", "approve", run_id, "scope")
+        self.assertEqual(refused.code, 2)
+        self.assertEqual(refused.err, NO_SESSION + "\n")
+        self.assertEqual(self.decisions(run_id), before)
+
+    def test_reject_is_never_relayed(self) -> None:
+        """AC-016."""
+        run_id = self.start()
+        before = self.decisions(run_id)
+        relayed = self.ballast(
+            "run", "reject", run_id, "scope", "--reason", "no", RELAYED, SESSION
+        )
+        self.assertEqual(relayed.code, 2)
+        self.assertIn("--relayed-by is not accepted by reject", relayed.err)
+        bare = self.ballast("run", "reject", run_id, "scope", "--reason", "no")
+        self.assertEqual(bare.code, 2)
+        self.assertIn("reject needs a terminal", bare.err)
+        self.assertEqual(self.decisions(run_id), before)
+
+    def test_mode_needs_a_terminal_and_the_typed_text(self) -> None:
+        run_id = self.start()
+        history = self.record(run_id).run["mode_history"]
+        bare = self.ballast("run", "mode", run_id, "human-gated", "--reason", "x")
+        self.assertEqual(bare.code, 2)
+        self.assertIn("mode needs a terminal", bare.err)
+        relayed = self.ballast(
+            "run", "mode", run_id, "human-gated", "--reason", "x", RELAYED, SESSION
+        )
+        self.assertIn("--relayed-by is not accepted by mode", relayed.err)
+        wrong = self.call(
+            chat.change_mode,
+            self.root,
+            run_id,
+            "human-gated",
+            "x",
+            typed="mode human-gated\n",
+        )
+        self.assertEqual(wrong.code, 2, wrong.text)
+        self.assertIn("the typed text did not match", wrong.text)
+        self.assertEqual(self.record(run_id).run["mode_history"], history)
+        self.assertEqual(self.switch(run_id, "human-gated").code, 0)
+        self.assertEqual(self.record(run_id).run["mode_history"][-1]["by"], "operator")
+
+    def test_status_and_publish_refuse_a_session(self) -> None:
+        run_id = self.start()
+        for args in (("status", run_id), ("publish", run_id), ("step", run_id, "x")):
+            with self.subTest(args=args):
+                result = self.ballast("run", *args, RELAYED, SESSION)
+                self.assertEqual(result.code, 2)
+                self.assertIn(f"--relayed-by is not accepted by {args[0]}", result.err)
+
+
+class StepBoundaryTests(RelayCase):
+    """#147 T020 [AC-014]: inside a step, no relay reaches the launcher."""
+
+    def test_an_agent_relaying_from_inside_a_step_is_refused(self) -> None:
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        before = self.decisions(run_id)
+        runs = set(self.run_ids())
+        launcher_argv = [sys.executable, "-IS", str(LAUNCHER), "run"]
+        # Without BALLAST_AGENT_STEP: only the in-progress marker refuses.
+        bare = ["env", "-u", "BALLAST_AGENT_STEP"]
+        attempts = [
+            ["run", [*bare, *launcher_argv, "approve", run_id, "intent",
+                     RELAYED, "x"]],
+            ["run", [*bare, *launcher_argv, "start", "--mode", "autonomous",
+                     "-i", "issue=27", "-i", f"feature_directory={FEATURE}",
+                     RELAYED, "x"]],
+            ["run", [*launcher_argv, "approve", run_id, "intent", RELAYED, "x"]],
+        ]  # fmt: skip
+        result = self.step(run_id, "specify", attempts)
+        self.assertTrue(self.agent_ran(), result.text)
+        ran = [r for r in self.fake_report()["results"] if r[0] == "run"]
+        self.assertEqual(len(ran), 3)
+        for _, _, code, output in ran:
+            self.assertEqual(code, 2, output)
+            self.assertIn("an agent step is active", output)
+        self.assertIn("BALLAST_AGENT_STEP is set", ran[2][3])
+        self.assertNotIn("BALLAST_AGENT_STEP is set", ran[0][3])
+        self.assertEqual(self.decisions(run_id), before)
+        self.assertEqual(set(self.run_ids()), runs)
+
+
+class HeadlessStepTests(RelayCase):
+    """#147 T020 [AC-015, R10]: a confined headless Chat step, then the gates."""
+
+    def test_a_headless_chat_step_runs_confined_and_names_the_next_gates(
+        self,
+    ) -> None:
+        run_id = self.start_relayed()
+        self.assertEqual(self.relay(run_id, "scope").code, 0)
+        self.scenario([["write", f"{FEATURE}/spec.md", SPEC]])
+        bwrap_log = self.base / "bwrap.log"
+        before = bwrap_log.read_text() if bwrap_log.exists() else ""
+        step = self.ballast("run", "step", run_id, "specify", "--headless")
+        self.assertEqual(step.code, 0, step.text)
+        argv = self.fake_report()["argv"]
+        for rule in agent.CONFINED_ALLOW:
+            self.assertIn(rule, argv)
+        confined = (bwrap_log.read_text() if bwrap_log.exists() else "")[len(before) :]
+        self.assertIn(str(self.root), confined)
+        start, close = self.record(run_id).steps
+        self.assertEqual((start["driver"], close["outcome"]), ("headless", "completed"))
+        self.assertIn(f"Next: ballast run approve {run_id} intent\n", step.out)
+        self.assertFalse((launcher.state_dir(self.root) / "in-progress").exists())
+
+    @unittest.skipUnless(_bwrap_works(), "needs bwrap with user namespaces")
+    def test_a_headless_step_cannot_reach_operator_records_under_real_bwrap(
+        self,
+    ) -> None:
+        """T-01: the agent-session headless step is confined for real (AC-015)."""
+        self.real_bwrap()
+        self.trust()
+        run_id = self.start_relayed()
+        self.assertEqual(self.relay(run_id, "scope").code, 0)
+        directory = autonomy.run_dir(self.root, run_id)
+        names = ("run.json", "human-decisions.jsonl", "events.jsonl")
+        self.scenario(
+            [
+                ["write", f"{FEATURE}/spec.md", SPEC],
+                *(["try_write", str(directory / name)] for name in names),
+            ]
+        )
+        step = self.ballast("run", "step", run_id, "specify", "--headless")
+        self.assertEqual(step.code, 0, step.text)
+        outcomes = {
+            r[1]: r[2] for r in self.fake_report()["results"] if r[0] == "try_write"
+        }
+        for name in names:
+            self.assertNotEqual(outcomes[str(directory / name)], "ok")
+
+    def test_without_bwrap_a_headless_chat_step_is_refused(self) -> None:
+        run_id = self.start()
+        self.approve_in_process(run_id, "scope")
+        real = shutil.which
+
+        def which(name: str, *args: object, **kwargs: object) -> str | None:
+            return None if name == "bwrap" else real(name, *args, **kwargs)
+
+        with patch.object(chat.shutil, "which", which):
+            result = self.call(
+                lambda: chat.run_step(
+                    self.root, run_id, "specify", None, [], headless=True
+                )
+            )
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn("bwrap is not on PATH", result.text)
+        self.assertFalse(self.agent_ran())
+
+    def test_a_terminal_less_interactive_step_names_headless(self) -> None:
+        run_id = self.start()
+        result = self.ballast("run", "step", run_id, "specify")
+        self.assertEqual(result.code, 2)
+        self.assertIn(
+            "a Chat step needs a terminal; run it headless with --headless, or "
+            "switch the run to human-gated at a terminal",
+            result.err,
+        )
+
+
+class BatchApprovalTests(RelayCase):
+    """#147 T030 [AC-017 to AC-020]: one command, one confirmation, all or none."""
+
+    def ready(self) -> str:
+        run_id = self.start()
+        self.feature_file("spec.md", SPEC)
+        self.feature_file("plan.md", PLAN)
+        self.feature_file("tasks.md", TASKS)
+        return run_id
+
+    def recorded(self, run_id: str) -> tuple:
+        baseline = self.record(run_id).run.get("baseline")
+        intent = self.root / FEATURE / "intent.md"
+        return (
+            self.decisions(run_id),
+            len(self.ledger(run_id)),
+            baseline,
+            intent.read_text() if intent.exists() else None,
+        )
+
+    def test_four_gates_take_one_confirmation(self) -> None:
+        """AC-017."""
+        run_id = self.ready()
+        gates = ("scope", "intent", "plan", "tasks")
+        typed = "approve " + " ".join(gates)
+        result = self.ballast(
+            "run",
+            "approve",
+            run_id,
+            *gates,
+            tty=True,
+            keys=(("wait", b"to confirm"), ("send", f"{typed}\r".encode())),
+        )
+        self.assertEqual(result.code, 0, result.text)
+        self.assertIn(f"Approving 4 decisions in run {run_id}:", result.text)
+        self.assertIn(f"Type `{typed}` to confirm", result.text)
+        self.assertIn(f"{FEATURE}/tasks.md", result.text)
+        humans = self.record(run_id).humans
+        self.assertEqual([h["gate"] for h in humans], list(gates))
+        self.assertEqual([h["by"] for h in humans], ["operator"] * 4)
+        self.assertEqual(
+            [h["id"] for h in humans], ["HD-0001", "HD-0002", "HD-0003", "HD-0004"]
+        )
+        gate_events = [e for e in self.ledger(run_id) if e["kind"] == "gate"]
+        self.assertEqual(len(gate_events), 4)
+        run = self.chat_run(run_id)
+        for gate in gates:
+            self.assertEqual(chat.approval_state(run, gate)[0], "current")
+        self.assertEqual(run.record["baseline"]["approval"], "HD-0004")
+
+    def test_through_selects_the_pending_and_stale_gates(self) -> None:
+        """AC-018."""
+        run_id = self.ready()
+        self.approve_in_process(run_id, "scope")
+        self.approve_in_process(run_id, "intent")
+        self.approve_in_process(run_id, "plan")
+        self.feature_file("plan.md", PLAN + "\nEdited.\n")  # plan is stale now
+        result = self.call(
+            chat.approve_many,
+            self.root,
+            run_id,
+            [],
+            "tasks",
+            typed="approve plan tasks\n",
+        )
+        self.assertEqual(result.code, 0, result.text)
+        humans = self.record(run_id).humans
+        self.assertEqual([h["gate"] for h in humans[-2:]], ["plan", "tasks"])
+
+    def test_every_refusal_records_nothing(self) -> None:
+        """AC-019."""
+        run_id = self.ready()
+        self.approve_in_process(run_id, "scope")
+        cases = {
+            "not pending": (
+                ["scope", "intent"],
+                None,
+                "approve scope intent\n",
+                "scope is not pending",
+            ),
+            "mismatched line": (
+                ["intent", "plan"],
+                None,
+                "approve intent\n",
+                "the typed text did not match",
+            ),
+            "out of order": (
+                ["plan", "intent"],
+                None,
+                "approve plan intent\n",
+                "name gates once each",
+            ),
+            "duplicated": (
+                ["intent", "intent"],
+                None,
+                "approve intent intent\n",
+                "name gates once each",
+            ),
+            "through and gates": (
+                ["intent"],
+                "plan",
+                "approve intent plan\n",
+                "mutually exclusive",
+            ),
+            "third precondition": (
+                ["intent", "plan", "implementation"],
+                None,
+                "approve intent plan implementation\n",
+                "the implementation gate's precondition fails",
+            ),
+        }
+        before = self.recorded(run_id)
+        for name, (gates, through, typed, reason) in cases.items():
+            with self.subTest(name):
+                result = self.call(
+                    chat.approve_many, self.root, run_id, gates, through, typed=typed
+                )
+                self.assertNotEqual(result.code, 0, result.text)
+                self.assertIn(reason, result.text)
+                self.assertEqual(self.recorded(run_id), before)
+
+    def test_a_later_refusal_restores_intent_md(self) -> None:
+        """AC-019: a gate refused after intent was written restores intent.md."""
+        run_id = self.ready()
+        self.approve_in_process(run_id, "scope")
+        before = self.recorded(run_id)
+        real = chat._record_requirements  # noqa: SLF001
+
+        def refuse_plan(run, gate, humans, assumed):  # noqa: ANN001, ANN202
+            if gate == "plan":
+                raise chat.Refused(chat.EXIT_BLOCKED, "plan requirement fails")
+            return real(run, gate, humans, assumed)
+
+        with patch.object(chat, "_record_requirements", refuse_plan):
+            result = self.call(
+                chat.approve_many,
+                self.root,
+                run_id,
+                ["intent", "plan"],
+                None,
+                typed="approve intent plan\n",
+            )
+        self.assertNotEqual(result.code, 0, result.text)
+        self.assertIn("plan requirement fails", result.text)
+        self.assertEqual(self.recorded(run_id), before)
+
+    def test_a_relayed_intent_approval_never_reads_as_a_human_user(self) -> None:
+        """FR-011: intent.md names the relaying session, never a human user."""
+        run_id = self.start_relayed()
+        self.feature_file("spec.md", SPEC)
+        result = self.relay(run_id, "scope", "intent")
+        self.assertEqual(result.code, 0, result.text)
+        intent = (self.root / FEATURE / "intent.md").read_text()
+        self.assertIn(f"- **Approved by**: relayed by agent session {SESSION}", intent)
+        self.assertNotIn("human user", intent)
+        self.assertIsNone(autonomy.HUMAN_APPROVAL.search(intent))
+
+    def test_an_active_step_records_nothing(self) -> None:
+        run_id = self.ready()
+        step = "20261006T101010123456Z-plan-claude"
+        record = autonomy.read_run(self.root, run_id)
+        record["active_step"] = {
+            "step": step,
+            "phase": "plan",
+            "unit": f"ballast-agent-{run_id}-{step}.scope",
+            "started_at": autonomy.now(),
+        }
+        autonomy.write_run(self.root, record)
+        (self.base / "scope-state").write_text("active\n")
+        before = self.recorded(run_id)
+        result = self.call(
+            chat.approve_many,
+            self.root,
+            run_id,
+            ["scope", "intent"],
+            None,
+            typed="approve scope intent\n",
+        )
+        self.assertEqual(result.code, 2, result.text)
+        # Refused while the step's processes may still run, whichever check fires.
+        self.assertIn(step, result.text)
+        self.assertEqual(self.recorded(run_id), before)
+
+    def test_a_digest_moved_while_confirming_records_nothing(self) -> None:
+        run_id = self.ready()
+        before = self.recorded(run_id)
+        real = chat._confirm  # noqa: SLF001
+
+        def edit_while_confirming(expected: str) -> bool:
+            self.feature_file("spec.md", SPEC + "\nMoved.\n")
+            return real(expected)
+
+        with patch.object(chat, "_confirm", edit_while_confirming):
+            result = self.call(
+                chat.approve_many,
+                self.root,
+                run_id,
+                ["scope", "intent"],
+                None,
+                typed="approve scope intent\n",
+            )
+        self.assertEqual(result.code, 2, result.text)
+        self.assertIn("changed while you confirmed", result.text)
+        self.assertEqual(self.recorded(run_id), before)
+
+    def test_a_crash_before_the_atomic_write_records_nothing(self) -> None:
+        run_id = self.ready()
+        before = self.decisions(run_id)
+        with (
+            patch.object(autonomy, "_write_bytes", side_effect=OSError("crash")),
+            self.assertRaises(OSError),
+        ):
+            self.call(
+                chat.approve_many,
+                self.root,
+                run_id,
+                ["scope", "intent"],
+                None,
+                typed="approve scope intent\n",
+            )
+        self.assertEqual(self.decisions(run_id), before)
+        self.assertEqual([e for e in self.ledger(run_id) if e["kind"] == "gate"], [])
+
+    def test_batches_follow_the_actor_rule(self) -> None:
+        """AC-020: refused terminal-less in human-gated; relayed per gate in Chat."""
+        run_id = self.ready()
+        result = self.relay(run_id, "scope", "intent")
+        self.assertEqual(result.code, 0, result.text)
+        humans = self.record(run_id).humans
+        self.assertEqual(
+            [(h["gate"], h["by"], h["ref"]) for h in humans],
+            [
+                ("scope", "relayed", "relayed approve scope"),
+                ("intent", "relayed", "relayed approve intent"),
+            ],
+        )
+        self.assertEqual(self.switch(run_id, "human-gated").code, 0)
+        before = self.decisions(run_id)
+        refused = self.ballast("run", "approve", run_id, "plan", "tasks")
+        self.assertEqual(refused.err, NO_SESSION + "\n")
+        refused = self.relay(run_id, "plan", "tasks")
+        self.assertEqual(refused.err, HUMAN_GATED_RELAY + "\n")
+        self.assertEqual(self.decisions(run_id), before)
+
+    def test_a_single_gate_keeps_its_prompt(self) -> None:
+        run_id = self.ready()
+        result = self.approve(run_id, "scope")
+        self.assertIn("Type `approve scope` to confirm", result.text)
+        self.assertIn("Gate: scope", result.text)
+
+
+class AgentSessionEndToEndTests(RelayCase):
+    """#147 T029 [AC-008, SC-002, SC-004]: a whole Chat run from an agent session.
+
+    Every command runs without a terminal: a relayed start, headless steps,
+    relayed approvals after the operator's yes in chat, the checks and the
+    publication. The only operator action left is the merge.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.eligible_issue()
+
+    def run_ok(self, *args: str) -> SimpleNamespace:
+        result = self.ballast("run", *args)
+        self.assertEqual(result.code, 0, result.text)
+        return result
+
+    def headless(self, run_id: str, phase: str, actions: list) -> None:
+        self.scenario(actions)
+        self.run_ok("step", run_id, phase, "--headless")
+
+    def test_a_chat_run_needs_no_terminal_until_the_merge(self) -> None:
+        run_id = self.start_relayed()
+        relay = ("--relayed-by", SESSION)
+        self.run_ok("approve", run_id, "scope", *relay)
+        self.headless(run_id, "specify", [["write", f"{FEATURE}/spec.md", SPEC]])
+        self.run_ok("approve", run_id, "intent", *relay)
+        self.headless(run_id, "plan", [["write", f"{FEATURE}/plan.md", PLAN]])
+        self.run_ok("approve", run_id, "plan", *relay)
+        self.headless(run_id, "tasks", [["write", f"{FEATURE}/tasks.md", TASKS]])
+        self.run_ok("approve", run_id, "--through", "tasks", *relay)
+        self.headless(
+            run_id,
+            "implement",
+            [
+                ["write", f"{FEATURE}/tasks.md", DONE_TASKS],
+                ["write", "src/demo.py", "print('demo')\n"],
+            ],
+        )
+        self.run_ok("approve", run_id, "implementation", *relay)
+        # The operator's session writes the reconciliation it was asked for.
+        self.feature_file("reviews/convergence.md", CONVERGED)
+        self.run_ok("approve", run_id, "spec-reconciliation", *relay)
+        self.run_ok("checks", run_id)
+        self.run_ok("approve", run_id, "final", *relay)
+        published = self.run_ok("publish", run_id)
+        self.assertIn("Draft PR: https://github.com/acme/demo/pull/7", published.out)
+        record = self.record(run_id)
+        self.assertEqual(record.run["status"], "published")
+        approvals = [h for h in record.humans if h["kind"] == "gate-approval"]
+        self.assertEqual(
+            [h["gate"] for h in approvals],
+            [
+                "scope",
+                "intent",
+                "plan",
+                "tasks",
+                "implementation",
+                "spec-reconciliation",
+                "final",
+            ],
+        )
+        self.assertTrue(
+            all(
+                h["by"] == "relayed" and h["relayed_by"] == SESSION
+                for h in record.humans
+            )
+        )
+        self.assertEqual(record.run["mode_history"][0]["by"], "relayed")
+        status = self.run_ok("status", run_id)
+        body = (self.gh_dir / "pr-body.md").read_text()
+        for text in (status.out, body):
+            self.assertNotIn("by operator", text)
+            self.assertNotIn("approved by the operator", text)
+        self.assertIn(f"relayed by agent session {SESSION}", body)

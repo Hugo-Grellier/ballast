@@ -168,6 +168,10 @@ class Feature:
         # The operator record of a Ballast-driven Chat run (#20); never `run`,
         # so check_intent requires the registered human approval block.
         self.chat: dict | None = None
+        # Set only by a Chat approval batch that approves intent before a later
+        # gate (#147 R9): the batch records intent before any later decision,
+        # and checks every later gate again against the recorded approval.
+        self.intent_in_batch = False
         specs = (root / "specs").resolve()
         if (
             not specs.is_relative_to(root.resolve())
@@ -263,6 +267,8 @@ def check_intent(feature: Feature) -> None:
         check_provisional_intent(feature)
         return
     spec = check_clarified_spec(feature)
+    if feature.intent_in_batch:
+        return  # the same approval batch records it first
     intent = feature.read("intent.md")
     missing = [section for section in INTENT_SECTIONS if section not in intent]
     if missing:
@@ -303,11 +309,12 @@ def _approval_path(feature: Feature, block: str) -> Path:
     return state_dir(feature.root) / "approvals" / key
 
 
-def record_intent(feature: Feature) -> None:
+def record_intent(feature: Feature, relayed_by: str | None = None) -> None:
     """Record human intent approval bound to the current spec digest.
 
     Run only after the approve-intent gate. Human-written intent sections are
-    preserved; only the machine-managed approval block is replaced.
+    preserved; only the machine-managed approval block is replaced. A relayed
+    approval names the relaying agent session, never a human user (FR-011).
     """
     spec = check_clarified_spec(feature)
     source = (
@@ -318,7 +325,9 @@ def record_intent(feature: Feature) -> None:
     block = "\n".join(
         (
             APPROVAL_START,
-            "- **Approved by**: human user",
+            "- **Approved by**: human user"
+            if relayed_by is None
+            else f"- **Approved by**: relayed by agent session {relayed_by}",
             f"- **Approved**: {datetime.now(UTC).replace(microsecond=0).isoformat()}",
             f"- **Source**: {source}",
             f"- **Spec**: {feature.relative}/spec.md",

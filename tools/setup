@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install Spec Kit and this standard into a project's git-ignored paths.
 
-Usage: tools/setup [--project DIR] [--check | --prepare]
+Usage: tools/setup [--project DIR] [--check | --prepare | --refresh]
 
 Setup never builds in place. It builds the complete installation in a stage
 under `.ballast/setup/`, validates it, then switches it in entry by entry,
@@ -29,6 +29,16 @@ trust baseline themselves when it holds exactly what they installed from
 configuration a human reviewed and no agent has run there (ADR-0015,
 `spec_workflow/setup_trust.py` decides); otherwise they record nothing and
 `ballast trust` stays the operator's step. `--check` never does.
+
+`--refresh` is run by the global `ballast` command before `run`, `ledger` or
+`intake` when the launcher would refuse changed protected inputs or a pin
+that differs from the installation (ADR-0021). Under the exclusive lock, and
+refusing with a marker or an unfinished attempt, it asks `setup_trust` whether
+every change came from the reviewed repository's default branch, installs
+the current configuration, and records a `default-branch` baseline only after
+a verified re-snapshot; otherwise it prints `not refreshed: <reason>` and
+changes nothing. A plain setup does the same when its own decision skipped
+and the baseline names a repository.
 
 The project commits `ballast.toml` and its own overrides only. Everything this
 script writes is rebuildable and must be ignored; see GITIGNORE below.
@@ -72,6 +82,8 @@ _spec = spec_from_file_location(
 )
 launcher = module_from_spec(_spec)
 _spec.loader.exec_module(launcher)
+# One producer of claude-settings.json: `trust` and the refresh compare with it.
+merge_permissions = launcher.merge_permissions
 VERSION = "1.0.11"
 SOURCES = {
     "core": ("github/spec-kit", "8147943512404afb9d99c6252cb9bf84369fd0b0"),
@@ -560,20 +572,103 @@ class Setup:
                 )
             if self.current(state):
                 say(f"nothing changed: {self.ref} is set up and verified")
-                for line in self.closing(self.settle(state), unchanged=True):
+                verdict = self.settle(state)
+                refreshed = self.refresh_after(state, verdict)
+                if refreshed is not None:
+                    say(refreshed)
+                    if refreshed.startswith("refreshed"):
+                        verdict = None
+                for line in self.closing(verdict, unchanged=True):
                     say(line)
                 return
             self.check_links(PARENTS)
             self.check_ignored()
             reused = self.attempt(state, self.build)
             verdict = self.settle(state)
+            refreshed = self.refresh_after(state, verdict)
         finally:
             os.close(lock)
         if reused:
             say(f"Reused the previous installation ({self.ref})")
         say(f"Spec Kit {VERSION} and the standard are set up.")
-        for line in self.closing(verdict):
+        if refreshed is not None:
+            say(refreshed)
+            verdict = None if refreshed.startswith("refreshed") else verdict
+        for line in self.closing(verdict, unchanged=refreshed is not None):
             say(line)
+
+    def refresh_after(self, state: Path, verdict: object) -> str | None:
+        """After a skipped `settle`, refresh a baseline that names a repository.
+
+        An operator's setup after pulling a merged change then needs no
+        `ballast trust` either (ADR-0021, FR-001). None when not attempted.
+        """
+        if (
+            not self.records_trust
+            or getattr(verdict, "kind", None) != "skipped"
+            or launcher.refresh_repository(state) is None
+        ):
+            return None
+        setup_trust = self.trust_module()
+        found = setup_trust.refresh_eligible(self.root, state, standard=STANDARD)
+        if not found.eligible:
+            return None
+        return setup_trust.record_refresh(
+            self.root, state, found, self.recorded(state), standard=STANDARD
+        )
+
+    def refresh(self) -> None:
+        """`--refresh`: record a default-branch baseline after a merged change.
+
+        Run by the global `ballast` command before the launcher, when it would
+        refuse changed inputs or a pin that differs from the installation. It
+        decides eligibility before installing anything, regenerates the
+        installation for the current ballast.toml and pin, and records only
+        after a verified re-snapshot (ADR-0021). Never prompts.
+        """
+        try:
+            state = launcher.state_dir(self.root)
+        except OSError as error:
+            refuse(str(error), "set XDG_STATE_HOME elsewhere")
+        state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock = self.lock(state)
+        try:
+            if os.path.lexists(state / launcher.SETUP_ATTEMPT):
+                refuse("setup did not finish in this checkout", "run `ballast setup`")
+            if os.path.lexists(self.root / launcher.TAMPER_MARKER):
+                refuse(
+                    f"{launcher.TAMPER_MARKER} exists",
+                    "review the checkout, then run `ballast trust`",
+                )
+            if os.path.lexists(state / launcher.IN_PROGRESS):
+                refuse(
+                    "an agent step did not finish",
+                    "review the checkout, then run `ballast discard-runs`",
+                )
+            setup_trust = self.trust_module()
+            found = setup_trust.refresh_eligible(self.root, state, standard=STANDARD)
+            if not found.eligible:
+                line = found.line()
+            else:
+                if not self.current(state):
+                    self.check_links(PARENTS)
+                    self.check_ignored()
+                    self.attempt(state, self.build)
+                line = setup_trust.record_refresh(
+                    self.root, state, found, self.recorded(state), standard=STANDARD
+                )
+        finally:
+            os.close(lock)
+        say(line)
+
+    def trust_module(self) -> object:
+        """Import `setup_trust` from this standard, only once installed."""
+        path = str(STANDARD / "tools/spec_workflow")
+        if path not in sys.path:
+            sys.path.insert(0, path)
+        import setup_trust  # noqa: PLC0415 - never in --check
+
+        return setup_trust
 
     def prepare(self) -> None:
         """Install a new worktree from a verified local installation (#15).
@@ -683,11 +778,7 @@ class Setup:
             with contextlib.suppress(OSError):
                 _write_json(state / HOLDER, {**holder, "phase": "settling"})
         try:
-            path = str(STANDARD / "tools/spec_workflow")
-            if path not in sys.path:
-                sys.path.insert(0, path)
-            import setup_trust  # noqa: PLC0415 - only after an installation, never in --check
-
+            setup_trust = self.trust_module()
             record = self.recorded(state) if self.current(state) else None
             return setup_trust.settle(
                 self.root, state, record, standard=STANDARD, mode=self.mode
@@ -1448,13 +1539,7 @@ class Setup:
             ignore=shutil.ignore_patterns("__pycache__"),
         )
         settings = ballast / "spec_workflow/claude-settings.json"
-        settings.write_text(
-            json.dumps(
-                merge_permissions(json.loads(settings.read_text()), self.config),
-                indent=2,
-            )
-            + "\n"
-        )
+        settings.write_bytes(launcher.generated_settings(STANDARD, self.config))
         policies = self.root / "docs/policies"
         policies.mkdir(parents=True, exist_ok=True)
         for policy in (STANDARD / "templates/policies").glob("*.md"):
@@ -1561,19 +1646,6 @@ def installed_digests(root: Path, names: list[str]) -> dict[str, str]:
         elif os.path.lexists(path):
             found.update(launcher.digests(root, [path], skip))
     return {k: v for k, v in found.items() if "__pycache__" not in Path(k).parts}
-
-
-def merge_permissions(settings: dict, config: dict) -> dict:
-    """Append the project's extra allow/deny rules to the base settings."""
-    extra = config.get("agents", {}).get("permissions", {})
-    permissions = settings["permissions"]
-    for key in ("allow", "deny"):
-        rules = extra.get(f"extra_{key}", [])
-        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
-            message = f"agents.permissions.extra_{key} must be a list of strings"
-            raise ValueError(message)
-        permissions[key] = list(dict.fromkeys([*permissions[key], *rules]))
-    return settings
 
 
 def executables(root: Path, files: dict[str, str]) -> list[str]:
@@ -1869,12 +1941,20 @@ def cli(argv: list[str]) -> int:
         help="install a new worktree from a verified local installation, "
         "downloading nothing",
     )
+    modes.add_argument(
+        "--refresh",
+        action="store_true",
+        help="refresh the trust baseline and the installation after a change "
+        "merged on the pinned repository's default branch",
+    )
     arguments = parser.parse_args(argv)
     try:
         setup = Setup(arguments.project.resolve())
         if arguments.check:
             return 0 if setup.check() else EXIT_FAILED
-        if arguments.prepare:
+        if arguments.refresh:
+            setup.refresh()
+        elif arguments.prepare:
             setup.prepare()
         else:
             setup.main()

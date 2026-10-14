@@ -1263,5 +1263,179 @@ class ProvisionalGuardTests(recorders.FixLoopCase):
         )
 
 
+SESSION = "claude-code:t1"
+# Today's preconditions refuse these before the D-08 rule is reached (AC-028).
+PRECONDITION_REFUSED = {"tamper", "unfinished-step", "forge", "permission", "limit"}
+
+
+class RelayedResumeTests(StubCase):
+    """#147 T022 [AC-028, D-08]: a relayed resume of a decision block needs --ref."""
+
+    def blocked_as(self, category: str) -> str:
+        """Stop a run, then replace its block with one of CATEGORY."""
+        self.engine.update(status="failed", code=1, step="record-tasks")
+        code, out, _ = self.start()
+        self.assertEqual(code, 1, out)
+        run_id = self.launched[-1][1]
+        block = autonomy.make_block(
+            category,
+            "stand-in block",
+            run_id=run_id,
+            step_id="record-tasks",
+            options=run.FALLBACK_OPTIONS,
+        )
+        autonomy.write_json(autonomy.run_dir(self.root, run_id) / "block.json", block)
+        return run_id
+
+    def frozen(self, run_id: str) -> tuple[bytes, bytes]:
+        directory = autonomy.run_dir(self.root, run_id)
+        humans = directory / "human-decisions.jsonl"
+        return (
+            (directory / "run.json").read_bytes(),
+            humans.read_bytes() if humans.exists() else b"",
+        )
+
+    def resume(self, run_id: str, *extra: str) -> tuple[int, str, str]:
+        self.engine.update(status="failed", code=1, step="record-tasks")
+        return self.main("resume", run_id, *extra, "--relayed-by", SESSION, tty=False)
+
+    def test_every_category_follows_the_rule(self) -> None:
+        for category in autonomy.BLOCK_CATEGORIES:
+            with self.subTest(category=category):
+                run_id = self.blocked_as(category)
+                before = self.frozen(run_id)
+                code, out, err = self.resume(run_id)
+                if category in PRECONDITION_REFUSED:
+                    self.assertEqual(code, 2, out + err)
+                    self.assertNotIn("carries a decision", err)
+                    self.assertEqual(self.frozen(run_id), before)
+                elif category in run.actor.DECISION_FREE:
+                    (decision,) = autonomy.read_human_decisions(self.root, run_id)
+                    self.assertEqual(
+                        (decision["by"], decision["relayed_by"], decision["ref"]),
+                        (
+                            "relayed",
+                            SESSION,
+                            f"relayed resume after the {category} block",
+                        ),
+                    )
+                    self.assertEqual(decision["block_category"], category)
+                else:
+                    self.assertEqual(code, 2, out + err)
+                    self.assertEqual(
+                        err,
+                        f"ballast: refusing: the {category} block carries a "
+                        "decision; relay it only with --ref naming the operator's "
+                        "answer; nothing was recorded\n",
+                    )
+                    self.assertEqual(self.frozen(run_id), before)
+
+    def test_a_decision_block_is_relayed_with_the_operators_answer(self) -> None:
+        run_id = self.blocked_as("decision")
+        code, out, err = self.resume(run_id, "--ref", "Issue #27 comment, option 2")
+        self.assertEqual(code, 1, out + err)
+        (decision,) = autonomy.read_human_decisions(self.root, run_id)
+        self.assertEqual(
+            (decision["by"], decision["ref"], decision["block_category"]),
+            ("relayed", "Issue #27 comment, option 2", "decision"),
+        )
+        record = autonomy.read_run(self.root, run_id)
+        text = autonomy.render_run_record(self.root, record)
+        self.assertIn(
+            f"{decision['id']} at {decision['at']} by agent session {SESSION} "
+            "(relayed)",
+            text,
+        )
+
+    def test_an_approval_claim_in_the_ref_is_refused(self) -> None:
+        run_id = self.blocked_as("decision")
+        before = self.frozen(run_id)
+        code, _, err = self.resume(run_id, "--ref", "approved by the operator")
+        self.assertEqual(code, 2)
+        self.assertIn("claims a human approval", err)
+        self.assertEqual(self.frozen(run_id), before)
+
+    def test_a_relayed_continue_without_ref_hits_todays_argument_rule(self) -> None:
+        """Plan-review F-003: continue already requires --ref for every block."""
+        run_id = self.blocked_as("interrupted")
+        before = self.frozen(run_id)
+        code, _, err = self.main(
+            "continue",
+            run_id,
+            "--reason",
+            "block-resolved",
+            "--relayed-by",
+            SESSION,
+            tty=False,
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            err,
+            "ballast: refusing: continue needs --reason "
+            "block-resolved|changes-requested --ref TEXT\n",
+        )
+        self.assertEqual(self.frozen(run_id), before)
+
+    def test_a_terminal_less_resume_without_a_session_is_refused(self) -> None:
+        run_id = self.blocked_as("interrupted")
+        before = self.frozen(run_id)
+        code, _, err = self.main("resume", run_id, tty=False)
+        self.assertEqual(code, 2)
+        self.assertIn("name the relaying agent session with --relayed-by", err)
+        self.assertEqual(self.frozen(run_id), before)
+
+
+class PostconditionReentryTests(StubCase):
+    """#147 T034 [AC-024, R12]: resume after an implementation postcondition."""
+
+    def test_resume_reruns_implement_then_its_validator(self) -> None:
+        def implemented(run_id: str) -> None:
+            state = self.root / ".specify/workflow-state" / run_id
+            state.mkdir(parents=True, exist_ok=True)
+            (state / "implementation-baseline.json").write_text('{"tree": "x"}')
+
+        self.engine.update(
+            status="failed",
+            code=1,
+            step="validate-implementation",
+            scenario=implemented,
+        )
+        code, out, _ = self.start()
+        self.assertEqual(code, 1, out)
+        run_id = self.launched[-1][1]
+        block = autonomy.read_block(self.root, run_id)
+        self.assertEqual(
+            (block["category"], block["step_id"]),
+            ("postcondition", "validate-implementation"),
+        )
+        self.engine.update(status="failed", code=1, scenario=None)
+        code, out, err = self.main("resume", run_id)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn(f"run {run_id} resumes in Autonomous at implement", out)
+        self.assertEqual(self.resumed_at, "implement")
+        baseline = (
+            self.root
+            / ".specify/workflow-state"
+            / run_id
+            / "implementation-baseline.json"
+        )
+        self.assertTrue(baseline.is_file())
+
+    def test_other_validators_rerun_themselves(self) -> None:
+        steps = list(autonomy.AUTONOMOUS_STEPS)
+        self.assertEqual(
+            run._block_step("validate-plan", steps, "postcondition"),  # noqa: SLF001
+            "validate-plan",
+        )
+        self.assertEqual(
+            run._block_step("validate-implementation", steps, "tamper"),  # noqa: SLF001
+            "validate-implementation",
+        )
+        self.assertEqual(
+            run._block_step("validate-implementation", steps, "postcondition"),  # noqa: SLF001
+            "implement",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

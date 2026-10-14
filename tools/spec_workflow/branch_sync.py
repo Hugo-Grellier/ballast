@@ -181,9 +181,12 @@ RECOVERY = {
         "check {repo}'s branch rules for {branch} (protection, required "
         "signatures), then {rerun}"
     ),
+    # #147: the rerun refreshes trust when every change came from the default branch.
     "protected-input": (
-        "review these changes; after a pin change run ballast setup first, then "
-        "ballast trust (operator only)"
+        "the synchronized branch changed protected inputs; rerun {rerun}: it "
+        "refreshes trust and the installation from the pinned default branch when "
+        "every change came from it, otherwise the operator reviews them and runs "
+        "ballast trust"
     ),
     "internal-error": "report it with the run ID, then {rerun}",
     "no-committer": (

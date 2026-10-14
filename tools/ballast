@@ -30,10 +30,15 @@ Then, from a project root whose ballast.toml has `[standard] ref = "..."`:
 Each version is extracted once into $XDG_DATA_HOME/ballast/standard/<ref>/,
 under a per-version lock, and published together with a record of its content;
 `setup` and `preview` verify a cached copy against that record and fetch a
-damaged one again. Only `setup` and `preview` download; every other command
-runs the launcher of an already fetched version. The first `run`, `ledger` or
-`intake` in a new worktree prepares its installation from a verified
-installation on this machine, without downloading. `preview` runs the target
+damaged one again. Only `setup` and `preview` download, and `run`, `ledger`
+or `intake` when the launcher would refuse changed protected inputs or a pin
+that differs from the installation: they then fetch the pinned version and run
+its `tools/setup --refresh`, which records a trust baseline only for changes
+that came from the reviewed default branch (ADR-0021), then run the launcher
+as before. Every other command runs the launcher of an already fetched version.
+The first `run`, `ledger` or `intake` in a new worktree prepares its
+installation from a verified installation on this machine, without
+downloading. `preview` runs the target
 version's own setup in a disposable project and changes nothing else. The
 repository is fixed here, so a project can choose a version but never a
 source. Set BALLAST_STANDARD_DIR to a local checkout of this repository to
@@ -1393,6 +1398,7 @@ class Declarations(NamedTuple):
     resumes: list[str]
     prepare: bool
     init: bool = False
+    refresh: bool = False
 
 
 def declarations(standard: Path) -> Declarations:
@@ -1410,6 +1416,7 @@ def declarations(standard: Path) -> Declarations:
         resumes=[r for r in resumes if isinstance(r, str)],
         prepare=isinstance(setup, dict) and setup.get("prepare") is True,
         init=isinstance(adopt, dict) and adopt.get("supported") is True,
+        refresh=isinstance(setup, dict) and setup.get("refresh") is True,
     )
 
 
@@ -1872,6 +1879,70 @@ def before_launcher(root: Path, standard: Path, command: str) -> int:
     return 0
 
 
+# Launcher refusals after which the pinned standard's setup may refresh the
+# trust baseline from the reviewed default branch (ADR-0021).
+REFRESHABLE = ("inputs-changed", "pin-mismatch")
+
+
+def refresh_before(root: Path, command: str, args: list[str] | None = None) -> None:
+    """Run the pinned standard's `setup --refresh` when the launcher would refuse.
+
+    Only for `run`, `ledger` and `intake` in an installed checkout, only on a
+    protected-input change or a pin that differs from the installation, and
+    only when the pinned version declares `[setup] refresh`. Setup decides
+    and prints why it does or does not refresh; its exit status is ignored,
+    because the launcher's own check, run next, decides. Setup runs from the
+    verified cache (or the operator's local standard), never the checkout.
+    It never runs inside a workflow step or for `run status`, and a failed
+    download only skips the refresh, so the launcher's own refusal shows.
+    """
+    if command not in PREPARING or needs_installation(root):
+        return
+    if os.environ.get("BALLAST_AGENT_STEP") or (args or [])[:1] == ["status"]:
+        return
+    pin, error = read_pin(root)
+    if error is not None:
+        return
+    local = os.environ.get("BALLAST_STANDARD_DIR")
+    probed = Path(local).resolve() if local else _probe_standard(root, pin)
+    if probed is None or _refusal_kind(root, probed) not in REFRESHABLE:
+        return
+    try:
+        standard = Path(local).resolve() if local else ensure_standard(root, pin)
+    except (SystemExit, OSError) as error:
+        sys.stderr.write(
+            f"ballast: trust not refreshed: cannot fetch {pin} ({error})\n"
+        )
+        return
+    if not declarations(standard).refresh:
+        return
+    tool = standard / "tools/setup"
+    command_line = [PYTHON, "-IS", str(tool), "--project", str(root), "--refresh"]
+    subprocess.run(command_line, cwd=root, check=False)  # noqa: S603
+
+
+def _probe_standard(root: Path, pin: str) -> Path | None:
+    """Return a verified cached standard to ask: the pinned, else the installed."""
+    for ref in dict.fromkeys((pin, installed_ref(root))):
+        if ref is None:
+            continue
+        candidate = trusted_standard_dir(root, ref)
+        if candidate.is_dir() and damage(candidate) is None:
+            return candidate
+    return None
+
+
+def _refusal_kind(root: Path, standard: Path) -> str | None:
+    """Return the launcher's `refusal_kind`; None from an older one or a failure."""
+    launcher = standard / "tools/spec_workflow/launcher.py"
+    result = probe([PYTHON, "-I", "-S", str(launcher), "status", "--json"], cwd=root)
+    try:
+        kind = json.loads(result.stdout).get("refusal_kind") if result else None
+    except (AttributeError, ValueError):
+        return None
+    return kind if isinstance(kind, str) else None
+
+
 def refuse_uninstalled() -> int:
     """Refuse a checkout with nothing installed, naming setup."""
     sys.stderr.write(
@@ -1982,7 +2053,7 @@ def init(argv: list[str]) -> int:
     return 1
 
 
-def main(argv: list[str]) -> int:  # noqa: PLR0911 - one return per command
+def main(argv: list[str]) -> int:  # noqa: C901, PLR0911 - one return per command
     """Fetch on `setup`, otherwise hand the command to the pinned launcher."""
     if not argv:
         fail(USAGE)
@@ -1998,6 +2069,8 @@ def main(argv: list[str]) -> int:  # noqa: PLR0911 - one return per command
     if argv[0] == "init":
         return init(argv[1:])
     root = Path.cwd()
+    if argv[0] in PREPARING:
+        refresh_before(root, argv[0], argv[1:])
     standard = command_standard(root, argv[0])
     if argv[0] == "setup":
         tool = standard / "tools/setup"

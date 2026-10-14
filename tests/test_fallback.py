@@ -439,7 +439,8 @@ class SettingTests(FallbackCase):
         self.enable()
         fallback.setting_path(self.root, RUN).write_text("{")
         result = self.quota()
-        self.assertEqual(result.returncode, 1)
+        # #147 R13: a confirmed-stopped usage limit is a resumable stop by design.
+        self.assertEqual(result.returncode, agent.EXIT_USAGE_LIMIT)
         self.assertIn("local fallback off", result.stderr)
         self.assertEqual(self.stub.requests, [])
         self.assertEqual(self.codex_runs(), [])
@@ -1294,7 +1295,8 @@ class WrapperFallbackTests(FallbackCase):
                 if case == "off":
                     fallback.write_setting(self.root, RUN, None)
                 result = self.quota()
-                self.assertEqual(result.returncode, 1)
+                # #147 R13: classified without a fallback; nothing else changes.
+                self.assertEqual(result.returncode, agent.EXIT_USAGE_LIMIT)
                 self.assertNotIn("local fallback", result.stderr)
                 self.assertEqual(set(self.metas()[-1]), keys)
                 self.assertEqual(
@@ -1310,8 +1312,10 @@ class WrapperFallbackTests(FallbackCase):
         record = self.make_run()
         del record
         fallback.setting_path(self.root, RUN).unlink()
-        self.assertEqual(self.quota().returncode, 1)
+        self.assertEqual(self.quota().returncode, agent.EXIT_USAGE_LIMIT)
         (step,) = self.steps()
+        self.assertEqual(step["exit_code"], agent.EXIT_USAGE_LIMIT)
+        self.assertEqual(step["reason"], agent.USAGE_LIMITED)
         self.assertEqual(
             set(step),
             {

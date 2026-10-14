@@ -23,10 +23,10 @@ Chat runs (#20), driven by the operator one action at a time:
     ballast run start --mode chat -i feature_directory=specs/N-slug \
         [-i idea="Issue #N: ..."] [-i integration=auto|claude|codex] \
         [-i model=NAME]
-    ballast run step RUN_ID PHASE [--kind KIND] [-i integration=claude|codex] \
-        [-i model=NAME]
+    ballast run step RUN_ID PHASE [--kind KIND] [--headless] \
+        [-i integration=claude|codex] [-i model=NAME]
     ballast run status RUN_ID
-    ballast run approve RUN_ID GATE
+    ballast run approve RUN_ID GATE [GATE ...] | --through GATE
     ballast run reject RUN_ID GATE --reason TEXT
     ballast run resolve RUN_ID DEC-NNNN
     ballast run checks RUN_ID
@@ -39,8 +39,19 @@ reconcile-intent, converge or review (with --kind plan, implementation,
 security, test, documentation or spec-reconciliation). GATE is scope,
 intent, plan, tasks, implementation, spec-reconciliation or final. Every
 `step` runs branch synchronization before its one agent step, which is
-interactive in chat mode and headless in human-gated mode; every gate needs
-`approve` from a terminal (see chat.py and docs/policies/spec-kit-workflow.md).
+interactive in chat mode (or confined with `--headless`) and headless in
+human-gated mode; every gate needs `approve` (see chat.py and
+docs/policies/spec-kit-workflow.md).
+
+Who decided (#147, ADR-0021): `start`, `resume`, `continue` and a Chat
+`approve` record the operator when stdin and stdout are terminals, or the
+operator's agent session named by `--relayed-by SESSION`, which every other
+command refuses; without either they are refused before anything is
+written. A relayed approval is accepted only in a Chat run in chat mode, and
+a relayed `resume` or `continue` of a block that carries a decision needs
+`--ref` naming the operator's answer. An Autonomous start on a branch not
+named for the Issue offers the branch at a terminal and otherwise prints the
+switch and rerun commands.
 
 `ballast` is the installed copy of launcher.py, which verifies the
 checkout before executing this file; see docs/policies/spec-kit-workflow.md.
@@ -133,6 +144,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -157,6 +169,7 @@ if __name__ == "__main__" and os.path.lexists(ROOT / TAMPER_MARKER):
 sys.pycache_prefix = os.devnull
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import actor  # noqa: E402
 import autonomy  # noqa: E402
 import branch_sync  # noqa: E402
 import chat  # noqa: E402
@@ -164,6 +177,7 @@ import completion  # noqa: E402
 import demo  # noqa: E402
 import draft_pr  # noqa: E402
 import fallback  # noqa: E402
+import ledger  # noqa: E402
 from ledger import archive_dir, archive_lock, archive_policy, import_run  # noqa: E402
 
 BIN = ROOT / ".ballast/spec_workflow/bin"
@@ -181,8 +195,11 @@ WRAPPER_CATEGORIES = {
     4: "tamper",
     5: "limit",
     6: "credential",
+    # agent.EXIT_USAGE_LIMIT: the CLI's usage limit, processes confirmed stopped.
+    7: "interrupted",
     130: "interrupted",
 }
+USAGE_LIMIT_DETAIL = "the agent CLI hit its provider usage limit"
 FALLBACK_OPTIONS = [
     {
         "option": "Resolve the open decision in the feature artifacts",
@@ -210,6 +227,54 @@ COMMANDS = {
     "demo",
     *CHAT_COMMANDS,
 }
+
+
+# ADR-0021: the operator's agent session names itself when it relays.
+RELAYED_BY = "--relayed-by"
+
+
+def _take_relayed(options: list[str]) -> tuple[str | None, list[str]] | str:
+    """Take `--relayed-by SESSION` out of the options; a refusal on misuse."""
+    found: str | None = None
+    rest: list[str] = []
+    index = 0
+    while index < len(options):
+        option = options[index]
+        name, equals, value = option.partition("=")
+        if name == RELAYED_BY and not (rest and rest[-1] in {"-i", "--input"}):
+            if not equals:
+                index += 1
+                if index >= len(options):
+                    return f"{RELAYED_BY} needs a SESSION"
+                value = options[index]
+            if found is not None:
+                return f"{RELAYED_BY} given twice"
+            found = value
+        else:
+            rest.append(option)
+        index += 1
+    return found, rest
+
+
+def _actor(relayed: str | None) -> actor.Actor | str:
+    """Return the actor of a decision-recording command, or its refusal (R7)."""
+    try:
+        return actor.resolve(relayed, stdin=sys.stdin, stdout=sys.stdout)
+    except actor.Refused as refusal:
+        return str(refusal)
+
+
+def _run_mode(run_id: str) -> str:
+    """Return the mode the agent command matrix applies to a run."""
+    try:
+        record = autonomy.find_run(ROOT, run_id) if RUN_ID.fullmatch(run_id) else None
+    except autonomy.AutonomyError:
+        record = None
+    if record is None or record["workflow"] == CONTINUE:
+        return "human-gated"
+    if record["workflow"] == AUTONOMOUS:
+        return "autonomous"
+    return autonomy.effective_mode(record)
 
 
 def _summary(run_id: str) -> None:
@@ -412,6 +477,18 @@ def _archive_format(run_id: str) -> None:
         sys.stderr.write(f"warning: run format not recorded: {error}\n")
 
 
+# Bound at import: tests replace this module's `subprocess` wholesale.
+DEVNULL = subprocess.DEVNULL
+
+
+def _terminal_stdin() -> bool:
+    """Whether stdin is a terminal the engine may prompt on."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (OSError, ValueError):
+        return False
+
+
 def _launch(command: list[str], run_id: str, *, start: bool) -> int:
     """Run Spec Kit, then summarize, archive and import the run."""
     if start:
@@ -420,7 +497,12 @@ def _launch(command: list[str], run_id: str, *, start: bool) -> int:
     status = EXIT_INTERRUPTED
     try:
         result = subprocess.run(  # noqa: S603
-            command, cwd=ROOT, env=_environment(run_id), check=False
+            command,
+            cwd=ROOT,
+            env=_environment(run_id),
+            check=False,
+            # Without a terminal, piped text never reaches an engine gate (AC-011).
+            stdin=None if _terminal_stdin() else DEVNULL,
         )
         status = result.returncode
     except KeyboardInterrupt:
@@ -559,6 +641,47 @@ def _run_feature(run_id: str) -> str | None:
     return record["feature"] if record else None
 
 
+# Set by the launcher once after a default-branch trust refresh (ADR-0021).
+REFRESHED = "BALLAST_REFRESHED"
+_refresh: dict[str, str] | None = None
+
+
+def _announce_refresh() -> None:
+    """Print the refresh the launcher handed over; the ledger gets it later."""
+    global _refresh  # noqa: PLW0603 - one announcement per invocation
+    try:
+        data = json.loads(os.environ.pop(REFRESHED, "") or "null")
+        repository, branch, commit = data["repository"], data["branch"], data["commit"]
+    except (ValueError, TypeError, KeyError):
+        return
+    if not all(isinstance(v, str) for v in (repository, branch, commit)):
+        return
+    _refresh = {"repository": repository, "branch": branch, "commit": commit}
+    sys.stdout.write(
+        draft_pr.printable(
+            f"trust baseline refreshed from {repository} {branch} at {commit[:12]}"
+        )
+        + "\n"
+    )
+
+
+def _ledger_refresh(run_id: str) -> None:
+    """Append the invocation's refresh to the run's ledger once; report a failure."""
+    global _refresh
+    if _refresh is None:
+        return
+    data, _refresh = _refresh, None
+    feature = _run_feature(run_id)
+    if feature is None:
+        return  # no run to record it in; the output line said it
+    try:
+        ledger.append(
+            ROOT, ledger.new_event(run_id, feature, "trust_refresh", "runner", data)
+        )
+    except (ledger.LedgerError, OSError, ValueError) as error:
+        sys.stderr.write(f"ballast: ledger trust_refresh not recorded: {error}\n")
+
+
 def _checkpoint(run_id: str) -> draft_pr.Outcome | None:
     """Run the Draft PR checkpoint once, last in the invocation (DEC-0007).
 
@@ -566,6 +689,7 @@ def _checkpoint(run_id: str) -> draft_pr.Outcome | None:
     After an Autonomous publication it finds and reuses the publisher's PR.
     Returns the outcome for PR completion, or None when the step raised.
     """
+    _ledger_refresh(run_id)
     outcome = None
     try:
         outcome = draft_pr.checkpoint(ROOT, run_id)
@@ -762,7 +886,11 @@ def _number(value: str | None, name: str) -> int | None:
 
 
 def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
-    flags: dict[str, str], options: list[str], specify: str, local: str | None = None
+    flags: dict[str, str],
+    options: list[str],
+    specify: str,
+    local: str | None = None,
+    who: actor.Actor = actor.OPERATOR,
 ) -> int:
     """Check eligibility, write the run record, run ballast-autonomous."""
     inputs = _inputs(options)
@@ -795,18 +923,9 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         policy, defaults, warnings = autonomy.parse_policy(config)
         for warning in warnings:
             sys.stderr.write(f"ballast: {warning}\n")
-        # #141: the start flag only narrows ballast.toml, refused before any
-        # record is written; the snapshot gains fields only when either is set.
-        flag, configured = flags.get(COMPLETION), policy.get("completion_configured")
-        if flag == "ready" and configured != "ready":
-            return _refuse(
-                "--completion ready cannot widen ballast.toml [autonomous] "
-                f"completion ({configured or 'draft'})"
-            )
-        if flag is not None:
-            policy["completion_flag"] = flag
-        if flag is not None or configured is not None:
-            policy["completion"] = autonomy.completion_policy(configured, flag)
+        widened = _completion(flags, policy)
+        if widened is not None:
+            return _refuse(widened)
         autonomy.parse_checks(config)
         limits = autonomy.resolve_limits(
             defaults,
@@ -823,6 +942,14 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         result = autonomy.check_eligibility(
             ROOT, issue=issue, feature=feature, policy=policy, warnings=warnings
         )
+        if _only_branch_refusal(result["eligibility"], issue):
+            # R14: offer the Issue-named branch; never switch without a typed answer.
+            offered = _branch_offer(issue, feature, flags, options, who)
+            if offered is not None:
+                return offered
+            result = autonomy.check_eligibility(
+                ROOT, issue=issue, feature=feature, policy=policy, warnings=warnings
+            )
     except autonomy.AutonomyError as error:
         return _refuse(str(error), alternative=True)
     eligibility = result["eligibility"]
@@ -852,6 +979,7 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
         risk=result["risk"],
         eligibility=eligibility,
         limits=limits,
+        actor=who,
     )
     if fallback:
         record["integration_fallback"] = fallback
@@ -860,6 +988,114 @@ def _start_autonomous(  # noqa: C901, PLR0911, PLR0912 - one guarded start
     _set_local_fallback(run_id, local)
     with _invocation_lock(run_id):
         return _run_autonomous(run_id, record, result, inputs, specify, snapshot)
+
+
+def _completion(flags: dict[str, str], policy: dict) -> str | None:
+    """Apply the start's completion flag to the policy; a refusal reason, or None.
+
+    #141: the start flag only narrows ballast.toml, refused before any record
+    is written; the snapshot gains fields only when either is set.
+    """
+    flag, configured = flags.get(COMPLETION), policy.get("completion_configured")
+    if flag == "ready" and configured != "ready":
+        return (
+            "--completion ready cannot widen ballast.toml [autonomous] "
+            f"completion ({configured or 'draft'})"
+        )
+    if flag is not None:
+        policy["completion_flag"] = flag
+    if flag is not None or configured is not None:
+        policy["completion"] = autonomy.completion_policy(configured, flag)
+    return None
+
+
+def _current_branch() -> str:
+    found = autonomy.git(ROOT, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    return found.stdout.strip()
+
+
+def _only_branch_refusal(eligibility: dict, issue: int) -> bool:
+    """Whether the branch name is eligibility's only refusal (no open-PR cause)."""
+    return eligibility["reasons"] == [
+        autonomy.REFUSAL + autonomy.BRANCH_REFUSAL
+    ] and not autonomy.is_feature_branch(_current_branch(), issue, None, None)
+
+
+def _proposed_branch(issue: int, feature: str) -> tuple[str, bool] | None:
+    """Return the branch to switch to and whether to create it, or None.
+
+    The one local branch named for the Issue, else `feat-<feature slug>`,
+    which must be a valid new branch name (R14).
+    """
+    current = _current_branch()
+    listed = autonomy.git(
+        ROOT, "for-each-ref", "--format=%(refname:short)", "refs/heads/", check=False
+    ).stdout.split()
+    named = [
+        branch
+        for branch in listed
+        if branch != current and autonomy.is_feature_branch(branch, issue, None, None)
+    ]
+    if len(named) == 1:
+        return named[0], False
+    branch = "feat-" + feature.removeprefix("specs/")
+    valid = autonomy.git(ROOT, "check-ref-format", "--branch", branch, check=False)
+    if valid.returncode != 0 or branch in listed:
+        return None
+    return branch, True
+
+
+def _branch_offer(
+    issue: int,
+    feature: str,
+    flags: dict[str, str],
+    options: list[str],
+    who: actor.Actor,
+) -> int | None:
+    """At a terminal, offer the Issue branch; None once switched (AC-027, D-06).
+
+    Without a terminal, or relayed, print the exact switch and rerun commands.
+    """
+    proposed = _proposed_branch(issue, feature)
+    current = _current_branch()
+    switch = (
+        None
+        if proposed is None
+        else f"git switch {'-c ' if proposed[1] else ''}{proposed[0]}"
+    )
+    if who.by == "operator" and proposed is not None:
+        sys.stdout.write(
+            f"autonomous needs a feature branch named for Issue #{issue}; this "
+            f"checkout is on {draft_pr.printable(current)}.\nType `switch "
+            f"{proposed[0]}` to run `{switch}` and continue, or anything else to "
+            "stop:\n"
+        )
+        sys.stdout.flush()
+        try:
+            typed = sys.stdin.readline().strip()
+        except (OSError, KeyboardInterrupt):
+            typed = ""
+        if typed == f"switch {proposed[0]}":
+            args = ["switch", *(["-c"] if proposed[1] else []), proposed[0]]
+            done = autonomy.git(ROOT, *args, check=False)
+            if done.returncode != 0:
+                return _refuse(f"{switch} failed: {done.stderr.strip()[:500]}")
+            sys.stdout.write(f"Switched to {proposed[0]}.\n")
+            return None
+    sys.stderr.write(
+        f"ballast: refusing: {autonomy.REFUSAL}{autonomy.BRANCH_REFUSAL}\n"
+    )
+    if switch is not None:
+        sys.stderr.write(f"Switch first: {switch}\n")
+    words = [
+        word
+        for name in ("--wall-time", "--max-agent-steps", LOCAL_FALLBACK)
+        if name in flags
+        for word in (name, flags[name])
+    ]
+    rerun = " ".join(shlex.quote(word) for word in [*words, *options])
+    sys.stderr.write(f"Then rerun: ballast run start --mode autonomous {rerun}\n")
+    return EXIT_REFUSED
 
 
 def _run_autonomous(  # noqa: PLR0913, PLR0917 - the start's checked values
@@ -1097,6 +1333,8 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: C901, 
         category = WRAPPER_CATEGORIES.get(code)
         if category is not None:
             condition = last.get("reason") or f"agent step ended with exit {code}"
+            if code == 7:  # noqa: PLR2004 - agent.EXIT_USAGE_LIMIT
+                condition = USAGE_LIMIT_DETAIL
             limit = None
             if category == "tamper":
                 condition = "an agent step changed protected workflow files"
@@ -1108,6 +1346,9 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: C901, 
             restart = category == "limit" and _restart_only(
                 run_id, {"category": category, "limit": limit}
             )
+            recovery = autonomy.RESTART_RECOVERY if restart else None
+            if code == 7:  # noqa: PLR2004 - agent.EXIT_USAGE_LIMIT
+                recovery = autonomy.USAGE_LIMIT_RECOVERY.format(run=run_id)
             return autonomy.make_block(
                 category,
                 condition,
@@ -1115,7 +1356,7 @@ def _stop_block(run_id: str, record: dict, status: int) -> dict:  # noqa: C901, 
                 step_id=step_id,
                 evidence=[f".specify/workflow-state/{run_id}/agents/"],
                 limit=limit,
-                recovery=autonomy.RESTART_RECOVERY if restart else None,
+                recovery=recovery,
                 command=autonomy.RESTART_COMMAND if restart else None,
             )
         if code == EXIT_REFUSED and "confinement" in str(last.get("reason")):
@@ -1275,12 +1516,16 @@ def _flags(
     return found, rest
 
 
-def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912 - one branch per command
+def _chat_command(  # noqa: C901, PLR0911, PLR0912 - one branch per command
+    command: str, options: list[str], relayed: str | None = None
+) -> int:
     """Dispatch `step`, `status`, `approve`, `reject`, `resolve`, `checks`, `mode`."""
     if not options or not RUN_ID.fullmatch(options[0]):
         return _refuse(f"{command} needs a valid RUN_ID")
     run_id, rest = options[0], options[1:]
     if command == "step":
+        headless = "--headless" in rest
+        rest = [option for option in rest if option != "--headless"]
         split = _flags(rest, {"--kind"})
         if isinstance(split, str):
             return _refuse(split)
@@ -1288,7 +1533,12 @@ def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR09
         if not rest or rest[0].startswith("-"):
             return _refuse("step needs a PHASE")
         return _chat(
-            chat.run_step, ROOT, run_id, rest[0], flags.get("--kind"), rest[1:]
+            lambda *args: chat.run_step(*args, headless=headless),
+            ROOT,
+            run_id,
+            rest[0],
+            flags.get("--kind"),
+            rest[1:],
         )
     if command in {"status", "checks"}:
         if rest:
@@ -1299,9 +1549,22 @@ def _chat_command(command: str, options: list[str]) -> int:  # noqa: C901, PLR09
                 return _status_with_fallback(run_id, local)
         return _chat(chat.status if command == "status" else chat.checks, ROOT, run_id)
     if command == "approve":
-        if len(rest) != 1:
-            return _refuse("approve needs RUN_ID GATE")
-        return _chat(chat.approve, ROOT, run_id, rest[0])
+        split = _flags(rest, {"--through"})
+        if isinstance(split, str):
+            return _refuse(split)
+        flags, gates = split
+        if not gates and "--through" not in flags:
+            return _refuse("approve needs RUN_ID GATE [GATE ...] or --through GATE")
+        who = _actor(relayed)
+        if isinstance(who, str):
+            return _refuse(who)
+        # Early, before any lock: the matrix refuses relays outside Chat.
+        refusal = actor.allowed("approve", _run_mode(run_id), who)
+        if refusal is not None:
+            return _refuse(refusal)
+        return _chat(
+            chat.approve_many, ROOT, run_id, gates, flags.get("--through"), who
+        )
     if command == "reject":
         split = _flags(rest, {"--reason"})
         if isinstance(split, str):
@@ -1549,7 +1812,9 @@ def _continue_refusal(source: dict, reason: str, mode: str) -> str | None:  # no
     return None
 
 
-def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: PLR0911
+def _continue_command(  # noqa: PLR0911
+    options: list[str], specify: str | None, who: actor.Actor = actor.OPERATOR
+) -> int:
     """`ballast run continue`: record the human decision, lower, run gates.
 
     `--mode chat` continues in a linked Chat run (#20) instead of the
@@ -1581,12 +1846,24 @@ def _continue_command(options: list[str], specify: str | None) -> int:  # noqa: 
         return _refuse(source)
     try:
         with _invocation_lock(source["run_id"]):  # SEC2-001: like resume
-            return _continue_locked(source["run_id"], flags, specify)
+            return _continue_locked(source["run_id"], flags, specify, who)
     except LockHeld as held:
         return _refuse(str(held))
 
 
-def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) -> int:  # noqa: PLR0911
+def _relayed_extra(who: actor.Actor, kind: str, block: dict | None) -> dict | None:
+    """Return the block category a relayed block resolution names (D-08)."""
+    if who.by != "relayed" or kind != "block-resolution" or block is None:
+        return None
+    return {"block_category": block["category"]}
+
+
+def _continue_locked(  # noqa: PLR0911
+    run_id: str,
+    flags: dict[str, str],
+    specify: str | None,
+    who: actor.Actor = actor.OPERATOR,
+) -> int:
     """Lower and continue under the source run's lock, from a fresh read."""
     source = _source_run(run_id)
     if isinstance(source, str):
@@ -1596,8 +1873,23 @@ def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) ->
     )
     if refusal is not None:
         return _refuse(refusal)
+    try:
+        block = autonomy.read_block(ROOT, run_id)
+    except autonomy.AutonomyError as error:
+        return _refuse(f"run {run_id}: {error}")
+    refusal = actor.allowed(
+        "continue",
+        "autonomous",
+        who,
+        block["category"] if block else None,
+        flags["--ref"],
+    )
+    if refusal is not None:
+        return _refuse(refusal)
+    kind = REASONS[flags["--reason"]]
+    extra = _relayed_extra(who, kind, block)
     if flags.get("--mode") == "chat":
-        return _continue_chat(source, flags)
+        return _continue_chat(source, flags, who, extra)
     if specify is None:
         sys.stderr.write(
             "specify CLI not found; see docs/policies/spec-kit-workflow.md\n"
@@ -1619,12 +1911,18 @@ def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) ->
         decision = autonomy.append_human_decision(
             ROOT,
             run_id,
-            REASONS[flags["--reason"]],
+            kind,
             flags["--ref"],
             resolves="block" if flags["--reason"] == "block-resolved" else None,
+            extra=extra,
+            actor=who,
         )
         autonomy.change_mode(
-            source, "human-gated", reason=flags["--reason"], decision_id=decision["id"]
+            source,
+            "human-gated",
+            reason=flags["--reason"],
+            decision_id=decision["id"],
+            actor=who,
         )
         autonomy.set_status(source, "continued")
         autonomy.write_run(ROOT, source)
@@ -1637,6 +1935,7 @@ def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) ->
             integration=source["integration"],
             continues=run_id,
             reason=flags["--reason"],
+            actor=who,
         )
         autonomy.write_run(ROOT, record)
         _render_source_record(source)
@@ -1668,7 +1967,12 @@ def _continue_locked(run_id: str, flags: dict[str, str], specify: str | None) ->
     return status
 
 
-def _continue_chat(source: dict, flags: dict[str, str]) -> int:
+def _continue_chat(
+    source: dict,
+    flags: dict[str, str],
+    who: actor.Actor = actor.OPERATOR,
+    extra: dict | None = None,
+) -> int:
     """`continue --mode chat`: decide, lower to chat, then link a Chat run (AC-022)."""
     run_id = source["run_id"]
     try:
@@ -1678,9 +1982,15 @@ def _continue_chat(source: dict, flags: dict[str, str]) -> int:
             REASONS[flags["--reason"]],
             flags["--ref"],
             resolves="block" if flags["--reason"] == "block-resolved" else None,
+            extra=extra,
+            actor=who,
         )
         autonomy.change_mode(
-            source, "chat", reason=flags["--reason"], decision_id=decision["id"]
+            source,
+            "chat",
+            reason=flags["--reason"],
+            decision_id=decision["id"],
+            actor=who,
         )
         autonomy.set_status(source, "continued")
         autonomy.write_run(ROOT, source)
@@ -1688,7 +1998,7 @@ def _continue_chat(source: dict, flags: dict[str, str]) -> int:
     except (autonomy.AutonomyError, OSError) as error:
         return _refuse(str(error))
     try:
-        return _chat(chat.continue_run, ROOT, source, decision)
+        return _chat(chat.continue_run, ROOT, source, decision, who)
     finally:
         _archive_operator(run_id)
 
@@ -1861,15 +2171,24 @@ def _resume_refusal(  # noqa: C901, PLR0911, PLR0912 - one refusal per eligibili
     return None
 
 
-def _block_step(failed: str | None, steps: list[str]) -> str | None:
+def _block_step(
+    failed: str | None, steps: list[str], category: str | None = None
+) -> str | None:
     """Return the step a resume re-runs for a block at `failed` (#21 R6).
 
     A failed agent step or validator is re-run; a failed recorder re-runs
     the agent step whose drafts it records (the first reviewer step for the
-    implementation reviews).
+    implementation reviews). A failed implementation postcondition reruns
+    `implement`, whose validator then runs again (#147 R12, ADR-0021).
     """
     if failed is None or failed not in steps:
         return None
+    if (
+        failed == "validate-implementation"
+        and category == "postcondition"
+        and "implement" in steps
+    ):
+        return "implement"
     if failed == "record-implementation-review":
         return "review-implementation"
     match = re.fullmatch(r"record-fix-review-(\d+)", failed)
@@ -1888,7 +2207,9 @@ def _reentry(run_id: str, record: dict, block: dict) -> tuple[str, list[str]]:
     if not steps:
         message = f"run {run_id}'s workflow copy lists no steps to resume at"
         raise RuntimeError(message)
-    step = _block_step(_engine_state(run_id).get("current_step_id"), steps)
+    step = _block_step(
+        _engine_state(run_id).get("current_step_id"), steps, block.get("category")
+    )
     if step is None:
         message = f"run {run_id}'s workflow state names no step to resume at"
         raise RuntimeError(message)
@@ -1974,7 +2295,20 @@ def _trusted_policy() -> tuple[dict, list[str]]:
     return policy, warnings
 
 
-def _resume_autonomous(options: list[str], specify: str, *, refresh: bool) -> int:
+def _relay_refusal(who: actor.Actor, block: dict | None, ref: str) -> str | None:
+    """D-08: a relayed resume of a block that carries a decision needs --ref."""
+    return actor.allowed(
+        "resume", "autonomous", who, block["category"] if block else None, ref
+    )
+
+
+def _resume_autonomous(
+    options: list[str],
+    specify: str,
+    *,
+    refresh: bool,
+    who: actor.Actor = actor.OPERATOR,
+) -> int:
     """`ballast run resume RUN_ID [--ref TEXT] [--refresh-policy]` (#21 R5, #95)."""
     ref = _resume_options(options)
     if ref is not None and ref.startswith("!"):
@@ -1982,7 +2316,10 @@ def _resume_autonomous(options: list[str], specify: str, *, refresh: bool) -> in
     run_id = options[0]
     try:
         record = autonomy.read_run(ROOT, run_id)
-        refusal = _resume_refusal(record, autonomy.read_block(ROOT, run_id))
+        block = autonomy.read_block(ROOT, run_id)
+        refusal = _resume_refusal(record, block) or _relay_refusal(
+            who, block, ref or ""
+        )
     except autonomy.AutonomyError as error:
         return _refuse(f"run {run_id}: {error}")
     if refusal is not None:
@@ -1992,13 +2329,21 @@ def _resume_autonomous(options: list[str], specify: str, *, refresh: bool) -> in
         return _refuse(f"run {run_id}'s pin names another feature than its record")
     try:
         with _invocation_lock(run_id):
-            return _resume_locked(run_id, ref or "", pin, specify, refresh=refresh)
+            return _resume_locked(
+                run_id, ref or "", pin, specify, refresh=refresh, who=who
+            )
     except LockHeld as held:
         return _refuse(str(held))
 
 
-def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded resume
-    run_id: str, ref: str, pin: dict, specify: str, *, refresh: bool
+def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915 - one guarded resume
+    run_id: str,
+    ref: str,
+    pin: dict,
+    specify: str,
+    *,
+    refresh: bool,
+    who: actor.Actor = actor.OPERATOR,
 ) -> int:
     """Resume under the run's lock: sync, decide, reposition, run.
 
@@ -2017,6 +2362,10 @@ def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded resum
         return _refuse(f"run {run_id}: {error}")
     if refusal is not None or block is None:
         return _refuse(refusal or f"run {run_id} has no block to resolve")
+    # Before the synchronization and any record (D-08).
+    refusal = _relay_refusal(who, block, ref)
+    if refusal is not None:
+        return _refuse(refusal)
     # Before any agent step and before any record: a blocked check leaves only
     # its own block, which this command resumes (ADR-0005).
     outcome = _sync(run_id, feature=pin.get("feature"))
@@ -2099,16 +2448,22 @@ def _resume_locked(  # noqa: C901, PLR0911, PLR0912, PLR0915 - one guarded resum
         review = "record-implementation-review"
         reset = review in steps and steps.index(reentry) <= steps.index(review)
         block_step = _engine_state(run_id).get("current_step_id")
+        default = (
+            autonomy.relayed_resume_ref(block["category"])
+            if who.by == "relayed"
+            else (
+                f"operator resumed after the {block['category']} block at "
+                f"{block_step or reentry}"
+            )
+        )
         decision = autonomy.append_human_decision(
             ROOT,
             run_id,
             "block-resolution",
-            ref
-            or (
-                f"operator resumed after the {block['category']} block at "
-                f"{block_step or reentry}"
-            ),
+            ref or default,
             resolves="block",
+            extra=_relayed_extra(who, "block-resolution", block),
+            actor=who,
         )
         entry = {
             "at": autonomy.now(),
@@ -2193,10 +2548,16 @@ def _point_feature(feature: str | None) -> int | None:
 
 def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Preserve runner exit.
     """Launch Spec Kit with the wrapper environment, or drive a Chat run."""
+    _announce_refresh()
     if len(argv) < 1 or argv[0] not in COMMANDS:
         sys.stderr.write(__doc__ or "")
         return 2
-    options = argv[1:]
+    taken = _take_relayed(argv[1:])
+    if isinstance(taken, str):
+        return _refuse(taken)
+    relayed, options = taken
+    if relayed is not None and argv[0] not in actor.RELAY_ACCEPTING:
+        return _refuse(actor.NOT_ACCEPTED.format(command=argv[0]))
     flags: dict[str, str] = {}
     local: str | None = None
     if argv[0] in {"start", "resume"} and _endpoint_option(options):
@@ -2268,38 +2629,52 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
     if os.path.lexists(ROOT / TAMPER_MARKER):
         sys.stderr.write(TAMPER_MESSAGE)
         return 2
+    who = actor.OPERATOR
+    if argv[0] in {"start", "continue"}:
+        # R7: before anything is written; a terminal-less call names its session.
+        resolved = _actor(relayed)
+        if isinstance(resolved, str):
+            return _refuse(resolved)
+        who = resolved
     if argv[0] in CHAT_COMMANDS:
         try:
-            return _chat_command(argv[0], options)
+            return _chat_command(argv[0], options, relayed)
         finally:
             if options and RUN_ID.fullmatch(options[0]):
                 _archive_operator(options[0])
+                _ledger_refresh(options[0])
     if argv[0] == "publish":
         return _publish_command(options)
     if argv[0] == "start" and flags.get("--mode") == "chat":
-        return _chat(chat.start, ROOT, options)
+        return _chat(chat.start, ROOT, options, who)
     if argv[0] == "checkpoint":
         return _checkpoint_command(options)
     if argv[0] == "resume" and not autonomous_resume:
         refusal = _chat_resume_refusal(options[0], found)
         if refusal is not None:
             return _refuse(refusal)
+    if argv[0] == "resume":
+        # R7, after the refusals that need no decision, before any write.
+        resolved = _actor(relayed)
+        if isinstance(resolved, str):
+            return _refuse(resolved)
+        who = resolved
     if autonomous_resume:
         # Refusals first: they need no engine and write nothing.
         ref = _resume_options(options)
         if ref is not None and ref.startswith("!"):
             return _refuse(ref[1:])
         try:
+            block = autonomy.read_block(ROOT, options[0])
             refusal = _resume_refusal(
-                autonomy.read_run(ROOT, options[0]),
-                autonomy.read_block(ROOT, options[0]),
-            )
+                autonomy.read_run(ROOT, options[0]), block
+            ) or _relay_refusal(who, block, ref or "")
         except autonomy.AutonomyError as error:
             return _refuse(f"run {options[0]}: {error}")
         if refusal is not None:
             return _refuse(refusal)
     if argv[0] == "continue":
-        return _continue_command(options, shutil.which("specify"))
+        return _continue_command(options, shutil.which("specify"), who)
     specify = shutil.which("specify")
     if specify is None:
         sys.stderr.write(
@@ -2308,9 +2683,11 @@ def main(argv: list[str]) -> int:  # noqa: C901, PLR0911, PLR0912, PLR0915 - Pre
         return 2
     if autonomous_resume:
         _set_local_fallback(options[0], local)
-        return _resume_autonomous(options, specify, refresh=refresh)
+        return _resume_autonomous(options, specify, refresh=refresh, who=who)
     if flags.get("--mode") == "autonomous":
-        return _start_autonomous(flags, options, specify, local)
+        return _start_autonomous(flags, options, specify, local, who)
+    # A human-gated start or resume writes no operator run record: `who` was
+    # only validated, and its engine gates prompt only at a terminal (F-001).
     if argv[0] == "start":
         run_id = uuid.uuid4().hex[:8]
         command = [specify, "workflow", "run", WORKFLOW, *options]

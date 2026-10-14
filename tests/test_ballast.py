@@ -1309,5 +1309,172 @@ class InitBootstrapTests(unittest.TestCase):
         self.assertEqual(list(self.project.iterdir()), [])
 
 
+class RefreshTriggerTests(unittest.TestCase):
+    """#147 T009 [AC-001, FR-020]: the CLI refreshes only on the two refusal kinds."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory(dir=outside_temp())
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.project = self.base / "project"
+        (self.project / ".ballast/spec_workflow").mkdir(parents=True)
+        (self.project / ".ballast/spec_workflow/run.py").write_text("")
+        (self.project / "ballast.toml").write_text('[standard]\nref = "v1.2.0"\n')
+        # A setup an agent planted in the checkout is never what runs.
+        (self.project / "tools").mkdir()
+        (self.project / "tools/setup").write_text("raise SystemExit('planted')\n")
+        self.standard = self.base / "data/ballast/standard/v1.2.0"
+        (self.standard / "tools/spec_workflow").mkdir(parents=True)
+        shutil.copy(ROOT / "tools/cli.toml", self.standard / "tools/cli.toml")
+        (self.standard / "tools/spec_workflow/launcher.py").write_text("")
+        (self.standard / "tools/setup").write_text("")
+        self.enterContext(
+            patch.dict(
+                os.environ,
+                {
+                    "XDG_DATA_HOME": str(self.base / "data"),
+                    "XDG_STATE_HOME": str(operator_state(self)),
+                },
+            )
+        )
+        os.environ.pop("BALLAST_STANDARD_DIR", None)
+        directory = Path.cwd()
+        os.chdir(self.project)
+        self.addCleanup(os.chdir, directory)
+        self.status: dict | None = {"installed": True, "refusal": "r"}
+        self.calls: list[list[str]] = []
+        self.fetched: list[str] = []
+        self.unreachable = False
+
+    def kind(self, kind: str | None) -> None:
+        self.status = {"installed": True, "refusal": "r"}
+        if kind is not None:
+            self.status["refusal_kind"] = kind
+
+    def run_command(self, *argv: str, exit_status: int = 0) -> list[list[str]]:
+        """Run `ballast ARGV` in process; the commands it ran, the launcher last."""
+        self.calls = []
+
+        def probe(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            self.assertIn("status", argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps(self.status), "")
+
+        def run(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            self.calls.append(argv)
+            return subprocess.CompletedProcess(argv, exit_status)
+
+        def ensure(_root: Path, ref: str) -> Path:
+            if self.unreachable:
+                message = f"ballast: cannot fetch standard {ref}"
+                raise SystemExit(message)
+            self.fetched.append(ref)
+            return self.standard
+
+        def execv(_path: str, argv: list[str]) -> None:
+            self.calls.append(argv)
+            raise Executed
+
+        with (
+            patch.object(shim, "probe", probe),
+            patch.object(shim, "damage", lambda _tree: None),
+            patch.object(shim, "ensure_standard", ensure),
+            patch.object(shim.subprocess, "run", run),
+            patch.object(shim.os, "execv", execv),
+            suppress(Executed),
+        ):
+            shim.main(list(argv))
+        return self.calls
+
+    def refresh_argv(self) -> list[str]:
+        return [
+            shim.PYTHON,
+            "-IS",
+            str(self.standard / "tools/setup"),
+            *("--project", str(self.project), "--refresh"),
+        ]
+
+    def test_refreshes_on_changed_inputs_and_a_pin_mismatch(self) -> None:
+        for kind in ("inputs-changed", "pin-mismatch"):
+            for command in ("run", "ledger", "intake"):
+                with self.subTest(kind=kind, command=command):
+                    self.kind(kind)
+                    calls = self.run_command(command, "x")
+                    self.assertEqual(calls[0], self.refresh_argv())
+                    self.assertEqual(calls[-1][-2:], [command, "x"])
+                    self.assertEqual(len(calls), 2)
+        self.assertEqual(set(self.fetched), {"v1.2.0"})
+
+    def test_its_exit_status_is_ignored(self) -> None:
+        self.kind("inputs-changed")
+        calls = self.run_command("run", "resume", "r1", exit_status=2)
+        self.assertEqual(calls[0], self.refresh_argv())
+        self.assertIn(str(self.standard / "tools/spec_workflow/launcher.py"), calls[1])
+
+    def test_never_refreshes_in_a_step_or_for_status(self) -> None:
+        """SEC-004, F6: no download or setup inside a step, nor for `run status`."""
+        self.kind("pin-mismatch")
+        calls = self.run_command("run", "status", "r1")
+        self.assertEqual(len(calls), 1)
+        with patch.dict(os.environ, {"BALLAST_AGENT_STEP": "1"}):
+            calls = self.run_command("run", "resume", "r1")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.fetched, [])
+
+    def test_a_failed_download_falls_through_to_the_launcher(self) -> None:
+        """F4: the launcher's own refusal shows, not a fetch error."""
+        self.kind("pin-mismatch")
+        self.unreachable = True
+        err = io.StringIO()
+        with redirect_stderr(err):
+            calls = self.run_command("run", "resume", "r1")
+        self.assertEqual(len(calls), 1)
+        self.assertIn(str(self.standard / "tools/spec_workflow/launcher.py"), calls[0])
+        self.assertIn("trust not refreshed: cannot fetch v1.2.0", err.getvalue())
+
+    def test_never_refreshes_otherwise(self) -> None:
+        for kind in (
+            None,
+            "tamper",
+            "unfinished-step",
+            "no-baseline",
+            "setup-unfinished",
+            "state",
+        ):
+            with self.subTest(kind=kind):
+                self.kind(kind)
+                calls = self.run_command("run", "x")
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn("--refresh", calls[0])
+        self.kind("inputs-changed")
+        for command in ("trust", "discard-runs"):
+            with self.subTest(command=command):
+                calls = self.run_command(command)
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn("--refresh", calls[0])
+        self.assertEqual(self.fetched, [])
+
+    def test_an_older_launcher_without_the_kind_never_refreshes(self) -> None:
+        self.status = {"installed": True, "refusal": "inputs changed"}
+        self.assertEqual(len(self.run_command("run", "x")), 1)
+
+    def test_a_standard_without_the_declaration_never_refreshes(self) -> None:
+        manifest = self.standard / "tools/cli.toml"
+        manifest.write_text(manifest.read_text().replace("refresh = true\n", ""))
+        self.kind("inputs-changed")
+        calls = self.run_command("run", "x")
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--refresh", calls[0])
+
+    def test_setup_runs_only_from_the_verified_cache(self) -> None:
+        self.kind("pin-mismatch")
+        calls = self.run_command("run", "x")
+        planted = str(self.project / "tools/setup")
+        self.assertFalse(any(planted in argv for argv in calls))
+        self.assertTrue(calls[0][2].startswith(str(self.base / "data")))
+
+    def test_the_shipped_manifest_declares_it(self) -> None:
+        self.assertTrue(shim.declarations(ROOT).refresh)
+
+
 if __name__ == "__main__":
     unittest.main()

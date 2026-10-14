@@ -29,6 +29,7 @@ Every feature run stops at seven human gates. Issue #27 lets the operator run an
 
 - One workflow with mode-conditional gates: engine support is unverified, and it risks changing human-gated behavior.
 - Piping `approve` into gate prompts: the runner would approve on the human's behalf and the record would read as a human approval.
+  - Superseded in part by [ADR-0021](0021-agent-sessions-relay-decisions.md): in a Chat run only, the operator's agent session relays an approval after a yes in chat, recorded and shown as relayed, never as operator-typed.
 - An agent-written committed Markdown record, or the run ledger, as the source of truth: the first is forgeable, the second forbids prose and may be reachable from a primary checkout.
 - Publishing from a workflow shell step: a forge failure would fail a step that an Autonomous run cannot resume.
 - systemd `ReadOnlyPaths` instead of `bwrap`: silently ignored by a user manager on hosts that restrict unprivileged user namespaces.

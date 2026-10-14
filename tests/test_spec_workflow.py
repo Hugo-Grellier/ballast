@@ -30,6 +30,7 @@ from unittest.mock import Mock, patch
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from contextlib import AbstractContextManager
 
 import yaml
 
@@ -64,6 +65,22 @@ TASKS = """# Tasks: Demo import
 - [ ] T001 Add import test for [AC-001] in tests/test_import.py
 - [ ] T002 Implement import in src/demo/import.py (depends on T001)
 """
+
+
+class TerminalText(io.StringIO):
+    """A text stream that says it is a terminal: the operator's, in process."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def operator_at_terminal(case: unittest.TestCase) -> None:
+    """Let the actor rule see the operator's terminal for the whole test.
+
+    #147 T028: these in-process tests run human-gated `start` and `resume`
+    as the operator; without a terminal the actor rule refuses them.
+    """
+    case.enterContext(patch.object(_run_module().actor, "_isatty", lambda _s: True))
 
 
 def _tree(root: Path) -> dict[str, str]:
@@ -1505,6 +1522,8 @@ class TrustedLauncherTests(unittest.TestCase):
                     "inputs (.ballast/spec_workflow, .specify, .venv, .git), then run "
                     "`ballast trust`"
                 ),
+                # #147: the global command refreshes only on two of these kinds.
+                "refusal_kind": "no-baseline",
             },
         )
         self.assertEqual(list(state.iterdir()), [])
@@ -2127,15 +2146,45 @@ class EngineRunTests(unittest.TestCase):
         self.assertEqual(results["validate-plan"]["status"], "failed")
         self.assertNotIn("review-plan", results)
 
+    def test_a_piped_answer_never_passes_a_gate(self) -> None:
+        """#147 T023, plan-review F-001: gates prompt only at a terminal.
 
-if __name__ == "__main__":
-    unittest.main()
+        A relayed human-gated start or resume runs this engine without a
+        terminal; an `approve` on its stdin must not pass the intent gate.
+        """
+        subprocess.run(  # noqa: S603
+            [  # noqa: S607 - resolved by the skip condition
+                "specify",
+                "workflow",
+                "run",
+                str(WORKFLOW),
+                "-i",
+                "idea=Issue #102: demo",
+                "-i",
+                f"feature_directory={FEATURE}",
+                "-i",
+                "integration=claude",
+            ],
+            cwd=self.repo.root,
+            env={**self.env, "FAKE_SPEC": str(self.repo.root / "spec-fixture.md")},
+            input="approve\napprove\n",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        (run,) = (self.repo.root / ".specify/workflows/runs").iterdir()
+        state = json.loads((run / "state.json").read_text())
+        self.assertEqual(state["status"], "paused")
+        self.assertNotIn("record-intent", state["step_results"])
+        self.assertNotIn("plan", state["step_results"])
 
 
 class RunHistoryTests(unittest.TestCase):
     """run.py keeps run data only in the local Git common directory."""
 
     def setUp(self) -> None:
+        operator_at_terminal(self)
         self.directory = TemporaryDirectory()
         self.repo = Repository(self.directory.name)
         # These tests cover archiving and import; the branch check has its own.
@@ -3095,13 +3144,22 @@ class AutonomousEngineCase(AutonomyCase):
         target.chmod(0o755)
 
     def main(self, *argv: str) -> tuple[int, str, str]:
-        """run.main in process, with stdin that cannot answer a gate."""
-        out, err = io.StringIO(), io.StringIO()
+        """run.main in process, with stdin that cannot answer a gate.
+
+        The Python streams stand in for the operator's terminal (#147 T028:
+        the actor rule records the operator); fd 0 stays /dev/null, so no
+        engine gate can read an answer from it.
+        """
+        out, err = TerminalText(), io.StringIO()
         saved = os.dup(0)
         with Path(os.devnull).open() as null:
             os.dup2(null.fileno(), 0)
         try:
-            with redirect_stdout(out), redirect_stderr(err):
+            with (
+                patch.object(sys, "stdin", TerminalText()),
+                redirect_stdout(out),
+                redirect_stderr(err),
+            ):
                 code = run_module.main(list(argv))
         finally:
             os.dup2(saved, 0)
@@ -3960,6 +4018,73 @@ class DraftPrRunTests(unittest.TestCase):
             self.assertFalse(rule.startswith(("Bash(gh", "Bash(git push")), rule)
 
 
+class RelayedHumanGatedTests(unittest.TestCase):
+    """#147 T023 [AC-011, F-001, F-002]: a human-gated run records no relay.
+
+    `--relayed-by` is validated and nothing more: a human-gated start or
+    resume writes no operator run record, and its gates are the engine's,
+    which prompt only at a terminal (EngineRunTests' piped-answer case).
+    """
+
+    setUp = DraftPrRunTests.setUp
+    tearDown = DraftPrRunTests.tearDown
+    main = DraftPrRunTests.main
+
+    def without_terminal(self) -> AbstractContextManager:
+        return patch.object(self.run.actor, "_isatty", lambda _s: False)
+
+    def test_a_relayed_resume_runs_and_records_nothing(self) -> None:
+        with self.without_terminal():
+            status, _ = self.main(
+                0, "resume", "run42", "--relayed-by", "claude-code:t1"
+            )
+        self.assertEqual(status, 0)
+        self.assertTrue(self.dump.exists())
+        with patch.dict(os.environ, {"XDG_STATE_HOME": os.environ["XDG_STATE_HOME"]}):
+            self.assertIsNone(self.run.autonomy.find_run(self.repo.root, "run42"))
+
+    def test_without_a_terminal_the_engine_reads_no_input(self) -> None:
+        """T-02, AC-011: piped text never reaches a Spec Kit engine gate."""
+        seen: list[object] = []
+
+        def engine(_command: list[str], **kwargs: object) -> SimpleNamespace:
+            seen.append(kwargs.get("stdin"))
+            return SimpleNamespace(returncode=0)
+
+        for terminal, expected in ((False, subprocess.DEVNULL), (True, None)):
+            with (
+                self.subTest(terminal=terminal),
+                patch.object(self.run, "_terminal_stdin", lambda t=terminal: t),
+                patch.object(self.run.subprocess, "run", engine),
+                patch.object(self.run, "_summary", lambda _r: None),
+                patch.object(self.run, "_record", lambda *_a: None),
+                patch.object(self.run, "import_run", lambda *_a: None),
+            ):
+                seen.clear()
+                self.run._launch(["specify"], "run42", start=False)  # noqa: SLF001
+                self.assertEqual(seen, [expected])
+
+    def test_terminal_less_without_a_session_is_refused_before_the_engine(
+        self,
+    ) -> None:
+        err = io.StringIO()
+        with self.without_terminal(), redirect_stderr(err):
+            status, _ = self.main(0, "resume", "run42")
+        self.assertEqual(status, 2)
+        self.assertIn(
+            "name the relaying agent session with --relayed-by", err.getvalue()
+        )
+        self.assertFalse(self.dump.exists())
+
+    def test_an_invalid_session_is_refused_before_the_engine(self) -> None:
+        err = io.StringIO()
+        with self.without_terminal(), redirect_stderr(err):
+            status, _ = self.main(0, "resume", "run42", "--relayed-by", "a b")
+        self.assertEqual(status, 2)
+        self.assertIn("--relayed-by SESSION must match", err.getvalue())
+        self.assertFalse(self.dump.exists())
+
+
 class BranchSyncCallTests(unittest.TestCase):
     """T015 [FR-001, FR-010, FR-014, SC-001, R12, R13]: where run.py calls the check."""
 
@@ -4162,6 +4287,7 @@ class BranchSyncEndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
         if not test_branch_sync.GIT_OK:
             self.skipTest("needs git 2.41 or later")
+        operator_at_terminal(self)
         self.scratch = test_branch_sync.Scratch(self)
         self.branch = test_branch_sync.BRANCH
         self.feature = test_branch_sync.FEATURE
@@ -5084,3 +5210,303 @@ class SetupBaselineLauncherTests(LauncherStateCase):
         )
         self.assertIn("no trusted baseline", self.refusal())
         self.assertNotIn("baseline_source", self.status())
+
+
+SETTINGS_REFUSAL = (
+    "ballast: refusing to trust: generated agent settings "
+    "(.ballast/spec_workflow/claude-settings.json) differ from what ballast.toml "
+    "produces; run `ballast setup`, review, then `ballast trust`\n"
+)
+
+
+class TrustSettingsTests(LauncherStateCase):
+    """#147 T008 [AC-003, FR-004]: trust never vouches for stale agent settings."""
+
+    CONFIG = (
+        '[github]\nrepository = "Acme/Demo"\n\n[agents.permissions]\n'
+        'extra_allow = ["Bash(make lint)"]\n'
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write_config(self.CONFIG)
+        self.install_settings(self.CONFIG)
+
+    def install_settings(self, config: str) -> None:
+        settings = self.launcher.generated_settings(ROOT, tomllib.loads(config))
+        (self.root / ".ballast/spec_workflow/claude-settings.json").write_bytes(
+            settings
+        )
+
+    def records(self) -> tuple[bool, bytes | None]:
+        state = self.state()
+        reviewed = state.parent / "reviewed-repositories.json"
+        return (
+            (state / "trusted.json").exists(),
+            reviewed.read_bytes() if reviewed.exists() else None,
+        )
+
+    def test_matching_settings_are_trusted_with_their_repository(self) -> None:
+        result = self.launch("trust")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads((self.state() / "trusted-source.json").read_text())
+        self.assertEqual(record["repository"], "acme/demo")
+        self.assertEqual(record["source"], "trust")
+
+    def test_stale_settings_are_refused(self) -> None:
+        self.install_settings('[github]\nrepository = "Acme/Demo"\n')
+        before = self.records()
+        result = self.launch("trust")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stderr, SETTINGS_REFUSAL)
+        self.assertEqual(self.records(), before)
+        self.assertFalse(before[0])
+
+    def test_edited_settings_are_refused(self) -> None:
+        path = self.root / ".ballast/spec_workflow/claude-settings.json"
+        path.write_text(path.read_text().replace("make lint", "*"))
+        self.assertEqual(self.launch("trust").stderr, SETTINGS_REFUSAL)
+
+    def test_malformed_permissions_are_refused(self) -> None:
+        for text in (
+            '[agents]\npermissions = "x"\n',
+            '[agents.permissions]\nextra_allow = "Bash(*)"\n',
+            "not toml [",
+        ):
+            with self.subTest(text):
+                self.write_config(text)
+                before = self.records()
+                self.assertEqual(self.launch("trust").stderr, SETTINGS_REFUSAL)
+                self.assertEqual(self.records(), before)
+
+
+class RefreshStatusTests(LauncherStateCase):
+    """#147 T008 [AC-001]: status names the refusal kind; a refresh is told once."""
+
+    def test_refusal_kinds(self) -> None:
+        state = self.state()
+        self.assertEqual(self.status()["refusal_kind"], "no-baseline")
+        self.assertEqual(self.launch("trust").returncode, 0)
+        self.assertNotIn("refusal_kind", self.status())
+        (self.root / ".specify/scripts/x.sh").write_text("changed\n")
+        self.assertEqual(self.status()["refusal_kind"], "inputs-changed")
+        (self.root / ".specify/scripts/x.sh").write_text("echo\n")
+        cases = {
+            "tamper": lambda: (self.root / "BALLAST_TAMPERED").write_text(""),
+            "unfinished-step": lambda: (state / "in-progress").write_text("x\n"),
+            "setup-unfinished": lambda: (state / "setup-attempt.json").write_text("{}"),
+        }
+        for kind, make in cases.items():
+            with self.subTest(kind):
+                make()
+                self.assertEqual(self.status()["refusal_kind"], kind)
+                for path in (
+                    self.root / "BALLAST_TAMPERED",
+                    state / "in-progress",
+                    state / "setup-attempt.json",
+                ):
+                    path.unlink(missing_ok=True)
+        stamp = "1.0 abc"
+        (self.root / ".ballast/.setup-version").write_text(stamp + "\n")
+        (state / "installation.json").write_text(
+            json.dumps({"schema": 1, "ref": "v1", "files": {}, "fingerprint": stamp})
+        )
+        self.write_config('[standard]\nref = "v2"\n')
+        self.assertEqual(self.status()["refusal_kind"], "pin-mismatch")
+
+    def record_refresh(self) -> str:
+        state = self.state()
+        with patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            inputs = self.launcher.trusted_inputs(self.root)
+        commit = "c" * 40
+        self.launcher.record_baseline(
+            state,
+            inputs,
+            source="default-branch",
+            reference={"repository": "acme/demo", "branch": "main", "commit": commit},
+            repository="Acme/Demo",
+        )
+        return commit
+
+    def test_a_refreshed_baseline_names_its_commit(self) -> None:
+        commit = self.record_refresh()
+        status = self.status()
+        self.assertEqual(status["baseline_source"], "default-branch")
+        self.assertEqual(status["baseline_commit"], commit)
+        self.assertNotIn("refusal_kind", status)
+        source = json.loads((self.state() / "trusted-source.json").read_text())
+        self.assertEqual(source["repository"], "acme/demo")
+
+    def test_the_first_run_after_a_refresh_is_told_once(self) -> None:
+        (self.root / ".ballast/spec_workflow/run.py").write_text(
+            "import os; print(os.environ.get('BALLAST_REFRESHED'))\n"
+        )
+        commit = self.record_refresh()
+        first = self.launch("run", "status", "r1")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(
+            json.loads(first.stdout),
+            {"repository": "acme/demo", "branch": "main", "commit": commit},
+        )
+        self.assertEqual(self.launch("run", "status", "r1").stdout, "None\n")
+        # `ledger` and `intake` never consume the announcement.
+        self.assertEqual(self.launch("ledger").stdout, "ledger\n")
+
+    def test_an_inherited_announcement_is_never_passed_on(self) -> None:
+        """SEC-003: a caller cannot forge the refresh line or its ledger event."""
+        (self.root / ".ballast/spec_workflow/run.py").write_text(
+            "import os; print(os.environ.get('BALLAST_REFRESHED'))\n"
+        )
+        self.record_refresh()
+        self.launch("run", "status", "r1")  # consumes the real announcement
+        forged = {"repository": "o/n", "branch": "main", "commit": "e" * 40}
+        self.env = {**self.env, "BALLAST_REFRESHED": json.dumps(forged)}
+        result = self.launch("run", "status", "r1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "None\n")
+
+    def test_run_prints_the_line_and_records_it_once(self) -> None:
+        run = _run_module()
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _git(root, "init", "-q")
+            runs = root / ".specify/workflows/runs/r1"
+            runs.mkdir(parents=True)
+            (runs / "inputs.json").write_text(
+                json.dumps({"inputs": {"feature_directory": FEATURE}})
+            )
+            data = {"repository": "acme/demo", "branch": "main", "commit": "d" * 40}
+            out = io.StringIO()
+            with (
+                patch.object(run, "ROOT", root),
+                patch.dict(os.environ, {"BALLAST_REFRESHED": json.dumps(data)}),
+                redirect_stdout(out),
+            ):
+                run._announce_refresh()  # noqa: SLF001
+                self.assertNotIn("BALLAST_REFRESHED", os.environ)
+                run._ledger_refresh("r1")  # noqa: SLF001
+                run._ledger_refresh("r1")  # noqa: SLF001
+            self.assertEqual(
+                out.getvalue(),
+                f"trust baseline refreshed from acme/demo main at {'d' * 12}\n",
+            )
+            events, problems = run.ledger.read(root, "r1")
+        self.assertEqual(problems, [])
+        self.assertEqual(
+            [(e["kind"], e["data"]) for e in events], [("trust_refresh", data)]
+        )
+
+
+class AgentStepEnvironmentTests(LauncherStateCase):
+    """#147 T023 [AC-014, AC-016, D-09]: defence in depth in a step; trust outside."""
+
+    def test_every_command_but_status_is_refused_in_a_step(self) -> None:
+        self.assertEqual(self.launch("trust").returncode, 0)
+        saved = self.env
+        self.env = {**saved, "BALLAST_AGENT_STEP": "1"}
+        try:
+            for args in (
+                ("run", "status", "r1"),
+                ("ledger", "check", "r1"),
+                ("intake",),
+                ("trust",),
+                ("discard-runs",),
+                ("discard-runs", "--help"),
+            ):
+                with self.subTest(args):
+                    result = self.launch(*args)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("BALLAST_AGENT_STEP is set", result.stderr)
+                    self.assertIn("in-progress marker is the boundary", result.stderr)
+            self.assertEqual(self.launch("status", "--json").returncode, 0)
+        finally:
+            self.env = saved
+
+    def test_trust_inside_a_step_writes_no_baseline(self) -> None:
+        saved = self.env
+        self.env = {**saved, "BALLAST_AGENT_STEP": "1"}
+        try:
+            self.assertEqual(self.launch("trust").returncode, 2)
+        finally:
+            self.env = saved
+        self.assertFalse((self.state() / "trusted.json").exists())
+
+    def test_trust_without_a_terminal_outside_a_step_still_records(self) -> None:
+        """D-09: no terminal test is added to trust; the subprocess has no TTY."""
+        result = self.launch("trust")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.state() / "trusted.json").exists())
+        source = (ROOT / "tools/spec_workflow/launcher.py").read_text()
+        trust = source.split("def _trust(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("isatty", trust)
+
+    def test_the_marker_still_refuses_trust(self) -> None:
+        (self.state() / "in-progress").write_text("x\n")
+        result = self.launch("trust")
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.state() / "trusted.json").exists())
+
+
+class DiscardRunsArgumentTests(LauncherStateCase):
+    """#147 T033 [AC-021 to AC-023]: discard-runs arguments and the trust it needs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.root / ".specify/workflows/runs/r1").mkdir(parents=True)
+        (self.root / ".specify/workflows/runs/r1/state.json").write_text("{}")
+        self.assertEqual(self.launch("trust").returncode, 0)
+        (self.state() / "in-progress").write_text("not-a-scope\n")
+
+    def everything(self) -> tuple[dict, dict]:
+        return _tree(self.root), _tree(self.state())
+
+    def test_help_prints_usage_and_changes_nothing(self) -> None:
+        before = self.everything()
+        for flag in ("--help", "-h"):
+            with self.subTest(flag):
+                result = self.launch("discard-runs", flag)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(result.stdout.startswith("usage: ballast discard-runs"))
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(self.everything(), before)
+
+    def test_unknown_arguments_are_refused(self) -> None:
+        before = self.everything()
+        for args in (("--bogus",), ("r1",), ("--help", "x")):
+            with self.subTest(args):
+                result = self.launch("discard-runs", *args)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(
+                    result.stderr,
+                    "ballast: refusing: discard-runs takes no arguments (see --help)\n",
+                )
+                self.assertEqual(self.everything(), before)
+
+    def discard(self) -> str:
+        (self.state() / "in-progress").unlink()
+        result = self.launch("discard-runs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_unchanged_inputs_need_no_trust(self) -> None:
+        out = self.discard()
+        self.assertIn(
+            "Next: protected inputs are unchanged since the trust baseline; no "
+            "`ballast trust` is needed.",
+            out,
+        )
+        self.assertIsNone(self.status()["refusal"])
+
+    def test_changed_inputs_still_name_trust(self) -> None:
+        (self.root / ".specify/scripts/x.sh").write_text("changed\n")
+        out = self.discard()
+        self.assertIn("Next: review the checkout, then run `ballast trust`.", out)
+        self.assertEqual(self.status()["refusal_kind"], "inputs-changed")
+
+    def test_a_tamper_marker_prints_the_tamper_recovery(self) -> None:
+        (self.root / "BALLAST_TAMPERED").write_text("")
+        out = self.discard()
+        self.assertIn(
+            "Next: BALLAST_TAMPERED exists: run nothing from the checkout", out
+        )
+        self.assertIn("if `ballast run status` still reports changed inputs", out)
