@@ -58,6 +58,10 @@ and checks for dirty files, unpublished commits, and live workers.
 
 ## Standalone backend
 
+For one GitHub/Codex foreground issue, use [the standalone adapter](standalone.md).
+Its stated limits describe the implemented first slice; queue/recovery operations
+below remain requirements for the later scheduler.
+
 Use Git's native worktree operations, repository-host tooling, and explicit agent
 launch configuration. Read the installed tools' help rather than assuming flags.
 Launch a fresh session with a bounded handoff and explicit working directory,
