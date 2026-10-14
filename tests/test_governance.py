@@ -832,6 +832,8 @@ class CheckEnvironmentDocumentTests(unittest.TestCase):
             ),
             "## Why this grants a check no authority",
             "`check-timeout`",
+            "0020-autonomous-stop-rule.md",
+            "#153",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, adr)

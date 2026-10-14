@@ -2,7 +2,7 @@
 
 - Status: proposed (2026-10-13, with the change for [#146](https://github.com/Hugo-Grellier/ballast/issues/146), [spec](../../specs/146-checks-pass-in-run/spec.md)). Drafted agent-provisionally in Autonomous run `a060b968`; merging the PR is the only human approval that accepts this ADR.
 - Risk: R2 (the headless-agent permission model, what Ballast executes).
-- Extends: [ADR-0018](0018-runner-recorded-acceptance-checks.md), whose acceptance checks run through the same confinement as the check commands, and [ADR-0010](0010-autonomous-resume-and-bounded-recovery.md), with a resumable limit.
+- Extends: [ADR-0018](0018-runner-recorded-acceptance-checks.md), whose acceptance checks run through the same confinement as the check commands, and [ADR-0010](0010-autonomous-resume-and-bounded-recovery.md), as amended by [ADR-0020](0020-autonomous-stop-rule.md), with a resumable limit.
 
 ## Context
 
@@ -30,6 +30,7 @@ A check loses variables and `PATH` entries and gains nothing. The run variables 
 - A check that times out with nothing for a fix step to fix stops the run after 0 fix cycles instead of 3, and the operator sees which command and which timeout to change.
 - A project whose checks relied on the guard or on the run variables (none is known) sees them gone.
 - A run that pins an earlier Ballast keeps the earlier check environment until it pins a release with this change.
+- Under ADR-0020's stop rule, every limit, `check-timeout` included, becomes a Draft-PR limit outcome once #153 ships. Until then, the resumable block described here applies, as ADR-0020's Delivery section keeps ADR-0010's limits as written.
 
 ## Rejected alternatives
 

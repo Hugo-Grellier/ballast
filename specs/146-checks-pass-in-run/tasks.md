@@ -28,7 +28,15 @@ No implementing step edits `ballast.toml`.
 
 Read-only `git status`, `git diff`, `git log` and `git show` are also allowed. A test that needs the run variables set sets them inside the test (`patch.dict` or a child process `env=`), never on the command line.
 
-**Plan review findings settled here** ([reviews/plan.md](reviews/plan.md)):
+**After the resume at `validate-plan`** (HD-0001 in the [run record](autonomous/record.md)): the branch was rebased on `main` at 617df9c. `main` now holds `docs/adr/0020-autonomous-stop-rule.md`, so this feature's ADR is 0021. Outside any step, the driving agent applied T020 and [D-001](decisions.md) in commit bd80a3e: `[checks]` now runs `uv run --locked python tests/parallel.py` with `timeout_minutes = 60`. It then ran `ballast trust`. T001 to T030 stay done. Only T031 to T033 are new, and they settle the second plan review.
+
+**Second plan review findings settled here** ([reviews/plan.md](reviews/plan.md), PD-0014):
+
+- F-001: ADR-0021 extends ADR-0010 but does not cite ADR-0020, which amends ADR-0010. T031 adds the citation and T032 tests it.
+- F-002: `spec.md` and `discovery.md` still name the ADR 0020. That is a wording clarification for spec reconciliation, a workflow-owned step. No task edits `spec.md`, so the `spec_digest` in `acceptance-evidence.json` stays valid.
+- F-003: the PR states both commands: `[checks]` runs `tests/parallel.py`, while CI and `AGENTS.md` keep `python -m unittest tests/test_*.py`. It also states the measured `run-checks` seconds for SC-002 and keeps AC-014 and SC-001 deferred to T021. The PR is workflow-owned, so this is not a task.
+
+**First plan review findings settled here** (PD-0006):
 
 - F-001: the wall-time case keeps the resumable `check-timeout` kind from the contract. Its condition says that the run's wall time ran out instead of naming a `timeout_minutes` value. T017 implements that wording and T019 tests it.
 - F-002: the timeout-only rule goes in `record_decision` right after `review_rule(...)` and `evidence` are computed. It comes before `if rule == "block":`, the `limit` block, `_check_dispositions` and the required-kinds check. It applies only when `point == "implementation-review"` and `fix_loop(feature)`. T019 asserts that the fix state and the cycle count are unchanged on both the first record and `--recheck`.
@@ -233,7 +241,8 @@ US4 comes before US3 in execution because it adds tests that US3's after-profile
 
 **Independent Test**: Compare the before and after profiles: same or more tests, lower total, under 2700 s. The run's `run-checks` passes within 60 minutes.
 
-- [ ] T020 [US3] [DEFERRED-TO-PR] The driving agent, outside any agent step, sets `[checks] timeout_minutes = 60` in `ballast.toml` and runs `ballast trust`, the authorized privileged action `operator-trust`. The PR records both. An implementing step never edits `ballast.toml`. [AC-010]
+- [X] T020 [US3] [DEFERRED-TO-PR] The driving agent, outside any agent step, sets `[checks] timeout_minutes = 60` in `ballast.toml` and runs `ballast trust`, the authorized privileged action `operator-trust`. The PR records both. An implementing step never edits `ballast.toml`. [AC-010]
+  - Done by the driving agent in commit bd80a3e, together with D-001, then `ballast trust` (HD-0001). No agent step made it.
 - [ ] T021 [US3] [DEFERRED-TO-PR] Operator verification of AC-014 and SC-001.
   - Run an Autonomous run on an unchanged `main` with this checkout's runner (`BALLAST_STANDARD_DIR` set to the checkout), or with the first release that ships this change. Its `run-checks` passes within the timeout, with 0 fix cycles, no `git-untrusted` and no attestation error.
   - The PR states that this run's own v1.0.0 `run-checks` is not evidence of FR-001 (plan review F-003, research R11). [AC-014]
@@ -252,6 +261,7 @@ US4 comes before US3 in execution because it adds tests that US3's after-profile
   - If the total is at or below 2700 s, record in `suite-profile.md` that no parallel runner is needed and that the `[checks]` and CI commands stay unchanged.
   - If it is above, add `tests/parallel.py`: a standard-library runner that runs `python -m unittest <module>` per module in a bounded process pool, prints each module's output and exits non-zero when any module fails. Add a test for it in `tests/test_parallel.py`. Record in `specs/146-checks-pass-in-run/decisions.md` that the `[checks]` command change needs the driving agent and `ballast trust`, as T020 does.
   - Run `uv run --locked python -m unittest tests/test_parallel.py` when the runner was added. [AC-012, AC-013] (depends on T023)
+  - Outcome: the total stayed above 2700 s, so `tests/parallel.py` and `tests/test_parallel.py` were added. D-001 was accepted and applied by the driving agent in bd80a3e. `.github/workflows/ci.yml` is unchanged.
 
 **Checkpoint**: US3 is complete, except for the deferred operator checks T020 and T021.
 
@@ -307,6 +317,28 @@ US4 comes before US3 in execution because it adds tests that US3's after-profile
 
 ---
 
+## Phase 9: Rebase follow-up (second plan review)
+
+**Purpose**: Settle PD-0014 F-001. ADR-0021 must name the accepted ADR-0020 amendment, so that #153 treats `check-timeout` like every other limit.
+
+- [X] T031 [US5] In `docs/adr/0021-check-command-environment.md`, cite [ADR-0020](0020-autonomous-stop-rule.md) as the record that amends ADR-0010. Make two edits:
+  - In the `Extends:` line, after the ADR-0010 link, add that ADR-0020 amends ADR-0010.
+  - In `## Consequences`, add one bullet. Under ADR-0020's stop rule, every limit, `check-timeout` included, becomes a Draft-PR limit outcome once #153 ships. Until then, the resumable block described here applies, as ADR-0020's Delivery section keeps ADR-0010's limits as written.
+
+  Do not change ADR-0020, ADR-0018 or the Decision section of ADR-0021. Do not edit `templates/policies/spec-kit-workflow.md`, because its Stop rule paragraph already covers this. (depends on T025)
+- [X] T032 [US5] In `tests/test_governance.py`, extend `CheckEnvironmentDocumentTests.test_adr_0021_records_the_boundary`:
+  - Assert that the ADR text contains `0020-autonomous-stop-rule.md` and `#153`.
+  - Keep every existing assertion, and keep the method name so the `acceptance-evidence.json` mapping for AC-020 is still valid.
+
+  Run `uv run --locked python -m unittest tests.test_governance.CheckEnvironmentDocumentTests`. [AC-020] (depends on T027, T031)
+- [X] T033 Run `uv run --locked ruff check`, then `uv run --locked ruff format --check`, and fix any finding in the changed files without disabling a rule. Then confirm that `acceptance-evidence.json` needs no change:
+  - `git diff bd80a3e -- specs/146-checks-pass-in-run/spec.md` must be empty, so the `spec_digest` still matches.
+  - Every test it names for AC-019 and AC-020 still exists.
+
+  (depends on T030, T032)
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -317,7 +349,8 @@ US4 comes before US3 in execution because it adds tests that US3's after-profile
 - **US4 (Phase 5)**: starts after T003 and T006. It shares `artifacts.py` with US1 and test files with US1.
 - **US3 (Phase 6)**: speed-ups wait for every new test (US1, US2, US4, US5), so the after-profile is complete. T020 and T021 are deferred and block nothing.
 - **US5 (Phase 7)**: after the behavior it documents (T006, T014).
-- **Polish (Phase 8)**: last.
+- **Polish (Phase 8)**: after every story.
+- **Rebase follow-up (Phase 9)**: after T025, T027 and T030. It is the only open work after the resume.
 
 ### User Story Dependencies
 
@@ -335,6 +368,8 @@ US4 comes before US3 in execution because it adds tests that US3's after-profile
 - `tests/test_autonomous_artifacts.py`: T007 → T008 → T017 → T018
 - `tests/test_agent_run_ledger.py`: T009 → T010 → T011
 - `tests/*` speed-ups: T022 after every test-writing task, including T027
+- `docs/adr/0021-check-command-environment.md`: T025 → T031
+- `tests/test_governance.py`: T027 → T032
 
 ---
 
@@ -398,6 +433,15 @@ Wave 12:
 
 Wave 13:
   T030      acceptance-evidence.json (depends on T029)
+
+Wave 14 (after the resume at validate-plan):
+  T031 [US5] ADR-0021 cites the ADR-0020 amendment (depends on T025)
+
+Wave 15:
+  T032 [US5] governance test asserts the ADR-0020 citation (depends on T027, T031)
+
+Wave 16:
+  T033      ruff and acceptance-evidence.json still valid (depends on T030, T032)
 ```
 
 Every task after T001 depends on it, directly or through T002, because T001 measures the unchanged tree.
@@ -419,6 +463,7 @@ Every task after T001 depends on it, directly or through T002, because T001 meas
 2. US3 speeds up the suite and measures it after every new test exists. The driving agent applies the 60-minute timeout (T020) outside a step before the run's `run-checks`.
 3. US5 documents the boundary in ADR-0021 and the policy template.
 4. Polish, then `acceptance-evidence.json`.
+5. After the resume, do T031 to T033 only. Every other task is done or deferred.
 
 ---
 
