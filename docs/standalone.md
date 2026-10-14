@@ -14,7 +14,7 @@ Use a POSIX host with Python 3.11+, Git, authenticated `gh` and the qualified
 Codex CLI outside CI. Windows execution is currently blocked because this worker
 requires bounded nonblocking pipe writes.
 
-Run one issue and one worker at a time. Workers run in the foreground, at most
+Without a [queue](#bounded-queue), run one issue and one worker at a time. Workers run in the foreground, at most
 900 seconds each (300 by default), with 64 KiB task/final-message limits and a
 1 MiB protocol-message limit. The coordinator permits at most three review/fix
 rounds and one issue PR. A fresh session is required for each worker. Worker
@@ -88,7 +88,8 @@ preserve `unknown` and the worker lock. The helper closes/reaps its client, but
 makes no claim that all external effects stopped. No automatic retry, stale-lock
 reclaim, detached operation or general resume is implemented in this slice.
 Report the local worker reference and blocker; inspect actual liveness/effects
-before replacement. Queue/recovery support is a separate milestone.
+before replacement. A [queue](#bounded-queue) adds pause, cancel, quota and
+recorded reconciliation; it still never reclaims a lock by age or PID.
 
 ## Check and review
 
@@ -126,3 +127,73 @@ Record the PR URL, submitted head, review worker/verdict and workflow run in the
 local claim as publication evidence; retain its preparation status separately
 from PR readiness. Keep the claim and checkout while the PR awaits merge. Do not merge, release,
 delete worktrees/repositories or schedule recurring work automatically.
+
+## Bounded queue
+
+To work several selected leaf issues, configure one finite queue in the same
+clone. Queue state shares the `ballast-v2/` directory and one short local
+`flock`; GitHub stays authoritative for dependencies, PRs, merges and CI. Every
+helper invocation in a queue needs `BALLAST_COORDINATOR` set to the queue's
+coordinator reference; workers inherit it and cannot raise a limit.
+
+```sh
+export BALLAST_COORDINATOR=COORDINATOR_REF
+python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+  create --repo OWNER/REPOSITORY --issue 12 --issue 13 \
+  --coordinator "$BALLAST_COORDINATOR" --revision INSTRUCTION_REVISION
+python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" select
+```
+
+Defaults are one active issue, two workers (review and helpers included), two
+PRs awaiting humans, three attempts per worker role and one hour; override each
+with `--issues`, `--workers`, `--backlog`, `--attempts` and `--seconds`. A queue
+cannot be recreated to reset its budget.
+
+- `select` reports eligible issues within the remaining budgets, issues waiting
+  for capacity, existing claims, and blocked issues with their reasons: native
+  `blockedBy` or `Blocked by:` prerequisites that are unmerged, cross-repository
+  or cyclic. A closed prerequisite counts only with a merged closing PR. `select`
+  still reports stacked work as blocked; stacking stays an explicit coordinator
+  exception, prepared directly, with its merge order recorded in the PRs.
+- `worktree.py` admits a claim and `worker.py` reserves a worker under the same
+  lock. Claims and worker locks from before the queue, or with unknown outcome,
+  consume capacity. A fresh turn needs a permit that rechecks controls and spends
+  one attempt; qualification failures before it spend none. A claim bound to a
+  queue fails closed if that queue's policy is missing or replaced.
+- `control paused|running|cancelled --reason TEXT` records a control. Pause
+  blocks new admissions and turns. Cancel makes live workers send
+  `turn/interrupt` and wait at most 30 seconds for terminal evidence; otherwise
+  the worker stays `unknown` with its lock. `running` after a pause also clears
+  a quota pause. A cancelled queue is not resumed by a control.
+- A structured `usageLimitExceeded`/`rateLimitExceeded` turn error settles the
+  worker as `quota` and pauses dispatch until the backend-reported window reset,
+  or until an explicit `running` control when no window was reported. Nothing
+  retries, buys capacity or skips review.
+- `publish --claim CLAIM --title TEXT --body-file FILE` requires the pushed
+  reviewed head, reuses the one matching PR on the claim branch, creates a draft
+  only when none exists, and re-queries after an uncertain response. Several,
+  foreign or stale PRs block.
+- `settle --claim CLAIM ACTIVITY --evidence TEXT` records positive coordinator
+  evidence. Allowed moves: `active` to `pr_wait`, `stopped` or `unknown`;
+  `unknown` to `stopped` or `active`; `pr_wait` to `active`, `stopped` or
+  `merged` (only when GitHub reports the PR merged); `stopped` to `active`.
+  Moving into `active` rechecks controls and the issue cap. Any recorded PR
+  consumes backlog until merged. Another coordinator takes over an active issue
+  only after a recorded `stopped`.
+- `release --claim CLAIM --worker ID --evidence TEXT` frees an `unknown` worker
+  lock after the coordinator has positive stop evidence (for example the backend
+  thread's terminal state) and marks that worker's result `released`. Nothing
+  releases a lock by age or PID. Coordinator identity and evidence are trusted
+  references, not authentication.
+- `recover --claim CLAIM --evidence TEXT` adopts an existing attempt after an
+  interrupted preparation or restart, or binds a pre-queue claim to the queue.
+  If preparation died before its checkout existed, it creates that checkout at
+  the recorded branch and base. It verifies checkout, branch and base, refuses
+  while a worker lock remains, and rechecks controls and the issue cap. It never
+  deletes or replaces a checkout.
+- `status` projects the queue, used capacity, per-issue control history and
+  workers: role, outcome, elapsed time, token totals or `unavailable`, rework and
+  review rounds; a worker directory without a result is `unrecorded`. It never
+  deletes checkouts, merges or schedules work. Phase-level waiting time and a
+  mapping to acceptance evidence are not derived yet; read them from the claim
+  history and the PR.
