@@ -1756,7 +1756,8 @@ class ConfinementTests(AutonomyCase):
             "BALLAST_GIT": "/usr/bin/git",
             "BALLAST_SPEC_WORKFLOW": "1",
             "SPECKIT_WORKFLOW_RUN_ID": "run42",
-            "PATH": os.pathsep.join((guard, "/usr/bin", "/opt/guard")),
+            # The original PATH keeps the bwrap stand-in setUp installed.
+            "PATH": os.pathsep.join((guard, os.environ["PATH"], "/opt/guard")),
             "GH_TOKEN": "t",
         }
         with (
@@ -1767,7 +1768,9 @@ class ConfinementTests(AutonomyCase):
         env = run.call_args.kwargs["env"]
         self.assertFalse(set(artifacts.CHECK_UNSET) & set(env))
         self.assertNotIn("GH_TOKEN", env)
-        self.assertEqual(env["PATH"], os.pathsep.join(("/usr/bin", "/opt/guard")))
+        self.assertEqual(
+            env["PATH"], os.pathsep.join((os.environ["PATH"], "/opt/guard"))
+        )
 
     def test_deadline_spent_during_sandbox_setup_launches_nothing(self) -> None:
         """#117 review: the time left is measured just before each launch."""
