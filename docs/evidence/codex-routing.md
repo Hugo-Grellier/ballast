@@ -4,8 +4,8 @@ Date: 2026-10-14. Installed client: Codex CLI 0.162.1. Commands executed outside
 CI, directly from an issue worktree with Python's isolated stdlib mode:
 
 ```sh
-python3 -I -S tools/v2/qualify.py --model gpt-6.1-sol --effort medium
-python3 -I -S tools/v2/qualify.py --model gpt-6-luna --effort low
+python3 -I -S tools/codex.py --model gpt-6.1-sol --effort medium
+python3 -I -S tools/codex.py --model gpt-6-luna --effort low
 ```
 
 | Requested model / effort | Observed model / effort | Receipt | Task started |
@@ -34,3 +34,10 @@ Protocol references: the installed client's generated app-server schema, especia
 [official app-server documentation](https://learn.chatgpt.com/docs/app-server).
 The generated local schema is evidence for the tested binary, not a new shipped
 protocol definition.
+
+## In-place layout recheck
+
+After the operator requested normal repository locations, both commands above
+were rerun from `tools/codex.py` on 2026-10-14. Codex 0.162.1 again reported
+requested equal to observed for both pairs, `status: qualified`, and
+`task_started: false`. The relocation introduces no model task or paid fallback.

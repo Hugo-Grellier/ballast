@@ -35,6 +35,17 @@ development, direct verification commands and independent review; do not invoke
 release approval. This scoped exception does not activate the unfinished v2
 runtime or change the workflow for unrelated v1 work.
 
+### Ballast 2.0 entry points
+
+The 2.0 instructions and code live in the normal repository layout. For Epic
+#174 and its children, follow [issue workflow](docs/issue-workflow.md),
+[pair review](docs/pair-review.md), [model routing](docs/model-routing.md), and
+[portable execution](docs/execution.md). These override the v1 workflow below for
+2.0 development. Keep one branch/worktree per leaf and the chosen stack's merge
+order. Use Conventional Commit PR titles. Human merge/release approval remains
+required. The final migration retires the v1 sections and installer templates;
+released v1 is retained in tags and history.
+
 ### Existing v1 workflow
 
 GitHub Issues track status, discussion, dependencies and implementation progress; they do not replace accepted product or feature intent. Read the issue and comments. Before `speckit.specify`, apply the [scope gate](docs/policies/spec-kit-workflow.md#scope-and-decomposition-gate): dispatch only an actionable leaf Issue, never an unresolved Epic. Use the full Spec Kit workflow for new features and meaningful behavior changes, the bugfix workflow for a small bounded fix, and the assess workflow for research or a spike. Before changing a feature, read its `intent.md`, `spec.md`, `plan.md`, `tasks.md`, review reports and unresolved `decisions.md` as applicable. The human approves intent, material plan changes and final acceptance. Tasks use explicit dependencies and execution waves, and each acceptance criterion has test or other verification evidence.
