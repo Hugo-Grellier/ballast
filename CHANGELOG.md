@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.1.0](https://github.com/Hugo-Grellier/ballast/compare/v1.0.0...v1.1.0) (2026-10-14)
+
+
+### Features
+
+* **review:** declare UI states per feature in specs/&lt;feature&gt;/ui-states.toml ([#145](https://github.com/Hugo-Grellier/ballast/issues/145)) ([09fb427](https://github.com/Hugo-Grellier/ballast/commit/09fb427a0ab30a5506a0e6d530abd9ef9aa19b20))
+* **workflow:** human gates are decisions, not command relays ([#162](https://github.com/Hugo-Grellier/ballast/issues/162)) ([68ef048](https://github.com/Hugo-Grellier/ballast/commit/68ef048256ac578c31407f24f4fef05389523db0))
+* **workflow:** let an eligible Autonomous run mark its PR ready ([#155](https://github.com/Hugo-Grellier/ballast/issues/155)) ([d215a63](https://github.com/Hugo-Grellier/ballast/commit/d215a632b3bf074ec2cb9bea1eb673a29cf8f818))
+
+
+### Bug Fixes
+
+* **run:** make the [checks] test command pass inside an Autonomous run ([#163](https://github.com/Hugo-Grellier/ballast/issues/163)) ([578a93a](https://github.com/Hugo-Grellier/ballast/commit/578a93a6638aa9f04527ebfc35d0ff402130da18))
+
+
+### Documentation
+
+* **adr:** Autonomous runs stop only for in-run authority changes ([#157](https://github.com/Hugo-Grellier/ballast/issues/157)) ([617df9c](https://github.com/Hugo-Grellier/ballast/commit/617df9c1eab920db9874e66fe4bb5e0f83df2a08))
+* **research:** measure Ballast run token cost against a sandboxed Ralph loop ([#161](https://github.com/Hugo-Grellier/ballast/issues/161)) ([0bddeb8](https://github.com/Hugo-Grellier/ballast/commit/0bddeb8ceb6b2f74b5390d2a0cfad5929ad1eca4))
+
 ## [1.0.0](https://github.com/Hugo-Grellier/ballast/compare/v0.10.0...v1.0.0) (2026-10-11)
 
 
