@@ -22,9 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
-      # Tests that need a systemd user session, the Codex sandbox or the
-      # Spec Kit CLI skip themselves here; run them locally before a release.
-      - run: uv run --locked python -m unittest tests/test_*.py
+      # The pinned Spec Kit CLI enables the CLI-dependent workflow tests.
+      - run: uv run --locked --group spec-kit python -m unittest tests/test_*.py
 
   dogfood:
     # Ballast installs its working copy into this repository like any project:

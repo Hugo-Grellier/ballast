@@ -1805,10 +1805,20 @@ class RunFormatTests(unittest.TestCase):
         self.assertTrue(manifest["setup"]["recoverable"])
 
     def test_format_changes_with_what_runs_depend_on(self) -> None:
-        version = re.search(
-            r'^VERSION = "([^"]+)"', (ROOT / "tools/setup").read_text(), re.MULTILINE
-        )
-        digest = hashlib.sha256(version.group(1).encode())
+        requirements = tomllib.loads((ROOT / "pyproject.toml").read_text())[
+            "dependency-groups"
+        ]["spec-kit"]
+        versions = [
+            match.group(1)
+            for requirement in requirements
+            if (
+                match := re.fullmatch(
+                    r"specify-cli==([0-9]+(?:\.[0-9]+)+)", requirement
+                )
+            )
+        ]
+        self.assertEqual(len(versions), 1, "pyproject.toml must have one CLI pin")
+        digest = hashlib.sha256(versions[0].encode())
         for path in sorted(
             (ROOT / "templates/spec-kit/workflows").glob("*/workflow.yml")
         ):

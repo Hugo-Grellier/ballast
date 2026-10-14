@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "spec_digest": "sha256:984eafbb1c2b8eada34ac9faec3c6ad2d03efdfc6e4273162f8a44adecd5fcf9",
+  "criteria": {
+    "AC-001": [
+      "tests.test_setup.SpecifyPinTests.test_cli_version_comes_from_standard_manifest"
+    ],
+    "AC-002": [
+      "tests.test_setup.SpecifyPinTests.test_invalid_cli_pin_refuses_before_specify"
+    ],
+    "AC-003": [],
+    "AC-004": [
+      "tests.test_setup.SpecifyPinTests.test_cli_pin_comes_from_standard_root"
+    ],
+    "AC-005": [
+      "tests.test_setup.SpecifyPinTests.test_cli_pin_change_changes_fingerprint"
+    ],
+    "AC-006": [
+      "tests.test_setup.SpecifyPinTests.test_duplicate_cli_pins_refuse"
+    ],
+    "AC-007": []
+  }
+}

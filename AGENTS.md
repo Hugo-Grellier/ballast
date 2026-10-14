@@ -12,8 +12,8 @@ Accepted ADRs and the accepted architecture govern design. A ready feature spec 
 
 ## Commands
 
-- Install: `uv sync --locked` (before `ballast trust`, so a run's checks never create `.venv`). The shipped tools are stdlib-only; only the gate's `ruff` and `pyyaml` are pinned in `uv.lock`.
-- Fast gate: `uv run --locked ruff check && uv run --locked ruff format --check` and `uv run --locked python tests/parallel.py tests/test_*.py` (the same classes as `python -m unittest tests/test_*.py`, one process per class, in parallel). Full local gate: the same suite on a Linux machine with a systemd user session, the Codex CLI and the Spec Kit CLI, so the tests CI skips (real systemd, `bwrap`, Codex sandbox, Spec Kit CLI) also run.
+- Install: `uv sync --locked --group spec-kit` (before `ballast trust`, so a run's checks never create or change `.venv`). The shipped tools are stdlib-only; the gate's `ruff`, `pyyaml`, and Spec Kit CLI are pinned in `pyproject.toml` and `uv.lock`.
+- Fast gate: `uv run --locked ruff check && uv run --locked ruff format --check` and `uv run --locked --group spec-kit python tests/parallel.py tests/test_*.py` (the same classes as `python -m unittest tests/test_*.py`, one process per class, in parallel). Full local gate: the same suite on a Linux machine with a systemd user session and the Codex CLI, so the tests CI skips (real systemd, `bwrap`, Codex sandbox) also run.
 - Record exact verification commands and any unavailable gate in the PR. See the [testing policy](docs/policies/testing.md) for evidence requirements.
 
 ## Invariants

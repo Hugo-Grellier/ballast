@@ -2,6 +2,13 @@
 
 Arguments are unchanged: `tools/setup [--project DIR] [--check]`.
 
+Before setup writes or downloads anything, it reads the exact stable
+`specify-cli` version from the standard checkout's
+`pyproject.toml#dependency-groups.spec-kit`. Missing, duplicated, malformed, or
+non-exact pins refuse with an error naming the manifest. Setup uses this value
+for the `uvx` invocation, freshness fingerprint, and installation record;
+`--check` validates and fingerprints the same pin without writing.
+
 ## Order of operations
 
 1. Resolve `state_dir(root)`; refuse (exit 2) when it is unavailable or agent-writable.

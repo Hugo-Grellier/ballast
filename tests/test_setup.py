@@ -194,6 +194,165 @@ class CheckTests(unittest.TestCase):
             setup.Setup(self.root).install_spec_kit(self.root)
 
 
+class SpecifyPinTests(unittest.TestCase):
+    """Setup reads its exact specify-cli pin from the standard manifest."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.base = Path(self.directory.name)
+        self.standard = self.base / "standard"
+        self.standard.mkdir()
+        (self.standard / "tools").mkdir()
+        (self.standard / "templates").mkdir()
+        self.project = self.base / "project"
+        self.project.mkdir()
+
+    def manifest(self, entries: str = '"specify-cli==1.0.11"') -> None:
+        (self.standard / "pyproject.toml").write_text(
+            f"[dependency-groups]\nspec-kit = [{entries}]\n"
+        )
+
+    def test_cli_version_comes_from_standard_manifest(self) -> None:
+        self.manifest('"specify-cli==2.4.1"')
+        calls: list[tuple[str, ...]] = []
+        with patch.object(setup, "STANDARD", self.standard):
+            tool = setup.Setup(self.project)
+            with patch.object(
+                tool, "run", side_effect=lambda *args, **_: calls.append(args)
+            ):
+                tool.specify("init")
+        self.assertEqual(
+            calls,
+            [("uvx", "--from", "specify-cli==2.4.1", "specify", "init")],
+        )
+
+    def test_cli_pin_comes_from_standard_root(self) -> None:
+        self.manifest('"specify-cli==2.4.1"')
+        (self.project / "pyproject.toml").write_text(
+            '[dependency-groups]\nspec-kit = ["specify-cli==99.0.0"]\n'
+        )
+        with patch.object(setup, "STANDARD", self.standard):
+            tool = setup.Setup(self.project)
+        self.assertEqual(tool.specify_version, "2.4.1")
+
+    def test_cli_pin_change_changes_fingerprint(self) -> None:
+        self.manifest('"specify-cli==2.4.1"')
+        with patch.object(setup, "STANDARD", self.standard):
+            before = setup.Setup(self.project).fingerprint()
+            stamp = self.project / setup.launcher.STAMP
+            stamp.parent.mkdir(parents=True)
+            stamp.write_text(before + "\n")
+            self.manifest('"specify-cli==2.4.2"')
+            after = setup.Setup(self.project).fingerprint()
+            output = io.StringIO()
+            with redirect_stdout(output):
+                current = setup.Setup(self.project).check()
+        self.assertFalse(current)
+        self.assertEqual(output.getvalue().strip(), "stale")
+        self.assertNotEqual(before, after)
+
+    def test_stage_setup_reuses_the_validated_pin_snapshot(self) -> None:
+        self.manifest('"specify-cli==2.4.1"')
+        with patch.object(setup, "STANDARD", self.standard):
+            parent = setup.Setup(self.project)
+            self.manifest('"specify-cli>=2.4"')
+            stage = setup.Setup(
+                self.base / "stage", _specify_version=parent.specify_version
+            )
+        self.assertEqual(stage.specify_version, "2.4.1")
+
+    def test_invalid_cli_pin_refuses_before_specify(self) -> None:
+        invalid_manifests = (
+            (
+                "[project]\nname = 'sample'\n",
+                "[dependency-groups].spec-kit group is missing",
+            ),
+            ("[dependency-groups]\nspec-kit = []\n", "specify-cli entry is missing"),
+            (
+                "[dependency-groups]\nspec-kit = [123]\n",
+                "entries must be strings",
+            ),
+            (
+                '[dependency-groups]\nspec-kit = ["specify-cli>=1.0"]\n',
+                "must be one exact stable version",
+            ),
+            (
+                '[dependency-groups]\nspec-kit = ["specify-cli~=1.0"]\n',
+                "must be one exact stable version",
+            ),
+            (
+                '[dependency-groups]\nspec-kit = ["specify-cli"]\n',
+                "must be one exact stable version",
+            ),
+            (
+                '[dependency-groups]\nspec-kit = ["specify-cli==1.0.*"]\n',
+                "must be one exact stable version",
+            ),
+            (
+                '[dependency-groups]\nspec-kit = ["specify-cli==1.0.11rc1"]\n',
+                "must be one exact stable version",
+            ),
+            (
+                (
+                    "[dependency-groups]\n"
+                    "spec-kit = [\"specify-cli==1.0; python_version > '3.11'\"]\n"
+                ),
+                "must be one exact stable version",
+            ),
+            ("[dependency-groups\nspec-kit = []\n", "cannot parse"),
+        )
+        for contents, reason in invalid_manifests:
+            with self.subTest(reason=reason):
+                (self.standard / "pyproject.toml").write_text(contents)
+                for mode in ([], ["--check"]):
+                    errors = io.StringIO()
+                    with (
+                        patch.object(setup, "STANDARD", self.standard),
+                        patch.object(
+                            setup.Setup,
+                            "run",
+                            side_effect=AssertionError("Spec Kit command must not run"),
+                        ),
+                        redirect_stderr(errors),
+                    ):
+                        result = setup.cli(["--project", str(self.project), *mode])
+                    self.assertEqual(result, setup.EXIT_REFUSED)
+                    self.assertIn("pyproject.toml", errors.getvalue())
+                    self.assertIn(reason, errors.getvalue())
+                self.assertFalse((self.project / ".ballast").exists())
+        (self.standard / "pyproject.toml").unlink()
+        errors = io.StringIO()
+        with (
+            patch.object(setup, "STANDARD", self.standard),
+            redirect_stderr(errors),
+        ):
+            result = setup.cli(["--project", str(self.project)])
+        self.assertEqual(result, setup.EXIT_REFUSED)
+        self.assertIn("pyproject.toml cannot be read", errors.getvalue())
+        self.assertFalse((self.project / ".ballast").exists())
+
+    def test_duplicate_cli_pins_refuse(self) -> None:
+        self.manifest('"specify-cli==1.0.11", "specify-cli==1.0.12"')
+        for mode in ([], ["--check"]):
+            with self.subTest(mode=mode):
+                errors = io.StringIO()
+                with (
+                    patch.object(setup, "STANDARD", self.standard),
+                    patch.object(
+                        setup.Setup,
+                        "run",
+                        side_effect=AssertionError("Spec Kit command must not run"),
+                    ),
+                    redirect_stderr(errors),
+                ):
+                    result = setup.cli(["--project", str(self.project), *mode])
+                self.assertEqual(result, setup.EXIT_REFUSED)
+                self.assertIn("pyproject.toml", errors.getvalue())
+                self.assertIn("more than once", errors.getvalue())
+        self.assertFalse((self.project / ".ballast").exists())
+
+
 class AutonomousInstallTests(unittest.TestCase):
     """T032, T041: setup installs the Autonomous workflows and extension."""
 
@@ -548,7 +707,7 @@ print("held", flush=True)
 time.sleep(120)
 """
 LAUNCHER = ROOT / "tools/spec_workflow/launcher.py"
-SUCCESS = f"Spec Kit {setup.VERSION} and the standard are set up."
+SUCCESS = f"Spec Kit {setup.specify_version()} and the standard are set up."
 
 
 def git(root: Path, *args: str) -> str:
