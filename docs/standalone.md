@@ -34,10 +34,12 @@ operator's existing authority; these helpers authorize no sandbox escalation.
    and active work. Ask consequential questions and plan only as needed. Existing
    linked work must be reconciled before creating another attempt.
 2. Select the integration branch explicitly. Fetch it with native Git, then use
-   the operator-selected helper source (`BALLAST_V2_SOURCE` below):
+   the operator-selected helper source. From that Ballast source checkout, set
+   its root; `PROJECT_CHECKOUT` names the already selected target repository:
 
    ```sh
-   python3 -I -S "$BALLAST_V2_SOURCE/tools/worktree.py" \
+   BALLAST_SOURCE="$(git rev-parse --show-toplevel)"
+   python3 -I -S "$BALLAST_SOURCE/tools/worktree.py" \
      --repo OWNER/REPOSITORY --issue NUMBER --base main --cwd "$PROJECT_CHECKOUT"
    ```
 
@@ -59,7 +61,7 @@ bounded local task file with issue, phase, acceptance criteria, relevant decisio
 scope, allowed checks and completion evidence. Keep publication with the coordinator.
 
 ```sh
-python3 -I -S "$BALLAST_V2_SOURCE/tools/worker.py" \
+python3 -I -S "$BALLAST_SOURCE/tools/worker.py" \
   --claim "$ISSUE_CLAIM" --task "$TASK_FILE" \
   --model CONCRETE_MODEL --effort SUPPORTED_EFFORT \
   --role implement --timeout 300
