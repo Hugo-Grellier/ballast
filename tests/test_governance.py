@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONSTITUTION = ROOT / ".specify/memory/constitution.md"
 AMENDMENT = ROOT / "specs/27-autonomous-core/constitution-amendment.md"
-VERSION = "**Version**: 1.2.0"
+VERSION = "**Version**: 1.3.0"
 
 
 class GovernanceTests(unittest.TestCase):
@@ -30,8 +30,15 @@ class GovernanceTests(unittest.TestCase):
     def test_constitution_allows_setup_recorded_baselines(self) -> None:
         # #55, ADR-0015: BL-INV-002 also accepts a baseline setup recorded.
         text = CONSTITUTION.read_text(encoding="utf-8")
-        self.assertIn("or until the operator's `ballast setup` or worktree", text)
+        self.assertIn(
+            "the operator's `ballast setup` or worktree preparation under the "
+            "conditions of ADR-0015",
+            text,
+        )
         self.assertIn("**1.2.0** (2026-10-06, #55)", text)
+        # #147, ADR-0020: and a refresh from the reviewed default branch.
+        self.assertIn("refreshing an existing baseline under the conditions", text)
+        self.assertIn("**1.3.0** (2026-10-13, #147)", text)
 
     def test_policies_have_the_autonomous_section(self) -> None:
         workflow = (ROOT / "templates/policies/workflow.md").read_text()
