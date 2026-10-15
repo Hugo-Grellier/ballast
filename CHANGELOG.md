@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.0.0](https://github.com/Hugo-Grellier/ballast/compare/v1.1.0...v2.0.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* Ballast 2.0 has no installer, trusted launcher or ballast run. Projects pinned to v1.x keep working; see docs/migration.md.
+
+### Features
+
+* migrate to Ballast 2.0 and retire the v1 standard ([#187](https://github.com/Hugo-Grellier/ballast/issues/187)) ([b3263c0](https://github.com/Hugo-Grellier/ballast/commit/b3263c0b3a805ce19dee83ca6a127bda3651b4cb))
+* **v2:** add bounded queue ownership and recoverable execution ([#184](https://github.com/Hugo-Grellier/ballast/issues/184)) ([af4e739](https://github.com/Hugo-Grellier/ballast/commit/af4e739271123ef1425b3b8e2150f7d3698632bd))
+* **v2:** establish portable workflow foundation and routing qualification ([#176](https://github.com/Hugo-Grellier/ballast/issues/176)) ([b2a77da](https://github.com/Hugo-Grellier/ballast/commit/b2a77dafe74570581f10aae507376e6e60a90f35))
+* **v2:** execute standalone issues with verified worker routing ([#181](https://github.com/Hugo-Grellier/ballast/issues/181)) ([db3c97e](https://github.com/Hugo-Grellier/ballast/commit/db3c97e33b3b1a705febca2a0a48646ee9325f70))
+
+
+### Documentation
+
+* drop the Orca adapter from 2.0 and record release evidence ([#190](https://github.com/Hugo-Grellier/ballast/issues/190)) ([413d7fc](https://github.com/Hugo-Grellier/ballast/commit/413d7fca9e43ee01a91ea0da4392da9c80a544fc))
+
 ## [1.1.0](https://github.com/Hugo-Grellier/ballast/compare/v1.0.0...v1.1.0) (2026-10-14)
 
 
