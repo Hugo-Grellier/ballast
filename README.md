@@ -6,9 +6,9 @@ consequential questions, starts workers with an explicit model and effort in a
 separate worktree, runs the checks, gets an independent review and publishes the
 PR. You write the issue and decide the merge.
 
-Ballast 2.0 is a set of workflow instructions, a few standard-library helpers and
+Ballast is a set of workflow instructions, a few standard-library helpers and
 copy-once project templates. It installs nothing, runs no daemon and puts no agent
-in CI. Projects on Ballast 1.x keep working at their `v1.x` pin; see
+in CI. Projects still on a `v1.x` pin keep working; see
 [migrating from 1.x](docs/migration.md).
 
 ## Workflow
@@ -40,7 +40,7 @@ limits.
 ## Adopting Ballast in a project
 
 Review and copy what you want from [`templates/`](templates/), then follow
-[adopting 2.0](docs/migration.md#adopting-20):
+[adopting Ballast](docs/migration.md#adopting-20):
 
 - [`AGENTS.md`](templates/AGENTS.md): a short agent entry point to fill in;
 - [`policies/`](templates/policies/): engineering, security, testing, dependency,
@@ -54,8 +54,8 @@ Review and copy what you want from [`templates/`](templates/), then follow
 ## Decisions and history
 
 [ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and
-[ADR-0024](docs/adr/0024-ballast-2-migration.md) define 2.0 and the v1 guarantees it
-removes. Earlier ADRs, [`specs/`](specs/) and the `v1.x` tags are the 1.x record; the
+[ADR-0024](docs/adr/0024-ballast-2-migration.md) define the current design and the 1.x guarantees it
+removed. Earlier ADRs, [`specs/`](specs/) and the `v1.x` tags are the 1.x record; the
 [v1.1.0 README](https://github.com/Hugo-Grellier/ballast/blob/v1.1.0/README.md)
 documents 1.x usage.
 
