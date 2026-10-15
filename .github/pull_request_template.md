@@ -2,16 +2,11 @@
 
 ## Related issue
 
-Link the feature/leaf issue and state whether this PR closes it. Link its parent Epic or planned Milestone when relevant.
+Link the leaf issue and state whether this PR closes it. Link its parent Epic or planned Milestone when relevant.
 
-## Spec
+## Acceptance evidence
 
-For the 2.0 stack, link issue acceptance and the reviewed plan instead of Spec
-Kit artifacts. Map each acceptance criterion to check/review evidence.
-
-Path or “issue only”:
-
-For a feature, link `intent.md`, `spec.md`, `plan.md`, `tasks.md`, any `decisions.md`, and material reports in `reviews/`.
+Map each acceptance criterion of the issue to its check, test or review evidence. Link the plan when one was written.
 
 ## Risk
 
@@ -23,22 +18,15 @@ For a feature, link `intent.md`, `spec.md`, `plan.md`, `tasks.md`, any `decision
 
 ## Verification performed
 
-Commands and results; note any gate not run and why.
+Commands and results at the submitted head; note any gate not run and why.
 
-## Required specialist reviews
+## Independent review
 
-List triggered reviews and findings/fixes, or “none” with reason.
-For a feature, record the independent model review, reconciliation verdict, and human intent/plan/final acceptance links or references.
+Reviewer (provider + model, effort), reviewed head, verdict, rounds, and findings fixed or remaining. List triggered specialist reviews, or “none” with reason.
 
-## Agent routing
+## Execution evidence
 
-For significant features during the routing pilot, record:
-
-- Author/implementer: provider + model, routing profile, effort
-- Independent reviewer: provider + model, routing profile, effort
-- Escalation: none, or what evidence triggered it
-
-Do not include subscription quota/account details.
+Link the issue's phase/attempt history and instruction revision. State requested versus observed worker routes, known waits and remaining gaps. Keep local destinations, raw worker output and account details private.
 
 ## Migration impact
 
@@ -47,10 +35,3 @@ Do not include subscription quota/account details.
 ## Known limitations / follow-up
 
 Follow the project's PR title convention. Add screenshots for visible UI changes.
-
-## 2.0 execution evidence
-
-Link the issue's phase/attempt history and instruction revision. State the
-reviewed head/verdict, check revisions, requested versus observed worker routes,
-known waits, review rounds and remaining gaps. Keep local destinations, raw
-worker output and account details private.

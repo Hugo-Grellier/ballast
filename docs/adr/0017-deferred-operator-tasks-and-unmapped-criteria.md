@@ -1,6 +1,7 @@
 # ADR-0017: Operator-only tasks are deferred to the PR by the recorder, and a criterion may map to no test
 
 - Status: accepted (2026-10-08, by the operator's merge of its PR for the 1.0 release). Previously: proposed (2026-10-07, with the fix for [#112](https://github.com/Hugo-Grellier/ballast/issues/112)). Resolved by the driving agent under the operator's standing authority for v1.0 issues (2026-10-05), listed for merge review; merging the PR is the human approval that accepts it.
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Amends: feature 21's D-07 (the implementation check stays unchanged) and the manifest rule of [ADR-0006](0006-review-packet-reads.md)'s packet and `ledger-schema.md` (every AC maps to at least one test).
 
 ## Context

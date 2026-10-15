@@ -1,6 +1,7 @@
 # ADR-0021: Agent sessions run mechanical commands and relay decisions within the run's autonomy
 
 - Status: proposed (2026-10-13, with the change for [#147](https://github.com/Hugo-Grellier/ballast/issues/147)). Agent-provisional in Autonomous run `2e651132`; merging the PR is the human approval that accepts it.
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Risk: R2 (the launcher's trust model, headless-agent permissions, what `ballast` executes, the paths setup installs).
 - Feature: [147-human-gates-are-decisions](../../specs/147-human-gates-are-decisions/spec.md); research [R1 to R14](../../specs/147-human-gates-are-decisions/research.md); contracts [cli.md](../../specs/147-human-gates-are-decisions/contracts/cli.md) and [trust-refresh.md](../../specs/147-human-gates-are-decisions/contracts/trust-refresh.md); operator decisions D-02 (HD-0002), D-08 (HD-0003) and D-09 (HD-0004) on Issue #147.
 - Supersedes in part: [ADR-0004](0004-autonomous-provisional-decisions.md) (the rejected alternative "piping approvals"), [ADR-0009](0009-chat-mode-operator-driven-steps.md) (D-1, the operator's list of actions, and D-4, approvals only from a terminal).

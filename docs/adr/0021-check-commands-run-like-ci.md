@@ -1,6 +1,7 @@
 # ADR-0021: `[checks]` commands run like CI, and a check timeout alone stops the fix loop
 
 - Status: proposed (2026-10-13, with the change for [#146](https://github.com/Hugo-Grellier/ballast/issues/146)). The operator chose the check environment, the timeout and the timeout block in the Issue's intake (2026-10-13); merging the PR is the human approval that accepts it.
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Risk: R2 (the runner's check environment, the headless-agent permission model).
 - Amends: the agent git guard's scope (#34) and the fix loop of [ADR-0004](0004-autonomous-provisional-decisions.md) (#21).
 

@@ -8,8 +8,8 @@ work through an execution backend outside CI. Routine dispatch needs no manual
 terminal commands from the human; ask only for missing decisions or permissions.
 
 Standalone execution is a required path: Git, repository-host tooling, and
-installed agent CLIs or native delegation tools. Orca is optional. With Orca,
-use [the Orca adapter](orca-execution.md) for backend-specific operations. Choose
+installed agent CLIs or native delegation tools. Orca is optional, and its
+[adapter](orca-execution.md) is not available yet. Choose
 the backend explicitly at entry and retain ownership through completion. An
 interrupted Orca attempt cannot silently become a standalone duplicate.
 
