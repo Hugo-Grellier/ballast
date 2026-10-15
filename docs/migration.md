@@ -81,8 +81,8 @@ Templates are copy-once: Ballast never overwrites your copies, so they drift unl
 compare them. Between your adopted tag `vA` and the new tag `vB`:
 
 - From the Ballast checkout, run `git diff vA..vB -- templates/`. Without a checkout, use
-  the [compare view](https://github.com/Hugo-Grellier/ballast/compare/vA...vB) (replace
-  `vA` and `vB`).
+  the compare view `https://github.com/Hugo-Grellier/ballast/compare/vA...vB` with
+  your tags, and look only at the files under `templates/`.
 - Re-apply the changes that matter to your project and keep your project-specific edits.
   Skip a change when you removed or rewrote that rule on purpose.
 - Template links assume the layout in [Adopting 2.0](#adopting-20): policies in
