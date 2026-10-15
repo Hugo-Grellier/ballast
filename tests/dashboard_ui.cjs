@@ -18,9 +18,20 @@ assert.equal(text(doc, "p", "<script>hostile</script>").textContent, "<script>ho
 assert.equal(element.innerHTML, undefined);
 text(doc, "p", null); assert.equal(element.textContent, "unknown");
 assert.equal(relative("2026-01-01T00:00:00Z", Date.parse("2026-01-01T00:02:30Z")), "2 min ago");
+assert.equal(relative("2026-01-01T01:00:00Z", Date.parse("2026-01-01T00:00:00Z")), "in 1 h");
 assert.equal(relative(null), "unknown");
 assert.deepEqual(absent([{kind: "question"}]), ["phase", "plan", "decision", "check", "review", "readiness"]);
 assert.equal(attention({issue: 1, evidence: [{kind: "question", state: "pending"}]}, {reasons: {"1": ["blocked"]}}).records.length, 1);
+const progress = [
+  {kind: "question", state: "pending", reference: "question-1"},
+  {kind: "phase", state: "blocked"},
+  {kind: "question", state: "answered", reference: "question-1"},
+  {kind: "phase", state: "completed"},
+  {kind: "review", state: "blocked"},
+  {kind: "review", state: "accepted"},
+  {kind: "question", state: "pending", reference: "question-2"},
+];
+assert.deepEqual(attention({issue: 1, evidence: progress}, {reasons: {}}).records, [progress[6]]);
 assert.equal(safeLink("https://github.com/example/fixture/issues/1", "example/fixture"), true);
 assert.equal(safeLink("https://github.com/other/repo/issues/1", "example/fixture"), false);
 
@@ -28,8 +39,10 @@ class Element {
   constructor(tag) {this.tag = tag; this.children = []; this.dataset = {}; this.listeners = {}; this.attributes = {}; this.disabled = false; this._text = "";}
   get textContent() {return this._text + this.children.map(c => c.textContent).join("");}
   set textContent(value) {this._text = String(value); this.children = [];}
-  append(...items) {for (const item of items) {item.parent = this; this.children.push(item);}}
-  remove() {this.parent.children.splice(this.parent.children.indexOf(this), 1);}
+  append(...items) {for (const item of items) {if (item.parent) item.remove(); item.parent = this; this.children.push(item);}}
+  insertBefore(item, next) {if (item.parent) item.remove(); item.parent = this; this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, item);}
+  remove() {this.parent.children.splice(this.parent.children.indexOf(this), 1); this.focused = false; for (const child of this.children) child.focused = false;}
+  focus() {this.focused = true;}
   addEventListener(name, fn) {this.listeners[name] = fn;}
   setAttribute(name, value) {this.attributes[name] = value;}
   removeAttribute(name) {delete this.attributes[name];}
@@ -41,7 +54,8 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   const document = {createElement: tag => new Element(tag), getElementById: id => {if (!ids.has(id)) ids.set(id, new Element(id)); return ids.get(id);}};
   const worker = {worker: "abc", role: "implement", status: "completed", requested: {model: "requested"}, observed: {model: "verified"}, timing: {setup: .123456, running: 12.3456}, tokens: {totalTokens: 25, inputTokens: 10}, milestones: []};
   const question = {kind: "question", state: "pending", summary: "<img onerror=attack>", source: "coordinator-recorded", freshness: "unknown", at: "2026-01-01T00:00:00Z", reference: "https://github.com/example/fixture/issues/1"};
-  let observed = {repository: "example/fixture", queue: "0123456789abcdef0123456789abcdef", mode: "running", at: new Date().toISOString(), limits: {issues: 2, workers: 3, backlog: 4, attempts: 5, seconds: 3600}, clone_wide_used: {issues: 1, workers: 2, backlog: 0}, quota: {state: "paused", retry_at: 1}, dependencies: {status: "observed", at: "2026-01-01T00:00:00Z", issues: {"1": "blocked"}, reasons: {"1": ["prerequisite #2 has no merged change"]}}, controls: [], issues: [{issue: 1, activity: "active", readiness: "unknown", workers: [worker], timing: {elapsed: 1.2345, phases: {implement: .9876}}, evidence: [question]}]};
+  const futureRetry = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+  let observed = {repository: "example/fixture", queue: "0123456789abcdef0123456789abcdef", mode: "running", at: new Date().toISOString(), limits: {issues: 2, workers: 3, backlog: 4, attempts: 5, seconds: 3600}, clone_wide_used: {issues: 1, workers: 2, backlog: 0}, quota: {state: "paused", retry_at: futureRetry}, dependencies: {status: "observed", at: "2026-01-01T00:00:00Z", issues: {"1": "blocked"}, reasons: {"1": ["prerequisite #2 has no merged change"]}}, controls: [], issues: [{issue: 1, activity: "active", readiness: "unknown", workers: [worker], timing: {elapsed: 1.2345, phases: {implement: .9876}}, evidence: [question]}]};
   const calls = [], timers = [];
   let disconnected = false, loseMutationResponse = false;
   const context = {document, location: {hash: "#cap"}, history: {replaceState() {}}, sessionStorage: {getItem() {return null;}, setItem() {}}, URL, AbortSignal, confirm: () => true, setTimeout: fn => timers.push(fn), setInterval: () => {}, fetch: async (path, options) => {
@@ -57,9 +71,12 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   assert.equal(ids.get("queue-id").textContent, observed.queue);
   assert.match(ids.get("capacity").textContent, /Issues: 1 \/ 2/);
   assert.match(ids.get("capacity").textContent, /Retry at: /);
-  assert.equal(find(find(ids.get("capacity"), "retry"), "when").title, "1970-01-01T00:00:01.000Z");
+  assert.equal(find(find(ids.get("capacity"), "retry"), "when").title, futureRetry);
+  assert.equal(find(find(ids.get("capacity"), "retry"), "when").dateTime, futureRetry);
+  assert.match(find(find(ids.get("capacity"), "retry"), "when").textContent, /in 2 h/);
   assert.match(ids.get("detail").textContent, /Not recorded: phase, plan, decision, check, review, readiness \(unknown\)/);
   assert.equal(ids.get("detail").textContent.match(/Not recorded:/g).length, 1);
+  assert.match(ids.get("detail").textContent, /Phase timing not recorded: Review, Worker setup, Human review wait, Coordinator/);
   assert.match(ids.get("attention").textContent, /<img onerror=attack>/);
   assert.match(ids.get("attention").textContent, /prerequisite #2/);
   assert.equal(find(find(ids.get("attention"), "e-0"), "ref").href, question.reference);
@@ -85,6 +102,37 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   assert.equal(find(find(ids.get("detail"), "evidence-0"), "time"), evidenceTime);
   assert.equal(workerButton.attributes["aria-pressed"], "true");
   assert.match(row.textContent, /draft/);
+  observed = {...observed, issues: [{...observed.issues[0], evidence: []}]};
+  await timers.shift()();
+  const firstEvidence = question;
+  observed = {...observed, dependencies: {...observed.dependencies, reasons: {}}, issues: [{...observed.issues[0], evidence: [firstEvidence]}]};
+  await timers.shift()();
+  const detail = ids.get("detail"), firstBox = find(detail, "evidence-0");
+  assert.ok(detail.children.indexOf(find(detail, "evidence-heading")) < detail.children.indexOf(find(detail, "absent")));
+  assert.ok(detail.children.indexOf(firstBox) < detail.children.indexOf(find(detail, "timing")));
+  const firstLink = find(firstBox, "ref");
+  firstLink.focus();
+  const answer = {...question, state: "answered"};
+  observed = {...observed, issues: [{...observed.issues[0], evidence: [firstEvidence, answer]}]};
+  await timers.shift()();
+  assert.equal(find(detail, "evidence-0"), firstBox);
+  assert.equal(find(firstBox, "ref"), firstLink);
+  assert.equal(firstLink.focused, true);
+  assert.ok(detail.children.indexOf(find(detail, "evidence-1")) < detail.children.indexOf(find(detail, "timing")));
+  assert.doesNotMatch(row.textContent, /Needs you/);
+  const secondEvidence = {kind: "phase", state: "blocked", summary: "Waiting", source: "coordinator-recorded", at: question.at};
+  observed = {...observed, issues: [{...observed.issues[0], evidence: [firstEvidence, answer, secondEvidence]}]};
+  await timers.shift()();
+  assert.equal(find(detail, "evidence-0"), firstBox);
+  assert.ok(detail.children.indexOf(find(detail, "evidence-2")) < detail.children.indexOf(find(detail, "timing")));
+  assert.match(row.textContent, /Needs you/);
+  observed = {...observed, issues: [{...observed.issues[0], evidence: [firstEvidence, answer, secondEvidence, {...secondEvidence, state: "completed"}]}]};
+  await timers.shift()();
+  assert.doesNotMatch(row.textContent, /Needs you/);
+  assert.match(find(detail, "evidence-0").textContent, /question: pending/);
+  assert.match(find(detail, "evidence-1").textContent, /question: answered/);
+  assert.match(find(detail, "evidence-2").textContent, /phase: blocked/);
+  assert.match(find(detail, "evidence-3").textContent, /phase: completed/);
   loseMutationResponse = true;
   await ids.get("pause").listeners.click();
   assert.match(ids.get("connection").textContent, /outcome unknown/);

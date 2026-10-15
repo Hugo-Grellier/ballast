@@ -22,12 +22,26 @@
   function relative(value, now = Date.now()) {
     const ms = typeof value === "number" ? value * 1000 : Date.parse(value);
     if (!Number.isFinite(ms)) return "unknown";
-    const diff = Math.max(0, Math.floor((now - ms) / 1000));
+    if (ms > now) {
+      const diff = Math.ceil((ms - now) / 1000);
+      return diff < 3600 ? `in ${Math.ceil(diff / 60)} min` : diff < 86400 ? `in ${Math.ceil(diff / 3600)} h` : `in ${Math.ceil(diff / 86400)} d`;
+    }
+    const diff = Math.floor((now - ms) / 1000);
     return diff < 60 ? "just now" : diff < 3600 ? `${Math.floor(diff / 60)} min ago` : diff < 86400 ? `${Math.floor(diff / 3600)} h ago` : `${Math.floor(diff / 86400)} d ago`;
   }
   function absent(evidence) {return kinds.filter(kind => !evidence.some(e => e.kind === kind));}
   function attention(issue, dependencies) {
-    return {records: (issue.evidence ?? []).filter(e => (e.kind === "question" && e.state === "pending") || (e.state === "blocked" && ["phase", "plan", "review", "readiness"].includes(e.kind))), reasons: dependencies.reasons?.[String(issue.issue)] ?? []};
+    const records = [], answered = new Set(), latest = new Set();
+    for (const e of [...(issue.evidence ?? [])].reverse()) {
+      if (e.kind === "question") {
+        if (e.state === "pending" && (!e.reference || !answered.has(e.reference))) records.push(e);
+        if (e.state === "answered" && e.reference) answered.add(e.reference);
+      } else if (["phase", "plan", "review", "readiness"].includes(e.kind)) {
+        if (!latest.has(e.kind) && e.state === "blocked") records.push(e);
+        latest.add(e.kind);
+      }
+    }
+    return {records: records.reverse(), reasons: dependencies.reasons?.[String(issue.issue)] ?? []};
   }
   function safeLink(value, repo) {
     try {const u = new URL(value); return u.origin === "https://github.com" && u.pathname.startsWith(`/${repo}/`) && !u.username && !u.password;} catch {return false;}
@@ -44,7 +58,13 @@
     el.className = className;
     return el;
   }
-  function trim(parent, keys) {for (const child of Array.from(parent.children)) if (!keys.includes(child.dataset.key)) child.remove();}
+  function trim(parent, keys) {
+    for (const child of Array.from(parent.children)) if (!keys.includes(child.dataset.key)) child.remove();
+    keys.forEach((key, index) => {
+      const child = Array.from(parent.children).find(el => el.dataset.key === key);
+      if (parent.children[index] !== child) parent.insertBefore(child, parent.children[index] ?? null);
+    });
+  }
   function time(parent, key, value) {
     const el = put(parent, key, "time", relative(value));
     const ms = typeof value === "number" ? value * 1000 : Date.parse(value);
@@ -133,8 +153,11 @@
     const missing = absent(evidence);
     if (missing.length) {put(parent, "absent", "p", `Not recorded: ${missing.join(", ")} (unknown)`, "muted"); keys.push("absent");}
     const timing = issue.timing ?? {}, phases = timing.phases ?? {};
-    const recorded = Object.entries({implement: "Implementation", review: "Review", worker_setup: "Worker setup", human_review_wait: "Human review wait", coordinator: "Coordinator"}).filter(([key]) => phases[key] != null);
-    put(parent, "timing", "p", `Elapsed: ${seconds(timing.elapsed)}${recorded.length ? ` · ${recorded.map(([key, label]) => `${label}: ${seconds(phases[key])}`).join(" · ")}` : " · phase timing: unknown"}`, "muted"); keys.push("timing");
+    const labels = Object.entries({implement: "Implementation", review: "Review", worker_setup: "Worker setup", human_review_wait: "Human review wait", coordinator: "Coordinator"});
+    const recorded = labels.filter(([key]) => phases[key] != null);
+    put(parent, "timing", "p", `Elapsed: ${seconds(timing.elapsed)}${recorded.length ? ` · ${recorded.map(([key, label]) => `${label}: ${seconds(phases[key])}`).join(" · ")}` : ""}`, "muted"); keys.push("timing");
+    const missingTiming = labels.filter(([key]) => phases[key] == null).map(([, label]) => label);
+    if (missingTiming.length) {put(parent, "timing-missing", "p", `Phase timing not recorded: ${missingTiming.join(", ")}`, "muted"); keys.push("timing-missing");}
     put(parent, "rounds", "p", `Review worker rounds: ${count(issue.review_rounds)} · Rework: ${count(issue.rework)}`, "muted"); keys.push("rounds");
     trim(parent, keys); renderAttention(issue, snapshot);
   }
