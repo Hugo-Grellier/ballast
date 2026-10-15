@@ -1,3 +1,12 @@
+# Current verification
+
+The coordinator completed the full 67-test gate, ordinary desktop/mobile browser
+checks, real CLI restart observation and optional Orca display. See
+[dashboard evidence](../evidence/dashboard.md). Independent exact-head review
+and hosting checks are required before readiness.
+
+## Historical writer checkpoint
+
 # Issue #188 implementation checkpoint
 
 The implementation follows the approved `f47eb5f` plan. It is uncommitted and
