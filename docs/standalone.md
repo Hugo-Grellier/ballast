@@ -48,6 +48,22 @@ operator's existing authority; these helpers authorize no sandbox escalation.
    branch and Git worktree. Read the local claim to locate it. Run any authorized
    project setup there before dispatch. Setup failure blocks dependent work.
 
+The origin must name `github.com` itself, as `https://github.com/OWNER/REPOSITORY`,
+`ssh://git@github.com/OWNER/REPOSITORY` or `git@github.com:OWNER/REPOSITORY`
+(each with an optional `.git` and trailing `/`). Credentials in the URL, other
+hosts and SSH host aliases (`git@github-work:...`) are refused. To push through
+an alias, keep the origin canonical and rewrite only the push URL:
+
+```sh
+git config url."git@ALIAS:".pushInsteadOf "https://github.com/"
+```
+
+Observed with Git 2.53: `git remote get-url origin` still returns the canonical
+URL and `git remote get-url --push origin` returns the alias form. Do not use
+`url.<base>.insteadOf` for this: it rewrites the URL that `git remote get-url
+origin` reports, so the helper refuses the alias. `pushInsteadOf` leaves fetches
+on the canonical URL.
+
 Claims and execution records live under `ballast-v2/` in Git's common directory,
 shared by its linked worktrees. They contain local paths and stay untracked.
 This prevents duplicate dispatch within that clone. It does not coordinate other

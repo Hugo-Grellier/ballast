@@ -73,7 +73,7 @@ def repository(cwd: Path, expected: str, git_dir: Path | None = None) -> None:
         fail("Repository must be an explicit owner/name")
     remote = git(cwd, "remote", "get-url", "origin", git_dir=git_dir)
     match = re.fullmatch(
-        r"(?:https://github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
         remote,
     )
     if match is None or match[1].lower() != expected.lower():
