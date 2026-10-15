@@ -372,6 +372,7 @@ class QueueTests(unittest.TestCase):
             "implementer": {"role": "implement"},
             "older head": {"head_before": "older", "head_after": "older"},
             "changed checkout": {"head_after": "changed"},
+            "moved during review": {"head_before": "older"},
             "another attempt": {"attempt": "another"},
             **{
                 status: {"status": status}
@@ -386,8 +387,15 @@ class QueueTests(unittest.TestCase):
                     result.write_text(json.dumps(reviewed | change))
                 with self.assertRaisesRegex(RuntimeError, "completed independent"):
                     coordinate.publish(claim, "Fictional", self.root / "body.md")
-        self.assertEqual(self.prs, [])
         result.write_text(json.dumps(reviewed))
+        # Any malformed worker record fails closed, even beside a valid review.
+        other = self.state / "workers" / "other" / "result.json"
+        other.parent.mkdir()
+        other.write_text("{")
+        with self.assertRaisesRegex(RuntimeError, "malformed"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        other.unlink()
+        self.assertEqual(self.prs, [])
         self.heads[branch] = self.base
         record = coordinate.publish(claim, "Fictional", self.root / "body.md")
         self.assertEqual(record["pr"]["head"], self.base)
