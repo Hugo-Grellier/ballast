@@ -466,15 +466,21 @@ def stop_on_signals() -> Iterator[None]:
         stopping.clear()
 
 
-def permit(claim: Path, identifier: str, role: str) -> None:
-    """Refuse dispatch after a stop signal; else take the queue's turn permit."""
+def check_stop() -> None:
+    """Refuse to reserve or dispatch work after a stop signal."""
     if stopping.is_set():
         codex.fail("Worker stopped by a signal before dispatch")
+
+
+def permit(claim: Path, identifier: str, role: str) -> None:
+    """Refuse dispatch after a stop signal; else take the queue's turn permit."""
+    check_stop()
     admission.permit_turn(claim, identifier, role)
 
 
 def reserve(claim: Path, identifier: str, role: str) -> Path:
     """Reserve capacity and the private worker directory, or neither."""
+    check_stop()  # A stop before reservation never starts a client.
     admission.reserve_worker(claim, identifier, role)
     directory = claim.parent / "workers" / identifier
     try:

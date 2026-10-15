@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import signal
 import subprocess
@@ -311,6 +312,17 @@ class ExecutionTests(unittest.TestCase):
         server.deadline = time.monotonic() + 0.01
         with self.assertRaisesRegex(codex.QualificationError, "timed out"):
             server.send({"method": "turn/start", "params": {"private": "fictional"}})
+
+    def test_interrupt_bound_ends_a_silent_backend(self) -> None:
+        server = worker.WorkerServer.__new__(worker.WorkerServer)
+        server.messages = queue.Queue()
+        server.deadline = time.monotonic() - 1
+        server.interrupted = False
+        # At the deadline the caller still has to interrupt the turn.
+        self.assertIsNone(server.poll(worker.POLL_SECONDS))
+        server.interrupted = True
+        with self.assertRaisesRegex(codex.QualificationError, "timed out"):
+            server.poll(worker.POLL_SECONDS)
 
     def test_corrupt_claim_blocks_before_process(self) -> None:
         self.claim.write_text("null")

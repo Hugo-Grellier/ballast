@@ -23,6 +23,24 @@ from tests import test_standalone_execution as standalone
 from tools import admission, codex, coordinate, dashboard, progress, worker, worktree
 
 REPO = "example/fixture"
+
+
+def past_deadline():  # noqa: ANN201
+    """Control check outlasting a one-second deadline once; fail, never hang, later."""
+    calls = []
+
+    def check(_: Path) -> bool:
+        calls.append(None)
+        if len(calls) > 3:  # noqa: PLR2004 -- bound a deadline that never fires
+            message = "Worker kept polling past its deadline"
+            raise AssertionError(message)
+        if len(calls) == 1:
+            time.sleep(1)
+        return False
+
+    return check
+
+
 # Backend reply to an interrupted turn: receipt, interrupt ack, terminal turn.
 INTERRUPTED = [
     {"id": "qualify-5", "result": {"turn": {"id": "fixture-turn"}}},
@@ -302,9 +320,7 @@ class QueueTests(unittest.TestCase):
         self.queue([84])
         claim = self.prepare(84)
         # The first control check outlasts the deadline, as a long turn would.
-        with patch.object(
-            admission, "cancelled", side_effect=lambda _: time.sleep(1) or False
-        ):
+        with patch.object(admission, "cancelled", side_effect=past_deadline()):
             result = self.worker_on(claim, lambda m: m[:4] + INTERRUPTED, timeout=1)
         self.assertEqual(result["status"], "timeout")
         self.assertFalse(claim.with_suffix(".worker").exists())
@@ -319,29 +335,49 @@ class QueueTests(unittest.TestCase):
 
     def test_deadline_without_quiet_terminal_evidence_stays_unknown(self) -> None:
         self.queue([85, 86, 87], issues=3, workers=3)
-        late = patch.object(
-            admission, "cancelled", side_effect=lambda _: time.sleep(1) or False
-        )
         quiet = worker.await_quiet
-        for issue, tail, check in (
-            (85, INTERRUPTED[:2], quiet),  # No terminal turn before the bound.
-            (86, [*INTERRUPTED[:1], {"id": "worker-interrupt", "error": {}}], quiet),
+        for issue, tail, check, reason in (
+            # Backend ends after the interrupt ack (the silent backend's bound is
+            # covered by test_interrupt_bound_ends_a_silent_backend).
+            (85, INTERRUPTED[:2], quiet, "ended"),
+            (
+                86,
+                [*INTERRUPTED[:1], {"id": "worker-interrupt", "error": {}}],
+                quiet,
+                "rejected the interrupt",
+            ),
             (
                 87,
                 INTERRUPTED,
                 Mock(side_effect=codex.QualificationError("Processes still run")),
+                "still run",
             ),
         ):
             with self.subTest(issue=issue):
                 claim = self.prepare(issue)
                 with (
-                    late,
+                    patch.object(admission, "cancelled", side_effect=past_deadline()),
                     patch.object(worker, "await_quiet", check),
-                    self.assertRaises(codex.QualificationError),
+                    self.assertRaisesRegex(codex.QualificationError, reason),
                 ):
                     self.worker_on(claim, lambda m, t=tail: m[:4] + t, timeout=1)
                 self.assertEqual(self.outcome(claim)[0]["status"], "unknown")
                 self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def test_signal_before_reservation_starts_nothing(self) -> None:
+        self.queue([92])
+        claim = self.prepare(92)
+        self.quiet_signals()
+        with (
+            worker.stop_on_signals(),
+            patch.object(worker, "WorkerServer") as server,
+            self.assertRaisesRegex(codex.QualificationError, "signal"),
+        ):
+            os.kill(os.getpid(), signal.SIGTERM)
+            self.worker_on(claim)
+        server.assert_not_called()
+        self.assertFalse(claim.with_suffix(".worker").exists())
+        self.assertFalse((claim.parent / "workers").exists())
 
     def test_signal_before_dispatch_settles_not_started(self) -> None:
         self.queue([88, 89], issues=2)

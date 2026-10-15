@@ -12,7 +12,6 @@ import shutil
 import signal
 import subprocess
 import threading
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -567,7 +566,7 @@ class DashboardTests(unittest.TestCase):
         self.policy = self.queue([15])
         claim = self.prepare(15)
         with patch.object(
-            admission, "cancelled", side_effect=lambda _: time.sleep(1) or False
+            admission, "cancelled", side_effect=queue_tests.past_deadline()
         ):
             self.worker_on(claim, lambda m: m[:4] + queue_tests.INTERRUPTED, timeout=1)
         binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")

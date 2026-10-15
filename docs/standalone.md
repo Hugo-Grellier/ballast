@@ -14,9 +14,11 @@ Use a POSIX host with Python 3.11+, Git, authenticated `gh` and the qualified
 Codex CLI outside CI. Windows execution is currently blocked because this worker
 requires bounded nonblocking pipe writes.
 
-Without a [queue](#bounded-queue), run one issue and one worker at a time. Workers run in the foreground, at most
-900 seconds each (300 by default), with 64 KiB task/final-message limits and a
-1 MiB protocol-message limit. The coordinator permits at most three review/fix
+Without a [queue](#bounded-queue), run one issue and one worker at a time. Each
+worker has a `--timeout` of at most 900 seconds (300 by default); settling after
+it can take about 70 seconds more (see [execute and observe](#execute-and-observe)
+for running it as a background command). Task and final messages are limited to
+64 KiB, protocol messages to 1 MiB. The coordinator permits at most three review/fix
 rounds and one issue PR. A fresh session is required for each worker. Worker
 nested delegation is disabled in the client and forbidden in the handoff.
 
@@ -101,6 +103,12 @@ sooner (Claude Code's Bash tool defaults to 120 seconds, at most 600). Run the
 worker as a background command of the harness and wait for it to exit, or choose
 a `--timeout` that leaves that margin below the harness limit. A SIGKILL leaves
 the worker `unknown` with its lock held.
+
+Only SIGTERM/SIGINT sent to the worker process itself settles through the
+interrupt path. The Codex client shares the worker's process group, so a
+group-wide signal (Ctrl-C in its terminal, a harness stopping the process tree)
+also stops the client: the worker then ends `unknown` with its lock held. Stop a
+worker with `kill -TERM` on its own PID.
 
 The same executing session must establish authorized subscription access, catalog
 support and matching resolved model/effort, provider, working directory, sandbox,

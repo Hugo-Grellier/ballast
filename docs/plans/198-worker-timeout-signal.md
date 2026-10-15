@@ -28,7 +28,11 @@ One interrupt path for queue cancellation, deadline and signals.
 3. `main` runs `execute` inside `stop_on_signals`, whose SIGTERM/SIGINT
    handlers only set a flag; the previous handlers are restored afterwards.
    Before dispatch the flag blocks the turn permit (`not_started`, lock
-   released, no attempt spent); after dispatch `await_terminal` picks it up. Establishment is not cut short: it
+   released, no attempt spent), and before reservation it starts nothing;
+   after dispatch `await_terminal` picks it up. Only a signal to the worker
+   process itself takes this path: the Codex client shares its process group,
+   so a group-wide signal also stops the client and leaves `unknown` (process
+   group isolation is a separate follow-up). Establishment is not cut short: it
    is bounded by the timeout and normally takes seconds.
 4. Settlement is unchanged after the turn: `await_quiet`, head recording and
    review checks still gate `settled`. Missing terminal evidence, a rejected
