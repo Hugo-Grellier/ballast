@@ -95,3 +95,21 @@ Fictional fixture data only; no capability, credentials or local destinations.
 ![Ordinary mobile viewport](dashboard-mobile.png)
 
 ![Optional Orca display](dashboard-orca.png)
+
+## UI/UX rework — #193
+
+Presentation-only change to `tools/dashboard_assets/`; server routes, session,
+CSRF, CSP, controls and snapshot fields are unchanged. Screenshots show the
+real Ballast queue for #193 served over loopback (Playwright Chromium, no page
+errors, no horizontal overflow at 1440×1100 and 390×844). The previous UI has no
+dark theme, so its dark captures were identical and are omitted.
+
+| Before | After (light) | After (dark) |
+| --- | --- | --- |
+| ![Before, desktop](dashboard-193/before-1440-light.png) | ![After, desktop light](dashboard-193/after-1440-light.png) | ![After, desktop dark](dashboard-193/after-1440-dark.png) |
+| ![Before, mobile](dashboard-193/before-390-light.png) | ![After, mobile light](dashboard-193/after-390-light.png) | ![After, mobile dark](dashboard-193/after-390-dark.png) |
+
+Keyboard focus on the selected issue button survived several 2-second polls in
+the browser; native checks in `tests/dashboard_ui.cjs` cover node identity and
+order across polls, collapsed absent evidence, attention clearing after a later
+declaration, labelled missing phase timing and future relative times.

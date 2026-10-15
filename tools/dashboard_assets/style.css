@@ -1,1 +1,73 @@
-:root{font:15px/1.5 system-ui,sans-serif;color:#252b33;background:#f5f7fa}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:28px}header,section{background:white;border:1px solid #dde2e8;border-radius:6px;padding:20px}header p:first-child{color:#225ca3;font-weight:600}h1{font-size:1.5rem;overflow-wrap:anywhere}h2{font-size:1.1rem}nav{display:flex;gap:10px;margin:20px 0;flex-wrap:wrap}button{font:inherit;border:1px solid #99b3d2;border-radius:4px;background:white;color:#174e90;padding:7px 12px;cursor:pointer}button:hover{background:#eef4fc}button:disabled{color:#717b87;border-color:#d4dae1;cursor:default}button:focus-visible,a:focus-visible{outline:3px solid #216bd0;outline-offset:3px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}table{border-collapse:collapse;width:100%;text-align:left}th,td{padding:9px;border-bottom:1px solid #e2e6eb;vertical-align:top}p,td{overflow-wrap:anywhere}footer{padding:22px 0;color:#56616f}a{color:#1759a5}.evidence{border-left:3px solid #c1d3ec;padding-left:12px}@media(max-width:760px){main{padding:12px}.layout{grid-template-columns:1fr}section{padding:12px}th,td{padding:6px}}
+:root {
+  color-scheme: light;
+  --bg: #f2f5f8; --surface: #fff; --text: #182638; --muted: #566579; --line: #d9e1e9;
+  --accent: #135fa5; --accent-bg: #eaf3fc; --good: #176647; --good-bg: #e7f5ed;
+  --warn: #895713; --warn-bg: #fff2d7; --bad: #a23836; --bad-bg: #fdece9;
+  font: 15px/1.45 system-ui, sans-serif; color: var(--text); background: var(--bg);
+}
+* {box-sizing: border-box}
+body {margin: 0}
+main {max-width: 1440px; margin: auto; padding: 24px; min-width: 0}
+.surface {background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; min-width: 0}
+.header-line, .identity, .controls {display: flex; align-items: center; gap: 12px; flex-wrap: wrap}
+.header-line {justify-content: space-between}
+.eyebrow {margin: 0; color: var(--accent); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; font-size: .72rem}
+h1 {font-size: 1.5rem; line-height: 1.2; margin: 4px 0 12px; overflow-wrap: anywhere}
+h2 {font-size: 1rem; margin: 0 0 12px}
+h3 {font-size: .98rem; margin: 18px 0 8px}
+h4 {margin: 14px 0 8px}
+p {margin: 6px 0; overflow-wrap: anywhere}
+.muted, .caveat, footer {color: var(--muted); font-size: .85rem}
+.caveat {margin: 10px 0 0}
+.badge, .connection, .status, .readiness, .attention-marker {display: inline-block; border-radius: 999px; padding: 3px 9px; font-size: .82rem; font-weight: 700}
+.badge {background: var(--accent-bg); color: var(--accent)}
+.connection[data-state="live"] {background: var(--good-bg); color: var(--good)}
+.connection[data-state="stale"] {background: var(--warn-bg); color: var(--warn)}
+.connection[data-state="disconnected"] {background: var(--bad-bg); color: var(--bad)}
+.status.active, .readiness.ready {background: var(--good-bg); color: var(--good)}
+.status.pr_wait, .readiness.blocked, .attention-marker {background: var(--warn-bg); color: var(--warn)}
+.status.stopped, .readiness.changes_required {background: var(--bad-bg); color: var(--bad)}
+.status.unknown, .status.unclaimed, .readiness.unknown, .readiness.draft, .status.merged {background: var(--accent-bg); color: var(--accent)}
+.identity details {max-width: 100%}
+summary {cursor: pointer; color: var(--accent)}
+code {display: block; overflow-wrap: anywhere; font-size: .8rem}
+.controls {margin: 16px 0}
+button {font: inherit; border: 1px solid var(--accent); border-radius: 7px; background: var(--surface); color: var(--accent); padding: 7px 12px; cursor: pointer}
+button:hover:not(:disabled), button[aria-pressed="true"] {background: var(--accent-bg)}
+button:disabled {color: var(--muted); border-color: var(--line); cursor: default}
+button {max-width: 100%; overflow-wrap: anywhere}
+button:focus-visible, a:focus-visible, summary:focus-visible {outline: 3px solid var(--accent); outline-offset: 3px}
+.summary {display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 18px; margin-bottom: 18px}
+.summary #capacity {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px}
+.summary #capacity h2 {grid-column: 1 / -1}
+.summary > div + div {border-left: 1px solid var(--line); padding-left: 18px}
+.summary p {font-variant-numeric: tabular-nums}
+.layout {display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 18px; align-items: start}
+.table-scroll {overflow-x: auto}
+table {border-collapse: collapse; width: 100%; text-align: left}
+th, td {padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere}
+th {color: var(--muted); font-size: .8rem}
+.selected {background: var(--accent-bg)}
+.issue-button {border: 0; background: none; padding: 0; text-align: left; font-weight: 700}
+.attention-marker {display: block; width: max-content; margin-top: 5px}
+.attention {border: 1px solid var(--warn); border-radius: 8px; padding: 12px; background: var(--warn-bg); margin-top: 18px}
+.attention h3 {margin-top: 0}
+.attention.quiet {border-color: var(--line); background: none}
+.attention-item {border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px}
+.evidence {border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; margin: 8px 0}
+.evidence time, .evidence a {display: inline-block; margin-right: 10px}
+#worker-list button {margin: 0 8px 8px 0}
+#worker {border-top: 1px solid var(--line); padding-top: 10px; margin-top: 8px; overflow-x: auto}
+a {color: var(--accent)}
+footer {padding: 20px 0}
+@media (max-width: 760px) {
+  main {padding: 12px}
+  .surface {padding: 14px}
+  .summary, .layout {grid-template-columns: minmax(0, 1fr)}
+  .summary > div + div {border-left: 0; border-top: 1px solid var(--line); padding: 12px 0 0}
+  .header-line {align-items: start}
+  th, td {padding: 8px 5px}
+}
+@media (prefers-color-scheme: dark) {
+  :root {color-scheme: dark; --bg: #111922; --surface: #1b2835; --text: #eef3f8; --muted: #bbc7d4; --line: #394b5c; --accent: #9bcbff; --accent-bg: #243e55; --good: #9ee0b8; --good-bg: #1c4335; --warn: #ffd08a; --warn-bg: #503c20; --bad: #ffaaa6; --bad-bg: #502c30}
+}

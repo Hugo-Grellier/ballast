@@ -248,6 +248,13 @@ standalone coordination and execution remain the operations documented above.
 The UI shows only selected queue claims and workers joined through their claim
 reservations. Other/legacy claims contribute only to labelled clone-wide capacity.
 It never serves private output, checkout paths, raw histories or protocol streams.
+The issue list shows recorded activity, PR readiness and pending attention;
+issue titles appear only when supplied by an authoritative snapshot. Selected
+issue evidence lists recorded entries first and groups missing kinds as unknown.
+Pending questions and blockers point back to the main conversation. Worker
+settings and evidence appear beside the selected issue, with requested and
+observed settings shown separately. The header labels live, stale and
+disconnected observations; polling preserves issue and worker selection.
 Dependency selection uses the existing selector at most once per minute, with a
 two-second bound on the complete helper process group. A failed source is unknown;
 the observation timestamp identifies cached information. It does not dispatch.
