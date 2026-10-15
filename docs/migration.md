@@ -72,6 +72,19 @@ under 2.0 stay valid GitHub history.
 
 ## Upgrading within 2.x
 
-Fetch a newer 2.x tag in the Ballast source checkout and read `CHANGELOG.md`.
-Compare `templates/` between the two tags and apply the changes you want to your
-copies. Copy-once files are never overwritten for you.
+Fetch a newer 2.x tag in the Ballast source checkout and read `CHANGELOG.md`. Then
+update your template copies as described next.
+
+## Updating adopted templates
+
+Templates are copy-once: Ballast never overwrites your copies, so they drift unless you
+compare them. Between your adopted tag `vA` and the new tag `vB`:
+
+- From the Ballast checkout, run `git diff vA..vB -- templates/`. Without a checkout, use
+  the [compare view](https://github.com/Hugo-Grellier/ballast/compare/vA...vB) (replace
+  `vA` and `vB`).
+- Re-apply the changes that matter to your project and keep your project-specific edits.
+  Skip a change when you removed or rewrote that rule on purpose.
+- Template links assume the layout in [Adopting 2.0](#adopting-20): policies in
+  `docs/policies/` and skills in `.agents/skills/`. If you placed them elsewhere, fix the
+  links in the copies you update.
