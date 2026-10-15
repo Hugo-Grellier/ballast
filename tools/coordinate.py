@@ -148,7 +148,7 @@ def lookup(cwd: Path, repo: str, number: int, cache: dict) -> dict | None:
 
 
 def preload(cwd: Path, repo: str, numbers: list[int], cache: dict) -> None:
-    """Fill the cache for every uncached number with one GraphQL call."""
+    """Fill the cache for uncached numbers, one GraphQL call per BATCH chunk."""
     wanted = [n for n in dict.fromkeys(numbers) if n not in cache]
     for start in range(0, len(wanted), BATCH):
         chunk = wanted[start : start + BATCH]
