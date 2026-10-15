@@ -341,3 +341,50 @@ class ExecutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OriginFormTests(unittest.TestCase):
+    """The origin must name github.com verifiably and carry no credentials."""
+
+    ACCEPTED = (
+        "https://github.com/example/fixture",
+        "https://github.com/example/fixture.git/",
+        "git@github.com:example/fixture.git",
+        "ssh://git@github.com/example/fixture",
+        "ssh://git@github.com/example/fixture.git",
+        "ssh://git@github.com/example/fixture.git/",
+        "ssh://git@github.com/Example/Fixture.git",
+    )
+    REFUSED = (
+        "ssh://git@github-work/example/fixture.git",
+        "git@github-work:example/fixture.git",
+        "ssh://git@github.com.evil.example/example/fixture.git",
+        "ssh://user:secret@github.com/example/fixture.git",
+        "ssh://other@github.com/example/fixture.git",
+        "ssh://github.com/example/fixture.git",
+        "ssh://git@github.com:2222/example/fixture.git",
+        "ssh://git@github.com/example/other.git",
+        "https://token@github.com/example/fixture",
+        "https://user:secret@github.com/example/fixture",
+        "https://example.com/example/fixture",
+    )
+
+    def check(self, origin: str) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            worktree.git(repo, "init", "-b", "main")
+            worktree.git(repo, "remote", "add", "origin", origin)
+            worktree.repository(repo, "example/fixture")
+
+    def test_accepted_origins(self) -> None:
+        for origin in self.ACCEPTED:
+            with self.subTest(origin=origin):
+                self.check(origin)
+
+    def test_refused_origins(self) -> None:
+        for origin in self.REFUSED:
+            with (
+                self.subTest(origin=origin),
+                self.assertRaisesRegex(RuntimeError, "Origin"),
+            ):
+                self.check(origin)
