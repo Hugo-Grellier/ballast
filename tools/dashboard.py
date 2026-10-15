@@ -351,48 +351,50 @@ class Binding:
                 and type(item.get("issue")) is int
                 and item.get("issue") in queue["issues"]
             ]
-            selected = {item["issue"]: self.issue(item) for item in claims}
-            return {
-                "at": datetime.now(UTC).isoformat(),
-                "repository": queue["repository"],
-                "queue": identifier(queue["id"]),
-                "mode": queue["mode"],
-                "coordinator_liveness": "unknown",
-                "limits": queue["limits"],
-                "clone_wide_used": admission.capacity(self.state),
-                "quota": {
-                    "state": "paused"
-                    if queue.get("quota")
-                    and (
-                        queue["quota"].get("retry_at") is None
-                        or queue["quota"]["retry_at"] > time.time()
-                    )
-                    else "window_elapsed"
-                    if queue.get("quota")
-                    else "unknown",
-                    "retry_at": number((queue.get("quota") or {}).get("retry_at")),
-                },
-                "controls": [
-                    {"event": h["event"], "at": stamp(h.get("at"))}
-                    for h in queue.get("history", [])
-                    if h.get("event")
-                    in {"running", "paused", "cancelled", "quota_paused"}
-                ],
-                "dependencies": self.dependencies,
-                "issues": [
-                    selected.get(
-                        n,
-                        {
-                            "issue": n,
-                            "activity": "unclaimed",
-                            "readiness": "unknown",
-                            "workers": [],
-                            "evidence": [],
-                        },
-                    )
-                    for n in queue["issues"]
-                ],
-            }
+            used = admission.capacity(self.state)
+        selected = {item["issue"]: self.issue(item) for item in claims}
+        with admission.locked(self.state):
+            admission.require_context(admission.policy(self.state), self.expected)
+        return {
+            "at": datetime.now(UTC).isoformat(),
+            "repository": queue["repository"],
+            "queue": identifier(queue["id"]),
+            "mode": queue["mode"],
+            "coordinator_liveness": "unknown",
+            "limits": queue["limits"],
+            "clone_wide_used": used,
+            "quota": {
+                "state": "paused"
+                if queue.get("quota")
+                and (
+                    queue["quota"].get("retry_at") is None
+                    or queue["quota"]["retry_at"] > time.time()
+                )
+                else "window_elapsed"
+                if queue.get("quota")
+                else "unknown",
+                "retry_at": number((queue.get("quota") or {}).get("retry_at")),
+            },
+            "controls": [
+                {"event": h["event"], "at": stamp(h.get("at"))}
+                for h in queue.get("history", [])
+                if h.get("event") in {"running", "paused", "cancelled", "quota_paused"}
+            ],
+            "dependencies": self.dependencies,
+            "issues": [
+                selected.get(
+                    n,
+                    {
+                        "issue": n,
+                        "activity": "unclaimed",
+                        "readiness": "unknown",
+                        "workers": [],
+                        "evidence": [],
+                    },
+                )
+                for n in queue["issues"]
+            ],
+        }
 
 
 class Server(HTTPServer):

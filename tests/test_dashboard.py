@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import http.client
 import json
 import os
@@ -378,6 +379,36 @@ class DashboardTests(unittest.TestCase):
             admission.control(
                 self.state, "paused", "fixture", expected=binding.expected
             )
+
+    def test_snapshot_derives_outside_lock_and_refuses_replacement(self) -> None:
+        self.policy = self.queue([7])
+        self.prepare(7)
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        binding.next_refresh = float("inf")
+        native = binding.issue
+        derived = []
+
+        def probe(item: dict) -> dict:
+            with (self.state / "admission.lock").open("a+") as stream:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            derived.append(item["issue"])
+            return native(item)
+
+        with patch.object(binding, "issue", side_effect=probe):
+            binding.snapshot()
+        self.assertEqual(derived, [7])
+
+        def replace(item: dict) -> dict:
+            value = admission.policy(self.state)
+            value["id"] = "replacement"
+            admission.write(self.state / "queue.json", value)
+            return native(item)
+
+        with (
+            patch.object(binding, "issue", side_effect=replace),
+            self.assertRaises(admission.AdmissionError),
+        ):
+            binding.snapshot()
 
     def test_projection_isolation_and_unknown_without_http(self) -> None:
         self.policy = self.queue([9, 10], issues=3)
