@@ -27,6 +27,7 @@ MAX_RUNTIME = 900
 POLL_SECONDS = 1.0
 QUIET_GAP_SECONDS = 0.2
 INTERRUPT_SECONDS = 30
+MAX_NAMED = 10
 
 
 class WorkerServer(codex.AppServer):
@@ -327,6 +328,8 @@ def read_task(task: Path) -> str:
 def check_launch(model: str, effort: str, timeout: float) -> None:
     """Reject CI, implicit routes and unbounded runtime before native work."""
     codex.check_environment(os.environ)
+    if worktree.inside_checkout():
+        codex.fail("Start the worker outside issue checkouts")
     if not math.isfinite(timeout) or not 0 < timeout <= MAX_RUNTIME:
         codex.fail("Worker timeout must be finite and between zero and 900 seconds")
     if not all(
@@ -339,6 +342,19 @@ def check_launch(model: str, effort: str, timeout: float) -> None:
 def started(entry: Path) -> int:
     """Return a process's start time in clock ticks since boot (stat field 22)."""
     return int((entry / "stat").read_text().rsplit(")", 1)[1].split()[19])
+
+
+def describe(pids: list[int]) -> str:
+    """Name survivors by PID and command name; arguments may hold secrets."""
+    names = []
+    for pid in pids[:MAX_NAMED]:
+        try:
+            comm = (Path("/proc") / str(pid) / "comm").read_text().strip()
+        except OSError:
+            comm = "?"
+        names.append(f"{pid} ({''.join(c if c.isprintable() else '?' for c in comm)})")
+    more = len(pids) - MAX_NAMED
+    return ", ".join(names) + (f", and {more} more" if more > 0 else "")
 
 
 def survivors(cwd: Path) -> list[int]:
@@ -377,20 +393,31 @@ def await_quiet(cwd: Path) -> None:
     # with a process forking mid-scan; a cgroup per worker would close it.
     empty = 0
     while empty < 2:  # noqa: PLR2004 -- consecutive empty scans
-        if survivors(cwd):
+        if found := survivors(cwd):
             empty = 0
             if time.monotonic() >= deadline:
-                codex.fail("Processes still run in the checkout; outcome unknown")
+                codex.fail(
+                    "Processes still run in the checkout; outcome unknown: "
+                    + describe(found)
+                )
             time.sleep(POLL_SECONDS)
         else:
             empty += 1
             time.sleep(QUIET_GAP_SECONDS)
 
 
+def keep_output(
+    server: WorkerServer, directory: Path, result: dict, outcome: str
+) -> None:
+    """Keep a completed turn's output even if settlement later stays unknown."""
+    if outcome == "completed":
+        (directory / "output.txt").write_text(server.output)
+        result["turn"] = "completed"
+
+
 def record_outcome(
     server: WorkerServer,
     claim: Path,
-    directory: Path,
     result: dict,
     terminal: tuple[str, str | None],
 ) -> None:
@@ -400,8 +427,6 @@ def record_outcome(
     if outcome == "quota":
         result["retry_at"] = server.retry_at()
         admission.quota(claim.parent, kind or "unknown", result["retry_at"])
-    if outcome == "completed":
-        (directory / "output.txt").write_text(server.output)
 
 
 def reserve(claim: Path, identifier: str, role: str) -> Path:
@@ -462,6 +487,7 @@ def execute(
             worktree.write_record(directory / "result.json", result)
             event(directory, "task_dispatched")
             outcome, kind = run_turn(server, cwd, text, directory, result)
+        keep_output(server, directory, result, outcome)
         # Close/reap must succeed before calling the worker settled. Sandboxed
         # tool commands run in their own session and can outlive the client.
         await_quiet(cwd)
@@ -469,7 +495,7 @@ def execute(
             head_before=head,
             head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),
         )
-        record_outcome(server, claim, directory, result, (outcome, kind))
+        record_outcome(server, claim, result, (outcome, kind))
         if role == "review" and (
             result["head_after"] != head
             or worktree.git(cwd, "status", "--porcelain", git_dir=git_dir)

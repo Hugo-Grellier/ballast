@@ -81,6 +81,15 @@ contains final model output for coordinator inspection; it remains private and
 is never publication-ready evidence by itself. Raw protocol, reasoning, account
 identity and tool streams are not retained by the helper.
 
+Coordinator processes (shells, editors, the dashboard, queue commands) must not
+run with their working directory inside an issue checkout while a worker is
+active: settlement waits until nothing runs there, and it cannot tell a
+coordinator process from a worker's. The worker, dashboard and queue commands
+refuse to start from inside one. If processes remain after the turn, the block
+reason names each by PID and command name (never arguments); the worker stays
+`unknown` with its lock held, but a turn the backend confirmed is recorded as
+`turn: completed` in `result.json` and its `output.txt` is kept.
+
 A successful backend turn and client exit produce `completed`; this does not
 establish task acceptance. Pre-delivery failures produce `not_started`. Uncertain
 delivery, timeout, malformed completion, failed turn or unconfirmed shutdown
