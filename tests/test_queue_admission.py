@@ -392,8 +392,21 @@ class QueueTests(unittest.TestCase):
         other = self.state / "workers" / "other" / "result.json"
         other.parent.mkdir()
         other.write_text("{")
-        with self.assertRaisesRegex(RuntimeError, "malformed"):
-            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        native = Path.glob
+        # Scan both orders: a valid review found first must not hide it.
+        for reverse in (False, True):
+            with (
+                self.subTest(reverse=reverse),
+                patch.object(
+                    Path,
+                    "glob",
+                    lambda path, pattern, r=reverse: iter(
+                        sorted(native(path, pattern), reverse=r)
+                    ),
+                ),
+                self.assertRaisesRegex(RuntimeError, "malformed"),
+            ):
+                coordinate.publish(claim, "Fictional", self.root / "body.md")
         other.unlink()
         self.assertEqual(self.prs, [])
         self.heads[branch] = self.base
