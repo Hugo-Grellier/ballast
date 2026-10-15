@@ -370,7 +370,11 @@ class ExecutionTests(unittest.TestCase):
     def worker_reason(self) -> str:
         args = ["worker.py", "--claim", str(self.claim), "--task", str(self.task)]
         args += ["--model", "m", "--effort", "low", "--role", "implement"]
-        with patch("sys.argv", args), patch.object(codex, "emit") as emit:
+        with (
+            patch("sys.argv", args),
+            patch.object(worker.shutil, "which", return_value="/fictional/codex"),
+            patch.object(codex, "emit") as emit,
+        ):
             self.assertEqual(worker.main(), 1)
         return emit.call_args.args[0]["reason"]
 
