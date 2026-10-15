@@ -664,6 +664,32 @@ class QueueTests(unittest.TestCase):
         self.assertTrue((directory / "output.txt").read_text())
         self.assertTrue(claim.with_suffix(".worker").exists())
 
+    def test_client_shutdown_failure_keeps_completed_output(self) -> None:
+        claim = self.prepare(83)
+        with (
+            patch.object(
+                worker.WorkerServer,
+                "close",
+                side_effect=codex.QualificationError("Fictional shutdown failure"),
+            ),
+            self.assertRaisesRegex(codex.QualificationError, "shutdown"),
+        ):
+            self.worker_on(claim)
+        (directory,) = (claim.parent / "workers").iterdir()
+        result = json.loads((directory / "result.json").read_text())
+        self.assertEqual((result["status"], result["turn"]), ("unknown", "completed"))
+        self.assertTrue((directory / "output.txt").read_text())
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    @unittest.skipUnless(Path("/proc/self/comm").exists(), "Linux /proc required")
+    def test_non_utf8_process_name_is_still_named(self) -> None:
+        code = "import time; open('/proc/self/comm', 'wb').write(b'\\xffbad')"
+        process = subprocess.Popen([sys.executable, "-c", f"{code}; time.sleep(30)"])  # noqa: S603
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        time.sleep(0.3)
+        self.assertRegex(worker.describe([process.pid]), rf"^{process.pid} \(.bad\)$")
+
     def test_survivor_names_are_bounded(self) -> None:
         self.assertEqual(worker.describe([2**31]), f"{2**31} (?)")
         many = worker.describe([2**31] * (worker.MAX_NAMED + 2))

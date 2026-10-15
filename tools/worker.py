@@ -349,7 +349,9 @@ def describe(pids: list[int]) -> str:
     names = []
     for pid in pids[:MAX_NAMED]:
         try:
-            comm = (Path("/proc") / str(pid) / "comm").read_text().strip()
+            comm = (
+                (Path("/proc") / str(pid) / "comm").read_text(errors="replace").strip()
+            )
         except OSError:
             comm = "?"
         names.append(f"{pid} ({''.join(c if c.isprintable() else '?' for c in comm)})")
@@ -487,7 +489,7 @@ def execute(
             worktree.write_record(directory / "result.json", result)
             event(directory, "task_dispatched")
             outcome, kind = run_turn(server, cwd, text, directory, result)
-        keep_output(server, directory, result, outcome)
+            keep_output(server, directory, result, outcome)
         # Close/reap must succeed before calling the worker settled. Sandboxed
         # tool commands run in their own session and can outlive the client.
         await_quiet(cwd)
