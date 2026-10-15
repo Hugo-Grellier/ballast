@@ -77,8 +77,18 @@
     const el = put(parent, key, "a", label); el.href = url; el.rel = "noreferrer"; return true;
   }
   function connection(label, kind) {const el = byId("connection"); el.textContent = label; el.dataset.state = kind;}
+  function observation(kind) {
+    const stateLabel = kind === "Disconnected" ? "disconnected" : kind.toLowerCase();
+    const value = state.snapshot?.at;
+    const ms = typeof value === "number" ? value * 1000 : Date.parse(value);
+    const label = value == null || !Number.isFinite(ms) ? "unknown" : relative(value);
+    connection(`${kind} · last observation ${label}`, stateLabel);
+    const el = byId("connection");
+    if (Number.isFinite(ms)) el.title = new Date(ms).toISOString();
+    else {el.removeAttribute("title"); delete el.title;}
+  }
   function updateControls() {
-    if (state.fresh && Date.now() - state.at >= 6000) {state.fresh = false; connection("Stale · observation delayed", "stale");}
+    if (state.fresh && Date.now() - state.at >= 6000) {state.fresh = false; observation("Stale");}
     const allowed = controls(state);
     for (const id of ["pause", "resume", "cancel"]) byId(id).disabled = !allowed[id];
   }
@@ -200,8 +210,8 @@
     if (!response.ok) throw new Error("Unavailable"); return response.json();
   }
   async function poll() {
-    try {const snapshot = await request("/api/snapshot"); state.fresh = true; state.at = Date.now(); render(snapshot); connection(`Live · observed ${relative(snapshot.at)}`, "live");}
-    catch {state.fresh = false; connection("Disconnected · last observation stale", "disconnected"); updateControls();}
+    try {const snapshot = await request("/api/snapshot"); state.fresh = true; state.at = Date.now(); render(snapshot); observation("Live");}
+    catch {state.fresh = false; observation("Disconnected"); updateControls();}
     setTimeout(poll, 2000);
   }
   for (const [id, action] of [["pause", "paused"], ["resume", "running"], ["cancel", "cancelled"]]) {

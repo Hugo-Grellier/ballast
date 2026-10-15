@@ -66,6 +66,9 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   vm.runInNewContext(fs.readFileSync(require.resolve("../tools/dashboard_assets/app.js"), "utf8"), context);
   const flush = () => new Promise(resolve => setImmediate(resolve));
   await flush();
+  const connection = ids.get("connection");
+  assert.match(connection.textContent, /^Live · last observation /);
+  assert.equal(connection.title, new Date(observed.at).toISOString());
   assert.equal(ids.get("pause").disabled, false);
   assert.equal(ids.get("context").textContent, "example/fixture");
   assert.equal(ids.get("queue-id").textContent, observed.queue);
@@ -142,8 +145,12 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   assert.equal(calls.filter(c => c[0] === "/api/control").length, 1);
   disconnected = true; await timers.shift()();
   assert.equal(ids.get("connection").dataset.state, "disconnected");
-  assert.match(ids.get("connection").textContent, /stale/);
-  disconnected = false; loseMutationResponse = false;
+  assert.match(ids.get("connection").textContent, /^Disconnected · last observation /);
+  assert.equal(ids.get("connection").title, new Date(observed.at).toISOString());
+  observed = {...observed, at: null}; disconnected = false; await timers.shift()();
+  assert.match(ids.get("connection").textContent, /last observation unknown/);
+  assert.equal(ids.get("connection").title, undefined);
+  loseMutationResponse = false;
   observed = {...observed, mode: "paused"}; await timers.shift()();
   assert.equal(ids.get("resume").disabled, false);
   worker.tokens = {}; worker.timing = {};
