@@ -9,9 +9,9 @@ from tools import admission, progress
 REPO = "owner/repo"
 
 
-def declare(summary: str, **extra: object) -> dict:
+def declare(summary: str) -> dict:
     """Build a plan declaration around one summary."""
-    return {"kind": "phase", "state": "plan", **extra, "summary": summary}
+    return {"kind": "plan", "state": "proposed", "summary": summary}
 
 
 class ProgressValidationTests(unittest.TestCase):
@@ -38,19 +38,40 @@ class ProgressValidationTests(unittest.TestCase):
             "see /etc/passwd",
             "wrote ~/notes",
             "see output.txt",
+            "DB_PASSWORD=hunter2",
+            "GITHUB_TOKEN=abc",
+            "client_secret=abc",
+            "access_token: abc",
+            "AWS_SECRET_ACCESS_KEY=x",
+            "api key: abc",
+            "Authorization Basic xyz",
+            "xoxb-123-abc",
+            "AKIAABCDEFGHIJKLMNOP",
+            "glpat-abc123",
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "see /dev/sda",
+            "see /Volumes/Work",
+            "see /workspace/acme/app",
+            "see /nix/store/x",
+            "see /data/x",
+            "see /Library/x",
+            "(/home/x)",
+            "`/home/x`",
+            "dir=/home/x",
+            "C:\\Users\\x",
             "line\x00break",
             "tab\there",
         )
         for text in accepted:
             with self.subTest(accepted=text):
-                value = declare(text, kind="plan", state="proposed")
+                value = declare(text)
                 self.assertEqual(progress.validate(value, REPO), value)
         for text in rejected:
             with (
                 self.subTest(rejected=text),
                 self.assertRaises(admission.AdmissionError),
             ):
-                progress.validate(declare(text, kind="plan", state="proposed"), REPO)
+                progress.validate(declare(text), REPO)
 
     def test_revision_accepts_sha1_and_sha256_only(self) -> None:
         check = {"kind": "check", "state": "passed", "summary": "Checks passed"}

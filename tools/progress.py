@@ -36,9 +36,11 @@ REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 # Match secret and path shapes, not common words.
 SENSITIVE = re.compile(
     r"(?i)(?:(?<![a-z0-9])sk-[a-z0-9]|(?<![a-z0-9])gh[pousr]_[a-z0-9]|github_pat_|"
-    r"\bbearer\s+\S|\b(?:password|passwd|secret|token|api[_-]?key|authorization)\s*[=:]|"
-    r"output\.txt|(?:^|\s)(?:~|\\|[a-z]:\\|"
-    r"/(?:home|root|etc|usr|var|tmp|opt|mnt|users|private|proc|srv|run)(?:/|\b)))"
+    r"xox[abpr]-|AKIA[0-9A-Z]{16}|glpat-|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"\bbearer\s+\S|authorization\s+(?:basic|digest|negotiate|token)\s+\S|"
+    r"(?:password|passwd|secret|token|api[_ -]?key|authorization)(?:[_-]\w*)?\s*[=:]|"
+    r"output\.txt|[a-z]:\\|"
+    r"(?:^|[\s(`'\"=])(?:~|\\|/[^\s/]+/))"
 )
 
 

@@ -301,9 +301,10 @@ GitHub issue/comment, PR or Actions run URLs. Unknown fields are rejected.
 
 Summaries are bounded public declarations curated by the authorized coordinator.
 It is responsible for excluding secrets, account details, private reasoning and
-paths; validation also rejects control characters and secret-shaped text (API-key
-and token prefixes, `Bearer` values, `password=`-style assignments, home or
-system paths, `output.txt`).
+paths; validation also rejects control characters and secret-shaped text (API-key,
+token and private-key shapes, `Bearer`/`Authorization` values, `password=`-style
+assignments including prefixed names, absolute paths of two or more segments,
+`~`, drive paths, `output.txt`).
 Never copy raw final worker output into this producer or treat it as approval.
 The browser cannot record evidence or answer questions. Viewing it conveys no
 approval. Evidence is labelled coordinator-recorded; revision-bound declarations
