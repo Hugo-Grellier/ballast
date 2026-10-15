@@ -1,6 +1,7 @@
 # ADR-0008: A verified standard cache and a read-only update preview
 
 - Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (with the plan of [feature 14](../../specs/14-recoverable-install/plan.md), 2026-10-06); accepted when its PR merges
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Feature: [14-recoverable-install](../../specs/14-recoverable-install/spec.md), FR-009, FR-012, FR-015 to FR-017, AC-010, AC-013, AC-016 to AC-021; extends [ADR-0002](0002-cli-standard-manifest.md)
 
 ## Context

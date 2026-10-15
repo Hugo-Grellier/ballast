@@ -2,40 +2,31 @@
 
 ## Related issue
 
-Link the feature/leaf issue and state whether this PR closes it. Link its parent Epic or planned Milestone when relevant.
+Link the leaf issue and state whether this PR closes it. Link its parent Epic or planned Milestone when relevant.
 
-## Spec
+## Acceptance evidence
 
-Path or “issue only”:
-
-For a feature, link `intent.md`, `spec.md`, `plan.md`, `tasks.md`, any `decisions.md`, and material reports in `reviews/`.
+Map each acceptance criterion of the issue to its check, test or review evidence. Link the plan when one was written.
 
 ## Risk
 
 - [ ] R0
 - [ ] R1
-- [ ] R2 — human-gated: link explicit human approval; Autonomous run: the pre-change approval was agent-provisional, and merging this PR is the human approval
+- [ ] R2 — link explicit human approval
 
 ## Affected areas
 
 ## Verification performed
 
-Commands and results; note any gate not run and why.
+Commands and results at the submitted head; note any gate not run and why.
 
-## Required specialist reviews
+## Independent review
 
-List triggered reviews and findings/fixes, or “none” with reason.
-For a feature, record the independent model review, reconciliation verdict, and human intent/plan/final acceptance links or references.
+Reviewer (provider + model, effort), reviewed head, verdict, rounds, and findings fixed or remaining. List triggered specialist reviews, or “none” with reason.
 
-## Agent routing
+## Execution evidence
 
-For significant features during the routing pilot, record:
-
-- Author/implementer: provider + model, routing profile, effort
-- Independent reviewer: provider + model, routing profile, effort
-- Escalation: none, or what evidence triggered it
-
-Do not include subscription quota/account details.
+Link the issue's phase/attempt history and instruction revision. State requested versus observed worker routes, known waits and remaining gaps. Keep local destinations, raw worker output and account details private.
 
 ## Migration impact
 

@@ -1,6 +1,7 @@
 # ADR-0019: The trusted runner marks an eligible, opted-in Autonomous PR ready for review
 
 - Status: proposed (2026-10-12, with the change for [#141](https://github.com/Hugo-Grellier/ballast/issues/141), [spec](../../specs/141-autonomous-pr-completion/spec.md)). Drafted agent-provisionally in Autonomous run `478cbe23`; the operator approved the feature intent in human-gated run `6263f734`. Merging the PR is the only human approval that accepts this ADR.
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Risk: R2 (what Ballast executes, the launcher's trust model).
 - Amends: [ADR-0004](0004-autonomous-provisional-decisions.md), its publication decision ("opens one Draft PR") and its narrowing-only `[autonomous]` consequence. Extends: [ADR-0003](0003-launcher-github-authority.md), its fixed command list.
 

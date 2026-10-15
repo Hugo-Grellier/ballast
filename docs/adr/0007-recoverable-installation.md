@@ -1,6 +1,7 @@
 # ADR-0007: Setup stages, journals and switches an installation
 
 - Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: proposed (with the plan of [feature 14](../../specs/14-recoverable-install/plan.md), 2026-10-06); accepted when its PR merges
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Feature: [14-recoverable-install](../../specs/14-recoverable-install/spec.md), FR-001 to FR-014, FR-019, AC-001 to AC-015, AC-022, AC-023
 
 ## Context

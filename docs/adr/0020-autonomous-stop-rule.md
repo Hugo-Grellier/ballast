@@ -1,6 +1,7 @@
 # ADR-0020: Autonomous runs stop only for authority that takes effect before merge
 
 - Status: accepted (2026-10-13, with the change for #150), agent-provisional in Autonomous run `1d0a2143` until the operator merges the PR; that merge is the human approval that accepts it.
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Risk: R2 (agent authority, the launcher's trust model, accepted architecture).
 - Feature: [150-autonomous-stop-rule](../../specs/150-autonomous-stop-rule/spec.md); research [R1 to R9](../../specs/150-autonomous-stop-rule/research.md).
 - Amends: [ADR-0004](0004-autonomous-provisional-decisions.md) (when a run blocks; recovery from a block) and [ADR-0010](0010-autonomous-resume-and-bounded-recovery.md) (resume after a provider usage limit; the limit block).

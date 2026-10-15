@@ -1,6 +1,7 @@
 # ADR-0005: The trusted launcher synchronizes the feature branch before agent steps
 
 - Status: accepted (2026-10-05, approved by the operator in conversation)
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Feature: [18-branch-sync](../../specs/18-branch-sync/spec.md), FR-001, FR-005, FR-007, FR-012, FR-016; plan [§ Proposed architecture decisions](../../specs/18-branch-sync/plan.md#architecture-boundaries); decisions DEC-0001 to DEC-0007 in [decisions.md](../../specs/18-branch-sync/decisions.md)
 - Extends: [ADR-0003](0003-launcher-github-authority.md)
 

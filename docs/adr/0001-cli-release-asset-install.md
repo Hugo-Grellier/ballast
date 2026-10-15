@@ -1,6 +1,7 @@
 # ADR-0001: Distribute the CLI as a checksummed release asset
 
 - Status: accepted (with the plan of [feature 12](../../specs/12-cli-install-doctor/plan.md), 2026-10-03)
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Feature: [12-cli-install-doctor](../../specs/12-cli-install-doctor/spec.md), FR-001 to FR-007
 
 ## Context
