@@ -22,11 +22,11 @@ Accepted ADRs and the accepted architecture govern design; the issue states the 
 
 ## Issue workflow
 
-Ballast source: [PATH TO A BALLAST CHECKOUT AT THE ADOPTED TAG]. Its `docs/` holds the workflow; read only the file the current phase needs.
+`BALLAST_SOURCE` below means [PATH TO A BALLAST CHECKOUT AT THE ADOPTED TAG], outside this repository. Its `docs/` holds the workflow; read only the file the current phase needs. Paths under `BALLAST_SOURCE` never resolve in this repository.
 
-- For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow its `docs/issue-workflow.md`: read the issue and comments, scope and decompose, ask only consequential questions, plan as needed, implement, verify, review, publish. Dispatch only an actionable leaf issue, never an unresolved Epic.
-- Each implementing issue gets its own branch and worktree with one writer. Workers use an explicit model and effort, verified before task input (`docs/model-routing.md`). Without Orca, use `docs/standalone.md`; with Orca, `docs/orca-execution.md`.
-- An independent reviewer follows `docs/pair-review.md`, at most three review/fix rounds, then escalate to a human.
+- For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow `BALLAST_SOURCE/docs/issue-workflow.md`: read the issue and comments, scope and decompose, ask only consequential questions, plan as needed, implement, verify, review, publish. Dispatch only an actionable leaf issue, never an unresolved Epic.
+- Each implementing issue gets its own branch and worktree with one writer. Workers use an explicit model and effort, verified before task input (`BALLAST_SOURCE/docs/model-routing.md`). Without Orca, use `BALLAST_SOURCE/docs/standalone.md`; with Orca, `BALLAST_SOURCE/docs/orca-execution.md`.
+- An independent reviewer follows `BALLAST_SOURCE/docs/pair-review.md`, at most three review/fix rounds, then escalate to a human.
 - Record phases, blockers, review rounds and waits on the issue; unknown stays unknown. Agents run outside CI; CI runs deterministic checks only.
 
 ## Risk and conditional guidance

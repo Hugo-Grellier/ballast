@@ -56,10 +56,12 @@ GitHub.com, and a supported Codex CLI for workers (see [standalone](standalone.m
    - the Ballast ignore block in `.gitignore`.
 
    Keep any `.specify/` record you still want as history; it no longer drives anything.
-6. **Optional machine cleanup.** Remove the v1 command (`~/.local/bin/ballast`), its
-   cache (`$XDG_DATA_HOME/ballast/standard/`) and its state
-   (`$XDG_STATE_HOME/ballast/`) once no project on the machine uses v1. These steps
-   are destructive and cannot be undone except by reinstalling v1.
+6. **Optional machine cleanup.** Once no project on the machine uses v1, remove the
+   v1 command (`~/.local/bin/ballast`), its cache and its state. The cache is
+   `$XDG_DATA_HOME/ballast/standard/`, by default `~/.local/share/ballast/standard/`.
+   The state is `$XDG_STATE_HOME/ballast/`, by default `~/.local/state/ballast/`. Check
+   whether those variables are set first. This cleanup cannot be undone except by
+   reinstalling v1.
 
 ## Rolling back
 

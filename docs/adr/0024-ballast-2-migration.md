@@ -44,7 +44,8 @@ the generic policies and review skills as copy-once content.
 
 | v1 guarantee (source) | In 2.0 |
 | --- | --- |
-| Pinned, verified install into ignored paths; a project owns only its files (BL-INV-001, BL-INV-004, ADR-0001/0002/0007/0008/0011/0012) | Removed. Templates are copied once and owned by the project. The helpers run from a checkout the operator selected, with no verification of their origin |
+| A project commits only its own files; everything installed is git-ignored and rebuildable (BL-INV-001, ADR-0007/0011/0012) | Changed. Project ownership stays, but nothing is installed: copied templates become the project's own committed files |
+| A verified install of a pinned version; the project picks a version, never a source, and the source repository is fixed in the command (BL-INV-004, ADR-0001/0002/0008) | Removed. The operator chooses the Ballast checkout and its tag; nothing verifies the origin or content of the helpers |
 | Nothing executes from a writable checkout before trust; trust baselines and refresh (BL-INV-002, ADR-0003/0005/0015/0021) | Removed. The coordinator and the helpers run with the caller's authority from the operator's checkout |
 | Protected inputs and tamper markers fail a step closed (BL-INV-003) | Removed. Workers are confined by the native CLI sandbox. Coordinator records are cooperative and can be edited by the operator or a peer with the same access |
 | Postcondition-checked phases, artifact validators, run ledger and acceptance packet (BL-INV-005, ADR-0006/0017/0018) | Replaced by phase records on the issue, PR acceptance evidence, independent review and settlement on backend terminal evidence. Missing evidence is reported as unknown |
