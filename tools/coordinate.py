@@ -301,14 +301,17 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
 
     The verdict is not read here: a completed review is not an approval.
     """
+    # Read every record first: a malformed one blocks regardless of scan order.
+    results = [
+        admission.read(path)
+        for path in (claim.parent / "workers").glob("*/result.json")
+    ]
     return any(
         result.get("attempt") == attempt
         and result.get("role") == "review"
         and result.get("status") == "completed"
         and result.get("head_before") == result.get("head_after") == head
-        for result in map(
-            admission.read, (claim.parent / "workers").glob("*/result.json")
-        )
+        for result in results
     )
 
 
