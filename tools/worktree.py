@@ -242,7 +242,7 @@ def main() -> int:
         RuntimeError,
         subprocess.SubprocessError,
     ) as error:
-        # Admission reasons are fixed strings without private payloads.
+        # Fixed reasons carry no private payloads.
         reason = (
             str(error)
             if isinstance(error, admission.FixedReasonError)

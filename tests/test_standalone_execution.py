@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.test_codex_routing import MemoryProcess, response
-from tools import admission, codex, worker, worktree
+from tools import admission, codex, coordinate, worker, worktree
 
 
 class ExecutionTests(unittest.TestCase):
@@ -366,6 +366,38 @@ class ExecutionTests(unittest.TestCase):
         ):
             self.assertEqual(worktree.main(), 1)
             self.assertIn("Fixed.", stderr.write.call_args.args[0])
+
+    def worker_reason(self) -> str:
+        args = ["worker.py", "--claim", str(self.claim), "--task", str(self.task)]
+        args += ["--model", "m", "--effort", "low", "--role", "implement"]
+        with patch("sys.argv", args), patch.object(codex, "emit") as emit:
+            self.assertEqual(worker.main(), 1)
+        return emit.call_args.args[0]["reason"]
+
+    def test_worker_main_reports_claim_and_lock_reasons(self) -> None:
+        self.claim.with_suffix(".worker").write_text("{}")
+        self.assertEqual(self.worker_reason(), "Another worker holds this issue")
+        self.claim.with_suffix(".worker").unlink()
+        worktree.mark(self.claim, "preparing")
+        self.assertEqual(
+            self.worker_reason(),
+            "Claim is not ready or belongs to another Git repository",
+        )
+
+    def test_coordinate_main_reports_fixed_reasons_only(self) -> None:
+        for error, shown in (
+            (worktree_error("Fixed reason."), "Fixed reason."),
+            (RuntimeError("private payload"), "RuntimeError"),
+        ):
+            with (
+                patch("sys.argv", ["coordinate.py", "status"]),
+                patch.object(coordinate, "run", side_effect=error),
+                patch("sys.stderr") as stderr,
+            ):
+                self.assertEqual(coordinate.main(), 1)
+                text = stderr.write.call_args.args[0]
+                self.assertIn(shown, text)
+                self.assertNotIn("private", text)
 
 
 def worktree_error(reason: str) -> Exception:
