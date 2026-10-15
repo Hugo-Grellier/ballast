@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.1.0](https://github.com/Hugo-Grellier/ballast/compare/v2.0.0...v2.1.0) (2026-10-15)
+
+
+### Features
+
+* add portable local execution dashboard ([#191](https://github.com/Hugo-Grellier/ballast/issues/191)) ([ad6928a](https://github.com/Hugo-Grellier/ballast/commit/ad6928ab794aff787c7d52b1f551af57ca70a9d7))
+* **dashboard:** rework the local execution dashboard UI/UX ([#194](https://github.com/Hugo-Grellier/ballast/issues/194)) ([87abfea](https://github.com/Hugo-Grellier/ballast/commit/87abfea3825f84dfd0b8db1c657a29cc0c964c07))
+
+
+### Bug Fixes
+
+* **admission:** require the queue coordinator on every queue mutation ([#216](https://github.com/Hugo-Grellier/ballast/issues/216)) ([8071fdf](https://github.com/Hugo-Grellier/ballast/commit/8071fdfa01df5b2b25a434b99d9d201a044da08b))
+* **coordinate:** evaluate queue dependencies in batched GraphQL queries ([#213](https://github.com/Hugo-Grellier/ballast/issues/213)) ([cbd0342](https://github.com/Hugo-Grellier/ballast/commit/cbd03423ef773eba98d3860d57b1c78f40410948))
+* **coordinate:** publish only a head with a completed independent review ([#217](https://github.com/Hugo-Grellier/ballast/issues/217)) ([a83f393](https://github.com/Hugo-Grellier/ballast/commit/a83f393cf492ffccfa3ae7ca3707dca709337cf0))
+* **dashboard:** keep Git subprocesses out of the admission lock ([#209](https://github.com/Hugo-Grellier/ballast/issues/209)) ([063af65](https://github.com/Hugo-Grellier/ballast/commit/063af65fbb3b95da5ddb91bb64d07e54cfd102a8))
+* **progress:** narrow the sensitive-text filter and accept SHA-256 revisions ([#210](https://github.com/Hugo-Grellier/ballast/issues/210)) ([adc8922](https://github.com/Hugo-Grellier/ballast/commit/adc89222402d9504c815657181eced6e80eb2ec1))
+* **worker:** name checkout survivors and keep completed output ([#196](https://github.com/Hugo-Grellier/ballast/issues/196)) ([2f6d0ff](https://github.com/Hugo-Grellier/ballast/commit/2f6d0ff64efb1408769ebe34cdd9f328c9afa130))
+* **worker:** report fixed blocking reasons instead of a generic failure ([#215](https://github.com/Hugo-Grellier/ballast/issues/215)) ([9e0b93f](https://github.com/Hugo-Grellier/ballast/commit/9e0b93fe777f84759e2f00e345aee8ebe817bf1a))
+* **worker:** settle a timed-out or terminated worker through the interrupt path ([#230](https://github.com/Hugo-Grellier/ballast/issues/230)) ([4645074](https://github.com/Hugo-Grellier/ballast/commit/4645074f44d76bba9d1dd8d733db0aecd5cc157b))
+* **worktree:** accept the ssh:// GitHub origin form ([#211](https://github.com/Hugo-Grellier/ballast/issues/211)) ([25729e2](https://github.com/Hugo-Grellier/ballast/commit/25729e2d880c900f824e8d7376b77e4f674cbb74))
+
+
+### Documentation
+
+* **migration:** explain how adopters pick up template changes ([#214](https://github.com/Hugo-Grellier/ballast/issues/214)) ([440c20e](https://github.com/Hugo-Grellier/ballast/commit/440c20ea0c2658357fa9623556770f28e635bb2c))
+* **research:** Claude Code as a verified Ballast worker backend ([#226](https://github.com/Hugo-Grellier/ballast/issues/226)) ([123d50c](https://github.com/Hugo-Grellier/ballast/commit/123d50ce75cc776e9f4298d37089badc43e9ccb2))
+
 ## [2.0.0](https://github.com/Hugo-Grellier/ballast/compare/v1.1.0...v2.0.0) (2026-10-15)
 
 
