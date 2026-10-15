@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,6 +55,7 @@ class QueueTests(unittest.TestCase):
         self.prs: list[dict] = []
         self.merged: set[int] = set()
         self.missing: set[int] = set()
+        self.graphql: list[list[str]] = []
         self.lose_create_response = False
         native = worktree.command
 
@@ -94,9 +96,13 @@ class QueueTests(unittest.TestCase):
                 worktree.fail("Fictional lost response")
             return {}
         if "graphql" in argv:
-            number = int(argv[-1].split("=", 1)[1])
-            found = None if number in self.missing else self.issue(number)
-            return {"data": {"repository": {"issue": found}}}
+            self.graphql.append(argv)
+            query = next(a for a in argv if a.startswith("query="))
+            numbers = [int(n) for n in re.findall(r"i\d+:issue\(number:(\d+)\)", query)]
+            if self.missing.intersection(numbers):
+                # The real gh exits non-zero when any alias is unresolved.
+                worktree.fail("Fictional unresolved issue")
+            return {"data": {"repository": {f"i{n}": self.issue(n) for n in numbers}}}
         path = argv[-1]
         if "/git/ref/heads/" in path:
             return {
@@ -555,6 +561,19 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(
             (paused["eligible"], paused["waiting_for_capacity"]), ([], [74])
         )
+
+    def test_selection_batches_queue_and_prerequisite_reads(self) -> None:
+        self.issues = {81: {"body": "Blocked by #90"}, 82: {"body": "Blocked by #91"}}
+        self.queue([80, 81, 82])
+        coordinate.select(self.repo)
+        self.assertEqual(len(self.graphql), 2)  # queue issues, then prerequisites
+
+    def test_malformed_node_isolates_only_that_issue(self) -> None:
+        self.issues = {91: {"number": 0}}
+        self.queue([90, 91])
+        selected = coordinate.select(self.repo)
+        self.assertEqual(selected["eligible"], [90])
+        self.assertEqual(selected["blocked"], {"91": ["issue could not be read"]})
 
     def test_closed_or_forkless_prs_block_cleanly(self) -> None:
         self.queue([75])

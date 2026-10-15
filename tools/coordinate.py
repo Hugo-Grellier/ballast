@@ -19,11 +19,10 @@ from tools import admission, progress, worktree
 MAX_DEPENDENCIES = 50
 # Bound regex work on untrusted issue bodies (GitHub caps bodies at 65536).
 MAX_LINE = 1024
-ISSUE_QUERY = """query($owner:String!,$name:String!,$number:Int!){
-repository(owner:$owner,name:$name){issue(number:$number){
+ISSUE_FIELDS = """fragment F on Issue{
 number state body subIssuesSummary{total}
 blockedBy(first:50){pageInfo{hasNextPage} nodes{number state repository{nameWithOwner}}}
-closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{merged}}}}}"""
+closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{merged}}}"""
 NAME = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 # `#5`, `owner/repo#5` or `https://github.com/owner/repo/issues/5`.
 REFERENCE = re.compile(rf"(?:https://github\.com/({NAME})/issues/|({NAME})?#)(\d+)")
@@ -50,9 +49,29 @@ def gh(cwd: Path, *args: str) -> object:
     return json.loads(worktree.command(["gh", *args], cwd))
 
 
-def issue(cwd: Path, repo: str, number: int) -> dict:
-    """Read one issue with native dependencies and its closing PR merge state."""
+def check(value: object, number: int) -> dict:
+    """Validate one issue node; anything malformed raises."""
+    if (
+        not isinstance(value, dict)
+        or value["number"] != number
+        or not isinstance(value["body"], str)
+        or not isinstance(value["state"], str)
+        or type(value["subIssuesSummary"]["total"]) is not int
+        or not isinstance(value["closedByPullRequestsReferences"]["nodes"], list)
+        or not isinstance(value["blockedBy"]["nodes"], list)
+    ):
+        raise TypeError
+    return value
+
+
+def issues(cwd: Path, repo: str, numbers: list[int]) -> dict[int, dict | None]:
+    """Read issues in one aliased query; a missing or malformed one is None."""
     owner, name = repo.split("/")
+    aliases = " ".join(f"i{n}:issue(number:{int(n)}){{...F}}" for n in numbers)
+    query = (
+        "query($owner:String!,$name:String!)"
+        f"{{repository(owner:$owner,name:$name){{{aliases}}}}}\n{ISSUE_FIELDS}"
+    )
     data = gh(
         cwd,
         "api",
@@ -60,28 +79,23 @@ def issue(cwd: Path, repo: str, number: int) -> dict:
         "--hostname",
         "github.com",
         "-f",
-        f"query={ISSUE_QUERY}",
+        f"query={query}",
         "-f",
         f"owner={owner}",
         "-f",
         f"name={name}",
-        "-F",
-        f"number={number}",
     )
     try:
-        value = data["data"]["repository"]["issue"]
-        if (
-            value["number"] != number
-            or not isinstance(value["body"], str)
-            or not isinstance(value["state"], str)
-            or type(value["subIssuesSummary"]["total"]) is not int
-            or not isinstance(value["closedByPullRequestsReferences"]["nodes"], list)
-            or not isinstance(value["blockedBy"]["nodes"], list)
-        ):
-            raise TypeError  # noqa: TRY301 -- one malformed-response path
+        nodes = data["data"]["repository"]
     except (KeyError, TypeError):
         worktree.fail("Issue response is malformed")
-    return value
+    found: dict[int, dict | None] = {}
+    for number in numbers:
+        try:
+            found[number] = check(nodes[f"i{number}"], number)
+        except LOOKUP_ERRORS:
+            found[number] = None
+    return found
 
 
 def prerequisites(repo: str, value: dict) -> dict[str, dict]:
@@ -120,12 +134,40 @@ def cycles(graph: dict[int, set[int]]) -> set[int]:
 
 def lookup(cwd: Path, repo: str, number: int, cache: dict) -> dict | None:
     """Fetch once; a failed or missing issue is unknown, never absent."""
-    if number not in cache:
-        try:
-            cache[number] = issue(cwd, repo, number)
-        except LOOKUP_ERRORS:
-            cache[number] = None
+    preload(cwd, repo, [number], cache)
     return cache[number]
+
+
+def preload(cwd: Path, repo: str, numbers: list[int], cache: dict) -> None:
+    """Fill the cache for every uncached number with one GraphQL call."""
+    wanted = [n for n in dict.fromkeys(numbers) if n not in cache]
+    if not wanted:
+        return
+    try:
+        cache.update(issues(cwd, repo, wanted))
+    except LOOKUP_ERRORS:
+        # A failed call (GitHub exits non-zero on any unresolved alias) reads each
+        # issue alone so only the unreadable one is unknown.
+        if len(wanted) == 1:
+            cache[wanted[0]] = None
+            return
+        for number in wanted:
+            preload(cwd, repo, [number], cache)
+
+
+def preload_prerequisites(cwd: Path, queue: dict, cache: dict) -> None:
+    """Second batch: same-repo prerequisites of the queue issues just read."""
+    repo = queue["repository"]
+    wanted: list[int] = []
+    for number in queue["issues"]:
+        if cache.get(number) is None:
+            continue
+        with contextlib.suppress(*LOOKUP_ERRORS):
+            for key in prerequisites(repo, cache[number]):
+                owner, dependency = key.rsplit("#", 1)
+                if owner.lower() == repo.lower():
+                    wanted.append(int(dependency))
+    preload(cwd, repo, wanted, cache)
 
 
 def merged(value: dict) -> bool:
@@ -176,6 +218,8 @@ def select(cwd: Path) -> dict:
         worktree.fail("No queue is configured")
     worktree.repository(cwd, value["repository"])
     context: tuple = ({}, {})
+    preload(cwd, value["repository"], list(value["issues"]), context[0])
+    preload_prerequisites(cwd, value, context[0])
     blocked = {n: blockers(cwd, value, n, context) for n in value["issues"]}
     for number in cycles(context[1]):
         blocked[number].append("dependency cycle")
