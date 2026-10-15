@@ -57,8 +57,8 @@ plan, not completed proof. Merge and release remain human decisions.
    - `docs/evidence/release-2.0.md`: standalone (#177), queue/recovery (#178) and
      Orca (#179) evidence, limits, remaining gaps, and the throughput/quality
      tradeoffs observed.
-   - The squash commit carries `Release-As: 2.0.0`. The operator approves the
-     release PR.
+   - The `feat!` title and `BREAKING CHANGE` footer make Release Please propose
+     2.0.0. The operator merges that release PR only after #179 and the evidence.
 
 ## Removed guarantees (for ADR-0024 and the migration guide)
 
