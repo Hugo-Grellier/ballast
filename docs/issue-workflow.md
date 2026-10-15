@@ -153,8 +153,9 @@ Fix actionable findings, rerun affected checks, and request review of the update
 head. For a disputed finding, record the evidence and request pair reassessment;
 the author cannot dismiss a blocker alone. Escalate product disagreements to the
 human. After three review/fix rounds, stop automatic repair and report unresolved
-findings in a draft PR. If an independent reviewer is unavailable, publish a
-draft PR with the missing review clearly stated.
+findings in a draft PR. If an independent reviewer is unavailable, do not
+publish; report the missing review to the human. The standalone `publish` helper
+refuses a head without a completed review.
 
 ## 6. Publish and finish
 

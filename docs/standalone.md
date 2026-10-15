@@ -210,8 +210,14 @@ cannot be recreated to reset its budget.
   worker as `quota` and pauses dispatch until the backend-reported window reset,
   or until an explicit `running` control when no window was reported. Nothing
   retries, buys capacity or skips review.
-- `publish --claim CLAIM --title TEXT --body-file FILE` requires the pushed
-  reviewed head, reuses the one matching PR on the claim branch, creates a draft
+- `publish --claim CLAIM --title TEXT --body-file FILE` first requires a
+  `--role review` worker of the claim's attempt whose recorded status is
+  `completed` and whose recorded head before and after the turn both equal the
+  checkout head; a review of another head or attempt, or a `cancelled`,
+  `quota`, `unknown` or `released` review, blocks before any GitHub call. It
+  does not read the verdict: a completed review is not an approval, and the
+  coordinator still reads the findings before publishing. It then requires that
+  head pushed, reuses the one matching PR on the claim branch, creates a draft
   only when none exists, and re-queries after an uncertain response. Several,
   foreign or stale PRs block.
 - `settle --claim CLAIM ACTIVITY --evidence TEXT` records positive coordinator

@@ -345,12 +345,73 @@ class QueueTests(unittest.TestCase):
         return {"number": number, "state": state, "repository": {"nameWithOwner": REPO}}
 
     def publish_ready(self, issue: int) -> Path:
+        """Push the base head and run a completed independent review of it."""
         claim = self.prepare(issue)
         record = json.loads(claim.read_text())
         self.heads[record["branch"]] = self.base
+        self.claim, self.cwd = claim, Path(record["checkout"])
+        messages = self.script(sandbox={"type": "readOnly", "networkAccess": False})
+        self.review = self.run_worker(messages, role="review")
         body = self.root / "body.md"
         body.write_text("Fictional PR body")
         return claim
+
+    def test_publish_requires_a_completed_review_of_this_head_and_attempt(
+        self,
+    ) -> None:
+        self.queue([45])
+        claim = self.publish_ready(45)
+        result = self.state / "workers" / self.review["worker"] / "result.json"
+        reviewed = json.loads(result.read_text())
+        self.assertEqual(reviewed["status"], "completed")
+        branch = json.loads(claim.read_text())["branch"]
+        # A refusal must come before the first GitHub call (the pushed-head read).
+        self.heads[branch] = "advanced"
+        refusals = {
+            "no review": None,
+            "implementer": {"role": "implement"},
+            "older head": {"head_before": "older", "head_after": "older"},
+            "changed checkout": {"head_after": "changed"},
+            "moved during review": {"head_before": "older"},
+            "another attempt": {"attempt": "another"},
+            **{
+                status: {"status": status}
+                for status in ("cancelled", "unknown", "released", "quota")
+            },
+        }
+        for name, change in refusals.items():
+            with self.subTest(name):
+                if change is None:
+                    result.unlink()
+                else:
+                    result.write_text(json.dumps(reviewed | change))
+                with self.assertRaisesRegex(RuntimeError, "completed independent"):
+                    coordinate.publish(claim, "Fictional", self.root / "body.md")
+        result.write_text(json.dumps(reviewed))
+        # Any malformed worker record fails closed, even beside a valid review.
+        other = self.state / "workers" / "other" / "result.json"
+        other.parent.mkdir()
+        other.write_text("{")
+        native = Path.glob
+        # Scan both orders: a valid review found first must not hide it.
+        for reverse in (False, True):
+            with (
+                self.subTest(reverse=reverse),
+                patch.object(
+                    Path,
+                    "glob",
+                    lambda path, pattern, r=reverse: iter(
+                        sorted(native(path, pattern), reverse=r)
+                    ),
+                ),
+                self.assertRaisesRegex(RuntimeError, "malformed"),
+            ):
+                coordinate.publish(claim, "Fictional", self.root / "body.md")
+        other.unlink()
+        self.assertEqual(self.prs, [])
+        self.heads[branch] = self.base
+        record = coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(record["pr"]["head"], self.base)
 
     def test_lost_publication_response_recovers_one_pr(self) -> None:
         self.queue([40], issues=1, backlog=1)
