@@ -1,6 +1,6 @@
 # Agent Instructions for [PROJECT NAME]
 
-This file is a starting point. Copy it to the repository root (link `CLAUDE.md` to it so Claude Code and Codex share one entry point), replace the placeholders, and remove rules that do not apply. Agents load this file automatically, so it stays committed and short; detailed procedures live in the installed `docs/policies/` and the project's `docs/policies/project/`.
+This file is a starting point. Copy it to the repository root (link `CLAUDE.md` to it so Claude Code and Codex share one entry point), replace the placeholders, and remove rules that do not apply. Agents load this file automatically, so it stays committed and short; detailed rules live in `docs/policies/` and the project's `docs/policies/project/`.
 
 ## Work from the right artifact
 
@@ -8,7 +8,7 @@ This file is a starting point. Copy it to the repository root (link `CLAUDE.md` 
 - Layout: [WHERE THE APPLICATION, MIGRATIONS, CLIENTS AND TESTS LIVE]
 - Architecture and domain: [ACCEPTED ARCHITECTURE DOCUMENT], ADRs in [ADR DIRECTORY], domain glossary in [GLOSSARY PATH].
 
-Accepted ADRs and the accepted architecture govern design. A ready feature spec in `specs/<number>-<slug>/` defines current requirements, followed by its reviewed plan and tasks. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR for an accepted architecture change. Read only the relevant architecture sections and ADRs when changing domain behavior or a boundary.
+Accepted ADRs and the accepted architecture govern design; the issue states the outcome and acceptance criteria. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR for an accepted architecture change. Read only the relevant architecture sections and ADRs when changing domain behavior or a boundary.
 
 ## Commands
 
@@ -18,25 +18,20 @@ Accepted ADRs and the accepted architecture govern design. A ready feature spec 
 
 ## Invariants
 
-- [PROJECT INVARIANTS, OR A POINTER TO `.specify/memory/constitution.md`]
+- [PROJECT INVARIANTS]
 
-Read the [constitution](.specify/memory/constitution.md) when planning a significant feature or checking a conflict.
+## Issue workflow
 
-## Issue and spec workflow
+`BALLAST_SOURCE` below means [PATH TO A BALLAST CHECKOUT AT THE ADOPTED TAG], outside this repository. Its `docs/` holds the workflow; read only the file the current phase needs. Paths under `BALLAST_SOURCE` never resolve in this repository.
 
-GitHub Issues track status, discussion, dependencies and implementation progress; they do not replace accepted product or feature intent. Read the issue and comments. Before `speckit.specify`, apply the [scope gate](docs/policies/spec-kit-workflow.md#scope-and-decomposition-gate): dispatch only an actionable leaf Issue, never an unresolved Epic. Use the full Spec Kit workflow for new features and meaningful behavior changes, the bugfix workflow for a small bounded fix, and the assess workflow for research or a spike. Before changing a feature, read its `intent.md`, `spec.md`, `plan.md`, `tasks.md`, review reports and unresolved `decisions.md` as applicable. The human approves intent, material plan changes and final acceptance. Tasks use explicit dependencies and execution waves, and each acceptance criterion has test or other verification evidence.
-
-For `Start #N`, `Fix #N`, `Investigate #N`, or `Continue #N`, use the [feature-intake skill](.agents/skills/ballast-feature-intake/SKILL.md). It inspects the Issue, applies the scope gate, reconciles approved GitHub setup, and hands off to the existing workflow. Start and resume feature runs only through `ballast run`; if it refuses, stop and report why.
-
-An agent session and an agent step differ. The operator's own agent session (this conversation, outside any `ballast run` step) runs the commands that carry no decision: `ballast setup`, `ballast intake`, `ballast run status`, `ballast run step RUN PHASE --headless`, `ballast run publish`, `ballast discard-runs`, and `ballast trust` on a checkout it set up. It relays decisions only within the run's autonomy, naming itself with `--relayed-by SESSION`: `ballast run start` in any mode after the operator chose it; `ballast run approve RUN GATE...` only in a Chat run and only after the operator's yes in chat; `ballast run resume` or `continue` of a block that carries a decision only with `--ref` naming the operator's answer. `ballast run reject`, `resolve`, `mode` and an interactive `step` stay at the operator's terminal; never relay them. An agent inside a step runs no `ballast` command at all, `ballast trust` included. See [Agent sessions](docs/policies/spec-kit-workflow.md#agent-sessions-and-relayed-decisions).
-
-To work on a feature conversationally, the operator uses Chat mode: `ballast run start --mode chat -i feature_directory=specs/N-slug` starts it, `ballast run step RUN PHASE` runs one confined, checked step, `ballast run status RUN` shows where it stands and what is allowed next, and `ballast run mode RUN chat|human-gated --reason TEXT` switches it. Come back to a Chat run with `status` and the next `step`, never `resume`. Every gate needs `ballast run approve`, typed at the operator's terminal or relayed as above; an agent in a Chat step never approves and never claims an approval, and a relay is recorded as relayed, never as the operator's. Working in a plain agent session outside `ballast run` gives none of the run's guarantees (preflight, confinement, postconditions, evidence, human gates). See the [Chat runs](docs/policies/spec-kit-workflow.md#chat-runs) section.
-
-Spec Kit artifacts and accepted product/technical documents are authoritative for intent. When implementation evidence conflicts with approved intent, stop at the conflict and record a feature-local proposal in `decisions.md`; agents may fix defects and clarify wording without a proposal, but every other discovery needs a human resolution, and product behavior, scope, data authority, security boundaries or accepted architecture changes require human approval. Update the spec, plan and tasks after approval before continuing. Reviews label findings as spec violation, implementation bug, architecture issue, missing test, spec ambiguity or proposed product change. Model roles are interchangeable; do not configure a permanent author/reviewer pairing. See the [Spec Kit workflow](docs/policies/spec-kit-workflow.md), the [risk and review matrix](docs/policies/workflow.md) and the [issue guidance](docs/policies/issue-tracker.md). Do not retrofit completed work.
+- For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow `BALLAST_SOURCE/docs/issue-workflow.md`: read the issue and comments, scope and decompose, ask only consequential questions, plan as needed, implement, verify, review, publish. Dispatch only an actionable leaf issue, never an unresolved Epic.
+- Each implementing issue gets its own branch and worktree with one writer. Workers use an explicit model and effort, verified before task input (`BALLAST_SOURCE/docs/model-routing.md`). Without Orca, use `BALLAST_SOURCE/docs/standalone.md`; with Orca, `BALLAST_SOURCE/docs/orca-execution.md`.
+- An independent reviewer follows `BALLAST_SOURCE/docs/pair-review.md`, at most three review/fix rounds, then escalate to a human.
+- Record phases, blockers, review rounds and waits on the issue; unknown stays unknown. Agents run outside CI; CI runs deterministic checks only.
 
 ## Risk and conditional guidance
 
-Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval: before the change in a human-gated run; in an eligible Autonomous run (`ballast run start --mode autonomous`), every intermediate decision is agent-provisional and the merge decision is the single human approval, including for R2. A provisional decision is never human approval. All feature PRs require human merge approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
+Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval of the risky change and of the merge. Every PR needs human merge approval; an agent never merges, releases or deploys, and an agent decision is never presented as human approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
 
 | When changing | Read and use |
 | --- | --- |
@@ -47,18 +42,13 @@ Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2
 | Schema/data migration | [Migration policy](docs/policies/migrations.md) and [database migration](.agents/skills/ballast-database-migration/SKILL.md) |
 | Public behavior, config, API, ADR | [Documentation policy](docs/policies/documentation.md) and [documentation review](.agents/skills/ballast-documentation-review/SKILL.md) |
 | Jobs, retries, provider failures | [Observability policy](docs/policies/observability.md) |
-| Significant spec completion | Resolve feature decisions, run Spec Kit converge and [spec reconciliation](.agents/skills/ballast-spec-reconciliation/SKILL.md) |
 
 Each policy also reads `docs/policies/project/<name>.md` when it exists.
 
 Never silently weaken a failing test, validation, authorization, lint/type rule or error result; change source authority; add a second source of truth; or mix unrelated refactors into the work. Resolve a genuine conflict explicitly.
 
-## Model routing
-
-When model choice is under operator control, follow [model routing](docs/policies/model-routing.md): use deterministic workflow/risk rules before classification, choose the lowest sufficient `economy`/`standard`/`senior` profile, and escalate from evidence rather than by default. Use the [routing classifier](.agents/skills/ballast-model-routing/SKILL.md) only for ambiguous work. Prefer cross-provider independent review for significant features when practical. Do not switch to a paid API or store account/quota details in the repository.
-
 ## PRs and local environment
 
-Link the issue and spec, state risk, checks and required reviews; include screenshots for visible UI changes. [RELEASE OR COMMIT-TITLE CONVENTION]
+Link the issue, map its acceptance criteria to evidence, state risk, checks and reviews; include screenshots for visible UI changes. [RELEASE OR COMMIT-TITLE CONVENTION]
 
 Do not expose secrets in code, logs, examples or generated files. Keep hostnames, IPs, server paths and credentials out of tracked files, commits, issues and PRs; put local destinations in an ignored `AGENTS.local.md`. Before a destructive operation or an externally visible release action, follow the project's approval process: [PROCESS OR LINK]

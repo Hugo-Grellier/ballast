@@ -3,7 +3,7 @@
 Use this adapter when an existing agent starts one leaf issue without Orca.
 The coordinator follows [the issue workflow](issue-workflow.md), owns decisions,
 checks and publication, and uses two helpers from the operator-selected Ballast
-2.0 source tree. The helpers do not install or activate Ballast 1.x.
+checkout.
 
 ## Scope and limits
 
@@ -21,7 +21,7 @@ rounds and one issue PR. A fresh session is required for each worker. Worker
 nested delegation is disabled in the client and forbidden in the handoff.
 
 This is a cooperative agent workflow under native CLI sandbox permissions, with
-read access supplied by the installed client. It does not supply the v1 trusted
+read access supplied by the installed client. It does not supply a trusted
 launcher, protect records from the operator or a malicious peer, isolate external
 services, enforce policy against arbitrary alternate CLIs, or provide detached
 supervision. Review local/project agent configuration before launch. Preserve the

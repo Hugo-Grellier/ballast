@@ -1,6 +1,6 @@
 # ADR-0023: Ballast 2.0 uses a portable agent workflow with explicit execution evidence
 
-- Status: proposed; human merge acceptance required
+- Status: accepted by [ADR-0024](0024-ballast-2-migration.md) when its PR merges ([#180](https://github.com/Hugo-Grellier/ballast/issues/180))
 - Issues: #174 (2.0), #175 (foundation)
 - Basis: operator's 2.0 design conversation, 2026-10-14
 

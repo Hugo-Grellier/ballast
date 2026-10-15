@@ -1,6 +1,7 @@
 # ADR-0019: A feature declares its criterion-linked UI states in its own file
 
 - Status: proposed (2026-10-12, with the change for [#142](https://github.com/Hugo-Grellier/ballast/issues/142)). Agent-provisional in Autonomous run `864d9151`; merging the PR is the human approval that accepts it.
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Risk: R2 (what the acceptance packet trusts).
 - Feature: [142-feature-ui-states](../../specs/142-feature-ui-states/spec.md); research [R1 to R9](../../specs/142-feature-ui-states/research.md); operator decisions 1b and 2b in the Issue intake scope comment.
 - Amends: [ADR-0006](0006-review-packet-reads.md), "the packet's configuration lives in the protected `ballast.toml`".

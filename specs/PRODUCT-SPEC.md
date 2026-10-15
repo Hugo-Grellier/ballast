@@ -1,5 +1,7 @@
 # Agent-First Repository Operating System
 
+> **v1.x record.** This document describes Ballast 1.x and is kept unchanged as history. Ballast 2.0 is governed by [ADR-0023](../docs/adr/0023-ballast-2-portable-agent-workflow.md), [ADR-0024](../docs/adr/0024-ballast-2-migration.md) and the workflow in [`docs/`](../docs/); see the [migration guide](../docs/migration.md).
+
 **Version:** 0.1  
 **Status:** Draft  
 **Date:** 2026-09-24

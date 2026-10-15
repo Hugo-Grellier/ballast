@@ -1,6 +1,7 @@
 # ADR-0003: The trusted launcher holds GitHub authority, agents never do
 
 - Status: accepted (2026-10-04, with feature 17 after R2 review rounds 1–4; accepted by the agent under the operator's standing authority for Epic #11 children, confirmed by the operator's merge of PR #33)
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Feature: [17-draft-pr](../../specs/17-draft-pr/spec.md), FR-001, FR-013, SC-005; plan [§ Proposed architecture decisions](../../specs/17-draft-pr/plan.md#architecture-boundaries)
 
 ## Context

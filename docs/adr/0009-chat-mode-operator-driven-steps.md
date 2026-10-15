@@ -1,6 +1,7 @@
 # ADR-0009: Chat mode runs operator-driven steps through the trusted launcher
 
 - Status: accepted (2026-10-07, by the operator for the 1.0 release, after its PR merged). Previously: Proposed (agent-provisional in Autonomous run `2cb9c5c5`; accepted only by the human merge decision)
+- Superseded by [ADR-0024](0024-ballast-2-migration.md) (2026-10-15, Ballast 2.0). Kept unchanged as the v1.x record.
 - Feature: [20-chat-mode](../../specs/20-chat-mode/spec.md); plan [§ Decisions for plan review](../../specs/20-chat-mode/plan.md#decisions-for-plan-review), decisions D-1 to D-7; research R1 to R15
 - Extends: [ADR-0004](0004-autonomous-provisional-decisions.md) (the publisher), [ADR-0005](0005-launcher-branch-synchronization.md) (the list of invocations that synchronize)
 

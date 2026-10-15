@@ -1,281 +1,70 @@
 # Ballast
 
-## Ballast 2.0 development
+Ballast turns GitHub issues into verified, independently reviewed PRs from the agent
+session you already use. The agent coordinates: it scopes the issue, asks only
+consequential questions, starts workers with an explicit model and effort in a
+separate worktree, runs the checks, gets an independent review and publishes the
+PR. You write the issue and decide the merge.
 
+Ballast is a set of workflow instructions, a few standard-library helpers and
+copy-once project templates. It installs nothing, runs no daemon and puts no agent
+in CI. Projects still on a `v1.x` pin keep working; see
+[migrating from 1.x](docs/migration.md).
 
-The rewrite happens in the normal repository layout. Each leaf issue has its
-own branch and worktree; the PR stack isolates development from `main`.
-There is no separate successor product tree. Released v1 remains in Git history
-and release tags. The 2.0 release and migration still require human approval.
+## Workflow
 
-| Location | Purpose |
+| Document | Purpose |
 | --- | --- |
-| [AGENTS.md](AGENTS.md) | Instructions for working on this repository |
-| [docs/issue-workflow.md](docs/issue-workflow.md) | Scope, decomposition, questions/planning, implementation and publication |
-| [docs/pair-review.md](docs/pair-review.md) | Independent review and bounded repair |
-| [docs/model-routing.md](docs/model-routing.md) | Explicit provider/model/effort and pre-task verification |
-| [docs/execution.md](docs/execution.md) | Worktrees, ownership, limits and recovery contract |
-| [docs/orca-execution.md](docs/orca-execution.md) | Optional Orca adapter contract |
-| [tools/codex.py](tools/codex.py) | Codex capability/configuration probe and shared transport |
-| [docs/evidence/codex-routing.md](docs/evidence/codex-routing.md) | Real configuration qualification and its limits |
-| [docs/research/orca-workflow.md](docs/research/orca-workflow.md) | Orca practices and solo-maintainer tradeoffs |
-
-The [standalone adapter](docs/standalone.md) uses [tools/worktree.py](tools/worktree.py)
-to claim and prepare one issue, and [tools/worker.py](tools/worker.py) to execute a
-fresh worker with explicit routing verified before task input. The existing agent
-coordinates questions/planning, checks, independent review and publication.
-[Live evidence](docs/evidence/standalone.md) records a fictional issue-to-ready-PR
-scenario with meaningful checks, actual child/launcher routing contrast and CI.
-
-The bounded queue and recovery have landed and the v1 installer/runner code is
-removed from this branch (it stays at the `v1.x` tags). Optional Orca integration
-and the 2.0 migration remain separate dependent PRs in
-[the 2.0 epic](https://github.com/Hugo-Grellier/ballast/issues/174).
-This is not yet a complete or released 2.0 runtime.
-
-Develop with ordinary Git/worktrees, direct checks and independent review.
-Do not use Ballast 1.x or Spec Kit to build 2.0. See the root agent instructions.
-The final migration updates adoption templates and removes retired v1 tooling
-and the usage documentation below. No parallel product folder is needed.
-
-## Released 1.x usage
-
-Ballast keeps a repository steady while AI coding agents move fast. It is a reusable, repository-level baseline: a Spec Kit feature workflow with deterministic artifact checks, a bounded headless-agent runner, review skills, engineering policies, and agent instruction templates.
-
-This repository is the source of the standard. Projects pin a version and install it into git-ignored paths with `ballast setup`; only `AGENTS.md` and the PR template are copied once, because agents and GitHub read them from committed files.
-
-## Repository map
-
-- [`specs/PRODUCT-SPEC.md`](specs/PRODUCT-SPEC.md) describes the users, problem, goals, and product boundaries.
-- [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) describes the repository structure and the conventions for template content.
-- The 1.x tools live at tag `v1.1.0`, no longer on `main`: [`tools/ballast`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/ballast) is the global command; [`tools/init`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/init) adopts a blank or established repository (`ballast init`) from the generic templates in [`templates/init/`](templates/init/); [`tools/setup`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/spec_workflow) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/feature_intake.py) is the GitHub intake helper, run as `ballast intake`.
-- [`templates/policies/`](templates/policies/) are the base policies installed into `docs/policies/`; [`templates/skills/`](templates/skills/) are the `ballast-*` skills; [`templates/spec-kit/`](templates/spec-kit/) holds the feature workflow and Spec Kit templates.
-- [`templates/AGENTS.md`](templates/AGENTS.md) and [`templates/github/`](templates/github/) (PR template, Dependabot configuration, Conventional Commit PR-title workflow, and the [demo capture workflow](templates/github/workflows/ballast-demo.yml) that `ballast run demo` dispatches, to commit on the default branch before cutting feature branches) are copy-once templates. Stack-specific CI stays in each project.
-- `profiles/` is reserved for curated combinations of templates and will be added later.
-
-## Using the copy-once templates
-
-Review each template before copying it into a project. Replace project-specific placeholders, remove guidance that does not apply, and keep the resulting instructions close to the code they govern. Treat templates as a starting point, not as a substitute for the target project's own conventions.
-
-## Installing the Ballast CLI
-
-Once per machine, run this line. It downloads the `ballast` command of one release and its SHA-256 checksum into a fresh directory under `/tmp`, checks the checksum, and installs the command as `~/.local/bin/ballast`; on a mismatch or a failed download it installs nothing. It reads nothing from the current directory, so it is safe to run inside any checkout.
-
-<!-- x-release-please-start-version -->
-```sh
-(c=$PATH; PATH=/usr/local/bin:/usr/bin:/bin; v=v1.1.0; u=https://github.com/Hugo-Grellier/ballast/releases/download/$v; d=$(TMPDIR=/tmp mktemp -d) && { curl -q -fsSL -o "$d/ballast" "$u/ballast" && curl -q -fsSL -o "$d/ballast.sha256" "$u/ballast.sha256" || { echo "ballast: cannot download $v from $u; nothing installed" >&2; false; }; } && { [ "$(cut -d" " -f1 "$d/ballast.sha256")" = "$(sha256sum <"$d/ballast" | cut -d" " -f1)" ] || { echo "ballast: checksum mismatch for $v; nothing installed" >&2; false; }; } && BALLAST_CALLER_PATH="$c" /usr/bin/python3 -I -S "$d/ballast" self-install)
-```
-<!-- x-release-please-end -->
-
-If the download fails with 404, that release predates the installer; use the developer fallback below.
-
-Then check the machine and, from a project root, the project:
-
-```bash
-ballast --version
-ballast doctor            # add --json for a machine-readable report
-```
-
-`ballast doctor` is read-only: it downloads and writes nothing. It reports each prerequisite as passing, missing, unsupported or inconclusive, names the commands each gap blocks and gives the exact fix, and exits 1 while any command is blocked. Its checks are the authoritative prerequisite list; in summary:
-
-- `python`: `/usr/bin/python3` 3.11 or newer, which runs every Ballast tool.
-- `cli-on-path`: the `ballast` command on `PATH`.
-- `git` (2.41 or later, which branch synchronization needs), `uvx` and `patch` for `ballast setup`, and `network`: HTTPS access to GitHub and PyPI the first time a version is fetched.
-- `linux`, `systemd-user` and `systemd-run`: headless agent steps of `ballast run` need Linux with a systemd user session that can start transient scopes.
-- `specify` (the Spec Kit CLI) and `agent-cli` (Claude Code or Codex) for `ballast run`; `agent-cli` also reports where agents can write, which Ballast never trusts for programs or state.
-- `gh`, authenticated, for issue intake and PR steps.
-
-Inside a project it also checks the pin in `ballast.toml`, whether that version is fetched, the CLI version it needs, whether setup is current, and whether the launcher would refuse until `ballast trust`.
-
-To develop the standard itself, install from a reviewed checkout of this repository instead: `install -m 0755 tools/ballast ~/.local/bin/ballast`.
-
-## Installing the Spec Kit workflow
-
-`tools/setup` installs pinned Spec Kit sources and this standard's workflow tooling into a project. Everything it writes is rebuildable and git-ignored; the project commits only its own files. Projects reach it through one global command.
-
-### Adopting a repository with `ballast init`
-
-Once per machine, install the `ballast` command (see [Installing the Ballast CLI](#installing-the-ballast-cli)) and run `ballast doctor`. Then, from the root of a blank directory or an established repository:
-
-```bash
-ballast init                        # blank: asks for a one-line description and a stack
-ballast init --description "Billing service" --stack python   # no questions
-ballast trust                       # after reviewing what init wrote
-```
-
-`init` pins this CLI's own release (or `--ref REF`; on a rerun it keeps the existing pin), fetches that version and runs its `tools/init`:
-
-- It reads a fixed, size-bounded list of evidence files as data (manifests, lockfiles, `Makefile`, `.github/workflows/`, existing instructions, architecture documents) and never runs a command it finds. Git runs with hooks, pager and fsmonitor disabled; a linked evidence file is skipped and reported, and a linked path init would write through refuses.
-- It creates only absent files: `ballast.toml` (CI steps that run a known verifier and named manifest scripts become active `[checks]` with their evidence; other CI commands of a checking shape, inferred commands and every `extra_allow` suggestion stay commented), `.specify/memory/constitution.md`, `AGENTS.md` with a `CLAUDE.md` link (only when neither exists), and `docs/policies/project/testing.md` when CI evidence names a gate. Unknown values read `TO CONFIRM`. `git init` runs only when there is no repository. The known-verifier rule only keeps unrelated commands (deploys, publishes) out of the active checks; it is not a security boundary: an active check still runs repository code (a `package.json` script, `conftest.py`, a `Makefile` target). Checks run confined in `run-checks`, and you review `ballast.toml` before `ballast trust`.
-- The only change to an existing file is appending the ignore block to `.gitignore` when it is missing. Every other proposal (the Ballast section for an existing `AGENTS.md` or `CLAUDE.md`, a rule that un-ignores an installed path, new evidence on a rerun) goes into one ignored patch, `.ballast/init/proposed.patch`, which you may apply with `git apply`; the trusted preflight does not depend on it.
-- It installs through `ballast setup`'s own code and ends with a readiness report (instructions, ignored paths, pinned version, trust boundary, check commands) and the next action. A blank repository asks at most two questions; without a terminal, pass `--description` and `--stack` (`python`, `node`, `rust`, `go` or `neutral`).
-- It never records trust, commits, pushes, adds a remote or writes the copy-once GitHub files or stack CI; the report lists those with how to add them. A rerun changes no tracked file and reports the same readiness.
-
-A pinned version older than `init` makes the CLI refuse with the remedy; use the manual steps below.
-
-### Manual adoption
-
-1. Once per machine, install the `ballast` command (see [Installing the Ballast CLI](#installing-the-ballast-cli)) and run `ballast doctor`.
-2. Add `ballast.toml` at the project root. It pins the standard version (a tag or commit) and can extend the headless-agent permissions:
-
-   ```toml
-   [standard]
-   ref = "v0.1.0"
-
-   [agents.permissions]
-   extra_allow = ["Bash(./scripts/check)"]
-   extra_deny = ["Edit(./private/**)"]
-   ```
-
-   Headless Claude agents run only the Bash commands these rules and the standard's base list name, so list the project's checks here; Codex runs any command inside its sandbox. Rules match the command text: `*` matches anything, and a command with a leading `VAR=value` never matches, so write checks without one. Autonomous steps, which bubblewrap confines, may also run `ls`, `cat`, `head`, `tail`, `wc` and `find` without `-exec` or `-delete`.
-
-3. From the project root, run `ballast setup`. It downloads the pinned version once into `$XDG_DATA_HOME/ballast/standard/<ref>/` with a record of its content, checks the cached copy against that record before every setup, then runs its `tools/setup`. On the first run, add the ignore block it prints to the project's `.gitignore`; the block keeps `.specify/memory/constitution.md` tracked. Setup needs `git`, `uvx`, `patch`, and network access to GitHub; `ballast doctor` checks them.
-
-The result is Spec Kit with its bugfix and assess bundles, the multi-model-review, status-report and intent extensions, the explicit-task-dependencies preset, the `ballast-feature` workflow and its tools under `.ballast/`, the `ballast-*` skills under `.agents/skills/` (linked from `.claude/skills/`), and the standard's policies under `docs/policies/`. Project-specific additions go in `docs/policies/project/`, which setup never touches. Setup builds the new installation beside the current one under `.ballast/setup/`, validates it, then switches it in; a failed or interrupted setup keeps the previous installation (see [Updating the pinned version](#updating-the-pinned-version)). A rerun at a current pin changes nothing and downloads nothing. Setup never touches `.specify/workflows/runs/`, the project constitution or `docs/policies/project/`.
-
-### Worktrees
-
-The first `ballast run`, `ballast ledger` or `ballast intake` in a new Git worktree prepares its installation without a separate `ballast setup` and without downloading the standard: it copies an installation already on this machine for the same repository (the primary checkout's, another worktree's, or a kept previous one) whose pin and `ballast.toml` match and whose files, execute bits included, still match the record setup kept of it. Trust is per worktree: when the worktree's committed `ballast.toml` and constitution equal the pinned repository's default branch, the preparation records the worktree's own baseline too (see [Setup records the baseline](#setup-records-the-baseline)) and the command goes on; otherwise it stops at the trust check, naming the protected inputs to review, and you run `ballast trust` there. Run state is never copied between worktrees. The first worktree at a new pin or `ballast.toml` still needs `ballast setup`, which may download; later ones are prepared from it. `ballast setup` in a worktree also copies the primary checkout's installation when it matches its record.
-
-### Setup records the baseline
-
-`ballast setup`, and the preparation of a new worktree, record the checkout's trust baseline themselves, so a fresh clone or an issue worktree of a project needs no `ballast trust`. They do it only when all of this holds, and say so (`Recorded the trust baseline ...`); otherwise they install as before, print `No trust baseline recorded: <reason>.` and leave `ballast trust` to you:
-
-- every protected input is what setup just installed: no `.venv`, no committed `.specify` file other than the constitution, no edited installed file, and a linked worktree's `.git` pointer names a worktree of its own repository;
-- `ballast.toml` and `.specify/memory/constitution.md` are committed and unchanged (an uncommitted edit, such as a pin bump you have not committed, is never recorded), and they equal the files on the default branch of the repository pinned in `[github] repository`. `ballast setup` (not a preparation) also accepts the baseline you earlier recorded with `ballast trust` for the same checkout, which needs no network;
-- for the default-branch case, the pinned repository is one you ran `ballast trust` for on this machine. A baseline from before this version does not count, so each project needs one `ballast trust` on each machine after upgrading, and a first checkout of a project here needs one; after that, fresh clones and new worktrees of that repository need none. (`ballast trust` still succeeds if it cannot write that record; it warns and setup then keeps asking you.) Setup asks that repository for its default branch with Git 2.41 or later, your own credentials and no prompt, in a scratch repository it deletes; each request ends after 30 s (the fetch after 120 s). This needs network access and read access: offline, or without access, nothing is recorded. Setup holds the checkout's lock while it asks, so a second command in that checkout waits;
-- no agent has run in the checkout: no saved run state, no unfinished run, no `BALLAST_TAMPERED` marker and no unfinished agent step. Setup never records a baseline from inside an agent step.
-
-`ballast trust` records, for the repository `ballast.toml` pins, the digests of that `ballast.toml` and constitution, and prints a line when it adds one; setup counts the default branch only when the checkout's files equal a configuration you reviewed for that same repository, so a changed default branch needs one `ballast trust` per machine again and a commit that repoints `[github] repository` to another reviewed repository gains nothing. A repository stays "reviewed" until you remove it from `$XDG_STATE_HOME/ballast/reviewed-repositories.json` (`ballast doctor` lists them), so protect its default branch with review and remove the entry if the repository changes hands. `ballast setup --check`, `ballast doctor` and `ballast init` never record a baseline. A pin bump or `[agents.permissions]` change that is not yet on the default branch leaves `ballast.toml` different from it, so review it and run `ballast trust`. A baseline recorded from your own earlier one is marked as recorded by setup, so a later setup that records again needs the network (the default branch) or `ballast trust`, not your old baseline. After setup recorded a baseline, the launcher compares it exactly as for `ballast trust`, so any later change to a protected input is refused. `ballast doctor` shows who recorded it (`baseline recorded by ballast setup` or `ballast trust`).
-
-### Merged changes refresh trust by themselves
-
-A change merged on the pinned repository's default branch, such as a new `extra_allow` rule, a pin bump or a constitution edit, needs neither `ballast trust` nor `ballast setup` once you pull it. Before `ballast run`, `ballast ledger` or `ballast intake`, `ballast` asks the launcher why it would refuse; on changed protected inputs or a pin that differs from the installation it runs the pinned version's `setup --refresh`, which reinstalls for the current `ballast.toml` and records a baseline marked `default-branch` only when:
-
-- your baseline names the repository `ballast.toml` pins, and you ran `ballast trust` for it on this machine (a baseline from before this version names none: one `ballast trust` first);
-- every changed input is either installed by setup or committed unchanged and equal to that repository's default branch, read live as for setup above;
-- no `BALLAST_TAMPERED` or unfinished-step marker exists, and the reinstalled agent settings are exactly what `ballast.toml` produces.
-
-It prints `refreshed the trust baseline from OWNER/NAME BRANCH at COMMIT …`, and the first `ballast run` afterwards prints `trust baseline refreshed from OWNER/NAME BRANCH at COMMIT` once and records it in the run's ledger. To refresh, `ballast run`, `ledger` and `intake` may now download the newly pinned version; when that fails they skip the refresh. Otherwise it prints `not refreshed: <reason>` and changes nothing, and the launcher asks for `ballast trust` as before: a local edit, a commit only on your branch, a `.venv` change or a repointed `[github] repository` always does. A plain `ballast setup` refreshes the same way. A `ballast` command older than this version never refreshes; `ballast self-install` updates it. Branch protection on that default branch is therefore what reviews configuration changes for checkouts that already trust the repository.
-
-`ballast trust` itself refuses when `.ballast/spec_workflow/claude-settings.json` differs from what `ballast.toml` produces (run `ballast setup`, review, then trust), and `ballast discard-runs` names `ballast trust` only when the protected inputs actually changed.
-
-### Running the workflow
-
-Headless agent steps need Linux with a systemd user session. The operator entry point must live outside the checkout, because an agent can rewrite anything inside it. `ballast` therefore runs the launcher of the project's pinned version from `$XDG_DATA_HOME/ballast/standard/<ref>/`, never from the checkout:
-
-```bash
-ballast trust                 # from the reviewed project root
-ballast run start|resume ...
-ballast ledger snapshot|check|report ...
-```
-
-Only `setup` and `preview` download, and `run`, `ledger` or `intake` when they refresh after a merged pin change (see [Merged changes refresh trust by themselves](#merged-changes-refresh-trust-by-themselves)); the other commands refuse a version that is not fetched yet. The repository is fixed in `ballast`, so `ballast.toml` chooses a version, never a source. Run `trust` again after reviewing any change to `ballast.toml`, `.ballast/`, `.specify/` or `.venv/`, unless setup recorded the baseline for it or the change came from the default branch and was refreshed (see above). To work on the standard itself, set `BALLAST_STANDARD_DIR` to a local checkout. The launcher refuses to run while those inputs differ from the trusted baseline, while an `BALLAST_TAMPERED` marker exists, or after an agent step that did not finish its check. Its baseline and the agent run ledger live in `$XDG_STATE_HOME/ballast/`.
-
-Before the first agent step of every `ballast run start`, `resume` or `continue`, and of every Chat `step`, the launcher rebases the run's feature branch onto its base when that is safe, or stops before any agent with `BLOCKED_UPSTREAM_SYNC` and one recovery action; the [Branch synchronization section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#branch-synchronization) lists the causes and their recovery.
-
-`--local-fallback MODEL` on `ballast run start` or `resume` (`off` turns it off) lets a headless step of a human-gated or Autonomous run retry once on a local Ollama model through Codex's `--oss` mode when its agent's quota or provider failed and nothing changed; every check it cannot establish refuses before any content is sent. See the [Local fallback section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#local-fallback).
-
-At the end of every `ballast run start`, `resume` or `continue` invocation, after any Autonomous publication, the launcher makes sure one Draft PR shows an issue-linked feature once its published branch holds a change outside `specs/<feature>/`, and reuses that PR afterwards. It needs `[github] repository = "OWNER/NAME"` in `ballast.toml`, uses your authenticated `gh` 2.48 or later, never pushes (only an Autonomous run's publisher does), and never marks a PR ready, merges or closes it (only an opted-in Autonomous run's [PR completion](#autonomous-runs) marks a PR ready). The [Draft PR section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#draft-pr) lists the reported states and their remedies. The same Draft PR carries an [acceptance packet](templates/policies/spec-kit-workflow.md#acceptance-packet): each acceptance criterion's evidence state at the head commit, the run's decisions, open findings and checks, and links to every source; it is a derived summary, not an approval.
-
-### Autonomous runs
-
-An eligible feature can run unattended to a Draft PR. Every gate decision is then recorded as agent-provisional, and merging the PR is the single human approval. Eligible means a scoped leaf Issue (its intake scope comment has `Risk: R0|R1|R2` and `Privileged actions before merge: none` or an authorized action), started from a feature branch named for the Issue with no open PR. Autonomous needs `bwrap` (bubblewrap) with user namespaces on the host, because every agent step and check runs confined; a missing `bwrap` refuses the start. It also needs the `[github] repository` pin described above: eligibility and publication use only that repository, and `origin` must be it.
-
-```bash
-ballast run start --mode autonomous [--wall-time MINUTES] [--max-agent-steps N] \
-    [--completion draft|ready] -i issue=N -i idea="Issue #N: OUTCOME" -i feature_directory=specs/N-slug [-i integration=auto]
-ballast run resume RUN_ID [--ref TEXT]
-ballast run continue RUN_ID --reason block-resolved|changes-requested --ref TEXT
-ballast run publish RUN_ID
-ballast run checkpoint RUN_ID
-```
-
-`--wall-time` (1–1440 active minutes, default 240) and `--max-agent-steps` (1–200, default 40) are accepted only with `--mode autonomous`. An ineligible start is refused before any agent step and prints the human-gated command instead. A run reviews its implementation, fixes what the reviews or the checks find within three fix cycles, and ends with a Draft PR or with a block that names its class, its reason and the next command. `ballast run resume` continues a blocked or interrupted Autonomous run in Autonomous after branch synchronization, recording your block resolution, and `ballast run checkpoint` refreshes a finished run's Draft PR checkpoint and acceptance packet without an agent; both stay agent-provisional, and merging the PR stays the single human approval. `continue` records the operator's decision, lowers the run to human-gated and starts the remaining human gates; before implementation it refuses and points to `resume`, unless `--mode chat` continues the run in Chat. `publish` retries a failed publication without running an agent. Nothing in an Autonomous run merges, releases or deploys, and without the `completion` opt-in below nothing marks a PR ready.
-
-Two `ballast.toml` tables configure it:
-
-```toml
-[autonomous]                              # optional; can only narrow eligibility
-risk = ["R0", "R1"]
-excluded_boundaries = ["agent authority"]
-authorized_privileged_actions = ["secret-provisioning"]
-wall_time_minutes = 120
-max_agent_steps = 24
-completion = "ready"                      # opt-in: "draft" (default) or "ready"
-completion_max_severity = "low"           # "low" (default), "info" or "none"
-
-[checks]                                  # required for Autonomous
-commands = ["uvx ruff check", "uv run python -m unittest"]
-timeout_minutes = 30
-```
-
-`authorized_privileged_actions` names privileged-action kinds: `operator-trust`, `scratch-repository`, `secret-provisioning`, `network-access`, `external-write` or `permission-change`. Agents declare each action they need before merge as `KIND` or `KIND: description`, and only the kind is compared. An entry not spelled exactly as a kind (for example `secret provisioning`) still matches only an action declared with exactly that text, with a warning; replace it with a kind. Keys that would widen eligibility, and `merge`, `release`, `deploy`, `mark ready` or `other` as authorized actions, are ignored with a warning. A run keeps the policy it started with; after authorizing an action and running `ballast trust`, `ballast run resume RUN_ID --refresh-policy` applies it to a blocked run. The `[checks]` commands run confined before final acceptance; a failure blocks publication. Agents can run them while implementing only if `[agents.permissions] extra_allow` covers each one; `ballast doctor` reports any it does not as `checks-allowed`. Run `ballast trust` after changing either table.
-
-`completion = "ready"` is the one `[autonomous]` key that lets the runner do more: it never makes an ineligible start eligible, but after an Autonomous publication the runner marks the PR ready for review, as you, when every condition holds: the run stayed Autonomous, risk R0 or R1 with no R2 boundary declared, no privileged action, final acceptance and an approved spec reconciliation recorded, no open finding above `completion_max_severity`, the `[checks]` passed on the published tree, the acceptance packet shows every criterion verified, no material provisional change, no resolved block (so a resumed run stays a Draft), and the PR head is still the pushed commit. Otherwise the PR stays a Draft. The run prints one `PR completion:` line (`ready-for-review`; `draft` with every reason; or `unverified` when GitHub accepted the request but does not show the PR ready at the pushed commit) and records it in the run ledger. `--completion draft` narrows one run; `--completion ready` cannot widen `ballast.toml` and refuses the start. Marking a PR ready is not an approval: merging stays the single human approval. See [PR completion in the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#autonomous-runs).
-
-### Chat runs
-
-Chat mode lets you work through a feature in conversation, one step at a time, while Ballast keeps the guarantees of a headless run: the trusted preflight and branch synchronization before every agent step, the same confinement, the artifact postconditions, the run record and the human approvals. Each action is one `ballast run` command:
-
-```bash
-ballast run start --mode chat -i feature_directory=specs/N-slug [-i idea="Issue #N: OUTCOME"]
-ballast run step RUN_ID PHASE [--kind KIND]   # specify, clarify, plan, tasks, analyze, implement, ...
-ballast run step RUN_ID PHASE --headless      # the same step without a terminal, confined
-ballast run status RUN_ID                     # where the run stands and what is allowed next
-ballast run approve RUN_ID GATE [GATE ...]    # or --through GATE; one typed confirmation
-ballast run reject RUN_ID GATE --reason TEXT  # from your terminal
-ballast run resolve RUN_ID DEC-NNNN           # from your terminal
-ballast run checks RUN_ID
-ballast run mode RUN_ID chat|human-gated --reason TEXT   # from your terminal, typed
-ballast run publish RUN_ID                    # Draft PR with the Chat section, then the packet
-ballast run checkpoint RUN_ID                 # refresh the Draft PR and packet, no agent
-```
-
-A step is an interactive Claude or Codex session for one phase. It runs with the headless permission rules (anything else is denied, never prompted) under the same `bwrap` confinement as an Autonomous step, so Chat needs `bwrap` too. When the session ends (`/exit`, or `Ctrl-]` twice), Ballast confirms the agent is gone and checks the phase's artifact. `--headless` runs the step without a terminal under the same confinement and then lists the gates ready for approval. Every gate needs `ballast run approve`: typed at your terminal, where several gates take one confirmation, or relayed by your own agent session after your yes in chat (`--relayed-by SESSION`), which the record, `status` and the PR show as relayed. Nothing the agent writes or says approves anything, and `reject`, `resolve` and `mode` stay at your terminal. Leave whenever you like: `status` and the next `step` pick the run up later, from any terminal, after the full preflight. `ballast run continue RUN_ID ... --mode chat` continues a stopped Autonomous run in Chat. Conversation logs stay local.
-
-### Driving runs from your agent session
-
-You can drive every run from your own Claude Code or Codex session: it runs the commands that carry no decision (setup, status, a headless Chat step, publish, `discard-runs`) and relays your decisions within the run's autonomy, naming itself with `--relayed-by SESSION` on `ballast run start`, `resume`, `continue` and `approve`. A terminal-less command that records a decision without that flag is refused, so no relay ever reads as typed by you. An approval is relayed only in a Chat run; a resume of a block that carries a decision only with `--ref` naming your answer; a human-gated run's gates and an Autonomous run's merge stay yours. An agent inside a `ballast run` step can run no `ballast` command. The [Agent sessions section of the Spec Kit workflow policy](templates/policies/spec-kit-workflow.md#agent-sessions-and-relayed-decisions) lists every command. Working in a plain agent session outside `ballast run` gives none of the run's guarantees.
-
-### Updating the pinned version
-
-Pin changes stay manual and reviewed in Git. Update the `ballast` command first (see [Installing the Ballast CLI](#installing-the-ballast-cli)): verified downloads of the standard and `ballast preview` come with the CLI, not with the pinned version, so an older CLI does without them.
-
-```bash
-ballast preview vX.Y.Z      # what moving the pin would do; changes nothing
-# set ref = "vX.Y.Z" under [standard] in ballast.toml, review and commit it
-ballast setup               # the previous installation stays until the new one verifies
-ballast trust               # after reviewing the changed protected inputs it lists; once the pin bump is merged on the default branch, the next run refreshes trust instead
-```
-
-Then run the project's checks. `ballast preview` (add `--json` for scripts) names the pinned, installed and target versions and the CLI version the target needs, lists each unfinished run with whether the target can resume it, the installed paths it would add, change or remove, any ignore-rule change, and the exact steps above. It builds the target in a disposable directory, so it may need network, and exits 1 when something must happen first, such as finishing or discarding a run the target cannot resume.
-
-When setup fails, it says which stage failed, that the previous installation was kept, and what to do next. At an unchanged pin nothing else is needed: the existing trust still holds (setup leaves a baseline that still matches untouched) and a paused run resumes. If setup was interrupted, every other command refuses until the next `ballast setup`, which first restores the previous installation or completes the new one and says which. A second `ballast setup` in the same checkout refuses while one runs.
-
-**Retry after a failed update.** With the new pin, the launcher and `ballast doctor` name the pinned and the installed versions. Fix the cause (`ballast doctor` checks network access and tools), then run `ballast setup` again.
-
-**Roll back to the previous pin.** Restore the previous `ref` in `ballast.toml` (for example `git checkout HEAD~1 -- ballast.toml`), review and commit it, then:
-
-```bash
-ballast setup               # reuses the previous installation and the cached version: no download
-ballast trust               # unless setup says it recorded the baseline
-```
-
-The constitution, `docs/policies/project/`, paused runs and their archives are untouched. Versions released before this feature (v0.5.0 and earlier) run their own, older setup: a failure there can still leave the checkout without a usable installation, and `ballast preview` says so. A version cached by an older CLI is downloaded again once.
-
-## Dogfooding
-
-This repository installs Ballast like any project: `ballast.toml` pins a released version, `AGENTS.md` comes from the template, and Ballast-specific rules live in `docs/policies/project/` and `.specify/memory/constitution.md`. CI installs the working copy into the repository on every PR and fails if the install leaves any file that is not ignored.
-
-## Releases
-
-Release Please opens a release PR from Conventional Commit titles on `main`; merging it tags `vX.Y.Z`, updates `CHANGELOG.md`, `version.txt`, the CLI's `VERSION` and the install line above, and publishes the GitHub release. A follow-up job attaches the unchanged `tools/ballast` and its `ballast.sha256` to that release, for the install line. Projects pin those tags in `ballast.toml`. The workflow needs a `RELEASE_PLEASE_TOKEN` repository secret (a fine-grained token with contents and pull-request write access) so its release PR runs CI.
-
-## Status
-
-1.0: the request-to-PR workflow of [Epic #11](https://github.com/Hugo-Grellier/ballast/issues/11) is complete and was qualified on a blank repository and an established one ([#24](https://github.com/Hugo-Grellier/ballast/issues/24); evidence and release checklist in [`specs/24-v1-qualification/`](specs/24-v1-qualification/)). Known limit: the zero-cost local fallback is selected and confined as specified, but small local models may not produce a usable artifact. Ballast started as a backport of LoreForge's agent-first profile ([backport plan](docs/plans/2026-09-28-loreforge-backport.md)); profiles are not yet defined.
+| [Issue workflow](docs/issue-workflow.md) | Read, scope and decompose, plan, implement, verify, review, publish, with phase records |
+| [Pair review](docs/pair-review.md) | Independent review and bounded repair |
+| [Model routing](docs/model-routing.md) | Explicit provider, model and effort, verified before task input |
+| [Execution contract](docs/execution.md) | Worktrees, ownership, limits and recovery |
+| [Standalone adapter](docs/standalone.md) | Workers, worktree claims and the bounded queue without Orca |
+| [Orca adapter](docs/orca-execution.md) | Optional: the same contract on Orca |
+
+The [standalone adapter](docs/standalone.md) uses three helpers, run with
+`python3 -I -S` from a Ballast checkout:
+
+- [`tools/worktree.py`](tools/worktree.py) claims an issue and prepares its worktree.
+- [`tools/worker.py`](tools/worker.py) runs a fresh Codex worker after verifying its
+  routing.
+- [`tools/coordinate.py`](tools/coordinate.py) runs a finite issue queue: admission,
+  limits, pause/cancel/quota, recovery, idempotent draft publication and timing
+  status.
+
+Live evidence for each slice is in [`docs/evidence/`](docs/evidence/). The supported
+host is a POSIX machine with Python 3.11+, Git, an authenticated `gh` for GitHub.com
+and a supported Codex CLI; [standalone](docs/standalone.md#scope-and-limits) lists the
+limits.
+
+## Adopting Ballast in a project
+
+Review and copy what you want from [`templates/`](templates/), then follow
+[adopting Ballast](docs/migration.md#adopting-20):
+
+- [`AGENTS.md`](templates/AGENTS.md): a short agent entry point to fill in;
+- [`policies/`](templates/policies/): engineering, security, testing, dependency,
+  migration, documentation, observability, workflow (risk and review matrix) and
+  issue-tracker rules;
+- [`skills/`](templates/skills/): `ballast-*` review skills for engineering, tests,
+  security, documentation, dependencies and database migrations;
+- [`github/`](templates/github/): PR and issue templates, Dependabot and a
+  Conventional Commit PR-title check.
+
+## Decisions and history
+
+[ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and
+[ADR-0024](docs/adr/0024-ballast-2-migration.md) define the current design and the 1.x guarantees it
+removed. Earlier ADRs, [`specs/`](specs/) and the `v1.x` tags are the 1.x record; the
+[v1.1.0 README](https://github.com/Hugo-Grellier/ballast/blob/v1.1.0/README.md)
+documents 1.x usage.
+
+## Contributing
+
+See [`AGENTS.md`](AGENTS.md). Release Please opens a release PR from Conventional
+Commit titles on `main`; merging it, after human approval, tags `vX.Y.Z` and updates
+`CHANGELOG.md`.
 
 ## License
 
-[MIT](LICENSE). Copied Spec Kit templates and excerpts keep their upstream MIT notice; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE).
