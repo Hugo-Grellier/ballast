@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0](https://github.com/Hugo-Grellier/ballast/compare/v1.1.0...v1.2.0) (2026-10-15)
+
+
+### Features
+
+* **v2:** add bounded queue ownership and recoverable execution ([#184](https://github.com/Hugo-Grellier/ballast/issues/184)) ([af4e739](https://github.com/Hugo-Grellier/ballast/commit/af4e739271123ef1425b3b8e2150f7d3698632bd))
+* **v2:** establish portable workflow foundation and routing qualification ([#176](https://github.com/Hugo-Grellier/ballast/issues/176)) ([b2a77da](https://github.com/Hugo-Grellier/ballast/commit/b2a77dafe74570581f10aae507376e6e60a90f35))
+* **v2:** execute standalone issues with verified worker routing ([#181](https://github.com/Hugo-Grellier/ballast/issues/181)) ([db3c97e](https://github.com/Hugo-Grellier/ballast/commit/db3c97e33b3b1a705febca2a0a48646ee9325f70))
+
 ## [1.1.0](https://github.com/Hugo-Grellier/ballast/compare/v1.0.0...v1.1.0) (2026-10-14)
 
 
