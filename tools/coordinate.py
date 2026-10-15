@@ -296,12 +296,30 @@ def matching(cwd: Path, record: dict, head: str) -> dict | None:
     return found
 
 
+def reviewed(claim: Path, attempt: str, head: str) -> bool:
+    """Find a review worker of this attempt completed on this unchanged head.
+
+    The verdict is not read here: a completed review is not an approval.
+    """
+    return any(
+        result.get("attempt") == attempt
+        and result.get("role") == "review"
+        and result.get("status") == "completed"
+        and result.get("head_before") == result.get("head_after") == head
+        for result in map(
+            admission.read, (claim.parent / "workers").glob("*/result.json")
+        )
+    )
+
+
 def publish(claim: Path, title: str, body: Path) -> dict:
     """Create or reuse one draft PR; re-query after an uncertain response."""
     record = worktree.validate(claim)
     cwd = Path(record["checkout"])
     # Pinned admin directory: never follow the worker-writable gitfile.
     head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=Path(record["git_dir"]))
+    if not reviewed(claim, record["attempt"], head):
+        worktree.fail("Publish requires a completed independent review of this head")
     remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
     if remote != head:
         worktree.fail("Push the reviewed head before publication")
