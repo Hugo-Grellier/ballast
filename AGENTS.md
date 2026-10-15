@@ -5,7 +5,7 @@ Ballast is a reusable standard that projects install with `ballast setup`. This 
 ## Work from the right artifact
 
 - Purpose: ship the agent-first engineering standard that projects pin and install.
-- Layout: `tools/` (the `ballast` command, `init`, `setup`, the Spec Kit workflow tools and intake helper), `templates/` (policies, skills, Spec Kit workflow and templates, `init/` templates for `ballast init`, copy-once `AGENTS.md` and GitHub files), `tests/` (unittest), `specs/` (product and technical specifications), `docs/plans/` (backport plan).
+- Layout: `tools/` (the 2.0 standalone worker, worktree claims and bounded queue; the 1.x `ballast` command, `setup`, `init`, Spec Kit workflow tools and intake helper live at tag `v1.1.0`), `templates/` (policies, skills, Spec Kit workflow and templates, `init/` templates for `ballast init`, copy-once `AGENTS.md` and GitHub files), `tests/` (unittest), `specs/` (product and technical specifications), `docs/plans/` (backport plan).
 - Architecture and domain: [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) and [`specs/PRODUCT-SPEC.md`](specs/PRODUCT-SPEC.md). Decisions are ADRs under `docs/adr/`; record a new one there.
 
 Accepted ADRs and the accepted architecture govern design. A ready feature spec in `specs/<number>-<slug>/` defines current requirements, followed by its reviewed plan and tasks. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR for an accepted architecture change. Read only the relevant architecture sections and ADRs when changing domain behavior or a boundary.

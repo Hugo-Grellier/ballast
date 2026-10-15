@@ -1,7 +1,7 @@
 __pycache__/
 .venv/
 
-# Installed by Ballast (tools/setup)
+# Installed by Ballast (`ballast setup`)
 .ballast/
 .agents/skills/ballast-*
 .claude/skills/ballast-*

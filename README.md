@@ -27,8 +27,9 @@ coordinates questions/planning, checks, independent review and publication.
 [Live evidence](docs/evidence/standalone.md) records a fictional issue-to-ready-PR
 scenario with meaningful checks, actual child/launcher routing contrast and CI.
 
-Bounded queue/recovery, optional Orca integration and retirement of the old
-installer/runner remain separate dependent PRs in
+The bounded queue and recovery have landed and the v1 installer/runner code is
+removed from this branch (it stays at the `v1.x` tags). Optional Orca integration
+and the 2.0 migration remain separate dependent PRs in
 [the 2.0 epic](https://github.com/Hugo-Grellier/ballast/issues/174).
 This is not yet a complete or released 2.0 runtime.
 
@@ -47,7 +48,7 @@ This repository is the source of the standard. Projects pin a version and instal
 
 - [`specs/PRODUCT-SPEC.md`](specs/PRODUCT-SPEC.md) describes the users, problem, goals, and product boundaries.
 - [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) describes the repository structure and the conventions for template content.
-- [`tools/ballast`](tools/ballast) is the global command; [`tools/init`](tools/init) adopts a blank or established repository (`ballast init`) from the generic templates in [`templates/init/`](templates/init/); [`tools/setup`](tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](tools/spec_workflow/) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](tools/feature_intake.py) is the GitHub intake helper, run as `ballast intake`.
+- The 1.x tools live at tag `v1.1.0`, no longer on `main`: [`tools/ballast`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/ballast) is the global command; [`tools/init`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/init) adopts a blank or established repository (`ballast init`) from the generic templates in [`templates/init/`](templates/init/); [`tools/setup`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/setup) installs Spec Kit and the standard into a project; [`tools/spec_workflow/`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/spec_workflow) holds the validators, agent wrapper, trusted launcher and run ledger; [`tools/feature_intake.py`](https://github.com/Hugo-Grellier/ballast/tree/v1.1.0/tools/feature_intake.py) is the GitHub intake helper, run as `ballast intake`.
 - [`templates/policies/`](templates/policies/) are the base policies installed into `docs/policies/`; [`templates/skills/`](templates/skills/) are the `ballast-*` skills; [`templates/spec-kit/`](templates/spec-kit/) holds the feature workflow and Spec Kit templates.
 - [`templates/AGENTS.md`](templates/AGENTS.md) and [`templates/github/`](templates/github/) (PR template, Dependabot configuration, Conventional Commit PR-title workflow, and the [demo capture workflow](templates/github/workflows/ballast-demo.yml) that `ballast run demo` dispatches, to commit on the default branch before cutting feature branches) are copy-once templates. Stack-specific CI stays in each project.
 - `profiles/` is reserved for curated combinations of templates and will be added later.
