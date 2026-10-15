@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ballast execution</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body><main><header><p>Ballast · Local execution</p><h1 id="context">Connecting to selected queue</h1><details><summary>Queue identity</summary><p id="queue-id"></p></details><p id="connection" role="status">Unknown connection</p><p>Coordinator liveness: unknown. Requests, questions and decisions stay in the main conversation.</p></header>
+<nav aria-label="Queue controls"><button id="pause" disabled>Pause dispatch</button><button id="resume" disabled>Resume dispatch</button><button id="cancel" disabled>Request cancellation</button></nav>
+<p id="capacity"></p><p id="dependencies"></p><p id="control-history"></p>
+<div class="layout"><section aria-labelledby="queue-heading"><h2 id="queue-heading">Selected issues</h2><table><thead><tr><th>Issue</th><th>Activity</th><th>PR readiness</th></tr></thead><tbody id="issues"></tbody></table></section>
+<section aria-labelledby="detail-heading"><h2 id="detail-heading">Issue details</h2><div id="detail">Select an issue.</div></section></div>
+<section aria-labelledby="worker-heading"><h2 id="worker-heading">Worker settings and evidence</h2><div id="worker">Select a worker.</div></section>
+<footer>Closing this page changes no execution state. Cancellation is a stop request; unknown ownership still consumes capacity. No release or retry is available here.</footer></main></body></html>

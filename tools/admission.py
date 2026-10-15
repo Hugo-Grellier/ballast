@@ -127,6 +127,12 @@ def policy(state: Path) -> dict | None:
         or not math.isfinite(value["deadline"])
         or value.get("mode") not in {"running", "paused", "cancelled"}
         or not isinstance(value.get("issues"), list)
+        or not value["issues"]
+        or len(value["issues"]) > MAX_ISSUES
+        or any(type(n) is not int or n < 1 for n in value["issues"])
+        or len(set(value["issues"])) != len(value["issues"])
+        or not bounded(value.get("coordinator"))
+        or not bounded(value.get("instruction_revision"))
         or not bounded(value.get("id"))
         or not bounded(value.get("repository"))
         or (quota is not None and not valid_quota(quota))
@@ -135,10 +141,10 @@ def policy(state: Path) -> dict | None:
     return value
 
 
-def milestone(record: dict, kind: str, **values: object) -> None:
+def milestone(record: dict, event_type: str, **values: object) -> None:
     """Keep control history separate from backend outcome evidence."""
     record.setdefault("history", []).append(
-        {"at": datetime.now(UTC).isoformat(), "event": kind, **values}
+        {"at": datetime.now(UTC).isoformat(), "event": event_type, **values}
     )
 
 
@@ -394,7 +400,38 @@ def quota(state: Path, kind: str, retry_at: float | None) -> None:
         write(state / "queue.json", value)
 
 
-def control(state: Path, action: str, reason: str) -> dict:
+def context(value: dict) -> dict:
+    """Capture immutable queue authority; mutable controls are excluded."""
+    keys = (
+        "id",
+        "repository",
+        "issues",
+        "coordinator",
+        "instruction_revision",
+        "limits",
+        "started_at",
+        "deadline",
+    )
+    return {key: value[key] for key in keys}
+
+
+def require_context(value: dict | None, expected: dict) -> None:
+    """Fail closed on replaced context or a caller without queue ownership."""
+    if (
+        value is None
+        or context(value) != expected
+        or os.environ.get("BALLAST_COORDINATOR") != value["coordinator"]
+    ):
+        fail("Queue context or coordinator changed")
+
+
+def control(
+    state: Path,
+    action: str,
+    reason: str,
+    *,
+    expected: dict | None = None,
+) -> dict:
     """Record an explicit control without inferring active workers stopped."""
     if action not in {"running", "paused", "cancelled"} or not bounded(
         reason, MAX_REASON
@@ -404,7 +441,9 @@ def control(state: Path, action: str, reason: str) -> dict:
         value = policy(state)
         if value is None:
             fail("No queue to control")
-        if value["mode"] == "cancelled" and action == "running":
+        if expected is not None:
+            require_context(value, expected)
+        if value["mode"] == "cancelled" and action != "cancelled":
             fail("Cancelled queue needs explicit recovery, not a control reset")
         value["mode"] = action
         if action == "running":

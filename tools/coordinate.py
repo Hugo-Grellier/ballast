@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import admission, worktree
+from tools import admission, progress, worktree
 
 MAX_DEPENDENCIES = 50
 # Bound regex work on untrusted issue bodies (GitHub caps bodies at 65536).
@@ -502,6 +502,14 @@ def parser() -> argparse.ArgumentParser:
         create.add_argument(f"--{key}", type=int)
     commands.add_parser("select")
     commands.add_parser("status")
+    record = commands.add_parser("record")
+    record.add_argument("--claim", type=Path, required=True)
+    record.add_argument("--kind", choices=sorted(progress.STATES), required=True)
+    record.add_argument("--state", required=True)
+    record.add_argument("--summary", required=True)
+    record.add_argument("--reference")
+    record.add_argument("--revision")
+    record.add_argument("--round", type=int)
     control = commands.add_parser("control")
     control.add_argument("action", choices=("running", "paused", "cancelled"))
     control.add_argument("--reason", required=True)
@@ -542,6 +550,13 @@ def run(args: argparse.Namespace) -> dict:
     if args.command == "control":
         return admission.control(state, args.action, args.reason)
     claim = args.claim.resolve(strict=True)
+    if args.command == "record":
+        declaration = {
+            key: getattr(args, key)
+            for key in ("kind", "state", "summary", "reference", "revision", "round")
+            if getattr(args, key) is not None
+        }
+        return progress.record(claim, declaration)
     operations = {
         "settle": lambda: settle(claim, args.activity, args.evidence),
         "recover": lambda: recover(cwd, claim, args.evidence),
