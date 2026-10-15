@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_standalone_execution as standalone
-from tools import admission, codex, coordinate, dashboard, worker, worktree
+from tools import admission, codex, coordinate, dashboard, progress, worker, worktree
 
 REPO = "example/fixture"
 
@@ -422,23 +422,31 @@ class QueueTests(unittest.TestCase):
             "publish": lambda: coordinate.publish(claim, "Fictional", body),
             "record_pr": lambda: admission.record_pr(claim, {"number": 1}),
         }
-        before = (claim.read_text(), (self.state / "queue.json").read_text())
-        for caller in (None, "", "other"):
-            environment = {} if caller is None else {"BALLAST_COORDINATOR": caller}
-            for name, mutate in mutations.items():
-                with (
-                    self.subTest(caller=caller, operation=name),
-                    patch.dict(os.environ, environment),
-                ):
-                    if caller is None:
-                        del os.environ["BALLAST_COORDINATOR"]
-                    with self.assertRaisesRegex(
-                        admission.AdmissionError, "queue's coordinator reference"
+
+        def refused(mutations: dict, callers: tuple = (None, "", "other")) -> None:
+            before = (claim.read_text(), (self.state / "queue.json").read_text())
+            checkouts = worktree.git(self.repo, "worktree", "list", "--porcelain")
+            for caller in callers:
+                environment = {} if caller is None else {"BALLAST_COORDINATOR": caller}
+                for name, mutate in mutations.items():
+                    with (
+                        self.subTest(caller=caller, operation=name),
+                        patch.dict(os.environ, environment),
                     ):
-                        mutate()
-        self.assertEqual(
-            (claim.read_text(), (self.state / "queue.json").read_text()), before
-        )
+                        if caller is None:
+                            del os.environ["BALLAST_COORDINATOR"]
+                        with self.assertRaisesRegex(
+                            admission.AdmissionError, "queue's coordinator reference"
+                        ):
+                            mutate()
+            self.assertEqual(
+                (claim.read_text(), (self.state / "queue.json").read_text()), before
+            )
+            self.assertEqual(
+                worktree.git(self.repo, "worktree", "list", "--porcelain"), checkouts
+            )
+
+        refused(mutations)
         self.assertTrue(claim.with_suffix(".worker").exists())
         self.assertEqual(self.prs, [])
         # The queue's coordinator succeeds on each operation.
@@ -452,6 +460,21 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(
             (record["activity"], record["coordinator"]), ("stopped", "lead")
         )
+        admission.control(self.state, "running", "operator resume")
+        refused({"recover": lambda: coordinate.recover(self.repo, claim, "seen")})
+        self.assertEqual(
+            coordinate.recover(self.repo, claim, "seen")["activity"], "active"
+        )
+        # A pre-#200 claim owned by another reference launches and records nothing.
+        record = json.loads(claim.read_text())
+        claim.write_text(json.dumps({**record, "coordinator": "successor"}))
+        declaration = {"kind": "plan", "state": "accepted", "summary": "Fixture"}
+        foreign = {
+            "reserve_worker": lambda: admission.reserve_worker(claim, "w", "review"),
+            "progress": lambda: progress.record(claim, declaration),
+        }
+        refused(foreign, ("successor",))
+        self.assertFalse(claim.with_suffix(".worker").exists())
 
     def test_pre_queue_claim_needs_no_coordinator(self) -> None:
         claim = self.prepare(48)

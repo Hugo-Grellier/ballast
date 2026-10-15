@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import unicodedata
 from typing import TYPE_CHECKING
@@ -97,8 +96,7 @@ def record(claim: Path, declaration: dict) -> dict:
         queue = admission.governing(claim.parent, item)
         if queue is None:
             admission.fail("Public progress requires a selected queue")
-        if os.environ.get("BALLAST_COORDINATOR") != queue["coordinator"]:
-            admission.fail("Queue context or coordinator changed")
+        admission.require_coordinator(queue)
         if (
             item.get("queue") != queue["id"]
             or item.get("repository") != queue["repository"]

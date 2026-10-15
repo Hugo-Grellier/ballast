@@ -283,6 +283,7 @@ def reserve_worker(claim: Path, identifier: str, role: str) -> Path:
         record = read(claim)
         value = governing(state, record)
         if value:
+            require_coordinator(value)
             if record.get("queue") != value["id"] or record.get(
                 "coordinator"
             ) != os.environ.get("BALLAST_COORDINATOR"):
