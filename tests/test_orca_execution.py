@@ -57,7 +57,10 @@ class OrcaQualificationTests(unittest.TestCase):
         self.addCleanup(self.which.stop)
 
     def inspect(
-        self, native_status: dict | None = None, native_schema: dict | None = None
+        self,
+        native_status: dict | None = None,
+        native_schema: dict | None = None,
+        provider: str = "openai",
     ) -> dict:
         """Run discovery against serialized native fixtures."""
         values = [
@@ -67,7 +70,9 @@ class OrcaQualificationTests(unittest.TestCase):
             json.dumps(native_schema or schema()),
         ]
         with patch.object(orca, "read", side_effect=values) as reads:
-            result = orca.inspect("selected-orca", Path.cwd(), "test-model", "low")
+            result = orca.inspect(
+                "selected-orca", Path.cwd(), provider, "test-model", "low"
+            )
         self.assertEqual(
             [call.args[2] for call in reads.call_args_list],
             [
@@ -98,6 +103,12 @@ class OrcaQualificationTests(unittest.TestCase):
             self.inspect(status(appVersion="99.0.0"))["dispatch"], "blocked"
         )
 
+    def test_requested_provider_is_explicit_and_never_inferred(self) -> None:
+        result = self.inspect(provider="anthropic")
+        self.assertEqual(result["requested"]["provider"], "anthropic")
+        self.assertIsNone(result["observed"])
+        self.assertEqual(result["dispatch"], "blocked")
+
     def test_missing_routing_options_remain_unverified(self) -> None:
         result = self.inspect(native_schema=schema(commands=[]))
         self.assertFalse(any(result["launch_options"].values()))
@@ -116,7 +127,9 @@ class OrcaQualificationTests(unittest.TestCase):
                 patch.object(orca, "read") as read,
             ):
                 with self.assertRaises(codex.QualificationError):
-                    orca.inspect("selected-orca", Path.cwd(), "test-model", "low")
+                    orca.inspect(
+                        "selected-orca", Path.cwd(), "openai", "test-model", "low"
+                    )
                 read.assert_not_called()
         for model, effort in [
             ("", "low"),
@@ -128,7 +141,7 @@ class OrcaQualificationTests(unittest.TestCase):
                 patch.object(orca, "read") as read,
             ):
                 with self.assertRaises(codex.QualificationError):
-                    orca.inspect("selected-orca", Path.cwd(), model, effort)
+                    orca.inspect("selected-orca", Path.cwd(), "openai", model, effort)
                 read.assert_not_called()
 
     def test_malformed_status_and_schema_fail_closed(self) -> None:
@@ -169,7 +182,7 @@ class OrcaQualificationTests(unittest.TestCase):
             patch.object(orca, "read") as read,
         ):
             with self.assertRaises(codex.QualificationError):
-                orca.inspect("missing-orca", Path.cwd(), "test-model", "low")
+                orca.inspect("missing-orca", Path.cwd(), "openai", "test-model", "low")
             which.assert_called_once_with("missing-orca")
             read.assert_not_called()
 
@@ -195,6 +208,8 @@ class OrcaQualificationTests(unittest.TestCase):
             "orca.py",
             "--executable",
             "selected-orca",
+            "--provider",
+            "openai",
             "--model",
             "test-model",
             "--effort",

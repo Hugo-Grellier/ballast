@@ -70,20 +70,25 @@ def read(executable: str, cwd: Path, args: tuple[str, ...]) -> str:
     return result.stdout
 
 
-def inspect(executable: str, cwd: Path, model: str, effort: str) -> dict:
+def inspect(executable: str, cwd: Path, provider: str, model: str, effort: str) -> dict:
     """Project safe capability facts; never infer routing from advertised flags."""
     codex.check_environment(os.environ)
     if os.environ.get("ORCA_ENVIRONMENT") or os.environ.get("ORCA_PAIRING_CODE"):
         codex.fail("This Orca qualification supports only an explicit local target")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", model) or effort not in {
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    }:
-        codex.fail("Model and effort must be explicit concrete settings")
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", provider)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", model)
+        or effort
+        not in {
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        }
+    ):
+        codex.fail("Provider, model and effort must be explicit concrete settings")
     selected = shutil.which(executable)
     if selected is None:
         codex.fail("Selected Orca executable is unavailable; no alternate tried")
@@ -134,7 +139,7 @@ def inspect(executable: str, cwd: Path, model: str, effort: str) -> dict:
         "launch_options": {
             name: name in flags for name in ("agent", "model", "effort", "terminal")
         },
-        "requested": {"provider": "openai", "model": model, "effort": effort},
+        "requested": {"provider": provider, "model": model, "effort": effort},
         "observed": None,
         "verification": "unverified",
         "dispatch": "blocked",
@@ -151,12 +156,17 @@ def main() -> int:
         "--executable", required=True, help="Resolve using the installed Orca skill"
     )
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", required=True)
     args = parser.parse_args()
     try:
         report = inspect(
-            args.executable, args.cwd.resolve(strict=True), args.model, args.effort
+            args.executable,
+            args.cwd.resolve(strict=True),
+            args.provider,
+            args.model,
+            args.effort,
         )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         # CLI diagnostics can contain paths, account identifiers or private text.

@@ -15,7 +15,7 @@ Do not launch issue workers through the mappings below until this gap is closed.
 After resolving the executable with the installed skill, inspect it with:
 
 ```sh
-python3 -I -S tools/orca.py --executable orca-ide --model gpt-6-luna --effort low
+python3 -I -S tools/orca.py --executable orca-ide --provider openai --model gpt-6-luna --effort low
 ```
 
 Substitute the resolved executable and selected concrete route. This command
