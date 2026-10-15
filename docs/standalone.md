@@ -294,14 +294,16 @@ Kinds/states are: phase (`understand`, `decompose`, `plan`, `implement`, `verify
 question (`pending`, `answered`); decision (`pending`, `resolved`);
 check (`pending`, `passed`, `failed`); review (`pending`, `accepted`,
 `changes_required`, `blocked`); readiness (`draft`, `blocked`, `ready`). Review
-may supply `--round 1..3`. Check/review/readiness require a full revision.
+may supply `--round 1..3`. Check/review/readiness require a full revision (40 or 64 lowercase hex).
 Question/decision require an issue/comment reference back to the main conversation's
 public decision record. Other optional references must be exact selected-repository
 GitHub issue/comment, PR or Actions run URLs. Unknown fields are rejected.
 
 Summaries are bounded public declarations curated by the authorized coordinator.
 It is responsible for excluding secrets, account details, private reasoning and
-paths; validation also rejects control characters and recognizable sensitive text.
+paths; validation also rejects control characters and secret-shaped text (API-key
+and token prefixes, `Bearer` values, `password=`-style assignments, home or
+system paths, `output.txt`).
 Never copy raw final worker output into this producer or treat it as approval.
 The browser cannot record evidence or answer questions. Viewing it conveys no
 approval. Evidence is labelled coordinator-recorded; revision-bound declarations

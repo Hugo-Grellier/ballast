@@ -31,11 +31,14 @@ STATES = {
     "review": {"pending", "accepted", "changes_required", "blocked"},
     "readiness": {"draft", "blocked", "ready"},
 }
-REVISION = re.compile(r"[0-9a-f]{40}")
+REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 # Public summaries are coordinator-authored, never copied from private output.
+# Match secret and path shapes, not common words.
 SENSITIVE = re.compile(
-    r"(?i)(?:secret|password|authorization|api[_ -]?key|bearer|token|account|"
-    r"reasoning|protocol|output\.txt|sk-[a-z0-9]|(?:^|\s)[/~\\])"
+    r"(?i)(?:(?<![a-z0-9])sk-[a-z0-9]|(?<![a-z0-9])gh[pousr]_[a-z0-9]|github_pat_|"
+    r"\bbearer\s+\S|\b(?:password|passwd|secret|token|api[_-]?key|authorization)\s*[=:]|"
+    r"output\.txt|(?:^|\s)(?:~|\\|[a-z]:\\|"
+    r"/(?:home|root|etc|usr|var|tmp|opt|mnt|users|private|proc|srv|run)(?:/|\b)))"
 )
 
 
@@ -90,12 +93,13 @@ def record(claim: Path, declaration: dict) -> dict:
         queue = admission.governing(claim.parent, item)
         if queue is None:
             admission.fail("Public progress requires a selected queue")
-        admission.require_context(queue, admission.context(queue))
+        if os.environ.get("BALLAST_COORDINATOR") != queue["coordinator"]:
+            admission.fail("Queue context or coordinator changed")
         if (
             item.get("queue") != queue["id"]
             or item.get("repository") != queue["repository"]
             or item.get("issue") not in queue["issues"]
-            or item.get("coordinator") != os.environ.get("BALLAST_COORDINATOR")
+            or item.get("coordinator") != queue["coordinator"]
         ):
             admission.fail("Claim is outside coordinator's selected queue")
         public = validate(declaration, queue["repository"])
