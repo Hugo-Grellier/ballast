@@ -2,7 +2,7 @@
 
 Ballast 2.0 drops the v1 installer, trusted launcher and `ballast run`. An existing
 agent session follows the [issue workflow](issue-workflow.md), runs workers through
-the [standalone](standalone.md) or [Orca](orca-execution.md) adapter, and gets an
+the [standalone adapter](standalone.md), and gets an
 [independent review](pair-review.md). A project copies the templates it wants. Nothing
 is installed, and `ballast.toml` is no longer read.
 

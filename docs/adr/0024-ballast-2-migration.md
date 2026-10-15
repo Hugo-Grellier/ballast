@@ -9,8 +9,9 @@
 
 ADR-0023 proposed a portable agent workflow and required a migration to name every
 replaced v1 decision and removed guarantee. #177 and #178 delivered the standalone
-issue-to-PR slice and the bounded queue with live evidence; #179 adds the optional Orca
-adapter. The operator decided on 2026-10-15 that v1 tests and tools are not needed for
+issue-to-PR slice and the bounded queue with live evidence. The optional Orca adapter
+(#179) is not part of 2.0: Orca exposes no native routing receipt before task delivery,
+and the operator dropped it on 2026-10-15. Standalone is the only execution path. The operator decided on 2026-10-15 that v1 tests and tools are not needed for
 2.0 (removed in #185), that this repository switches fully to 2.0, and that projects keep
 the generic policies and review skills as copy-once content.
 

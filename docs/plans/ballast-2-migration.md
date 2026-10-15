@@ -1,6 +1,6 @@
 # Migration, v1 retirement and 2.0 release — #180
 
-Parent: #174. Blocked by #179 (optional Orca adapter, in progress separately). Build
+Parent: #174. #179 (optional Orca adapter) was dropped from 2.0, see below. Build
 with ordinary worktree/agent development, not Ballast 1.x or Spec Kit. This is a
 plan, not completed proof. Merge and release remain human decisions.
 
@@ -14,8 +14,9 @@ plan, not completed proof. Merge and release remain human decisions.
   ADRs. `specs/` stays as the v1 historical record.
 - Consumers keep the generic policies and review skills as copy-once content,
   cleaned of v1 references (option B). Spec Kit and v1-only content are removed.
-- Orca stays in 2.0: the release waits for #179. This branch does not touch Orca
-  files (`docs/orca-execution.md`, any Orca tool) to avoid conflicting with it.
+- Orca was first kept in 2.0. Later the same day #179 was blocked upstream: Orca exposes
+  no native routing receipt before task delivery (PR #186 stays a draft). The operator
+  then dropped it from 2.0. The Orca document stays as a contract marked not available.
 
 ## Waves
 
@@ -53,12 +54,13 @@ plan, not completed proof. Merge and release remain human decisions.
    the v1.1.0 README.
 5. **Issues.** Apply the triage table below after merge approval, with comments that
    link this PR.
-6. **Release (after #179).**
-   - `docs/evidence/release-2.0.md`: standalone (#177), queue/recovery (#178) and
-     Orca (#179) evidence, limits, remaining gaps, and the throughput/quality
-     tradeoffs observed.
-   - The `feat!` title and `BREAKING CHANGE` footer make Release Please propose
-     2.0.0. The operator merges that release PR only after #179 and the evidence.
+6. **Release.**
+   - [`docs/evidence/release-2.0.md`](../evidence/release-2.0.md): standalone (#177)
+     and queue/recovery (#178) evidence, verification at the release revision, limits,
+     remaining gaps, and the throughput/quality tradeoffs observed.
+   - The `feat!` title and `BREAKING CHANGE` footer of #187 made Release Please propose
+     2.0.0 ([#189](https://github.com/Hugo-Grellier/ballast/pull/189)). The operator
+     merges it.
 
 ## Removed guarantees (for ADR-0024 and the migration guide)
 
@@ -101,6 +103,6 @@ plan, not completed proof. Merge and release remain human decisions.
 | Migration, removed guarantees, rollback/pinning | Wave 4, table above |
 | Related issues retained/superseded/closed | Wave 5 |
 | CI deterministic; evidence at submitted revision | `ci.yml` unchanged (lint, tests); checks recorded in the PR |
-| Integration evidence | Wave 6 (after #179) |
+| Integration evidence | Wave 6: standalone and queue; Orca dropped from 2.0 |
 | Limits, gaps, tradeoffs | Wave 6 |
 | No merge, destructive cleanup or release without approval | Issue actions and release wait for the operator |
