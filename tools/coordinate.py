@@ -531,7 +531,7 @@ def run(args: argparse.Namespace) -> dict:
     """Dispatch one subcommand."""
     cwd = args.cwd.resolve(strict=True)
     # Refuse before any Git call follows a worker-writable gitfile.
-    if "ballast-v2" in cwd.parts:
+    if "ballast-v2" in cwd.parts or worktree.inside_checkout():
         worktree.fail("Run queue commands from the project checkout, not an issue")
     state = state_directory(cwd)
     if cwd.is_relative_to(state):

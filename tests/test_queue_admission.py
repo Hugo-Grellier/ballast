@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -15,7 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_standalone_execution as standalone
-from tools import admission, codex, coordinate, worker, worktree
+from tools import admission, codex, coordinate, dashboard, worker, worktree
 
 REPO = "example/fixture"
 
@@ -638,6 +641,79 @@ class QueueTests(unittest.TestCase):
         time.sleep(0.1)
         self.assertIn(process.pid, worker.survivors(checkout))
         self.assertNotIn(process.pid, worker.survivors(self.root / "elsewhere"))
+
+    @unittest.skipUnless(Path("/proc/self/cwd").exists(), "Linux /proc required")
+    def test_unrelated_process_in_checkout_is_named_and_output_kept(self) -> None:
+        # The #193 case: a coordinator process, not the worker, sits in the checkout.
+        claim = self.prepare(81)
+        checkout = Path(json.loads(claim.read_text())["checkout"])
+        process = subprocess.Popen(["sleep", "30"], cwd=checkout)  # noqa: S607
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        with (
+            patch.object(worker, "INTERRUPT_SECONDS", 0),
+            self.assertRaisesRegex(
+                codex.QualificationError, rf"unknown: .*\b{process.pid} \(sleep\)"
+            ),
+        ):
+            self.worker_on(claim)
+        (directory,) = (claim.parent / "workers").iterdir()
+        result = json.loads((directory / "result.json").read_text())
+        self.assertEqual((result["status"], result["turn"]), ("unknown", "completed"))
+        self.assertIn(str(process.pid), result["reason"])
+        self.assertTrue((directory / "output.txt").read_text())
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def test_client_shutdown_failure_keeps_completed_output(self) -> None:
+        claim = self.prepare(83)
+        with (
+            patch.object(
+                worker.WorkerServer,
+                "close",
+                side_effect=codex.QualificationError("Fictional shutdown failure"),
+            ),
+            self.assertRaisesRegex(codex.QualificationError, "shutdown"),
+        ):
+            self.worker_on(claim)
+        (directory,) = (claim.parent / "workers").iterdir()
+        result = json.loads((directory / "result.json").read_text())
+        self.assertEqual((result["status"], result["turn"]), ("unknown", "completed"))
+        self.assertTrue((directory / "output.txt").read_text())
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    @unittest.skipUnless(Path("/proc/self/comm").exists(), "Linux /proc required")
+    def test_non_utf8_process_name_is_still_named(self) -> None:
+        code = "import time; open('/proc/self/comm', 'wb').write(b'\\xffbad')"
+        process = subprocess.Popen([sys.executable, "-c", f"{code}; time.sleep(30)"])  # noqa: S603
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        time.sleep(0.3)
+        self.assertRegex(worker.describe([process.pid]), rf"^{process.pid} \(.bad\)$")
+
+    def test_survivor_names_are_bounded(self) -> None:
+        self.assertEqual(worker.describe([2**31]), f"{2**31} (?)")
+        many = worker.describe([2**31] * (worker.MAX_NAMED + 2))
+        self.assertTrue(many.endswith(", and 2 more"))
+
+    def test_helpers_refuse_to_start_inside_an_issue_checkout(self) -> None:
+        self.queue([82])
+        checkout = Path(json.loads(self.prepare(82).read_text())["checkout"])
+        args = coordinate.parser().parse_args(["--cwd", str(self.repo), "status"])
+        argv = ["dashboard", "--cwd", str(self.repo), "--repo", REPO]
+        with contextlib.chdir(checkout):
+            with self.assertRaisesRegex(RuntimeError, "project checkout"):
+                coordinate.run(args)
+            with self.assertRaisesRegex(codex.QualificationError, "outside issue"):
+                worker.check_launch("fixture-model", "low", 2)
+            with (
+                patch.object(sys, "argv", [*argv, "--coordinator", "lead"]),
+                patch.object(dashboard.Server, "serve_forever") as serve,
+                contextlib.redirect_stderr(io.StringIO()) as error,
+            ):
+                self.assertEqual(dashboard.main(), 1)
+            serve.assert_not_called()
+            self.assertIn("outside issue checkouts", error.getvalue())
+        coordinate.run(args)  # The project checkout itself is fine.
 
     def test_timing_edge_cases_from_review(self) -> None:
         def at(offset: int) -> str:

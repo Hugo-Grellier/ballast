@@ -579,6 +579,10 @@ def main() -> int:
     parser.add_argument("--revision")
     parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args()
+    if worktree.inside_checkout():
+        # A server running in a checkout would block a worker's quiet check.
+        sys.stderr.write("Dashboard blocked: start it outside issue checkouts\n")
+        return 1
     try:
         cwd = args.cwd.resolve(strict=True)
         if os.environ.get("BALLAST_COORDINATOR") != args.coordinator:

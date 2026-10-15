@@ -23,6 +23,15 @@ def fail(reason: str) -> NoReturn:
     raise RuntimeError(reason)
 
 
+def inside_checkout() -> bool:
+    """Whether this process runs inside an issue checkout.
+
+    There it would block a worker's quiet check. Decided by path alone, never
+    by a worker-writable gitfile.
+    """
+    return "ballast-v2" in Path.cwd().parts
+
+
 def command(argv: list[str], cwd: Path) -> str:
     """Run a bounded native command, keeping diagnostics private."""
     result = subprocess.run(  # noqa: S603 -- argument arrays, no shell
