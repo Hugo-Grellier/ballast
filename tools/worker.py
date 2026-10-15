@@ -7,6 +7,7 @@ import contextlib
 import json
 import math
 import os
+import queue
 import re
 import select
 import shutil
@@ -19,10 +20,13 @@ from pathlib import Path
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import codex, worktree
+from tools import admission, codex, worktree
 
 MAX_TEXT = 65536
 MAX_RUNTIME = 900
+POLL_SECONDS = 1.0
+QUIET_GAP_SECONDS = 0.2
+INTERRUPT_SECONDS = 30
 
 
 class WorkerServer(codex.AppServer):
@@ -42,6 +46,8 @@ class WorkerServer(codex.AppServer):
         self.thread_id = ""
         self.finished: dict | None = None
         self.output = ""
+        self.tokens: dict | None = None
+        self.windows: dict = {}
         super().__init__(executable, cwd, timeout)
 
     def send(self, message: dict) -> None:
@@ -66,11 +72,71 @@ class WorkerServer(codex.AppServer):
                 codex.fail("Worker input closed")
             pending = pending[written:]
 
+    def poll(self, wait: float) -> dict | None:
+        """Read one message or return None so the caller can observe controls."""
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            codex.fail("Worker timed out")
+        try:
+            message = self.messages.get(timeout=min(wait, remaining))
+        except queue.Empty:
+            return None
+        if not isinstance(message, dict):
+            codex.fail("Worker ended or returned malformed JSON")
+        return message
+
+    def interrupt(self, turn: str) -> None:
+        """Request a stop and bound the wait for terminal evidence."""
+        self.send(
+            {
+                "id": "worker-interrupt",
+                "method": "turn/interrupt",
+                "params": {"threadId": self.thread_id, "turnId": turn},
+            }
+        )
+        self.deadline = min(self.deadline, time.monotonic() + INTERRUPT_SECONDS)
+
+    def retry_at(self) -> float | None:
+        """Use only a backend-provided reset time for an exhausted window."""
+        times = [
+            window["resetsAt"]
+            for window in self.windows.values()
+            if isinstance(window, dict)
+            and type(window.get("usedPercent")) is int
+            and window["usedPercent"] >= 100  # noqa: PLR2004 -- exhausted window
+            and type(window.get("resetsAt")) is int
+        ]
+        return max(times, default=None)
+
+    def usage(self, method: object, params: dict) -> None:
+        """Keep only quota window timing and token totals, never account data."""
+        if method == "account/rateLimits/updated":
+            limits = params.get("rateLimits")
+            if isinstance(limits, dict):
+                self.windows.update(
+                    (key, limits[key])
+                    for key in ("primary", "secondary")
+                    if isinstance(limits.get(key), dict)
+                )
+        elif method == "thread/tokenUsage/updated" and (
+            params.get("threadId") == self.thread_id
+        ):
+            usage = params.get("tokenUsage")
+            if isinstance(usage, dict) and isinstance(usage.get("total"), dict):
+                self.tokens = {
+                    key: value
+                    for key, value in usage["total"].items()
+                    if type(value) is int
+                }
+
     def notification(self, message: dict) -> None:
         """Keep final messages, never reasoning, account data or raw tool output."""
         method = message.get("method")
         params = message.get("params", {})
-        if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
+        if not isinstance(params, dict):
+            return
+        self.usage(method, params)
+        if params.get("threadId") != self.thread_id:
             return
         if method == "item/completed":
             item = params.get("item", {})
@@ -176,8 +242,8 @@ def establish(
 
 def run_turn(
     server: WorkerServer, cwd: Path, text: str, directory: Path, result: dict
-) -> str:
-    """Wait for a correlated completed turn with bounded final output."""
+) -> tuple[str, str | None]:
+    """Wait for a correlated terminal turn; observe cancellation meanwhile."""
     boundary = (
         "Work only on the assigned task in this checkout. "
         "Do not invoke ballast, spawn agents, change model/provider, access "
@@ -203,22 +269,50 @@ def run_turn(
         codex.fail("Worker turn identity is missing")
     result["task_started"] = True
     event(directory, "task_accepted", turn=turn_id)
+    return settle_turn(server, turn_id, directory)
+
+
+def await_terminal(server: WorkerServer, turn_id: str, directory: Path) -> bool:
+    """Wait for the turn's terminal notification; return whether we interrupted."""
+    state = directory.parents[1]
+    interrupted = False
     while server.finished is None:
-        message = server.receive()
+        if not interrupted and admission.cancelled(state):
+            server.interrupt(turn_id)
+            interrupted = True
+            event(directory, "interrupt_requested")
+        message = server.poll(POLL_SECONDS)
+        if message is None:
+            continue
+        if message.get("id") == "worker-interrupt" and interrupted:
+            if "error" in message:
+                codex.fail("Backend rejected the interrupt; outcome unknown")
+            continue
         if "id" in message or not isinstance(message.get("method"), str):
             codex.fail("Unexpected worker response or approval request")
         server.notification(message)
+    return interrupted
+
+
+def settle_turn(
+    server: WorkerServer, turn_id: str, directory: Path
+) -> tuple[str, str | None]:
+    """Classify only backend-confirmed terminal states; others stay unknown."""
+    interrupted = await_terminal(server, turn_id, directory)
     final = server.finished
-    if (
-        not isinstance(final, dict)
-        or final.get("id") != turn_id
-        or final.get("status") != "completed"
-        or final.get("error")
-    ):
+    if not isinstance(final, dict) or final.get("id") != turn_id:
+        codex.fail("Worker did not report a matching turn completion")
+    error = final.get("error")
+    kind = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    if interrupted and final.get("status") == "interrupted":
+        return "cancelled", None
+    if final.get("status") == "failed" and kind in admission.QUOTA_ERRORS:
+        return "quota", kind
+    if final.get("status") != "completed" or error:
         codex.fail("Worker did not report a successful matching turn completion")
     if not server.output:
         codex.fail("Worker did not return final output")
-    return server.output
+    return "completed", None
 
 
 def read_task(task: Path) -> str:
@@ -242,6 +336,86 @@ def check_launch(model: str, effort: str, timeout: float) -> None:
         codex.fail("Worker model and effort must be explicit identifiers")
 
 
+def started(entry: Path) -> int:
+    """Return a process's start time in clock ticks since boot (stat field 22)."""
+    return int((entry / "stat").read_text().rsplit(")", 1)[1].split()[19])
+
+
+def survivors(cwd: Path) -> list[int]:
+    """List processes still running inside the checkout; Linux /proc only.
+
+    A same-user process started after this worker whose working directory
+    cannot be read counts as a survivor: unreadable is unknown, never stopped.
+    Older ones (session managers, agents) cannot belong to this worker.
+    """
+    proc = Path("/proc")
+    if not (proc / "self" / "cwd").exists():
+        codex.fail("Cannot confirm worker processes stopped on this host")
+    birth = started(proc / "self")
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            where = (entry / "cwd").readlink()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            with contextlib.suppress(OSError, ValueError, IndexError):
+                if entry.stat().st_uid == os.getuid() and started(entry) >= birth:
+                    found.append(int(entry.name))
+            continue
+        if where == cwd or cwd in where.parents:
+            found.append(int(entry.name))
+    return found
+
+
+def await_quiet(cwd: Path) -> None:
+    """Settle only when nothing still runs in the checkout; else stay unknown."""
+    deadline = time.monotonic() + INTERRUPT_SECONDS
+    # ponytail: two empty scans a short gap apart narrow, but cannot close, a race
+    # with a process forking mid-scan; a cgroup per worker would close it.
+    empty = 0
+    while empty < 2:  # noqa: PLR2004 -- consecutive empty scans
+        if survivors(cwd):
+            empty = 0
+            if time.monotonic() >= deadline:
+                codex.fail("Processes still run in the checkout; outcome unknown")
+            time.sleep(POLL_SECONDS)
+        else:
+            empty += 1
+            time.sleep(QUIET_GAP_SECONDS)
+
+
+def record_outcome(
+    server: WorkerServer,
+    claim: Path,
+    directory: Path,
+    result: dict,
+    terminal: tuple[str, str | None],
+) -> None:
+    """Persist a confirmed terminal turn and any structured quota pause."""
+    outcome, kind = terminal
+    result.update(status=outcome, tokens=server.tokens or "unavailable")
+    if outcome == "quota":
+        result["retry_at"] = server.retry_at()
+        admission.quota(claim.parent, kind or "unknown", result["retry_at"])
+    if outcome == "completed":
+        (directory / "output.txt").write_text(server.output)
+
+
+def reserve(claim: Path, identifier: str, role: str) -> Path:
+    """Reserve capacity and the private worker directory, or neither."""
+    admission.reserve_worker(claim, identifier, role)
+    directory = claim.parent / "workers" / identifier
+    try:
+        directory.mkdir(parents=True, mode=0o700)
+    except OSError:
+        admission.release_worker(claim, identifier)  # Nothing was started.
+        raise
+    return directory
+
+
 def execute(
     claim: Path, task: Path, *, route: tuple[str, str], role: str, timeout: float
 ) -> dict:
@@ -255,17 +429,14 @@ def execute(
     executable = shutil.which("codex")
     if executable is None:
         codex.fail("Codex is not installed on PATH")
-    lock = claim.with_suffix(".worker")
     identifier = uuid.uuid4().hex
-    with lock.open("x") as stream:
-        stream.write(identifier)
-    directory = claim.parent / "workers" / identifier
-    directory.mkdir(parents=True, mode=0o700)
+    directory = reserve(claim, identifier, role)
     started = False
     settled = False
     result = {
         "worker": identifier,
         "attempt": record["attempt"],
+        "role": role,
         "status": "not_started",
         "task_started": False,
     }
@@ -283,26 +454,29 @@ def execute(
             result.update(receipt)
             worktree.write_record(directory / "result.json", result)
             event(directory, "route_verified", **receipt)
+            # Pause/cancel after this permit treats the turn as already active.
+            admission.permit_turn(claim, identifier, role)
             # Persist possible delivery BEFORE writing; a lost response is unknown.
             started = True
             result.update(status="unknown", task_started="unknown")
             worktree.write_record(directory / "result.json", result)
             event(directory, "task_dispatched")
-            output = run_turn(server, cwd, text, directory, result)
-        # Close/reap must succeed before calling the worker settled.
+            outcome, kind = run_turn(server, cwd, text, directory, result)
+        # Close/reap must succeed before calling the worker settled. Sandboxed
+        # tool commands run in their own session and can outlive the client.
+        await_quiet(cwd)
         result.update(
-            status="completed",
             head_before=head,
             head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),
         )
+        record_outcome(server, claim, directory, result, (outcome, kind))
         if role == "review" and (
             result["head_after"] != head
             or worktree.git(cwd, "status", "--porcelain", git_dir=git_dir)
         ):
             codex.fail("Reviewed checkout changed; review evidence is invalid")
-        (directory / "output.txt").write_text(output)
         settled = True
-    except codex.QualificationError as error:
+    except (codex.QualificationError, admission.AdmissionError) as error:
         result["reason"] = str(error)
         raise
     finally:
@@ -311,7 +485,7 @@ def execute(
         worktree.write_record(directory / "result.json", result)
         event(directory, result["status"])
         if settled or not started:
-            lock.unlink()
+            admission.release_worker(claim, identifier)
     return result
 
 
@@ -333,7 +507,7 @@ def main() -> int:
             role=args.role,
             timeout=args.timeout,
         )
-    except codex.QualificationError as error:
+    except (codex.QualificationError, admission.AdmissionError) as error:
         codex.emit({"status": "blocked", "reason": str(error)})
         return 1
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError):

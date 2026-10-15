@@ -13,6 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn
 
+# Direct isolated invocation loads only this operator-selected source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools import admission
+
 
 def fail(reason: str) -> NoReturn:
     """Stop with a fixed diagnostic that contains no backend payload."""
@@ -144,11 +148,12 @@ def prepare(cwd: Path, repo: str, issue: int, base: str) -> Path:
         "created_at": datetime.now(UTC).isoformat(),
         "status": "preparing",
     }
-    try:
+    with admission.locked(state):
+        if claim.exists():
+            fail("Issue already claimed; reconcile its attempt before retrying")
+        admission.admit_issue(state, record)
         with claim.open("x") as stream:
             json.dump(record, stream)
-    except FileExistsError:
-        fail("Issue already claimed; reconcile its recorded attempt before retrying")
     try:
         git(cwd, "worktree", "add", "-b", branch, str(checkout), base_sha)
         if (
@@ -156,17 +161,26 @@ def prepare(cwd: Path, repo: str, issue: int, base: str) -> Path:
             or git(checkout, "branch", "--show-current") != branch
         ):
             fail("Prepared checkout identity differs from its claim")
-        record["status"] = "ready"
-        write_record(claim, record)
+        mark(claim, "ready")
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-        record["status"] = "setup_failed"
-        write_record(claim, record)
+        mark(claim, "setup_failed")
         raise
     return claim
 
 
-def validate(claim: Path) -> dict:
-    """Revalidate checkout identity before every worker, including linked worktrees."""
+def mark(claim: Path, status: str) -> None:
+    """Change preparation status under the shared lock, keeping other updates."""
+    with admission.locked(claim.parent):
+        record = admission.read(claim)
+        record["status"] = status
+        admission.write(claim, record)
+
+
+def validate(claim: Path, *, ready: bool = True) -> dict:
+    """Revalidate checkout identity before every worker, including linked worktrees.
+
+    Recovery passes ``ready=False`` to inspect an interrupted preparation.
+    """
     record = json.loads(claim.read_text())
     fields = (
         "attempt",
@@ -189,7 +203,7 @@ def validate(claim: Path) -> dict:
     admin = common / "worktrees" / cwd.name
     if (
         claim.resolve() != common / "ballast-v2" / f"issue-{record['issue']}.json"
-        or record["status"] != "ready"
+        or (ready and record["status"] != "ready")
         or not admin.is_dir()
         or (admin / "gitdir").read_text().strip() != str(cwd / ".git")
     ):
@@ -219,9 +233,13 @@ def main() -> int:
         RuntimeError,
         subprocess.SubprocessError,
     ) as error:
-        sys.stderr.write(
-            f"Preparation blocked: {type(error).__name__}; inspect local state\n"
+        # Admission reasons are fixed strings without private payloads.
+        reason = (
+            str(error)
+            if isinstance(error, admission.AdmissionError)
+            else f"{type(error).__name__}; inspect local state"
         )
+        sys.stderr.write(f"Preparation blocked: {reason}\n")
         return 1
     sys.stdout.write(json.dumps({"local_only": True, "claim": str(claim)}) + "\n")
     return 0
