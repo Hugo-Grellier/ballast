@@ -317,6 +317,8 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
 
 def publish(claim: Path, title: str, body: Path) -> dict:
     """Create or reuse one draft PR; re-query after an uncertain response."""
+    # Refuse before any GitHub write; record_pr rechecks under the lock.
+    admission.require_coordinator(admission.policy(claim.parent))
     record = worktree.validate(claim)
     cwd = Path(record["checkout"])
     # Pinned admin directory: never follow the worker-writable gitfile.
