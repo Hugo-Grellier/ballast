@@ -5,15 +5,15 @@ Ballast is a reusable standard that projects install with `ballast setup`. This 
 ## Work from the right artifact
 
 - Purpose: ship the agent-first engineering standard that projects pin and install.
-- Layout: `tools/` (the `ballast` command, `init`, `setup`, the Spec Kit workflow tools and intake helper), `templates/` (policies, skills, Spec Kit workflow and templates, `init/` templates for `ballast init`, copy-once `AGENTS.md` and GitHub files), `tests/` (unittest), `specs/` (product and technical specifications), `docs/plans/` (backport plan).
+- Layout: `tools/` (the 2.0 standalone worker, worktree claims and bounded queue; the 1.x `ballast` command, `setup`, `init`, Spec Kit workflow tools and intake helper live at tag `v1.1.0`), `templates/` (policies, skills, Spec Kit workflow and templates, `init/` templates for `ballast init`, copy-once `AGENTS.md` and GitHub files), `tests/` (unittest), `specs/` (product and technical specifications), `docs/plans/` (backport plan).
 - Architecture and domain: [`specs/TECHNICAL-SPEC.md`](specs/TECHNICAL-SPEC.md) and [`specs/PRODUCT-SPEC.md`](specs/PRODUCT-SPEC.md). Decisions are ADRs under `docs/adr/`; record a new one there.
 
 Accepted ADRs and the accepted architecture govern design. A ready feature spec in `specs/<number>-<slug>/` defines current requirements, followed by its reviewed plan and tasks. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR for an accepted architecture change. Read only the relevant architecture sections and ADRs when changing domain behavior or a boundary.
 
 ## Commands
 
-- Install: `uv sync --locked` (before `ballast trust`, so a run's checks never create `.venv`). The shipped tools are stdlib-only; only the gate's `ruff` and `pyyaml` are pinned in `uv.lock`.
-- Fast gate: `uv run --locked ruff check && uv run --locked ruff format --check` and `uv run --locked python tests/parallel.py tests/test_*.py` (the same classes as `python -m unittest tests/test_*.py`, one process per class, in parallel). Full local gate: the same suite on a Linux machine with a systemd user session, the Codex CLI and the Spec Kit CLI, so the tests CI skips (real systemd, `bwrap`, Codex sandbox, Spec Kit CLI) also run.
+- Install: `uv sync --locked` (before `ballast trust`, so a run's checks never create `.venv`). The shipped tools are stdlib-only; only the gate's `ruff` is pinned in `uv.lock`.
+- Fast gate: `uv run --locked ruff check && uv run --locked ruff format --check` and `uv run --locked python tests/parallel.py tests/test_*.py` (the same classes as `python -m unittest tests/test_*.py`, one process per class, in parallel). CI runs the same suite. The suite covers the 2.0 tools only; v1 tests were dropped and released v1 stays verified at its tags.
 - Record exact verification commands and any unavailable gate in the PR. See the [testing policy](docs/policies/testing.md) for evidence requirements.
 
 ## Invariants

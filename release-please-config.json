@@ -22,7 +22,7 @@
   "packages": {
     ".": {
       "initial-version": "0.1.0",
-      "extra-files": ["tools/ballast", "README.md"]
+      "extra-files": []
     }
   }
 }
