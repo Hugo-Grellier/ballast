@@ -169,7 +169,9 @@ To work several selected leaf issues, configure one finite queue in the same
 clone. Queue state shares the `ballast-v2/` directory and one short local
 `flock`; GitHub stays authoritative for dependencies, PRs, merges and CI. Every
 helper invocation in a queue needs `BALLAST_COORDINATOR` set to the queue's
-coordinator reference; workers inherit it and cannot raise a limit.
+coordinator reference; `control`, `settle`, `release`, `publish` and `recover`
+refuse otherwise, and an unset or empty value is never recorded. Workers inherit
+it and cannot raise a limit.
 
 ```sh
 export BALLAST_COORDINATOR=COORDINATOR_REF
@@ -219,8 +221,8 @@ cannot be recreated to reset its budget.
   `unknown` to `stopped` or `active`; `pr_wait` to `active`, `stopped` or
   `merged` (only when GitHub reports the PR merged); `stopped` to `active`.
   Moving into `active` rechecks controls and the issue cap. Any recorded PR
-  consumes backlog until merged. Another coordinator takes over an active issue
-  only after a recorded `stopped`.
+  consumes backlog until merged. A claim recorded under another coordinator
+  reference passes to the queue's coordinator only after a recorded `stopped`.
 - `release --claim CLAIM --worker ID --evidence TEXT` frees an `unknown` worker
   lock after the coordinator has positive stop evidence (for example the backend
   thread's terminal state) and marks that worker's result `released`. Nothing

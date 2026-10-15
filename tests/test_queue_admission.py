@@ -395,15 +395,74 @@ class QueueTests(unittest.TestCase):
     def test_active_transfer_needs_stop_evidence(self) -> None:
         self.queue([44])
         claim = self.prepare(44)
-        with (
-            patch.dict(os.environ, {"BALLAST_COORDINATOR": "successor"}),
-            self.assertRaisesRegex(admission.AdmissionError, "stop evidence"),
-        ):
-            admission.settle(claim, "active", "taking over")
-        admission.settle(claim, "stopped", "lead handed off")
-        with patch.dict(os.environ, {"BALLAST_COORDINATOR": "successor"}):
-            record = admission.settle(claim, "active", "accepted handoff")
-        self.assertEqual(record["coordinator"], "successor")
+        record = json.loads(claim.read_text())
+        # A claim recorded under another reference, e.g. before #200.
+        claim.write_text(json.dumps({**record, "coordinator": "previous"}))
+        with self.assertRaisesRegex(admission.AdmissionError, "stop evidence"):
+            admission.settle(claim, "stopped", "taking over")
+        claim.write_text(
+            json.dumps({**record, "coordinator": "", "activity": "stopped"})
+        )
+        record = admission.settle(claim, "active", "accepted handoff")
+        self.assertEqual(record["coordinator"], "lead")
+
+    def test_queue_mutations_require_the_queue_coordinator(self) -> None:
+        self.queue([47])
+        claim = self.publish_ready(47)
+        held = "fixture-worker"
+        claim.with_suffix(".worker").write_text(held)
+        body = self.root / "body.md"
+        cli = coordinate.parser().parse_args(
+            ["--cwd", str(self.repo), "control", "paused", "--reason", "x"]
+        )
+        mutations = {
+            "control": lambda: coordinate.run(cli),
+            "settle": lambda: admission.settle(claim, "stopped", "operator stop"),
+            "release": lambda: admission.release(claim, held, "thread failed"),
+            "publish": lambda: coordinate.publish(claim, "Fictional", body),
+            "record_pr": lambda: admission.record_pr(claim, {"number": 1}),
+        }
+        before = (claim.read_text(), (self.state / "queue.json").read_text())
+        for caller in (None, "", "other"):
+            environment = {} if caller is None else {"BALLAST_COORDINATOR": caller}
+            for name, mutate in mutations.items():
+                with (
+                    self.subTest(caller=caller, operation=name),
+                    patch.dict(os.environ, environment),
+                ):
+                    if caller is None:
+                        del os.environ["BALLAST_COORDINATOR"]
+                    with self.assertRaisesRegex(
+                        admission.AdmissionError, "queue's coordinator reference"
+                    ):
+                        mutate()
+        self.assertEqual(
+            (claim.read_text(), (self.state / "queue.json").read_text()), before
+        )
+        self.assertTrue(claim.with_suffix(".worker").exists())
+        self.assertEqual(self.prs, [])
+        # The queue's coordinator succeeds on each operation.
+        self.assertEqual(coordinate.run(cli)["mode"], "paused")
+        self.assertEqual(
+            coordinate.publish(claim, "Fictional", body)["pr"]["number"], 50
+        )
+        admission.release(claim, held, "thread failed")
+        self.assertFalse(claim.with_suffix(".worker").exists())
+        record = admission.settle(claim, "stopped", "operator stop")
+        self.assertEqual(
+            (record["activity"], record["coordinator"]), ("stopped", "lead")
+        )
+
+    def test_pre_queue_claim_needs_no_coordinator(self) -> None:
+        claim = self.prepare(48)
+        claim.with_suffix(".worker").write_text("fixture-worker")
+        with patch.dict(os.environ):
+            del os.environ["BALLAST_COORDINATOR"]
+            admission.release(claim, "fixture-worker", "thread failed")
+            admission.record_pr(claim, {"number": 1})
+            record = admission.settle(claim, "stopped", "operator stop")
+        self.assertEqual(record["activity"], "stopped")
+        self.assertNotIn("coordinator", record)
 
     def test_observation_derives_history_and_reports_unavailable(self) -> None:
         self.queue([45], issues=1, attempts=2)

@@ -237,15 +237,25 @@ def create(state: Path, spec: QueueSpec) -> dict:
         return value
 
 
+def require_coordinator(value: dict | None) -> str:
+    """Require the queue's coordinator for its mutations; return the caller.
+
+    The policy's reference is never empty, so an unset variable never matches.
+    Without a policy (pre-queue claims) nothing is required or recorded.
+    """
+    coordinator = os.environ.get("BALLAST_COORDINATOR", "")
+    if value is not None and coordinator != value["coordinator"]:
+        fail("Queue operations require the queue's coordinator reference")
+    return coordinator
+
+
 def admit_issue(state: Path, record: dict) -> None:
     """Reserve a fresh issue claim; caller holds the shared mutex."""
     value = policy(state)
     runnable(value)
     if value is None:
         return
-    coordinator = os.environ.get("BALLAST_COORDINATOR", "")
-    if coordinator != value["coordinator"]:
-        fail("Queue operations require the queue's explicit coordinator reference")
+    coordinator = require_coordinator(value)
     if (
         record["repository"].lower() != value["repository"].lower()
         or record["issue"] not in value["issues"]
@@ -326,6 +336,7 @@ def release(claim: Path, identifier: str, evidence: str) -> dict:
     if not bounded(evidence, MAX_REASON):
         fail("Release requires bounded stop evidence")
     with locked(claim.parent):
+        require_coordinator(policy(claim.parent))
         lock = claim.with_suffix(".worker")
         if not lock.exists() or lock.read_text() != identifier:
             fail("No such worker reservation on this claim")
@@ -365,8 +376,7 @@ def adopt(claim: Path, evidence: str) -> dict:
                 record["issue"] not in value["issues"]
             ):
                 fail("Issue is outside the selected queue")
-            if coordinator != value["coordinator"]:
-                fail("Queue operations require the queue's coordinator reference")
+            require_coordinator(value)
             if record.get("activity") == "merged":
                 fail("Merged work is complete; nothing to recover")
             issue_room(state, value, record)
@@ -380,6 +390,7 @@ def adopt(claim: Path, evidence: str) -> dict:
 def record_pr(claim: Path, pr: dict) -> dict:
     """Attach publication evidence without changing the issue's activity."""
     with locked(claim.parent):
+        require_coordinator(policy(claim.parent))
         record = read(claim)
         record["pr"] = pr
         milestone(record, "published", pr=pr["number"])
@@ -445,6 +456,7 @@ def control(
         value = policy(state)
         if value is None:
             fail("No queue to control")
+        require_coordinator(value)
         if expected is not None:
             require_context(value, expected)
         if value["mode"] == "cancelled" and action != "cancelled":
@@ -465,7 +477,7 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
     with locked(claim.parent):
         record = read(claim)
         value = governing(claim.parent, record)
-        coordinator = os.environ.get("BALLAST_COORDINATOR", "")
+        coordinator = require_coordinator(value)
         # An owner-less pre-queue claim may only move to unknown/stopped (TRANSITIONS).
         if value and record.get("coordinator") not in (None, coordinator):
             # Transfer needs the prior owner's recorded stop/handoff evidence.
