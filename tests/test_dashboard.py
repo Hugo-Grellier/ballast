@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
+import os
+import select
 import shutil
+import signal
 import subprocess
 import threading
 import unittest
@@ -12,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_queue_admission as queue_tests
-from tools import admission, dashboard, progress, worktree
+from tools import admission, codex, dashboard, progress, worktree
 
 REPO = queue_tests.REPO
 
@@ -385,7 +389,9 @@ class DashboardTests(unittest.TestCase):
             reason="PRIVATE_SENTINEL",
             tokens={"totalTokens": 20, "private": "PRIVATE_SENTINEL"},
         )
-        data["observed"].update(private="PRIVATE_SENTINEL")
+        data["requested"].update(model="fixture-model.1")
+        data["observed"].update(model="fixture-model.2", private="PRIVATE_SENTINEL")
+        data["session"] = "invalid.session"
         admission.write(directory / "result.json", data)
         other = admission.read(claim)
         other.update(queue="foreign", issue=99, attempt="PRIVATE_SENTINEL")
@@ -397,6 +403,11 @@ class DashboardTests(unittest.TestCase):
         view = binding.snapshot()
         self.assertNotIn("PRIVATE_SENTINEL", json.dumps(view))
         self.assertNotIn(str(self.root), json.dumps(view))
+        projected = view["issues"][0]["workers"][0]
+        self.assertEqual(projected["requested"]["model"], "fixture-model.1")
+        self.assertEqual(projected["observed"]["model"], "fixture-model.2")
+        self.assertNotEqual(projected["requested"], projected["observed"])
+        self.assertIsNone(projected["session"])
         self.assertEqual(view["issues"][0]["workers"][0]["tokens"], {"totalTokens": 20})
         self.assertEqual(view["issues"][1]["workers"][0]["status"], "unknown")
         self.assertEqual(
@@ -438,6 +449,138 @@ class DashboardTests(unittest.TestCase):
             binding.dependencies["issues"], {"9": "blocked", "10": "unknown"}
         )
         self.assertNotIn("PRIVATE_SENTINEL", json.dumps(binding.dependencies))
+
+    def test_route_validation_in_projection(self) -> None:
+        self.policy = self.queue([11])
+        claim = self.prepare(11)
+        result = self.worker_on(claim)
+        path = self.state / "workers" / result["worker"] / "result.json"
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        binding.next_refresh = float("inf")
+        for value, expected in (
+            ("a" + "._-9" * 31 + "xyz", "a" + "._-9" * 31 + "xyz"),
+            ("a" * 129, None),
+            (".model", None),
+            ("../private", None),
+            ("bad value", None),
+            (12, None),
+        ):
+            with self.subTest(value=value):
+                result["observed"] = dict.fromkeys(
+                    ("provider", "model", "effort"), value
+                )
+                result["observed"]["private"] = "PRIVATE_SENTINEL"
+                admission.write(path, result)
+                projected = binding.snapshot()["issues"][0]["workers"][0]
+                self.assertEqual(
+                    projected["observed"],
+                    dict.fromkeys(("provider", "model", "effort"), expected),
+                )
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(projected))
+        record = admission.read(claim)
+        record["history"].append(
+            {"event": "worker_reserved", "worker": "invalid.worker", "role": "review"}
+        )
+        admission.write(claim, record)
+        self.assertEqual(len(binding.snapshot()["issues"][0]["workers"]), 1)
+
+    def test_scripted_cancellation_projection_without_http(self) -> None:
+        self.policy = self.queue([12, 13, 14], issues=3)
+        completed = self.prepare(12)
+        self.worker_on(completed)
+        cancelled = self.prepare(13)
+        tail = [
+            {"id": "qualify-5", "result": {"turn": {"id": "fixture-turn"}}},
+            {"id": "worker-interrupt", "result": {}},
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "fixture-thread",
+                    "turn": {"id": "fixture-turn", "status": "interrupted"},
+                },
+            },
+        ]
+        with patch.object(admission, "cancelled", return_value=True):
+            result = self.worker_on(cancelled, lambda m: m[:4] + tail)
+        self.assertEqual(result["status"], "cancelled")
+        directory = self.state / "workers" / result["worker"]
+        events = [
+            json.loads(line)
+            for line in (directory / "events.jsonl").read_text().splitlines()
+        ]
+        terminal = next(e for e in events if e["event"] == "cancelled")
+        unknown = self.prepare(14)
+        with (
+            patch.object(admission, "cancelled", return_value=True),
+            self.assertRaises(codex.QualificationError),
+        ):
+            self.worker_on(unknown, lambda m: m[:4] + tail[:2])
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        binding.next_refresh = float("inf")
+        admission.control(self.state, "cancelled", "fixture", expected=binding.expected)
+        workers = [item["workers"][0] for item in binding.snapshot()["issues"]]
+        self.assertEqual(
+            [w["status"] for w in workers], ["completed", "cancelled", "unknown"]
+        )
+        self.assertIn(
+            {"event": "cancelled", "at": terminal["at"]}, workers[1]["milestones"]
+        )
+        self.assertIn(
+            "interrupt_requested", [e["event"] for e in workers[2]["milestones"]]
+        )
+        self.assertNotIn("cancelled", [e["event"] for e in workers[2]["milestones"]])
+        self.assertTrue(unknown.with_suffix(".worker").exists())
+
+    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
+    def test_selection_timeout_kills_and_reaps_own_group(self) -> None:
+        helper = self.root / "selection_helper.py"
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        write_pipe = os.fdopen(write_fd, "wb")
+        self.addCleanup(write_pipe.close)
+        # The child signals readiness, then keeps the pipe open until killed.
+        # EOF proves no live fixture descendant retains it; alarms bound failures.
+        child = (
+            "import os, signal; signal.alarm(10); "
+            f"os.write({write_fd}, b'ready'); signal.pause()"
+        )
+        helper.write_text(
+            "import signal, subprocess, sys\n"
+            "signal.alarm(10)\n"
+            f"subprocess.Popen([sys.executable, '-I', '-S', '-c', {child!r}], "
+            f"pass_fds=({write_fd},))\n"
+            "signal.pause()\n"
+        )
+        native = subprocess.Popen
+        processes = []
+
+        def launch(argv: list[str], **kwargs: object) -> subprocess.Popen:
+            process = native(argv, pass_fds=(write_fd,), **kwargs)
+            processes.append(process)
+            return process
+
+        try:
+            with (
+                patch.object(dashboard.coordinate, "__file__", str(helper)),
+                patch.object(dashboard.subprocess, "Popen", side_effect=launch),
+                self.assertRaises(subprocess.TimeoutExpired),
+            ):
+                dashboard.selection(self.repo)
+            write_pipe.close()
+            self.assertEqual(len(processes), 1)
+            process = processes[0]
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(process.pid, os.WNOHANG)
+            self.assertTrue(select.select([read_fd], [], [], 1)[0])
+            self.assertEqual(os.read(read_fd, 5), b"ready")
+            self.assertTrue(select.select([read_fd], [], [], 1)[0])
+            self.assertEqual(os.read(read_fd, 1), b"")
+        finally:
+            for process in processes:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=2)
 
     def test_native_ui_contract(self) -> None:
         node = shutil.which("node")

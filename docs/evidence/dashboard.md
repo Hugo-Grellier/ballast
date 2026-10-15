@@ -1,6 +1,6 @@
 # Local execution dashboard qualification — #188
 
-Code and integrated base: `5add251aa79cd2fd1eaa7a35a5a4b67216223f82`, incorporating
+Initial qualified code and integrated base: `5add251aa79cd2fd1eaa7a35a5a4b67216223f82`, incorporating
 `main` at `b60afb0c6f922260c311d3572dfc5a411766719f` (2.0.0). This record describes
 local deterministic/browser evidence, not a new live model-to-GitHub delivery run.
 
@@ -8,7 +8,7 @@ local deterministic/browser evidence, not a new live model-to-GitHub delivery ru
 
 - `uv run --locked ruff check` — passed.
 - `uv run --locked ruff format --check` — passed, 480 files.
-- `uv run --locked python tests/parallel.py tests/test_*.py` — **67 passed,
+- `uv run --locked python tests/parallel.py tests/test_*.py` — **70 passed,
   zero skipped**, four classes, including real loopback HTTP tests and native
   JavaScript behavior checks.
 - `git diff --check` — passed before publication.
@@ -78,6 +78,12 @@ same-user backend, Git-common clone ownership only, coordinator liveness unknown
 explicit coordinator-produced progress, and no browser answer/release/retry API.
 No new live quota, actual model cancellation or hosting end-to-end run is claimed
 for this UI; those unchanged backend paths have separate existing qualification.
+Independent implementation round 1 requested two corrections: preserve dotted
+backend route names and confirmed worker cancellation. Both were fixed with
+projection/scripted cancellation regressions. A native timeout test additionally
+proves helper process-group cleanup. The repaired tree passed the full 70-test
+gate and a repeated ordinary-browser/CLI qualification; no browser page errors or
+overflow were reported. Final exact-head review and CI are linked from the PR.
 Human merge/release approval remains required.
 
 ## Screenshots

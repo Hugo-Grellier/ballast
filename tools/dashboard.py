@@ -37,6 +37,7 @@ MILESTONES = {
     "task_dispatched",
     "task_accepted",
     "interrupt_requested",
+    "cancelled",
     "completed",
     "not_started",
     "unknown",
@@ -84,7 +85,13 @@ def stamp(value: object) -> str | None:
 def route(value: object) -> dict:
     """Whitelist concrete route keys; malformed observations remain unknown."""
     value = value if isinstance(value, dict) else {}
-    return {key: identifier(value.get(key)) for key in ("provider", "model", "effort")}
+    return {
+        key: item
+        if isinstance(item := value.get(key), str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", item)
+        else None
+        for key in ("provider", "model", "effort")
+    }
 
 
 def number(value: object) -> float | None:
@@ -229,7 +236,7 @@ class Binding:
             else "unknown",
             "status": result.get("status")
             if result.get("status")
-            in {"completed", "not_started", "unknown", "quota", "released"}
+            in {"completed", "cancelled", "not_started", "unknown", "quota", "released"}
             else "unknown",
             "requested": route(requested),
             "observed": route(result.get("observed")),

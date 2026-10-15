@@ -1,9 +1,66 @@
 # Current verification
 
-The coordinator completed the full 67-test gate, ordinary desktop/mobile browser
-checks, real CLI restart observation and optional Orca display. See
-[dashboard evidence](../evidence/dashboard.md). Independent exact-head review
-and hosting checks are required before readiness.
+The coordinator reports the full 67-test gate and GitHub CI green at
+`6389f3436586dd8541d958c767b0b4ab5593e0d3`; ordinary desktop/mobile browser
+checks, real CLI restart observation and optional Orca display are already
+recorded in [dashboard evidence](../evidence/dashboard.md). Those results do
+not verify the uncommitted review fixes below. Coordinator full-gate repetition,
+any required browser follow-up and independent review remain pending.
+
+## Implementation review round 1 fixes
+
+This bounded sole-writer pass addresses DASH-001 and DASH-002 against the
+reviewed head above, within the approved dashboard plan:
+
+- Route provider/model/effort use the backend's bounded
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` syntax. Actual durable projection tests
+  preserve distinct dotted requested/observed models, accept the 128-character
+  boundary and reject malformed/overlong values. Private keys remain omitted;
+  dotted session and worker identifiers remain rejected by the unchanged opaque
+  identifier validator. No worker/path validation was loosened.
+- Confirmed backend `cancelled` is preserved as a status and timestamped
+  milestone. The existing scripted transport/queue fixture setup produces a real
+  terminal interrupted notification and durable cancelled result/event. Projection
+  retains that exact event timestamp. A separate unconfirmed interrupt remains
+  unknown with its ownership marker retained, and a completed worker remains
+  completed after subsequent queue cancellation. `tools/worker.py` is unchanged.
+- A native POSIX helper/child test exercises the existing two-second selection
+  timeout without changing it. The helper runs in its own process group; SIGKILL
+  return status and an already-reaped parent are checked. A child readiness pipe
+  followed by EOF proves no live descendant retains the pipe, without arbitrary
+  sleeps or process-disappearance polling. Finally cleanup kills the fixture
+  group and waits; fixture alarms bound failure paths. No shell, agent, network
+  or Orca is involved.
+
+The route and cancellation regressions failed against the original implementation
+before the fixes (three failing tests); the native cleanup test already passed.
+After the fixes, these exact checks passed:
+
+```sh
+.venv/bin/ruff check --no-cache
+.venv/bin/ruff format --check --no-cache
+git diff --check
+python -m unittest tests.test_dashboard.DashboardTests.test_durable_projection_without_http tests.test_dashboard.DashboardTests.test_projection_isolation_and_unknown_without_http tests.test_dashboard.DashboardTests.test_route_validation_in_projection tests.test_dashboard.DashboardTests.test_scripted_cancellation_projection_without_http tests.test_dashboard.DashboardTests.test_selection_timeout_kills_and_reaps_own_group tests.test_dashboard.DashboardTests.test_native_ui_contract
+```
+
+The focused unittest command passed all six tests, including native JavaScript
+contracts. Ruff format checked 482 files. The attempted full gate,
+`python tests/parallel.py tests/test_*.py`, ran **70 tests, zero skipped**:
+65 passed and five existing real-loopback HTTP tests errored at socket creation
+with `PermissionError: [Errno 1] Operation not permitted`. The denied tests are
+`test_http_boundary_and_controls`,
+`test_independent_bounded_sessions_and_malformed_cookies`,
+`test_progress_validation_unknown_worker_and_dependency_budget`,
+`test_replacement_is_checked_inside_control_lock` and
+`test_scripted_transport_projection_evidence_and_reconnect`. They were neither
+skipped nor replaced. Full repaired-tree verification is blocked by this sandbox's
+socket restriction and requires the coordinator's permitted environment; no new
+browser, CI or full-gate success is claimed.
+
+Only dashboard projection, dashboard tests and this existing checkpoint changed.
+No backend behavior, runtime timeout, model/provider/effort route, credentials,
+agents, development claims, commits, publication, merge or release were used or
+changed. The local native fixture left no live subprocesses.
 
 ## Historical writer checkpoint
 
