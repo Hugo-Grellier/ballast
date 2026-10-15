@@ -20,7 +20,7 @@ from tools import admission
 
 def fail(reason: str) -> NoReturn:
     """Stop with a fixed diagnostic that contains no backend payload."""
-    raise RuntimeError(reason)
+    raise admission.FixedReasonError(reason)
 
 
 def inside_checkout() -> bool:
@@ -235,10 +235,10 @@ def main() -> int:
         RuntimeError,
         subprocess.SubprocessError,
     ) as error:
-        # Admission reasons are fixed strings without private payloads.
+        # Fixed reasons carry no private payloads.
         reason = (
             str(error)
-            if isinstance(error, admission.AdmissionError)
+            if isinstance(error, admission.FixedReasonError)
             else f"{type(error).__name__}; inspect local state"
         )
         sys.stderr.write(f"Preparation blocked: {reason}\n")

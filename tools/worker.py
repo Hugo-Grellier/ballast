@@ -504,7 +504,7 @@ def execute(
         ):
             codex.fail("Reviewed checkout changed; review evidence is invalid")
         settled = True
-    except (codex.QualificationError, admission.AdmissionError) as error:
+    except admission.FixedReasonError as error:
         result["reason"] = str(error)
         raise
     finally:
@@ -535,7 +535,7 @@ def main() -> int:
             role=args.role,
             timeout=args.timeout,
         )
-    except (codex.QualificationError, admission.AdmissionError) as error:
+    except admission.FixedReasonError as error:
         codex.emit({"status": "blocked", "reason": str(error)})
         return 1
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError):

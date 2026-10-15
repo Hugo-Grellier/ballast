@@ -50,7 +50,11 @@ class QueueSpec:
     revision: str
 
 
-class AdmissionError(RuntimeError):
+class FixedReasonError(RuntimeError):
+    """A blocking reason that is a fixed string, safe to print."""
+
+
+class AdmissionError(FixedReasonError):
     """Work could not obtain an authorized local resource slot."""
 
 
@@ -265,7 +269,7 @@ def reserve_worker(claim: Path, identifier: str, role: str) -> Path:
         value = policy(state)
         runnable(value)
         if lock.exists():
-            raise FileExistsError(lock.name)
+            fail("Another worker holds this issue")
         record = read(claim)
         value = governing(state, record)
         if value:

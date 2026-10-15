@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.test_codex_routing import MemoryProcess, response
-from tools import codex, worker, worktree
+from tools import admission, codex, coordinate, worker, worktree
 
 
 class ExecutionTests(unittest.TestCase):
@@ -244,7 +244,9 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaises(codex.QualificationError):
             self.run_worker(messages)
         self.assertTrue(self.claim.with_suffix(".worker").exists())
-        with self.assertRaises(FileExistsError):
+        with self.assertRaisesRegex(
+            admission.AdmissionError, "Another worker holds this issue"
+        ):
             self.run_worker(self.script())
         results = list((self.claim.parent / "workers").glob("*/result.json"))
         self.assertEqual(json.loads(results[0].read_text())["status"], "unknown")
@@ -337,6 +339,78 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual(
                 execute.call_args.kwargs["route"], ("fixture-model", "low")
             )
+
+    def test_main_reports_fixed_reasons_and_stays_generic_otherwise(self) -> None:
+        args = ["worker.py", "--claim", str(self.claim), "--task", str(self.task)]
+        args += ["--model", "m", "--effort", "low", "--role", "implement"]
+        for error, reason in (
+            (worktree_error("Fictional fixed reason"), "Fictional fixed reason"),
+            (RuntimeError("private payload"), "Worker failed; inspect local"),
+        ):
+            with (
+                patch("sys.argv", args),
+                patch.object(worker, "execute", side_effect=error),
+                patch.object(codex, "emit") as emit,
+            ):
+                self.assertEqual(worker.main(), 1)
+                shown = emit.call_args.args[0]["reason"]
+                self.assertTrue(shown.startswith(reason), shown)
+                self.assertNotIn("private", shown)
+        with (
+            patch(
+                "sys.argv",
+                ["worktree.py", "--repo", "r", "--issue", "1", "--base", "b"],
+            ),
+            patch.object(worktree, "prepare", side_effect=worktree_error("Fixed.")),
+            patch("sys.stderr") as stderr,
+        ):
+            self.assertEqual(worktree.main(), 1)
+            self.assertIn("Fixed.", stderr.write.call_args.args[0])
+
+    def worker_reason(self) -> str:
+        args = ["worker.py", "--claim", str(self.claim), "--task", str(self.task)]
+        args += ["--model", "m", "--effort", "low", "--role", "implement"]
+        with (
+            patch("sys.argv", args),
+            patch.object(worker.shutil, "which", return_value="/fictional/codex"),
+            patch.object(codex, "emit") as emit,
+        ):
+            self.assertEqual(worker.main(), 1)
+        return emit.call_args.args[0]["reason"]
+
+    def test_worker_main_reports_claim_and_lock_reasons(self) -> None:
+        self.claim.with_suffix(".worker").write_text("{}")
+        self.assertEqual(self.worker_reason(), "Another worker holds this issue")
+        self.claim.with_suffix(".worker").unlink()
+        worktree.mark(self.claim, "preparing")
+        self.assertEqual(
+            self.worker_reason(),
+            "Claim is not ready or belongs to another Git repository",
+        )
+
+    def test_coordinate_main_reports_fixed_reasons_only(self) -> None:
+        for error, shown in (
+            (worktree_error("Fixed reason."), "Fixed reason."),
+            (RuntimeError("private payload"), "RuntimeError"),
+        ):
+            with (
+                patch("sys.argv", ["coordinate.py", "status"]),
+                patch.object(coordinate, "run", side_effect=error),
+                patch("sys.stderr") as stderr,
+            ):
+                self.assertEqual(coordinate.main(), 1)
+                text = stderr.write.call_args.args[0]
+                self.assertIn(shown, text)
+                self.assertNotIn("private", text)
+
+
+def worktree_error(reason: str) -> Exception:
+    """Capture the exception worktree.fail raises."""
+    try:
+        worktree.fail(reason)
+    except admission.FixedReasonError as error:
+        return error
+    raise AssertionError
 
 
 if __name__ == "__main__":
