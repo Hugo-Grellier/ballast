@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -124,7 +125,9 @@ class ExecutionTests(unittest.TestCase):
             response(5, {"turn": {"id": "fixture-turn"}}),
         ]
 
-    def run_worker(self, messages: list[dict], *, role: str = "implement") -> dict:
+    def run_worker(
+        self, messages: list[dict], *, role: str = "implement", timeout: float = 2
+    ) -> dict:
         process = MemoryProcess(messages)
         process.stdin = self.enterContext(tempfile.TemporaryFile(mode="w+b"))
         native_popen = subprocess.Popen
@@ -143,7 +146,7 @@ class ExecutionTests(unittest.TestCase):
                 self.task,
                 route=("fixture-model", "low"),
                 role=role,
-                timeout=2,
+                timeout=timeout,
             )
 
     def test_linked_worktree_and_duplicate_claim(self) -> None:
@@ -328,17 +331,26 @@ class ExecutionTests(unittest.TestCase):
             "--role",
             "implement",
         ]
+        handlers = []
+
+        def run(*_: object, **__: object) -> dict:
+            handlers.append(signal.getsignal(signal.SIGTERM))
+            handlers.append(signal.getsignal(signal.SIGINT))
+            return {"status": "completed"}
+
+        before = signal.getsignal(signal.SIGTERM)
         with (
             patch("sys.argv", args),
-            patch.object(
-                worker, "execute", return_value={"status": "completed"}
-            ) as execute,
+            patch.object(worker, "execute", side_effect=run) as execute,
             patch.object(codex, "emit"),
         ):
             self.assertEqual(worker.main(), 0)
             self.assertEqual(
                 execute.call_args.kwargs["route"], ("fixture-model", "low")
             )
+        # Stop signals settle through the worker while it runs, then are restored.
+        self.assertEqual(handlers, [worker.request_stop] * 2)
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
     def test_main_reports_fixed_reasons_and_stays_generic_otherwise(self) -> None:
         args = ["worker.py", "--claim", str(self.claim), "--task", str(self.task)]

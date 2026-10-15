@@ -93,6 +93,15 @@ python3 -I -S "$BALLAST_SOURCE/tools/worker.py" \
   --role implement --timeout 300
 ```
 
+At `--timeout` the worker interrupts its turn rather than abandoning it, so it
+can run up to about 70 seconds longer: at most 30 seconds for the interrupted
+turn's terminal evidence, then up to 30 seconds for the checkout to go quiet and
+a few seconds for client shutdown. An agent harness may stop foreground commands
+sooner (Claude Code's Bash tool defaults to 120 seconds, at most 600). Run the
+worker as a background command of the harness and wait for it to exit, or choose
+a `--timeout` that leaves that margin below the harness limit. A SIGKILL leaves
+the worker `unknown` with its lock held.
+
 The same executing session must establish authorized subscription access, catalog
 support and matching resolved model/effort, provider, working directory, sandbox,
 no additional write roots/networking and approval policy before task input.
@@ -117,9 +126,15 @@ reason names each by PID and command name (never arguments); the worker stays
 `turn: completed` in `result.json` and its `output.txt` is kept.
 
 A successful backend turn and client exit produce `completed`; this does not
-establish task acceptance. Pre-delivery failures produce `not_started`. Uncertain
-delivery, timeout, malformed completion, failed turn or unconfirmed shutdown
-preserve `unknown` and the worker lock. The helper closes/reaps its client, but
+establish task acceptance. Pre-delivery failures produce `not_started`, as does
+SIGTERM or SIGINT before the task is dispatched. After dispatch, the deadline and
+SIGTERM/SIGINT take the queue cancellation path: the worker sends
+`turn/interrupt` and waits at most 30 seconds for the matching terminal turn.
+A backend-confirmed interrupted turn in a quiet checkout settles as `timeout`
+(deadline) or `cancelled` (signal) and releases the worker lock. Uncertain
+delivery, a rejected interrupt or missing terminal evidence, malformed
+completion, failed turn, survivors or unconfirmed shutdown preserve `unknown`
+and the worker lock. The helper closes/reaps its client, but
 makes no claim that all external effects stopped. No automatic retry, stale-lock
 reclaim, detached operation or general resume is implemented in this slice.
 Report the local worker reference and blocker; inspect actual liveness/effects

@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -561,6 +562,19 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertNotIn("cancelled", [e["event"] for e in workers[2]["milestones"]])
         self.assertTrue(unknown.with_suffix(".worker").exists())
+
+    def test_timed_out_worker_is_projected_settled(self) -> None:
+        self.policy = self.queue([15])
+        claim = self.prepare(15)
+        with patch.object(
+            admission, "cancelled", side_effect=lambda _: time.sleep(1) or False
+        ):
+            self.worker_on(claim, lambda m: m[:4] + queue_tests.INTERRUPTED, timeout=1)
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        binding.next_refresh = float("inf")
+        (projected,) = binding.snapshot()["issues"][0]["workers"]
+        self.assertEqual(projected["status"], "timeout")
+        self.assertIn("timeout", [e["event"] for e in projected["milestones"]])
 
     @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
     def test_selection_timeout_kills_and_reaps_own_group(self) -> None:
