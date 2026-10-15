@@ -212,3 +212,98 @@ cannot be recreated to reset its budget.
 
   Compare runs by these fields. `status` never deletes checkouts, merges or
   schedules work.
+
+## Local execution dashboard
+
+The existing agent conversation can start a foreground dashboard directly from
+an operator-selected Ballast source tree. Explicit inputs select the project;
+a focused Orca window never selects execution context. No agent, scheduler or
+worker starts merely because this UI starts. To create an authorized finite
+queue and observe it in one call (defaults are the bounded queue defaults above):
+
+```sh
+export BALLAST_COORDINATOR=COORDINATOR_REF
+python3 -I -S "$BALLAST_SOURCE/tools/dashboard.py" \
+  --cwd "$PROJECT_CHECKOUT" --repo OWNER/REPOSITORY \
+  --coordinator "$BALLAST_COORDINATOR" --create --issue 12 --issue 13 \
+  --revision INSTRUCTION_REVISION
+```
+
+For an existing queue, replace `--create`, `--issue` and `--revision` with
+`--queue QUEUE_ID`. Custom finite limits can be configured with the existing
+`coordinate create` operation before binding the dashboard. The caller supplies
+its existing coordinator reference in the environment; this cooperative identity
+is not account authentication. Keep the server in a managed foreground terminal
+for its intended lifetime. The printed local URL contains a private fragment
+capability; deliver it to the authorized conversation and avoid public logs.
+The browser exchanges it for an HttpOnly SameSite cookie and clears the fragment.
+Do not share the capability with an untrusted browser user.
+
+Open the URL in an ordinary browser; no Orca installation, account or hosting is
+needed. If Orca presentation is requested and available, the coordinator can use
+its existing embedded-browser navigation capability to open this exact returned
+URL. Orca does not launch or supervise workers. Opening a tab is optional;
+standalone coordination and execution remain the operations documented above.
+
+The UI shows only selected queue claims and workers joined through their claim
+reservations. Other/legacy claims contribute only to labelled clone-wide capacity.
+It never serves private output, checkout paths, raw histories or protocol streams.
+Dependency selection uses the existing selector at most once per minute, with a
+two-second bound on the complete helper process group. A failed source is unknown;
+the observation timestamp identifies cached information. It does not dispatch.
+
+Pause prevents new admissions/turns; resume reuses the existing backend control
+and clears quota pauses as documented above. Cancellation asks existing workers
+to stop, requires browser confirmation and is terminal for browser controls.
+Completed workers remain recorded as completed after cancellation. Unknown work
+retains ownership and consumes capacity. No browser retry, release, recovery,
+answer, model switching, publication or merge operation exists. Queue replacement
+or immutable context changes invalidate reads and controls, with context checked
+inside the control mutation lock. Return to the main conversation to reconcile.
+
+### Public progress evidence
+
+The coordinator records actual public evidence in existing claim history; this
+is the only progress producer. For example, after a real check:
+
+```sh
+python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+  record --claim "$ISSUE_CLAIM" --kind check --state passed \
+  --summary 'Focused checks passed' --revision FULL_COMMIT_SHA \
+  --reference https://github.com/OWNER/REPOSITORY/actions/runs/123
+```
+
+Kinds/states are: phase (`understand`, `decompose`, `plan`, `implement`, `verify`,
+`review`, `publish`, `blocked`); plan (`proposed`, `accepted`, `blocked`);
+question (`pending`, `answered`); decision (`pending`, `resolved`);
+check (`pending`, `passed`, `failed`); review (`pending`, `accepted`,
+`changes_required`, `blocked`); readiness (`draft`, `blocked`, `ready`). Review
+may supply `--round 1..3`. Check/review/readiness require a full revision.
+Question/decision require an issue/comment reference back to the main conversation's
+public decision record. Other optional references must be exact selected-repository
+GitHub issue/comment, PR or Actions run URLs. Unknown fields are rejected.
+
+Summaries are bounded public declarations curated by the authorized coordinator.
+It is responsible for excluding secrets, account details, private reasoning and
+paths; validation also rejects control characters and recognizable sensitive text.
+Never copy raw final worker output into this producer or treat it as approval.
+The browser cannot record evidence or answer questions. Viewing it conveys no
+approval. Evidence is labelled coordinator-recorded; revision-bound declarations
+become stale when pinned claim HEAD changes. Missing HEAD/evidence stays unknown.
+Recorded worker completion, accepted review, check success and PR readiness are
+separate facts. A readiness declaration is a coordinator assertion, not merge
+authority, and does not waive the required fresh review/check/acceptance evidence.
+
+### Lifetime and recovery
+
+Server and workers have foreground lifetimes. The server owns only HTTP; its exit
+stops no worker and supervises none. Refresh/reopen reads the same durable attempts.
+Reopen the printed capability URL after restarting the server to establish a new
+in-memory session. Up to eight independent browser sessions can observe one server;
+a ninth bootstrap expires the oldest session. Cookies are scoped by bound server
+port so dashboards on the same host do not overwrite each other's session.
+Page closure changes no backend state. Disconnected/stale views
+disable controls; a lost control response is observed, never automatically replayed.
+Reachable HTTP proves no coordinator liveness: that field remains unknown.
+Coordinator exit may leave interrupted/unknown ownership until the existing
+positive-evidence recovery protocol reconciles it. No age/PID heuristic frees work.
