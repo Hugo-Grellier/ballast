@@ -235,8 +235,7 @@ class Binding:
             if reservation.get("role") in {"implement", "review"}
             else "unknown",
             "status": result.get("status")
-            if result.get("status")
-            in {"completed", "cancelled", "not_started", "unknown", "quota", "released"}
+            if result.get("status") in coordinate.WORKER_STATUSES
             else "unknown",
             "requested": route(requested),
             "observed": route(result.get("observed")),
@@ -302,6 +301,7 @@ class Binding:
                     }
                 )
         timing = {}
+        derived = {}
         with contextlib.suppress(*ERRORS):
             timed_workers = [w | w["timing"] for w in workers]
             derived = coordinate.issue_view(
@@ -331,8 +331,8 @@ class Binding:
             "timing": timing,
             "evidence": evidence,
             "pr": progress.reference(pr.get("url"), self.expected["repository"]),
-            "review_rounds": sum(w["role"] == "review" for w in workers),
-            "rework": max(0, sum(w["role"] == "implement" for w in workers) - 1),
+            "review_rounds": derived.get("review_rounds", 0),
+            "rework": derived.get("rework", 0),
             "readiness": next(
                 (
                     e["state"]

@@ -80,13 +80,6 @@ def repository(cwd: Path, expected: str, git_dir: Path | None = None) -> None:
         fail("Origin does not match the requested GitHub repository")
 
 
-def write_record(path: Path, value: dict) -> None:
-    """Replace a local record atomically in its private directory."""
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n")
-    temporary.replace(path)
-
-
 def integration_revision(cwd: Path, repo: str, base: str) -> str:
     """Resolve the current branch revision from the verified GitHub host."""
     reference = json.loads(
