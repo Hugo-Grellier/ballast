@@ -52,17 +52,27 @@ The origin must name `github.com` itself, as `https://github.com/OWNER/REPOSITOR
 `ssh://git@github.com/OWNER/REPOSITORY` or `git@github.com:OWNER/REPOSITORY`
 (each with an optional `.git` and trailing `/`). Credentials in the URL, other
 hosts and SSH host aliases (`git@github-work:...`) are refused. To push through
-an alias, keep the origin canonical and rewrite only the push URL:
+an alias, keep the origin canonical and rewrite only the push URL. The
+`pushInsteadOf` base must match the form of the origin; a base that does not
+match rewrites nothing:
 
 ```sh
+# origin is https://github.com/OWNER/REPOSITORY
 git config url."git@ALIAS:".pushInsteadOf "https://github.com/"
+# origin is git@github.com:OWNER/REPOSITORY
+git config url."git@ALIAS:".pushInsteadOf "git@github.com:"
+# origin is ssh://git@github.com/OWNER/REPOSITORY
+git config url."git@ALIAS:".pushInsteadOf "ssh://git@github.com/"
 ```
 
 Observed with Git 2.53: `git remote get-url origin` still returns the canonical
 URL and `git remote get-url --push origin` returns the alias form. Do not use
 `url.<base>.insteadOf` for this: it rewrites the URL that `git remote get-url
-origin` reports, so the helper refuses the alias. `pushInsteadOf` leaves fetches
-on the canonical URL.
+origin` reports, so the helper refuses the alias.
+
+Fetches stay on the canonical URL. The operator needs working credentials for
+that account on the canonical transport (an HTTPS credential, or the default SSH
+key); otherwise fetch fails or authenticates as another account.
 
 Claims and execution records live under `ballast-v2/` in Git's common directory,
 shared by its linked worktrees. They contain local paths and stay untracked.
