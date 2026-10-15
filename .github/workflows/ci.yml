@@ -23,4 +23,4 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
       # Ballast 2.0 suites only; released v1 stays verified in its tags.
-      - run: uv run --locked python -m unittest tests/test_codex_routing.py tests/test_standalone_execution.py tests/test_queue_admission.py
+      - run: uv run --locked python -m unittest tests/test_codex_routing.py tests/test_standalone_execution.py tests/test_queue_admission.py tests/test_orca_execution.py
