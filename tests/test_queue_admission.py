@@ -55,6 +55,7 @@ class QueueTests(unittest.TestCase):
         self.prs: list[dict] = []
         self.merged: set[int] = set()
         self.missing: set[int] = set()
+        self.pr_numbers: set[int] = set()
         self.graphql: list[list[str]] = []
         self.lose_create_response = False
         native = worktree.command
@@ -98,11 +99,21 @@ class QueueTests(unittest.TestCase):
         if "graphql" in argv:
             self.graphql.append(argv)
             query = next(a for a in argv if a.startswith("query="))
-            numbers = [int(n) for n in re.findall(r"i\d+:issue\(number:(\d+)\)", query)]
+            numbers = [
+                int(n)
+                for n in re.findall(r"i\d+:issueOrPullRequest\(number:(\d+)\)", query)
+            ]
             if self.missing.intersection(numbers):
                 # The real gh exits non-zero when any alias is unresolved.
                 worktree.fail("Fictional unresolved issue")
-            return {"data": {"repository": {f"i{n}": self.issue(n) for n in numbers}}}
+            return {
+                "data": {
+                    "repository": {
+                        f"i{n}": {} if n in self.pr_numbers else self.issue(n)
+                        for n in numbers
+                    }
+                }
+            }
         path = argv[-1]
         if "/git/ref/heads/" in path:
             return {
@@ -567,6 +578,29 @@ class QueueTests(unittest.TestCase):
         self.queue([80, 81, 82])
         coordinate.select(self.repo)
         self.assertEqual(len(self.graphql), 2)  # queue issues, then prerequisites
+
+    def test_pull_request_numbered_prerequisite_stays_batched(self) -> None:
+        self.pr_numbers = {95}
+        self.issues = {96: {"body": "Blocked by #95"}}
+        self.queue([96])
+        selected = coordinate.select(self.repo)
+        self.assertEqual(len(self.graphql), 2)
+        self.assertEqual(selected["blocked"], {"96": ["unknown prerequisite #95"]})
+
+    def test_many_prerequisites_are_chunked(self) -> None:
+        def body(start: int) -> dict:
+            refs = ", ".join(f"#{n}" for n in range(start, start + 50))
+            return {"body": f"Blocked by {refs}"}
+
+        self.issues = {n: body(2000 + 50 * i) for i, n in enumerate((1, 2, 3))}
+        self.queue([1, 2, 3])
+        coordinate.select(self.repo)
+        self.assertEqual(len(self.graphql), 3)  # queue, then 150 prerequisites in 2
+        counts = [
+            len(re.findall("issueOrPullRequest", next(a for a in c if "query=" in a)))
+            for c in self.graphql
+        ]
+        self.assertEqual(counts, [3, coordinate.BATCH, 150 - coordinate.BATCH])
 
     def test_malformed_node_isolates_only_that_issue(self) -> None:
         self.issues = {91: {"number": 0}}

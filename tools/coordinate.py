@@ -19,6 +19,8 @@ from tools import admission, progress, worktree
 MAX_DEPENDENCIES = 50
 # Bound regex work on untrusted issue bodies (GitHub caps bodies at 65536).
 MAX_LINE = 1024
+# Aliases per query keep the argument far below the per-argument exec limit.
+BATCH = 100
 ISSUE_FIELDS = """fragment F on Issue{
 number state body subIssuesSummary{total}
 blockedBy(first:50){pageInfo{hasNextPage} nodes{number state repository{nameWithOwner}}}
@@ -65,9 +67,16 @@ def check(value: object, number: int) -> dict:
 
 
 def issues(cwd: Path, repo: str, numbers: list[int]) -> dict[int, dict | None]:
-    """Read issues in one aliased query; a missing or malformed one is None."""
+    """Read issues in one aliased query; a missing, malformed or PR node is None.
+
+    `issueOrPullRequest` resolves a PR number to `{}` instead of a NOT_FOUND error,
+    so a PR-numbered prerequisite does not fail the whole call.
+    """
     owner, name = repo.split("/")
-    aliases = " ".join(f"i{n}:issue(number:{int(n)}){{...F}}" for n in numbers)
+    aliases = " ".join(
+        f"i{n}:issueOrPullRequest(number:{int(n)}){{... on Issue{{...F}}}}"
+        for n in numbers
+    )
     query = (
         "query($owner:String!,$name:String!)"
         f"{{repository(owner:$owner,name:$name){{{aliases}}}}}\n{ISSUE_FIELDS}"
@@ -141,18 +150,18 @@ def lookup(cwd: Path, repo: str, number: int, cache: dict) -> dict | None:
 def preload(cwd: Path, repo: str, numbers: list[int], cache: dict) -> None:
     """Fill the cache for every uncached number with one GraphQL call."""
     wanted = [n for n in dict.fromkeys(numbers) if n not in cache]
-    if not wanted:
-        return
-    try:
-        cache.update(issues(cwd, repo, wanted))
-    except LOOKUP_ERRORS:
-        # A failed call (GitHub exits non-zero on any unresolved alias) reads each
-        # issue alone so only the unreadable one is unknown.
-        if len(wanted) == 1:
-            cache[wanted[0]] = None
-            return
-        for number in wanted:
-            preload(cwd, repo, [number], cache)
+    for start in range(0, len(wanted), BATCH):
+        chunk = wanted[start : start + BATCH]
+        try:
+            cache.update(issues(cwd, repo, chunk))
+        except LOOKUP_ERRORS:
+            # GitHub exits non-zero on any unresolved alias; read the chunk's
+            # issues alone so only the unreadable one is unknown.
+            for number in chunk:
+                try:
+                    cache.update(issues(cwd, repo, [number]))
+                except LOOKUP_ERRORS:
+                    cache[number] = None
 
 
 def preload_prerequisites(cwd: Path, queue: dict, cache: dict) -> None:
