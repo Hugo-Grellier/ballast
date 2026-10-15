@@ -37,13 +37,7 @@ MILESTONES = {
     "task_dispatched",
     "task_accepted",
     "interrupt_requested",
-    "cancelled",
-    "completed",
-    "not_started",
-    "unknown",
-    "quota",
-    "released",
-}
+} | coordinate.WORKER_STATUSES
 TOKENS = {
     "totalTokens",
     "inputTokens",
@@ -301,7 +295,6 @@ class Binding:
                     }
                 )
         timing = {}
-        derived = {}
         with contextlib.suppress(*ERRORS):
             timed_workers = [w | w["timing"] for w in workers]
             derived = coordinate.issue_view(
@@ -331,8 +324,7 @@ class Binding:
             "timing": timing,
             "evidence": evidence,
             "pr": progress.reference(pr.get("url"), self.expected["repository"]),
-            "review_rounds": derived.get("review_rounds", 0),
-            "rework": derived.get("rework", 0),
+            **coordinate.rounds([w["role"] for w in workers]),
             "readiness": next(
                 (
                     e["state"]

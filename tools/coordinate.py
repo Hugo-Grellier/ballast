@@ -404,6 +404,14 @@ def worker_view(directory: Path, now: str) -> dict:
     }
 
 
+def rounds(roles: list[str]) -> dict:
+    """Rework and review rounds counted from worker roles."""
+    return {
+        "review_rounds": roles.count("review"),
+        "rework": max(roles.count("implement") - 1, 0),
+    }
+
+
 def issue_view(item: dict, workers: list[dict], now: str) -> dict:
     """Phase times, reopenings and the evidence trail for one issue."""
     history = item.get("history") or []
@@ -435,8 +443,7 @@ def issue_view(item: dict, workers: list[dict], now: str) -> dict:
         "workers": mine,
         "elapsed": elapsed if history else "unavailable",
         "phases": phases,
-        "rework": max(roles.count("implement") - 1, 0),
-        "review_rounds": roles.count("review"),
+        **rounds(roles),
         # A PR sent back to active work after review is a regression signal.
         "reopened": sum(
             a == "pr_wait" and b == "active" for a, b in itertools.pairwise(activities)
