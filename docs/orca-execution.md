@@ -1,5 +1,10 @@
 # Agent-started execution with Orca
 
+> **Not available.** This adapter is a contract only. Orca does not yet expose a
+> native receipt of a session's model, effort, provider and permissions before task
+> delivery, which [model routing](model-routing.md) requires ([#179](https://github.com/Hugo-Grellier/ballast/issues/179)).
+> The operator dropped it from 2.0 on 2026-10-15. Use the [standalone adapter](standalone.md).
+
 ## Entry and ownership
 
 This optional adapter implements [portable execution](execution.md) using Orca.

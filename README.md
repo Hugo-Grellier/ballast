@@ -20,7 +20,7 @@ in CI. Projects still on a `v1.x` pin keep working; see
 | [Model routing](docs/model-routing.md) | Explicit provider, model and effort, verified before task input |
 | [Execution contract](docs/execution.md) | Worktrees, ownership, limits and recovery |
 | [Standalone adapter](docs/standalone.md) | Workers, worktree claims and the bounded queue without Orca |
-| [Orca adapter](docs/orca-execution.md) | Optional: the same contract on Orca |
+| [Orca adapter](docs/orca-execution.md) | Not available yet: contract only, blocked upstream ([#179](https://github.com/Hugo-Grellier/ballast/issues/179)) |
 
 The [standalone adapter](docs/standalone.md) uses three helpers, run with
 `python3 -I -S` from a Ballast checkout:
