@@ -578,7 +578,11 @@ def main() -> int:
         RuntimeError,
         subprocess.SubprocessError,
     ) as error:
-        reason = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+        reason = (
+            str(error)
+            if isinstance(error, admission.FixedReasonError)
+            else type(error).__name__
+        )
         sys.stderr.write(f"Queue operation blocked: {reason}\n")
         return 1
     sys.stdout.write(json.dumps(result, indent=2) + "\n")

@@ -18,6 +18,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
+# Direct isolated invocation loads only this operator-selected source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools import admission
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -35,7 +39,7 @@ CI_MARKERS = (
 )
 
 
-class QualificationError(RuntimeError):
+class QualificationError(admission.FixedReasonError):
     """The backend did not establish the requested configuration."""
 
 
