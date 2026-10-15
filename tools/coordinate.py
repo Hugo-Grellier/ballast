@@ -369,6 +369,8 @@ def waited(history: list[dict], starts: set[str], stop: set[str], now: str) -> f
 # Worker terminal events (worker.py writes its final status as the last event).
 # `unknown` is not among them: such a worker may still run until released.
 SETTLED = {"completed", "cancelled", "quota", "not_started"}
+# Every status a worker result can record.
+WORKER_STATUSES = SETTLED | {"unknown", "released"}
 # Claim events that change an issue's activity; `recovered` re-enters active work.
 CHANGES = admission.ACTIVITIES | {"recovered"}
 
@@ -399,6 +401,14 @@ def worker_view(directory: Path, now: str) -> dict:
     return view | {
         "setup": seconds(events[0]["at"], accepted or last),
         "running": seconds(accepted, last) if accepted else 0.0,
+    }
+
+
+def rounds(roles: list[str]) -> dict:
+    """Rework and review rounds counted from worker roles."""
+    return {
+        "review_rounds": roles.count("review"),
+        "rework": max(roles.count("implement") - 1, 0),
     }
 
 
@@ -433,8 +443,7 @@ def issue_view(item: dict, workers: list[dict], now: str) -> dict:
         "workers": mine,
         "elapsed": elapsed if history else "unavailable",
         "phases": phases,
-        "rework": max(roles.count("implement") - 1, 0),
-        "review_rounds": roles.count("review"),
+        **rounds(roles),
         # A PR sent back to active work after review is a regression signal.
         "reopened": sum(
             a == "pr_wait" and b == "active" for a, b in itertools.pairwise(activities)

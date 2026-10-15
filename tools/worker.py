@@ -458,7 +458,7 @@ def execute(
         codex.fail("Codex is not installed on PATH")
     identifier = uuid.uuid4().hex
     directory = reserve(claim, identifier, role)
-    started = False
+    dispatched = False
     settled = False
     result = {
         "worker": identifier,
@@ -479,14 +479,14 @@ def execute(
         ) as server:
             receipt = establish(server, cwd, model, effort, role)
             result.update(receipt)
-            worktree.write_record(directory / "result.json", result)
+            admission.write(directory / "result.json", result)
             event(directory, "route_verified", **receipt)
             # Pause/cancel after this permit treats the turn as already active.
             admission.permit_turn(claim, identifier, role)
             # Persist possible delivery BEFORE writing; a lost response is unknown.
-            started = True
+            dispatched = True
             result.update(status="unknown", task_started="unknown")
-            worktree.write_record(directory / "result.json", result)
+            admission.write(directory / "result.json", result)
             event(directory, "task_dispatched")
             outcome, kind = run_turn(server, cwd, text, directory, result)
             keep_output(server, directory, result, outcome)
@@ -509,10 +509,10 @@ def execute(
         raise
     finally:
         if not settled:
-            result["status"] = "unknown" if started else "not_started"
-        worktree.write_record(directory / "result.json", result)
+            result["status"] = "unknown" if dispatched else "not_started"
+        admission.write(directory / "result.json", result)
         event(directory, result["status"])
-        if settled or not started:
+        if settled or not dispatched:
             admission.release_worker(claim, identifier)
     return result
 

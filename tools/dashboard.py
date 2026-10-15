@@ -37,13 +37,7 @@ MILESTONES = {
     "task_dispatched",
     "task_accepted",
     "interrupt_requested",
-    "cancelled",
-    "completed",
-    "not_started",
-    "unknown",
-    "quota",
-    "released",
-}
+} | coordinate.WORKER_STATUSES
 TOKENS = {
     "totalTokens",
     "inputTokens",
@@ -235,8 +229,7 @@ class Binding:
             if reservation.get("role") in {"implement", "review"}
             else "unknown",
             "status": result.get("status")
-            if result.get("status")
-            in {"completed", "cancelled", "not_started", "unknown", "quota", "released"}
+            if result.get("status") in coordinate.WORKER_STATUSES
             else "unknown",
             "requested": route(requested),
             "observed": route(result.get("observed")),
@@ -331,8 +324,7 @@ class Binding:
             "timing": timing,
             "evidence": evidence,
             "pr": progress.reference(pr.get("url"), self.expected["repository"]),
-            "review_rounds": sum(w["role"] == "review" for w in workers),
-            "rework": max(0, sum(w["role"] == "implement" for w in workers) - 1),
+            **coordinate.rounds([w["role"] for w in workers]),
             "readiness": next(
                 (
                     e["state"]
