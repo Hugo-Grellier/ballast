@@ -340,32 +340,40 @@ def seconds(start: str, end: str) -> float:
 
 
 def waited(history: list[dict], starts: set[str], stop: set[str], now: str) -> float:
-    """Sum spans opened by `starts` events until the next `stop` event or now.
+    """Length of the union of spans opened by `starts` until a `stop` event.
 
-    An empty `stop` set closes a span at the next event of any kind.
+    Overlapping spans (repeated pauses, a quota window inside a pause) count once.
     """
-    total = 0.0
+    spans = []
     for index, entry in enumerate(history):
         if entry["event"] not in starts:
             continue
         end = next(
-            (
-                later["at"]
-                for later in history[index + 1 :]
-                if not stop or later["event"] in stop
-            ),
+            (later["at"] for later in history[index + 1 :] if later["event"] in stop),
             now,
         )
-        span = seconds(entry["at"], end)
+        opened = datetime.fromisoformat(entry["at"]).timestamp()
+        closed = datetime.fromisoformat(end).timestamp()
         if isinstance(entry.get("retry_at"), (int, float)):
             # A known quota window ends on its own, without a control event.
-            opened = datetime.fromisoformat(entry["at"]).timestamp()
-            span = min(span, max(entry["retry_at"] - opened, 0))
-        total += span
+            closed = min(closed, max(entry["retry_at"], opened))
+        spans.append((opened, closed))
+    total, reach = 0.0, float("-inf")
+    for opened, closed in sorted(spans):
+        if closed > reach:
+            total += closed - max(opened, reach)
+            reach = closed
     return total
 
 
-def worker_view(directory: Path) -> dict:
+# Worker terminal events (worker.py writes its final status as the last event).
+# `unknown` is not among them: such a worker may still run until released.
+SETTLED = {"completed", "cancelled", "quota", "not_started"}
+# Claim events that change an issue's activity; `recovered` re-enters active work.
+CHANGES = admission.ACTIVITIES | {"recovered"}
+
+
+def worker_view(directory: Path, now: str) -> dict:
     """Split one worker's time into setup (until task accepted) and running."""
     # A worker that died before its first result write is never "settled".
     result = (
@@ -376,7 +384,7 @@ def worker_view(directory: Path) -> dict:
     log = directory / "events.jsonl"
     events = (
         [json.loads(line) for line in log.read_text().splitlines()]
-        if (log.exists())
+        if log.exists()
         else []
     )
     view = {key: result.get(key) for key in ("worker", "attempt", "role", "status")} | {
@@ -385,9 +393,11 @@ def worker_view(directory: Path) -> dict:
     if not events:
         return view | {"setup": "unavailable", "running": "unavailable"}
     accepted = next((e["at"] for e in events if e["event"] == "task_accepted"), None)
-    first, last = events[0]["at"], events[-1]["at"]
+    # Still running (or died without a final event): count up to now.
+    ended = events[-1]["event"] in SETTLED or result.get("status") == "released"
+    last = events[-1]["at"] if ended else now
     return view | {
-        "setup": seconds(first, accepted or last),
+        "setup": seconds(events[0]["at"], accepted or last),
         "running": seconds(accepted, last) if accepted else 0.0,
     }
 
@@ -403,14 +413,22 @@ def issue_view(item: dict, workers: list[dict], now: str) -> dict:
         for role in ("implement", "review")
     }
     phases["worker_setup"] = sum(w["setup"] for w in timed)
-    phases["human_review_wait"] = waited(history, {"pr_wait"}, set(), now)
-    finished = next(
-        (h["at"] for h in history if h["event"] in {"merged", "stopped"}), now
+    phases["human_review_wait"] = waited(history, {"pr_wait"}, CHANGES, now)
+    # Only a current terminal activity ends the clock; a resumed issue runs on.
+    # Later milestones (a re-publish after merge) do not move the endpoint.
+    finished = (
+        next(h["at"] for h in reversed(history) if h["event"] in {"merged", "stopped"})
+        if item.get("activity") in {"merged", "stopped"}
+        else now
     )
     elapsed = seconds(history[0]["at"], finished) if history else 0.0
     # The rest is coordinator time: checks, decisions and publication.
     phases["coordinator"] = max(elapsed - sum(phases.values()), 0.0)
-    events = [h["event"] for h in history]
+    activities = [
+        "active" if h["event"] == "recovered" else h["event"]
+        for h in history
+        if h["event"] in CHANGES
+    ]
     return {
         "workers": mine,
         "elapsed": elapsed if history else "unavailable",
@@ -419,7 +437,7 @@ def issue_view(item: dict, workers: list[dict], now: str) -> dict:
         "review_rounds": roles.count("review"),
         # A PR sent back to active work after review is a regression signal.
         "reopened": sum(
-            a == "pr_wait" and b == "active" for a, b in itertools.pairwise(events)
+            a == "pr_wait" and b == "active" for a, b in itertools.pairwise(activities)
         ),
         "evidence": [
             {"at": h["at"], "event": h["event"], "evidence": h["evidence"]}
@@ -434,7 +452,8 @@ def observe(state: Path) -> dict:
     view = admission.status(state)
     now = datetime.now(UTC).isoformat()
     workers = [
-        worker_view(directory) for directory in sorted((state / "workers").glob("*"))
+        worker_view(directory, now)
+        for directory in sorted((state / "workers").glob("*"))
     ]
     for item in view["issues"]:
         item.update(issue_view(item, workers, now))

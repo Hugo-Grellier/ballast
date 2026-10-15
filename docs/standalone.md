@@ -165,7 +165,11 @@ cannot be recreated to reset its budget.
   `turn/interrupt` and wait at most 30 seconds for terminal evidence; otherwise
   the worker stays `unknown` with its lock. Sandboxed tool commands can outlive
   the client, so any worker settles only once no process runs inside its
-  checkout (Linux `/proc`; elsewhere the outcome stays `unknown`). `running` after a pause also clears
+  checkout in two consecutive scans (Linux `/proc`; elsewhere the outcome stays
+  `unknown`). A same-user process started after the worker whose working
+  directory cannot be read counts as still running. A process that forks
+  between scans can still escape detection; a per-worker cgroup would close
+  that gap. `running` after a pause also clears
   a quota pause. A cancelled queue is not resumed by a control.
 - A structured `usageLimitExceeded`/`rateLimitExceeded` turn error settles the
   worker as `quota` and pauses dispatch until the backend-reported window reset,
@@ -197,7 +201,7 @@ cannot be recreated to reset its budget.
   derived only from recorded timestamps:
   - per worker: role, outcome, setup (until the task was accepted) and running
     seconds, token totals or `unavailable`; a directory without a result is
-    `unrecorded`;
+    `unrecorded`; a worker still running or `unknown` counts up to now;
   - per issue: elapsed time split into `implement`, `review`, `worker_setup`,
     `human_review_wait` (time in `pr_wait`) and `coordinator` (the rest: checks,
     decisions, publication); rework, review rounds, `reopened` (a `pr_wait` sent

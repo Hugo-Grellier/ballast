@@ -434,7 +434,9 @@ class QueueTests(unittest.TestCase):
             {"attempt": "other", "role": "implement", "setup": 9.0, "running": 99.0},
         ]
         view = coordinate.issue_view(
-            {"attempt": "a", "history": history}, workers, at(3000)
+            {"attempt": "a", "activity": "merged", "history": history},
+            workers,
+            at(3000),
         )
         self.assertEqual(view["elapsed"], 260)
         self.assertEqual(
@@ -636,6 +638,74 @@ class QueueTests(unittest.TestCase):
         time.sleep(0.1)
         self.assertIn(process.pid, worker.survivors(checkout))
         self.assertNotIn(process.pid, worker.survivors(self.root / "elsewhere"))
+
+    def test_timing_edge_cases_from_review(self) -> None:
+        def at(offset: int) -> str:
+            return f"2026-01-01T00:{offset // 60:02d}:{offset % 60:02d}+00:00"
+
+        changes = coordinate.CHANGES
+        # A re-publish inside review waiting does not end the wait.
+        history = [
+            {"at": at(10), "event": "pr_wait"},
+            {"at": at(20), "event": "published"},
+            {"at": at(100), "event": "merged"},
+        ]
+        self.assertEqual(coordinate.waited(history, {"pr_wait"}, changes, at(500)), 90)
+        # Repeated pause controls count once.
+        pauses = [
+            {"at": at(10), "event": "paused"},
+            {"at": at(20), "event": "paused"},
+            {"at": at(100), "event": "running"},
+        ]
+        self.assertEqual(
+            coordinate.waited(pauses, {"paused"}, {"running"}, at(500)), 90
+        )
+        # A stopped then recovered issue keeps its clock; recovery and an
+        # intervening milestone still count as a reopening.
+        history = [
+            {"at": at(0), "event": "admitted"},
+            {"at": at(10), "event": "pr_wait"},
+            {"at": at(15), "event": "published"},
+            {"at": at(20), "event": "recovered"},
+            {"at": at(30), "event": "stopped"},
+            {"at": at(40), "event": "active"},
+            {"at": at(100), "event": "merged"},
+            {"at": at(300), "event": "published"},
+        ]
+        view = coordinate.issue_view(
+            {"attempt": "a", "activity": "merged", "history": history}, [], at(900)
+        )
+        self.assertEqual((view["elapsed"], view["reopened"]), (100, 1))
+
+    def test_live_worker_runtime_counts_until_now(self) -> None:
+        directory = self.root / "workers" / "live"
+        directory.mkdir(parents=True)
+        (directory / "events.jsonl").write_text(
+            '{"at": "2026-01-01T00:00:00+00:00", "event": "created"}\n'
+            '{"at": "2026-01-01T00:00:01+00:00", "event": "task_accepted"}\n'
+        )
+        view = coordinate.worker_view(directory, "2026-01-01T00:10:01+00:00")
+        self.assertEqual((view["setup"], view["running"]), (1, 600))
+        self.assertEqual(view["status"], "unrecorded")
+        # A worker that ended unknown may still run: count until now.
+        (directory / "events.jsonl").write_text(
+            '{"at": "2026-01-01T00:00:00+00:00", "event": "created"}\n'
+            '{"at": "2026-01-01T00:00:01+00:00", "event": "task_accepted"}\n'
+            '{"at": "2026-01-01T00:00:31+00:00", "event": "unknown"}\n'
+        )
+        view = coordinate.worker_view(directory, "2026-01-01T00:10:01+00:00")
+        self.assertEqual(view["running"], 600)
+
+    def test_unreadable_same_user_process_is_a_survivor(self) -> None:
+        native = Path.readlink
+
+        def hidden(path: Path) -> Path:
+            if path.parent.name == str(os.getpid()):
+                raise PermissionError(path)
+            return native(path)
+
+        with patch.object(Path, "readlink", hidden):
+            self.assertIn(os.getpid(), worker.survivors(self.root / "elsewhere"))
 
 
 def response_account(kind: str) -> dict:

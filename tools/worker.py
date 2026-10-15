@@ -25,6 +25,7 @@ from tools import admission, codex, worktree
 MAX_TEXT = 65536
 MAX_RUNTIME = 900
 POLL_SECONDS = 1.0
+QUIET_GAP_SECONDS = 0.2
 INTERRUPT_SECONDS = 30
 
 
@@ -335,28 +336,55 @@ def check_launch(model: str, effort: str, timeout: float) -> None:
         codex.fail("Worker model and effort must be explicit identifiers")
 
 
+def started(entry: Path) -> int:
+    """Return a process's start time in clock ticks since boot (stat field 22)."""
+    return int((entry / "stat").read_text().rsplit(")", 1)[1].split()[19])
+
+
 def survivors(cwd: Path) -> list[int]:
-    """List processes still running inside the checkout; Linux /proc only."""
+    """List processes still running inside the checkout; Linux /proc only.
+
+    A same-user process started after this worker whose working directory
+    cannot be read counts as a survivor: unreadable is unknown, never stopped.
+    Older ones (session managers, agents) cannot belong to this worker.
+    """
     proc = Path("/proc")
     if not (proc / "self" / "cwd").exists():
         codex.fail("Cannot confirm worker processes stopped on this host")
+    birth = started(proc / "self")
     found = []
     for entry in proc.iterdir():
-        if entry.name.isdigit():
-            with contextlib.suppress(OSError):
-                where = (entry / "cwd").readlink()
-                if where == cwd or cwd in where.parents:
+        if not entry.name.isdigit():
+            continue
+        try:
+            where = (entry / "cwd").readlink()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            with contextlib.suppress(OSError, ValueError, IndexError):
+                if entry.stat().st_uid == os.getuid() and started(entry) >= birth:
                     found.append(int(entry.name))
+            continue
+        if where == cwd or cwd in where.parents:
+            found.append(int(entry.name))
     return found
 
 
 def await_quiet(cwd: Path) -> None:
     """Settle only when nothing still runs in the checkout; else stay unknown."""
     deadline = time.monotonic() + INTERRUPT_SECONDS
-    while survivors(cwd):
-        if time.monotonic() >= deadline:
-            codex.fail("Processes still run in the checkout; outcome unknown")
-        time.sleep(POLL_SECONDS)
+    # ponytail: two empty scans a short gap apart narrow, but cannot close, a race
+    # with a process forking mid-scan; a cgroup per worker would close it.
+    empty = 0
+    while empty < 2:  # noqa: PLR2004 -- consecutive empty scans
+        if survivors(cwd):
+            empty = 0
+            if time.monotonic() >= deadline:
+                codex.fail("Processes still run in the checkout; outcome unknown")
+            time.sleep(POLL_SECONDS)
+        else:
+            empty += 1
+            time.sleep(QUIET_GAP_SECONDS)
 
 
 def record_outcome(
