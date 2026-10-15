@@ -13,7 +13,8 @@ The bar is what `tools/worker.py` verifies for Codex before task input: model, e
 ## Method
 
 - **Client surface.** `claude --version` and `claude --help`, plus the official pages for headless use, the Agent SDK TypeScript reference (message and control types), sandboxing and model configuration.
-- **Probes.** Three headless sessions, each run in its own empty temporary directory with `--input-format stream-json --output-format stream-json --verbose --no-session-persistence --safe-mode --permission-prompts none`. Each sent the `initialize` control request first, then one user message, `Reply with OK`, and contained no task content. The environment was rebuilt from an allowlist (home, path and the client config directory), so neither an API key nor a parent-session variable reached the child. `ANTHROPIC_API_KEY` was unset, and no settings file defines an API key or an `apiKeyHelper`. Every probe confirmed subscription access: `apiKeySource: "none"` in `system/init`, and `subscriptionType` set in the `initialize` response. Probe 1 still picked up a base URL from the user settings (see finding 2). The sandbox came from `--settings` (`enabled`, `failIfUnavailable`, `allowUnsandboxedCommands: false`). The probe script, raw output and debug logs stayed outside the repository. This note quotes only field names and values that matter for routing.
+- **Probes.** Three headless sessions, each run in its own empty temporary directory with `--input-format stream-json --output-format stream-json --verbose --no-session-persistence --safe-mode --permission-prompts none`. Each sent the `initialize` control request first, then one user message, `Reply with OK`, and contained no task content. The environment was rebuilt from an allowlist (home, path and the client config directory), so neither an API key nor a parent-session variable reached the child. `ANTHROPIC_API_KEY` was unset, and the user settings define neither an API key nor an `apiKeyHelper`. Every probe confirmed subscription access: `apiKeySource: "none"` in `system/init`, and `subscriptionType` set in the `initialize` response. Probe 1 still picked up a base URL from the user settings (see finding 2). The sandbox came from `--settings` (`enabled`, `failIfUnavailable`, `allowUnsandboxedCommands: false`). The probe script, raw output and debug logs stayed outside the repository. This note quotes only field names and values that matter for routing.
+- **Auth probe.** A fourth session, added after review, sent only the `initialize` control request, with `--restricted` and no user message, so it made no model request. It records which `account` fields appear on subscription access (see the auth source section of finding 2).
 
 | Probe | Model | Effort | Permission mode | Extra arguments | Model request |
 | --- | --- | --- | --- | --- | --- |
@@ -46,8 +47,8 @@ For the model, `--model` beats `ANTHROPIC_MODEL`, which beats the settings `mode
 
 **Effort is not reported.** In all three probes, `system/init` carried `effort: null`. The SDK reference explains why: Claude Code fills that field only for Remote Control clients and omits it from the init message an application reads. There is no fallback source:
 
-- `/effort status` echoes the selected level, not the applied one. Probe 3 reported `Current effort level: xhigh` for `claude-opus-4-6`, whose catalog entry lists only `low`, `medium`, `high` and `max`. The model configuration page states that an unsupported level silently "falls back to the highest supported level at or below the one you set", so the session actually ran at `high`.
-- A managed `maxEffortLevel` also silently caps `--effort` ("naming a higher level with `--effort` … runs at the cap instead").
+- `/effort status` echoes the selected level, not the applied one. Probe 3 reported `Current effort level: xhigh` for `claude-opus-4-6`, whose catalog entry lists only `low`, `medium`, `high` and `max`. The model configuration page states that an unsupported level silently "falls back to the highest supported level at or below the one you set", so the session would run at `high` according to the docs. Probe 3 made no model request, so this is an inference, not an observation. Either way, it contradicts the docs' description of `/effort status` as showing "the level in effect".
+- An effort cap set by the organization's admin silently caps `--effort` ("naming a higher level with `--effort` or `/effort` runs at the cap instead"). A managed `maxEffortLevel` caps effort on the client as well, and when both apply the lower cap wins.
 - The undocumented init field `per_turn_effort_active` was `true` in probe 2 and `false` in probe 3. It is not a level and has no documented meaning, so it cannot be used.
 - No effort value appears in the debug log, in assistant messages, or in the result's `usage` and `modelUsage`.
 
@@ -79,19 +80,45 @@ Arguments that keep a worker within its caller's authority:
 - **Never:** `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, or the `bypassPermissions` or `auto` permission modes.
 - **Environment.** The launcher must build the child environment from an allowlist, as the probes did. A coordinating Claude session exports an effort variable, a gateway base URL and OAuth token variables into its children. `CLAUDE_CODE_EFFORT_LEVEL`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`, `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` would each override or redirect the route.
 
-Proposed roles:
+Proposed roles. These argument sets combine flags that the probes exercised, but they were not probed as written. Both include `--safe-mode`, as the probes did. `--restricted` ignores settings files, but `--safe-mode` also disables what a checkout can carry outside them: `CLAUDE.md`, skills, custom commands and agents, plugins, hooks and MCP servers. The cost is that the worker does not load the repository's `CLAUDE.md` automatically, so the task handoff must name the instructions to read.
 
-- **Review (read-only):** `--restricted --strict-mcp-config --tools Read,Glob,Grep --permission-mode dontAsk --permission-prompts none`. With no shell and no write tool, this is strictly read-only. It is narrower than the Codex read-only sandbox, which still lets a reviewer run read-only commands such as tests. A reviewer that needs Bash would rely on `sandbox.filesystem.denyWrite` on the checkout, and this investigation did not test that.
-- **Implementation (workspace write):** `--restricted --strict-mcp-config --tools Read,Edit,Write,Glob,Grep,Bash --permission-mode acceptEdits --permission-prompts none --settings '{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[],"strictAllowlist":true}}}'`. Sandboxed Bash runs without prompts (`autoAllowBashIfSandboxed` defaults to true). Anything that would prompt is denied and reported in `permission_denials`. Two differences from Codex remain: the per-user temp directory is writable, and a linked worktree's shared `.git` is writable.
+- **Review (read-only):** `--safe-mode --restricted --strict-mcp-config --tools Read,Glob,Grep --permission-mode dontAsk --permission-prompts none`. With no shell and no write tool, this is strictly read-only. It is narrower than the Codex read-only sandbox, which still lets a reviewer run read-only commands such as tests. A reviewer that needs Bash would rely on `sandbox.filesystem.denyWrite` on the checkout, and this investigation did not test that.
+- **Implementation (workspace write):** `--safe-mode --restricted --strict-mcp-config --tools Read,Edit,Write,Glob,Grep,Bash --permission-mode acceptEdits --permission-prompts none --settings '{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[],"strictAllowlist":true}}}'`. Sandboxed Bash runs without prompts (`autoAllowBashIfSandboxed` defaults to true). Anything that would prompt is denied and reported in `permission_denials`. Two differences from Codex remain: the per-user temp directory is writable, and a linked worktree's shared `.git` is writable.
 
 The sandbox state is not in any receipt. Ballast can only verify its own launch configuration and rely on the fail-closed startup. This is a second, smaller gap next to effort.
+
+#### Auth source
+
+The [authentication docs](https://code.claude.com/docs/en/authentication#authentication-precedence) rank credentials in this order. The first one present wins:
+
+1. Cloud provider credentials, when `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY` is set.
+2. `ANTHROPIC_AUTH_TOKEN`.
+3. `ANTHROPIC_API_KEY`. Under `-p` it is "always used when present", with no approval prompt.
+4. `apiKeyHelper` output.
+5. `CLAUDE_CODE_OAUTH_TOKEN`.
+6. Anthropic profile and federation credentials (`ANTHROPIC_PROFILE`, the federation variables, or an active `oidc_federation` profile). These live in the Anthropic configuration directory under the home directory. An environment allowlist that keeps the home directory does not remove them.
+7. The subscription login from `/login`.
+
+A signed-in Claude apps gateway session outranks all of these.
+
+An allowlisted environment removes sources 1 to 5 and the profile variables. `--restricted` removes an `apiKeyHelper` defined in user, project or local settings, but not one in managed settings or `--settings`. An active federation profile on disk is not removed.
+
+**Observation before task input.** On the subscription path, the `initialize` response's `account` held `apiProvider: "firstParty"` and `subscriptionType`, and neither `tokenSource` nor `apiKeySource` was present (auth probe and probe 1). `system/init` then reported `apiKeySource: "none"`. A launcher can require exactly that shape. It has limits:
+
+- `apiProvider: "firstParty"` is the same for an API key and for a subscription.
+- The probes never saw how `apiKeySource` and `tokenSource` read under an API key, an auth token, `CLAUDE_CODE_OAUTH_TOKEN` or a profile. Observing that would need an API key, which the run's billing guard forbids.
+- The `initialize` response does not distinguish `CLAUDE_CODE_OAUTH_TOKEN` from a `/login` credential. Both are subscription access, but the account they belong to can differ.
+
+So the receipt check is a necessary refusal path, not proof that the session used the subscription login.
+
+**Fail-closed guard.** The Codex worker forces `forced_login_method="chatgpt"`. The Claude Code equivalent is `forceLoginMethod: "claudeai"`. The docs say it blocks `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `apiKeyHelper` at startup, and blocks a profile or federation credential only when one of those is also present. The settings reference scopes the key to "any file" (user, project, local and managed). `--restricted` ignores the first three, and the docs do not say whether `--settings` honors the key. A launcher would pass it through `--settings` together with the sandbox. That this blocks an API key at startup is **untested** (follow-up 4).
 
 ### 3. Terminal state, interrupts, usage and quota
 
 - **Terminal turn.** The last message of a turn is `type: "result"` with:
   - `subtype`: `success` or an `error_*` value;
   - `is_error`, `terminal_reason`, `stop_reason` and `num_turns`;
-  - `permission_denials`, which the docs call authoritative.
+  - `permission_denials`. The [SDK reference](https://code.claude.com/docs/en/agent-sdk/typescript) calls it "the authoritative record", because the streamed `permission_denied` event is best-effort.
 
   Probe 1 ended with `success`, `terminal_reason: "completed"` and exit code 0. The process exits non-zero on failure. SIGTERM exits with code 143 and records no result for the interrupted turn, so Ballast must treat a missing `result` as unknown, which matches its rule that settlement needs terminal evidence. `-p` also waits for background work it started, up to a default 10-minute idle cap, so the existing survivor check still applies.
 - **Interrupt.** In stream-json input mode, send a `control_request` with `subtype: "interrupt"`. With `interrupt_receipt_v1` advertised, probes 2 and 3 got a `control_response` (`still_queued: []`) before a result with `subtype: "error_during_execution"`, `terminal_reason: "aborted_streaming"`, `is_error: true` and exit code 1. Ballast's mapping carries over: the outcome is cancelled only when Ballast requested the interrupt and the matching result reports an aborted `terminal_reason`.
@@ -137,7 +164,7 @@ Options:
   - Environment: an allowlist.
   - Arguments: fixed per role, as above.
   - Preflight, all before task input:
-    1. `initialize`: the catalog must contain the pair, `subscriptionType` must be set, and `apiKeySource` must be `none`.
+    1. `initialize`: the catalog must contain the pair, and `account` must have the subscription shape: `subscriptionType` set, no `apiKeySource` and no `tokenSource`. `forceLoginMethod: "claudeai"` goes in `--settings` as the fail-closed guard.
     2. A local command that produces `system/init`.
     3. The receipt must match exactly: `model`, `effort`, `permissionMode`, `cwd`, the `tools` set, and `interrupt_receipt_v1` in `capabilities`.
   - Settlement: the result message correlated with the session, `modelUsage` containing only the requested model, `permission_denials` recorded, and a missing result treated as unknown.
@@ -153,7 +180,11 @@ Options:
 1. **Upstream request** (operator, external): report the applied effort in `system/init` for stream-json and SDK clients. Everything below waits on it, or on an explicit decision for option 2.
 2. **R2:** a stdlib stream-json transport for Claude Code with the preflight receipt check, and refusal tests for: missing or null effort, model mismatch, an unexpected tool, a permission mode other than the requested one, an API-key source, and a missing interrupt capability.
 3. **R2:** select Claude Code as a backend in `tools/worker.py`, with role arguments, the environment allowlist, and settlement and quota mapping. Fake-CLI tests should cover the interrupt receipt, SIGTERM with no result, `rejected` and `credits_required` rate limits, and a fallback model appearing in `modelUsage`.
-4. **R2:** a live probe that `sandbox.filesystem.denyWrite` can make the checkout and temp directory read-only for a Bash-enabled reviewer, and that `strictAllowlist` blocks network access without prompting.
+4. **R2:** live probes of the guards this note could not test:
+   - `forceLoginMethod: "claudeai"` passed through `--settings` refuses startup when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or an `apiKeyHelper` is present. Use an invalid dummy key, so the probe can never bill.
+   - The `account` fields under each non-subscription source.
+   - `sandbox.filesystem.denyWrite` can make the checkout and temp directory read-only for a Bash-enabled reviewer.
+   - `strictAllowlist` blocks network access without prompting.
 5. **Live qualification:** a fictional issue on a disposable repository with a Codex implementer and a Claude Code reviewer, recorded under `docs/evidence/`.
 
 ## Limits
