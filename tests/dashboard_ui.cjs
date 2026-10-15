@@ -65,6 +65,9 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   assert.equal(find(find(ids.get("attention"), "e-0"), "ref").href, question.reference);
   const row = find(ids.get("issues"), "1"), issueButton = find(find(row, "issue"), "select");
   assert.match(row.textContent, /Needs you/);
+  assert.equal(find(row, "activity").className, "");
+  assert.equal(find(find(row, "activity"), "badge").className, "status active");
+  assert.equal(ids.get("attention-box").className, "attention");
   const workerButton = find(ids.get("worker-list"), "abc");
   workerButton.onclick();
   assert.match(ids.get("worker").textContent, /requested/);

@@ -91,14 +91,14 @@
       const flagged = attention(item, snapshot.dependencies);
       if (flagged.records.length || flagged.reasons.length) put(issueCell, "attention", "span", "Needs you", "attention-marker");
       else trim(issueCell, ["select"]);
-      put(row, "activity", "td", activityLabels[item.activity] ?? "Unknown", `status ${item.activity ?? "unknown"}`);
-      put(row, "readiness", "td", item.readiness ?? "unknown", `readiness ${item.readiness ?? "unknown"}`);
+      put(put(row, "activity", "td"), "badge", "span", activityLabels[item.activity] ?? "Unknown", `status ${item.activity ?? "unknown"}`);
+      put(put(row, "readiness", "td"), "badge", "span", item.readiness ?? "unknown", `readiness ${item.readiness ?? "unknown"}`);
     }
     trim(parent, keys);
   }
   function renderAttention(issue, snapshot) {
     const parent = byId("attention"), keys = [];
-    if (!issue) {put(parent, "none", "p", "Select an issue."); trim(parent, ["none"]); return;}
+    if (!issue) {byId("attention-box").className = "attention quiet"; put(parent, "none", "p", "Select an issue."); trim(parent, ["none"]); return;}
     const flagged = attention(issue, snapshot.dependencies);
     for (const [i, e] of flagged.records.entries()) {
       const key = `e-${i}`; keys.push(key); const box = put(parent, key, "div", undefined, "attention-item");
@@ -109,6 +109,7 @@
       trim(box, childKeys);
     }
     for (const [i, reason] of flagged.reasons.entries()) {const key = `reason-${i}`; keys.push(key); put(parent, key, "p", `Dependency blocker: ${reason} · reference: unknown`, "attention-item");}
+    byId("attention-box").className = keys.length ? "attention" : "attention quiet";
     if (!keys.length) {put(parent, "none", "p", "No recorded pending questions or blockers."); keys.push("none");}
     trim(parent, keys);
   }

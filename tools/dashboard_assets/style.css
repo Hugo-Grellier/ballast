@@ -52,6 +52,7 @@ th {color: var(--muted); font-size: .8rem}
 .attention-marker {display: block; width: max-content; margin-top: 5px}
 .attention {border: 1px solid var(--warn); border-radius: 8px; padding: 12px; background: var(--warn-bg); margin-top: 18px}
 .attention h3 {margin-top: 0}
+.attention.quiet {border-color: var(--line); background: none}
 .attention-item {border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px}
 .evidence {border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; margin: 8px 0}
 .evidence time, .evidence a {display: inline-block; margin-right: 10px}
