@@ -14,9 +14,11 @@ Use a POSIX host with Python 3.11+, Git, authenticated `gh` and the qualified
 Codex CLI outside CI. Windows execution is currently blocked because this worker
 requires bounded nonblocking pipe writes.
 
-Without a [queue](#bounded-queue), run one issue and one worker at a time. Workers run in the foreground, at most
-900 seconds each (300 by default), with 64 KiB task/final-message limits and a
-1 MiB protocol-message limit. The coordinator permits at most three review/fix
+Without a [queue](#bounded-queue), run one issue and one worker at a time. Each
+worker has a `--timeout` of at most 900 seconds (300 by default); settling after
+it can take about 70 seconds more (see [execute and observe](#execute-and-observe)
+for running it as a background command). Task and final messages are limited to
+64 KiB, protocol messages to 1 MiB. The coordinator permits at most three review/fix
 rounds and one issue PR. A fresh session is required for each worker. Worker
 nested delegation is disabled in the client and forbidden in the handoff.
 
@@ -93,6 +95,21 @@ python3 -I -S "$BALLAST_SOURCE/tools/worker.py" \
   --role implement --timeout 300
 ```
 
+At `--timeout` the worker interrupts its turn rather than abandoning it, so it
+can run up to about 70 seconds longer: at most 30 seconds for the interrupted
+turn's terminal evidence, then up to 30 seconds for the checkout to go quiet and
+a few seconds for client shutdown. An agent harness may stop foreground commands
+sooner (Claude Code's Bash tool defaults to 120 seconds, at most 600). Run the
+worker as a background command of the harness and wait for it to exit, or choose
+a `--timeout` that leaves that margin below the harness limit. A SIGKILL leaves
+the worker `unknown` with its lock held.
+
+Only SIGTERM/SIGINT sent to the worker process itself settles through the
+interrupt path. The Codex client shares the worker's process group, so a
+group-wide signal (Ctrl-C in its terminal, a harness stopping the process tree)
+also stops the client: the worker then ends `unknown` with its lock held. Stop a
+worker with `kill -TERM` on its own PID.
+
 The same executing session must establish authorized subscription access, catalog
 support and matching resolved model/effort, provider, working directory, sandbox,
 no additional write roots/networking and approval policy before task input.
@@ -117,9 +134,15 @@ reason names each by PID and command name (never arguments); the worker stays
 `turn: completed` in `result.json` and its `output.txt` is kept.
 
 A successful backend turn and client exit produce `completed`; this does not
-establish task acceptance. Pre-delivery failures produce `not_started`. Uncertain
-delivery, timeout, malformed completion, failed turn or unconfirmed shutdown
-preserve `unknown` and the worker lock. The helper closes/reaps its client, but
+establish task acceptance. Pre-delivery failures produce `not_started`, as does
+SIGTERM or SIGINT before the task is dispatched. After dispatch, the deadline and
+SIGTERM/SIGINT take the queue cancellation path: the worker sends
+`turn/interrupt` and waits at most 30 seconds for the matching terminal turn.
+A backend-confirmed interrupted turn in a quiet checkout settles as `timeout`
+(deadline) or `cancelled` (signal) and releases the worker lock. Uncertain
+delivery, a rejected interrupt or missing terminal evidence, malformed
+completion, failed turn, survivors or unconfirmed shutdown preserve `unknown`
+and the worker lock. The helper closes/reaps its client, but
 makes no claim that all external effects stopped. No automatic retry, stale-lock
 reclaim, detached operation or general resume is implemented in this slice.
 Report the local worker reference and blocker; inspect actual liveness/effects

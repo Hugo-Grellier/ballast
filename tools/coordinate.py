@@ -444,7 +444,7 @@ def waited(history: list[dict], starts: set[str], stop: set[str], now: str) -> f
 
 # Worker terminal events (worker.py writes its final status as the last event).
 # `unknown` is not among them: such a worker may still run until released.
-SETTLED = {"completed", "cancelled", "quota", "not_started"}
+SETTLED = {"completed", "cancelled", "timeout", "quota", "not_started"}
 # Every status a worker result can record.
 WORKER_STATUSES = SETTLED | {"unknown", "released"}
 # Claim events that change an issue's activity; `recovered` re-enters active work.

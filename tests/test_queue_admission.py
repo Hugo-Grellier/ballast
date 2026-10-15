@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -16,12 +17,42 @@ import time
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tests import test_standalone_execution as standalone
 from tools import admission, codex, coordinate, dashboard, progress, worker, worktree
 
 REPO = "example/fixture"
+
+
+def past_deadline():  # noqa: ANN201
+    """Control check outlasting a one-second deadline once; fail, never hang, later."""
+    calls = []
+
+    def check(_: Path) -> bool:
+        calls.append(None)
+        if len(calls) > 3:  # noqa: PLR2004 -- bound a deadline that never fires
+            message = "Worker kept polling past its deadline"
+            raise AssertionError(message)
+        if len(calls) == 1:
+            time.sleep(1)
+        return False
+
+    return check
+
+
+# Backend reply to an interrupted turn: receipt, interrupt ack, terminal turn.
+INTERRUPTED = [
+    {"id": "qualify-5", "result": {"turn": {"id": "fixture-turn"}}},
+    {"id": "worker-interrupt", "result": {}},
+    {
+        "method": "turn/completed",
+        "params": {
+            "threadId": "fixture-thread",
+            "turn": {"id": "fixture-turn", "status": "interrupted"},
+        },
+    },
+]
 
 
 class QueueTests(unittest.TestCase):
@@ -149,12 +180,12 @@ class QueueTests(unittest.TestCase):
     def prepare(self, issue: int) -> Path:
         return worktree.prepare(self.repo, REPO, issue, "main")
 
-    def worker_on(self, claim: Path, edit=None) -> dict:  # noqa: ANN001
+    def worker_on(self, claim: Path, edit=None, timeout: float = 2) -> dict:  # noqa: ANN001
         """Run the scripted backend, optionally editing its transcript."""
         self.claim = claim
         self.cwd = Path(json.loads(claim.read_text())["checkout"])
         messages = self.script()
-        return self.run_worker(edit(messages) if edit else messages)
+        return self.run_worker(edit(messages) if edit else messages, timeout=timeout)
 
     def test_independent_issues_get_separate_worktrees_within_issue_cap(self) -> None:
         self.queue([1, 2, 3], issues=2)
@@ -259,6 +290,143 @@ class QueueTests(unittest.TestCase):
             self.assertRaises(codex.QualificationError),
         ):
             self.worker_on(claim, lambda m: m[:4] + tail)
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def outcome(self, claim: Path) -> tuple[dict, list[dict]]:
+        """Return the claim's single worker's recorded result and events."""
+        attempt = json.loads(claim.read_text())["attempt"]
+        (directory,) = (
+            path
+            for path in (claim.parent / "workers").iterdir()
+            if json.loads((path / "result.json").read_text())["attempt"] == attempt
+        )
+        events = (directory / "events.jsonl").read_text().splitlines()
+        return (
+            json.loads((directory / "result.json").read_text()),
+            [json.loads(line) for line in events],
+        )
+
+    def quiet_signals(self) -> object:
+        """Make the signals harmless here: a missing worker handler fails, not kills."""
+
+        def ignore(*_: object) -> None:
+            pass
+
+        for number in (signal.SIGTERM, signal.SIGINT):
+            self.addCleanup(signal.signal, number, signal.signal(number, ignore))
+        return ignore
+
+    def test_deadline_interrupts_and_settles_timeout(self) -> None:
+        self.queue([84])
+        claim = self.prepare(84)
+        # The first control check outlasts the deadline, as a long turn would.
+        with patch.object(admission, "cancelled", side_effect=past_deadline()):
+            result = self.worker_on(claim, lambda m: m[:4] + INTERRUPTED, timeout=1)
+        self.assertEqual(result["status"], "timeout")
+        self.assertFalse(claim.with_suffix(".worker").exists())
+        _, events = self.outcome(claim)
+        self.assertIn("timeout", events[-2].values())
+        self.assertEqual(events[-1]["event"], "timeout")
+        # A settled worker stops counting running time.
+        view = coordinate.worker_view(
+            claim.parent / "workers" / result["worker"], "2999-01-01T00:00:00+00:00"
+        )
+        self.assertLess(view["running"], 60)
+
+    def test_deadline_without_quiet_terminal_evidence_stays_unknown(self) -> None:
+        self.queue([85, 86, 87], issues=3, workers=3)
+        quiet = worker.await_quiet
+        for issue, tail, check, reason in (
+            # Backend ends after the interrupt ack (the silent backend's bound is
+            # covered by test_interrupt_bound_ends_a_silent_backend).
+            (85, INTERRUPTED[:2], quiet, "ended"),
+            (
+                86,
+                [*INTERRUPTED[:1], {"id": "worker-interrupt", "error": {}}],
+                quiet,
+                "rejected the interrupt",
+            ),
+            (
+                87,
+                INTERRUPTED,
+                Mock(side_effect=codex.QualificationError("Processes still run")),
+                "still run",
+            ),
+        ):
+            with self.subTest(issue=issue):
+                claim = self.prepare(issue)
+                with (
+                    patch.object(admission, "cancelled", side_effect=past_deadline()),
+                    patch.object(worker, "await_quiet", check),
+                    self.assertRaisesRegex(codex.QualificationError, reason),
+                ):
+                    self.worker_on(claim, lambda m, t=tail: m[:4] + t, timeout=1)
+                self.assertEqual(self.outcome(claim)[0]["status"], "unknown")
+                self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def test_signal_before_reservation_starts_nothing(self) -> None:
+        self.queue([92])
+        claim = self.prepare(92)
+        self.quiet_signals()
+        with (
+            worker.stop_on_signals(),
+            patch.object(worker, "WorkerServer") as server,
+            self.assertRaisesRegex(codex.QualificationError, "signal"),
+        ):
+            os.kill(os.getpid(), signal.SIGTERM)
+            self.worker_on(claim)
+        server.assert_not_called()
+        self.assertFalse(claim.with_suffix(".worker").exists())
+        self.assertFalse((claim.parent / "workers").exists())
+
+    def test_signal_before_dispatch_settles_not_started(self) -> None:
+        self.queue([88, 89], issues=2)
+        ignore = self.quiet_signals()
+        capability = codex.check_capability
+        for issue, number in ((88, signal.SIGTERM), (89, signal.SIGINT)):
+            with self.subTest(signal=number):
+                claim = self.prepare(issue)
+
+                def stop(*args: object, number: int = number) -> None:
+                    os.kill(os.getpid(), number)
+                    capability(*args)
+
+                with (
+                    worker.stop_on_signals(),
+                    patch.object(codex, "check_capability", side_effect=stop),
+                    patch.object(admission, "permit_turn") as permit,
+                    self.assertRaisesRegex(codex.QualificationError, "signal"),
+                ):
+                    self.worker_on(claim)
+                permit.assert_not_called()
+                self.assertEqual(self.outcome(claim)[0]["status"], "not_started")
+                self.assertFalse(claim.with_suffix(".worker").exists())
+                self.assertIs(signal.getsignal(number), ignore)
+
+    def test_signal_after_dispatch_interrupts_or_stays_unknown(self) -> None:
+        self.queue([90, 91], issues=2)
+        self.quiet_signals()
+
+        def stop(_: Path) -> bool:
+            os.kill(os.getpid(), signal.SIGTERM)
+            return False
+
+        claim = self.prepare(90)
+        with (
+            worker.stop_on_signals(),
+            patch.object(admission, "cancelled", side_effect=stop),
+        ):
+            result = self.worker_on(claim, lambda m: m[:4] + INTERRUPTED)
+        self.assertEqual(result["status"], "cancelled")
+        self.assertFalse(claim.with_suffix(".worker").exists())
+        claim = self.prepare(91)
+        with (
+            worker.stop_on_signals(),
+            patch.object(admission, "cancelled", side_effect=stop),
+            self.assertRaises(codex.QualificationError),
+        ):
+            self.worker_on(claim, lambda m: m[:4] + INTERRUPTED[:2])
+        self.assertEqual(self.outcome(claim)[0]["status"], "unknown")
         self.assertTrue(claim.with_suffix(".worker").exists())
 
     @staticmethod

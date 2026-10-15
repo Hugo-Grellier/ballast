@@ -11,16 +11,22 @@ import queue
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import admission, codex, worktree
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 MAX_TEXT = 65536
 MAX_RUNTIME = 900
@@ -28,6 +34,9 @@ POLL_SECONDS = 1.0
 QUIET_GAP_SECONDS = 0.2
 INTERRUPT_SECONDS = 30
 MAX_NAMED = 10
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+# Set by SIGTERM/SIGINT; the worker settles through the interrupt path.
+stopping = threading.Event()
 
 
 class WorkerServer(codex.AppServer):
@@ -45,6 +54,7 @@ class WorkerServer(codex.AppServer):
         if os.name != "posix":
             codex.fail("This worker requires POSIX bounded pipe writes")
         self.thread_id = ""
+        self.interrupted = False
         self.finished: dict | None = None
         self.output = ""
         self.tokens: dict | None = None
@@ -77,7 +87,9 @@ class WorkerServer(codex.AppServer):
         """Read one message or return None so the caller can observe controls."""
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            codex.fail("Worker timed out")
+            if self.interrupted:
+                codex.fail("Worker timed out")
+            return None  # The caller interrupts the turn at its deadline.
         try:
             message = self.messages.get(timeout=min(wait, remaining))
         except queue.Empty:
@@ -87,7 +99,9 @@ class WorkerServer(codex.AppServer):
         return message
 
     def interrupt(self, turn: str) -> None:
-        """Request a stop and bound the wait for terminal evidence."""
+        """Request a stop; wait at most INTERRUPT_SECONDS more, even past timeout."""
+        self.interrupted = True
+        self.deadline = time.monotonic() + INTERRUPT_SECONDS
         self.send(
             {
                 "id": "worker-interrupt",
@@ -95,7 +109,6 @@ class WorkerServer(codex.AppServer):
                 "params": {"threadId": self.thread_id, "turnId": turn},
             }
         )
-        self.deadline = min(self.deadline, time.monotonic() + INTERRUPT_SECONDS)
 
     def retry_at(self) -> float | None:
         """Use only a backend-provided reset time for an exhausted window."""
@@ -273,40 +286,44 @@ def run_turn(
     return settle_turn(server, turn_id, directory)
 
 
-def await_terminal(server: WorkerServer, turn_id: str, directory: Path) -> bool:
-    """Wait for the turn's terminal notification; return whether we interrupted."""
+def await_terminal(server: WorkerServer, turn_id: str, directory: Path) -> str | None:
+    """Wait for the turn's terminal notification; return why we interrupted it."""
     state = directory.parents[1]
-    interrupted = False
+    reason = None
     while server.finished is None:
-        if not interrupted and admission.cancelled(state):
-            server.interrupt(turn_id)
-            interrupted = True
-            event(directory, "interrupt_requested")
+        if not server.interrupted:
+            if admission.cancelled(state) or stopping.is_set():
+                reason = "cancelled"
+            elif time.monotonic() >= server.deadline:
+                reason = "timeout"
+            if reason:
+                server.interrupt(turn_id)
+                event(directory, "interrupt_requested", reason=reason)
         message = server.poll(POLL_SECONDS)
         if message is None:
             continue
-        if message.get("id") == "worker-interrupt" and interrupted:
+        if message.get("id") == "worker-interrupt" and server.interrupted:
             if "error" in message:
                 codex.fail("Backend rejected the interrupt; outcome unknown")
             continue
         if "id" in message or not isinstance(message.get("method"), str):
             codex.fail("Unexpected worker response or approval request")
         server.notification(message)
-    return interrupted
+    return reason
 
 
 def settle_turn(
     server: WorkerServer, turn_id: str, directory: Path
 ) -> tuple[str, str | None]:
     """Classify only backend-confirmed terminal states; others stay unknown."""
-    interrupted = await_terminal(server, turn_id, directory)
+    reason = await_terminal(server, turn_id, directory)
     final = server.finished
     if not isinstance(final, dict) or final.get("id") != turn_id:
         codex.fail("Worker did not report a matching turn completion")
     error = final.get("error")
     kind = error.get("codexErrorInfo") if isinstance(error, dict) else None
-    if interrupted and final.get("status") == "interrupted":
-        return "cancelled", None
+    if reason and final.get("status") == "interrupted":
+        return reason, None
     if final.get("status") == "failed" and kind in admission.QUOTA_ERRORS:
         return "quota", kind
     if final.get("status") != "completed" or error:
@@ -431,8 +448,39 @@ def record_outcome(
         admission.quota(claim.parent, kind or "unknown", result["retry_at"])
 
 
+def request_stop(*_: object) -> None:
+    """Signal handler: only flag the stop; the worker settles it."""
+    stopping.set()
+
+
+@contextlib.contextmanager
+def stop_on_signals() -> Iterator[None]:
+    """Turn SIGTERM/SIGINT into a stop request, then restore prior handlers."""
+    stopping.clear()
+    previous = {number: signal.signal(number, request_stop) for number in STOP_SIGNALS}
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+        stopping.clear()
+
+
+def check_stop() -> None:
+    """Refuse to reserve or dispatch work after a stop signal."""
+    if stopping.is_set():
+        codex.fail("Worker stopped by a signal before dispatch")
+
+
+def permit(claim: Path, identifier: str, role: str) -> None:
+    """Refuse dispatch after a stop signal; else take the queue's turn permit."""
+    check_stop()
+    admission.permit_turn(claim, identifier, role)
+
+
 def reserve(claim: Path, identifier: str, role: str) -> Path:
     """Reserve capacity and the private worker directory, or neither."""
+    check_stop()  # A stop before reservation never starts a client.
     admission.reserve_worker(claim, identifier, role)
     directory = claim.parent / "workers" / identifier
     try:
@@ -482,7 +530,7 @@ def execute(
             admission.write(directory / "result.json", result)
             event(directory, "route_verified", **receipt)
             # Pause/cancel after this permit treats the turn as already active.
-            admission.permit_turn(claim, identifier, role)
+            permit(claim, identifier, role)
             # Persist possible delivery BEFORE writing; a lost response is unknown.
             dispatched = True
             result.update(status="unknown", task_started="unknown")
@@ -528,13 +576,14 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=300)
     args = parser.parse_args()
     try:
-        result = execute(
-            args.claim.resolve(strict=True),
-            args.task,
-            route=(args.model, args.effort),
-            role=args.role,
-            timeout=args.timeout,
-        )
+        with stop_on_signals():
+            result = execute(
+                args.claim.resolve(strict=True),
+                args.task,
+                route=(args.model, args.effort),
+                role=args.role,
+                timeout=args.timeout,
+            )
     except admission.FixedReasonError as error:
         codex.emit({"status": "blocked", "reason": str(error)})
         return 1
