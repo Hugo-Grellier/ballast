@@ -33,8 +33,8 @@ One interrupt path for queue cancellation, deadline and signals.
 4. Settlement is unchanged after the turn: `await_quiet`, head recording and
    review checks still gate `settled`. Missing terminal evidence, a rejected
    interrupt or survivors keep `unknown` and the lock.
-5. `timeout` joins `coordinate.SETTLED` and the dashboard status and milestone
-   sets. `docs/standalone.md` describes the path and tells the coordinator to
+5. `timeout` joins `coordinate.SETTLED`, from which `WORKER_STATUSES` and the
+   dashboard status and milestone sets derive. `docs/standalone.md` describes the path and tells the coordinator to
    run the worker as a background command or keep `--timeout` about 70 s below
    the harness limit.
 
