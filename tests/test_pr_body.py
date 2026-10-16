@@ -92,6 +92,14 @@ class PrBodyTests(unittest.TestCase):
             self.assertEqual(self.run_main("--event-file", str(event))[0], 0)
             self.assertEqual(self.run_main("--event-file", str(null))[0], 1)
 
+    def test_crlf_event_payload_passes(self) -> None:
+        crlf = body().replace("\n", "\r\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            event = Path(tmp) / "e"
+            event.write_text(json.dumps({"pull_request": {"body": crlf}}))
+            self.assertEqual(self.run_main("--event-file", str(event))[0], 0)
+        self.assertEqual(self.check(crlf), [])
+
     def test_event_without_pull_request_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             event = Path(tmp) / "e"

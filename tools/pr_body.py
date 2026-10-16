@@ -18,7 +18,8 @@ COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 def problems(body: str, template: str) -> list[str]:
     """Return one line per structural defect; empty means the body conforms."""
-    body = COMMENT.sub("", body)
+    body = COMMENT.sub("", body.replace("\r\n", "\n").replace("\r", "\n"))
+    template = template.replace("\r\n", "\n").replace("\r", "\n")
     present = set(HEADING.findall(body))
     found = [
         f"missing section: ## {h}"
