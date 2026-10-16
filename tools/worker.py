@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import json
 import math
 import os
@@ -35,6 +36,7 @@ QUIET_GAP_SECONDS = 0.2
 INTERRUPT_SECONDS = 30
 MAX_NAMED = 10
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+PR_SET_PDEATHSIG = 1  # <linux/prctl.h>
 # Set by SIGTERM/SIGINT; the worker settles through the interrupt path.
 stopping = threading.Event()
 
@@ -60,6 +62,31 @@ class WorkerServer(codex.AppServer):
         self.tokens: dict | None = None
         self.windows: dict = {}
         super().__init__(executable, cwd, timeout)
+
+    @staticmethod
+    def isolation() -> dict:
+        """Keep the client out of group-wide signals, but never let it outlive us.
+
+        In its own session, a signal to the worker's PID or process group (a
+        terminal Ctrl-C) reaches only the worker, which then interrupts the turn;
+        a recursive tree kill that signals each descendant still reaches the
+        client. The kernel SIGKILLs the client if the worker dies first (Linux
+        parent-death signal).
+        """
+        try:
+            prctl = ctypes.CDLL(None, use_errno=True).prctl
+        except (OSError, AttributeError):
+            codex.fail("This worker requires Linux to bind its client's lifetime")
+        parent = os.getpid()
+
+        def die_with_worker() -> None:
+            # Bound to the forking thread; execute() starts the client from main.
+            if prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
+                raise OSError(ctypes.get_errno(), "prctl")
+            if os.getppid() != parent:  # The worker died before prctl took effect.
+                raise ProcessLookupError
+
+        return {"start_new_session": True, "preexec_fn": die_with_worker}
 
     def send(self, message: dict) -> None:
         """Bound pipe writes too, including a backend that stops reading input."""

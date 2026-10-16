@@ -66,9 +66,15 @@ class AppServer:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            **self.isolation(),
         )
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
+
+    @staticmethod
+    def isolation() -> dict:
+        """Extra launch options; the task-free probe shares its caller's signals."""
+        return {}
 
     def _read(self) -> None:
         stream = self.process.stdout

@@ -255,6 +255,17 @@ class ExecutionTests(unittest.TestCase):
         results = list((self.claim.parent / "workers").glob("*/result.json"))
         self.assertEqual(json.loads(results[0].read_text())["status"], "unknown")
 
+    def test_unbound_client_lifetime_never_starts_client(self) -> None:
+        # The refusal comes from launch options, before any client process exists.
+        with (
+            patch.object(worker.ctypes, "CDLL", side_effect=OSError),
+            self.assertRaisesRegex(codex.QualificationError, "Linux"),
+        ):
+            self.run_worker(self.script())
+        self.assertFalse(self.claim.with_suffix(".worker").exists())
+        results = list((self.claim.parent / "workers").glob("*/result.json"))
+        self.assertEqual(json.loads(results[0].read_text())["status"], "not_started")
+
     def test_malformed_notification_preserves_unknown(self) -> None:
         messages = self.script()
         messages[4]["params"]["item"] = None

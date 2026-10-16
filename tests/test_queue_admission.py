@@ -53,6 +53,30 @@ INTERRUPTED = [
         },
     },
 ]
+# A real client process: emit the transcript, then run until its input closes.
+CLIENT = (
+    "import sys; sys.stdout.write(sys.argv[1]); sys.stdout.flush(); sys.stdin.read()"
+)
+# A worker stand-in: launch a client the worker's way, report it, then idle.
+STAND_IN = """
+import subprocess, sys, time
+from tools import worker
+idle = [sys.executable, "-c", "import time; time.sleep(60)"]
+client = subprocess.Popen(idle, **worker.WorkerServer.isolation())
+print(client.pid, flush=True)
+time.sleep(60)
+"""
+# Set in the child run that owns a fresh process group for group-wide signals.
+GROUP_RUN = "BALLAST_TEST_GROUP_RUN"
+
+
+def gone(pid: int) -> bool:
+    """Report whether a process exited (a zombie has exited too)."""
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text()
+    except FileNotFoundError:
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] == "Z"
 
 
 class QueueTests(unittest.TestCase):
@@ -462,6 +486,92 @@ class QueueTests(unittest.TestCase):
             self.worker_on(claim, lambda m: m[:4] + INTERRUPTED[:2])
         self.assertEqual(self.outcome(claim)[0]["status"], "unknown")
         self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def client_on(self, claim: Path) -> dict:
+        """Run the worker against a real client process that confirms an interrupt."""
+        self.cwd = Path(json.loads(claim.read_text())["checkout"])
+        lines = "".join(json.dumps(m) + "\n" for m in self.script()[:4] + INTERRUPTED)
+        native = subprocess.Popen
+
+        def launch(argv: list[str], **kwargs: object) -> object:
+            if argv[0] == "/fictional/codex":
+                argv = [sys.executable, "-I", "-S", "-c", CLIENT, lines]
+            return native(argv, **kwargs)
+
+        with (
+            patch.object(codex.subprocess, "Popen", side_effect=launch),
+            patch.object(worker.shutil, "which", return_value="/fictional/codex"),
+        ):
+            return worker.execute(
+                claim,
+                self.task,
+                route=("fixture-model", "low"),
+                role="implement",
+                timeout=2,
+            )
+
+    def test_group_signal_after_dispatch_settles_cancelled(self) -> None:
+        if GROUP_RUN not in os.environ:
+            # A group-wide signal needs a process group of its own: rerun this
+            # test as the leader of a new session, then signal that whole group.
+            done = subprocess.run(  # noqa: S603 -- this interpreter, this test
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    f"{__name__}.{self.id().split('.', 2)[2]}",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, GROUP_RUN: "1"},
+                start_new_session=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertRegex(done.stderr, r"Ran 1 test")
+            return
+        self.queue([93, 94], issues=2)
+        self.quiet_signals()
+        for issue, number in ((93, signal.SIGTERM), (94, signal.SIGINT)):
+            with self.subTest(signal=number):
+                claim = self.prepare(issue)
+
+                def stop(_: Path, number: int = number) -> bool:
+                    os.killpg(0, number)  # Ctrl-C or a harness stopping the tree.
+                    return False
+
+                with (
+                    worker.stop_on_signals(),
+                    patch.object(admission, "cancelled", side_effect=stop),
+                ):
+                    result = self.client_on(claim)
+                self.assertEqual(result["status"], "cancelled")
+                _, events = self.outcome(claim)
+                self.assertIn("cancelled", events[-2].values())
+                self.assertFalse(claim.with_suffix(".worker").exists())
+
+    def test_client_dies_with_a_killed_worker(self) -> None:
+        # A stand-in worker launches a client as the worker does, then is SIGKILLed.
+        stand_in = subprocess.Popen(  # noqa: S603 -- this interpreter, fixed code
+            [sys.executable, "-c", STAND_IN],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(stand_in.wait)
+        self.addCleanup(stand_in.kill)
+        client = int(stand_in.stdout.readline())
+        stand_in.stdout.close()
+        self.assertNotEqual(os.getpgid(client), os.getpgid(stand_in.pid))
+        stand_in.kill()
+        deadline = time.monotonic() + 10
+        while not gone(client):
+            if time.monotonic() >= deadline:
+                os.kill(client, signal.SIGKILL)
+                self.fail("Client outlived its killed worker")
+            time.sleep(0.05)
 
     @staticmethod
     def quota(resets: int | None):  # noqa: ANN205
