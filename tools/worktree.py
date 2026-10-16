@@ -69,14 +69,21 @@ def git(cwd: Path, *args: str, git_dir: Path | None = None) -> str:
 
 def repository(cwd: Path, expected: str, git_dir: Path | None = None) -> None:
     """Require an unambiguous credential-free GitHub origin identity."""
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", expected):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", expected) or {
+        ".",
+        "..",
+    } & set(expected.split("/")):
         fail("Repository must be an explicit owner/name")
     remote = git(cwd, "remote", "get-url", "origin", git_dir=git_dir)
     match = re.fullmatch(
         r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
         remote,
     )
-    if match is None or match[1].lower() != expected.lower():
+    if (
+        match is None
+        or {".", ".."} & set(match[1].split("/"))
+        or match[1].lower() != expected.lower()
+    ):
         fail("Origin does not match the requested GitHub repository")
 
 

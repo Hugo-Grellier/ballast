@@ -467,12 +467,36 @@ class OriginFormTests(unittest.TestCase):
         "https://example.com/example/fixture",
     )
 
-    def check(self, origin: str) -> None:
+    def check(self, origin: str, expected: str = "example/fixture") -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary)
             worktree.git(repo, "init", "-b", "main")
             worktree.git(repo, "remote", "add", "origin", origin)
-            worktree.repository(repo, "example/fixture")
+            worktree.repository(repo, expected)
+
+    def test_dot_segments_refused(self) -> None:
+        forms = (
+            "https://github.com/{}",
+            "git@github.com:{}.git",
+            "ssh://git@github.com/{}.git",
+        )
+        for expected in ("../example", "example/..", "./example", "example/."):
+            for form in forms:
+                with (
+                    self.subTest(expected=expected, form=form),
+                    self.assertRaisesRegex(RuntimeError, "Repository|Origin"),
+                ):
+                    self.check(form.format(expected), expected)
+        # The origin alone is refused even when the request is a valid name.
+        for origin in (
+            "https://github.com/../example",
+            "ssh://git@github.com/example/..git",
+        ):
+            with (
+                self.subTest(origin=origin),
+                self.assertRaisesRegex(RuntimeError, "Origin"),
+            ):
+                self.check(origin, "example/fixture")
 
     def test_accepted_origins(self) -> None:
         for origin in self.ACCEPTED:
