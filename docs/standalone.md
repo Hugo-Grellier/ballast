@@ -368,7 +368,7 @@ keys, `Bearer` and `Authorization Basic|Digest|Negotiate|Token` values,
 `password=`-style assignments including prefixed names, `pass=`/`pwd=`
 assignments, absolute paths of two or more segments, `file:/` URLs, `~`, drive
 paths, `output.txt`). Slack (`xox?-`) and JWT (`eyJ`) prefixes match
-case-sensitively. A custom `Authorization <scheme> <value>` is not matched: it
+case-insensitively, accepting rare false positives to stay strict. A custom `Authorization <scheme> <value>` is not matched: it
 cannot be told apart from ordinary prose.
 Never copy raw final worker output into this producer or treat it as approval.
 The browser cannot record evidence or answer questions. Viewing it conveys no

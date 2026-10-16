@@ -29,8 +29,6 @@ class ProgressValidationTests(unittest.TestCase):
             "Task-force risk-review done",
             "Compass=north, bypass=on",
             "Tests pass: all green",
-            "XOXO-style notes",
-            "Notes eyJ and EYJ.EYJ",
         )
         rejected = (
             "key sk-abc123def456",
@@ -65,6 +63,8 @@ class ProgressValidationTests(unittest.TestCase):
             "a,/home/x/y",
             "AKIAABCDEFGHIJKLMNOP",
             "glpat-abc123",
+            "XOXB-123-abc",
+            "eyjhbGciOi.eyjzdWIiOi",
             "ASIAABCDEFGHIJKLMNOP",
             "see file:///home/x/y",
             "file:///x",
