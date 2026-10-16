@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.2.0](https://github.com/Hugo-Grellier/ballast/compare/v2.1.0...v2.2.0) (2026-10-16)
+
+
+### Features
+
+* **tools:** check PR bodies against the PR template locally and in CI ([#243](https://github.com/Hugo-Grellier/ballast/issues/243)) ([700c468](https://github.com/Hugo-Grellier/ballast/commit/700c468d003ecf0016b3967759ea344c9d6cb9cb))
+
+
+### Bug Fixes
+
+* **admission:** let the queue coordinator stop a claim stranded under another coordinator ([#238](https://github.com/Hugo-Grellier/ballast/issues/238)) ([0edee07](https://github.com/Hugo-Grellier/ballast/commit/0edee07ba81a28db9568f5e95e5ccfe4ec787ad9))
+* **dashboard:** keep dependency selection within budget under GitHub latency ([#244](https://github.com/Hugo-Grellier/ballast/issues/244)) ([508bb45](https://github.com/Hugo-Grellier/ballast/commit/508bb45ed76fb04c55ef7193b649d2e34bc89c5c))
+* **progress:** reject remaining secret and path shapes in public summaries ([#245](https://github.com/Hugo-Grellier/ballast/issues/245)) ([348c948](https://github.com/Hugo-Grellier/ballast/commit/348c9484ca270ef714e426ae7b0880f5878f63b0))
+* **worker:** keep the Codex client out of group-wide signals so stops settle cleanly ([#246](https://github.com/Hugo-Grellier/ballast/issues/246)) ([bce49d4](https://github.com/Hugo-Grellier/ballast/commit/bce49d42c2e2697331e56d674dad442d571220b8))
+* **worktree:** refuse . and .. as repository owner or name ([#237](https://github.com/Hugo-Grellier/ballast/issues/237)) ([e6f4df7](https://github.com/Hugo-Grellier/ballast/commit/e6f4df74e7d4413e454c1854ff5e1583db4c4b35))
+
+
+### Documentation
+
+* **pair-review:** define repair-round scope, nonblocking findings and CI evidence ([#247](https://github.com/Hugo-Grellier/ballast/issues/247)) ([130c7fe](https://github.com/Hugo-Grellier/ballast/commit/130c7fe4b17e05c0b9d0bbf03e6b7fd166dbc073))
+* **workflow:** guidance for dispatching agent-native subagents as workers ([#236](https://github.com/Hugo-Grellier/ballast/issues/236)) ([26b646e](https://github.com/Hugo-Grellier/ballast/commit/26b646eb0c0f5fd1f5c740a87f48bbadb64b96a3))
+
 ## [2.1.0](https://github.com/Hugo-Grellier/ballast/compare/v2.0.0...v2.1.0) (2026-10-15)
 
 
