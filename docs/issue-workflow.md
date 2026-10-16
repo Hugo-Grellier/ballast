@@ -101,8 +101,9 @@ Scale the plan to the work:
 
 Routine technical plans need no human approval checkpoint. Resolve blocking plan
 review findings before coding; use the same round limit and escalation
-rule as the final review ([pair-review.md](pair-review.md#round-limit)). If a required plan review is unavailable, report that
-block before implementing the affected work.
+rule as the final review ([pair-review.md](pair-review.md#round-limit)). If a
+required plan review is unavailable, report that block before implementing the
+affected work.
 
 Post a concise issue progress note before implementation. Include:
 

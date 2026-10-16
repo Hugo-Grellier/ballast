@@ -6,7 +6,7 @@ This is the operational profile: risk classification, review triggers and determ
 
 GitHub Issues are the work queue, discussion, dependency and status surface; PRs carry acceptance and review evidence. An issue states the outcome and acceptance criteria. Dispatch only an actionable leaf issue; an unresolved Epic coordinates child work and is not implemented directly. Plan after dispatch, and only as much as the change needs. Consequential architecture decisions become ADRs. Read the domain glossary and relevant architecture sections/ADRs only when the change touches domain or architecture.
 
-Each implementing issue uses its own branch and worktree. Stop automated fix attempts after three review/fix rounds and escalate unresolved findings to a human.
+Each implementing issue uses its own branch and worktree. Stop automated fix attempts at the pair-review round limit and escalate unresolved findings to a human.
 
 ## Risk
 

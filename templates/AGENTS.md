@@ -26,7 +26,7 @@ Accepted ADRs and the accepted architecture govern design; the issue states the 
 
 - For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow `BALLAST_SOURCE/docs/issue-workflow.md`: read the issue and comments, scope and decompose, ask only consequential questions, plan as needed, implement, verify, review, publish. Dispatch only an actionable leaf issue, never an unresolved Epic.
 - Each implementing issue gets its own branch and worktree with one writer. Workers use an explicit model and effort, verified before task input (`BALLAST_SOURCE/docs/model-routing.md`). Run workers with `BALLAST_SOURCE/docs/standalone.md`.
-- An independent reviewer follows `BALLAST_SOURCE/docs/pair-review.md`, at most three review/fix rounds, then escalate to a human.
+- An independent reviewer follows `BALLAST_SOURCE/docs/pair-review.md`, including its round limit and what follows it.
 - Record phases, blockers, review rounds and waits on the issue; unknown stays unknown. Agents run outside CI; CI runs deterministic checks only.
 
 ## Risk and conditional guidance

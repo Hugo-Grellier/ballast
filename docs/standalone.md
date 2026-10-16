@@ -21,8 +21,8 @@ Without a [queue](#bounded-queue), run one issue and one worker at a time. Each
 worker has a `--timeout` of at most 900 seconds (300 by default); settling after
 it can take about 70 seconds more (see [execute and observe](#execute-and-observe)
 for running it as a background command). Task and final messages are limited to
-64 KiB, protocol messages to 1 MiB. The coordinator permits at most three review/fix
-rounds and one issue PR. A fresh session is required for each worker. Worker
+64 KiB, protocol messages to 1 MiB. The coordinator enforces the [round limit](pair-review.md#round-limit)
+and permits one issue PR. A fresh session is required for each worker. Worker
 nested delegation is disabled in the client and forbidden in the handoff.
 
 This is a cooperative agent workflow under native CLI sandbox permissions, with
