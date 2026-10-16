@@ -363,9 +363,13 @@ GitHub issue/comment, PR or Actions run URLs. Unknown fields are rejected.
 Summaries are bounded public declarations curated by the authorized coordinator.
 It is responsible for excluding secrets, account details, private reasoning and
 paths; validation also rejects control characters and secret-shaped text (API-key,
-token, JWT, private-key and URL-credential shapes, `Bearer`/`Authorization` values, `password=`-style
-assignments including prefixed names, absolute paths of two or more segments,
-`~`, drive paths, `output.txt`).
+token, JWT, private-key and URL-credential shapes, `AKIA` and `ASIA` AWS access
+keys, `Bearer` and `Authorization Basic|Digest|Negotiate|Token` values,
+`password=`-style assignments including prefixed names, `pass=`/`pwd=`
+assignments, absolute paths of two or more segments, `file:/` URLs, `~`, drive
+paths, `output.txt`). Slack (`xox?-`) and JWT (`eyJ`) prefixes match
+case-insensitively, accepting rare false positives to stay strict. A custom `Authorization <scheme> <value>` is not matched: it
+cannot be told apart from ordinary prose.
 Never copy raw final worker output into this producer or treat it as approval.
 The browser cannot record evidence or answer questions. Viewing it conveys no
 approval. Evidence is labelled coordinator-recorded; revision-bound declarations
