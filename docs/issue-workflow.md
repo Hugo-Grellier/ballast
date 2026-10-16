@@ -99,6 +99,13 @@ Scale the plan to the work:
 - A decision crossing the authority boundaries in `AGENTS.md`: present the plan
   and exact decision for human approval before implementing the affected part.
 
+Record an R2 approval (plan or merge) durably on GitHub, never only in chat: a
+comment on the issue or PR by the human (direct), or a coordinator comment
+quoting the human's words verbatim with the date and scope (plan or merge),
+marked as relayed. A relayed approval is evidence, not authentication. Link the
+comment URL on the R2 line of the PR's Risk section and say which kind it is;
+`tools/pr_body.py` fails an R2 body without an issue or PR comment URL there.
+
 Routine technical plans need no human approval checkpoint. Resolve blocking plan
 review findings before coding; use the same round limit and escalation
 rule as the final review ([pair-review.md](pair-review.md#round-limit)). If a

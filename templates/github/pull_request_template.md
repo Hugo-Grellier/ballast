@@ -12,7 +12,7 @@ Map each acceptance criterion of the issue to its check, test or review evidence
 
 - [ ] R0
 - [ ] R1
-- [ ] R2 — link explicit human approval
+- [ ] R2 — link the human approval comment on the issue or PR, and say whether it is direct or relayed by the coordinator
 
 ## Affected areas
 

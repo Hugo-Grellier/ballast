@@ -21,6 +21,7 @@ def body(
     drop: str | None = None,
     link: str = "Closes #7",
     ticks: tuple[str, ...] = ("R1",),
+    approval: str = "",
 ) -> str:
     """Build a conforming body, then break one thing."""
     parts = []
@@ -34,7 +35,7 @@ def body(
             text += "".join(
                 f"- [{'x' if r in ticks else ' '}] {r}\n" for r in ("R0", "R1", "R2")
             )
-            text += "\n"
+            text += f"{approval}\n\n" if approval else "\n"
         parts.append(text)
     return "".join(parts)
 
@@ -66,6 +67,30 @@ class PrBodyTests(unittest.TestCase):
                 self.assertTrue(
                     any("risk box" in p for p in self.check(body(ticks=ticks)))
                 )
+
+    def test_r2_needs_an_approval_comment_link(self) -> None:
+        base = "https://github.com/o/r"
+        ok = (
+            f"Relayed: {base}/issues/5#issuecomment-123",
+            f"Direct: {base}/pull/9#issuecomment-1",
+            f"Review: {base}/pull/9#pullrequestreview-2",
+        )
+        for link in ok:
+            with self.subTest(link=link):
+                self.assertEqual(self.check(body(ticks=("R2",), approval=link)), [])
+        for bad in ("", "approved in chat", f"{base}/issues/5", f"{base}/issues/5#x"):
+            with self.subTest(bad=bad):
+                found = self.check(body(ticks=("R2",), approval=bad))
+                self.assertTrue(any("R2 needs" in p for p in found))
+
+    def test_approval_link_outside_risk_section_does_not_count(self) -> None:
+        link = "https://github.com/o/r/issues/5#issuecomment-123"
+        text = body(ticks=("R2",)).replace("## Summary\n", f"## Summary\n{link}\n")
+        self.assertTrue(any("R2 needs" in p for p in self.check(text)))
+
+    def test_r0_and_r1_need_no_approval_link(self) -> None:
+        for tick in ("R0", "R1"):
+            self.assertEqual(self.check(body(ticks=(tick,))), [])
 
     def test_commented_out_content_does_not_count(self) -> None:
         self.assertTrue(self.check(body(link="<!-- Closes #7 -->")))
