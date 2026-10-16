@@ -54,5 +54,5 @@ worker process only.
 
 ## Live qualification
 
-Pending; the coordinator records it in
+Recorded by the coordinator in
 [docs/evidence/231-live-qualification.md](../evidence/231-live-qualification.md).
