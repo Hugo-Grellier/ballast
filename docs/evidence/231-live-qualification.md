@@ -3,8 +3,10 @@
 Date: 2026-10-16. Host: Linux, Codex CLI 0.162.1 (app-server), real
 subscription model. Code under test: `tools/worker.py` at
 80419820e238a2ab7687147ec9655ca87278b127. Run by the coordinating session on the
-real #231 issue claim of a bounded queue; no GitHub writes, no disposable
-repository needed because publication is not touched.
+real #231 issue claim of a bounded queue, with no GitHub writes. This replaces
+the disposable-repository fixture of `AGENTS.md` by an explicit operator
+exception for this change, because the signal path does not touch publication:
+[decision on #231](https://github.com/Hugo-Grellier/ballast/issues/231#issuecomment-6211662532).
 
 ## Procedure
 
