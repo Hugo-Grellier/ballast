@@ -1,0 +1,18 @@
+name: PR body
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-body:
+    name: PR body
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # The body is read from the event payload file, never interpolated into a command.
+      - name: Require the PR template sections, an issue link and one risk box
+        run: python3 -I -S tools/pr_body.py --event-file "$GITHUB_EVENT_PATH"

@@ -25,3 +25,5 @@ ignore = ["COM812", "CPY001", "D203", "D213"]
 # The test suite uses the standard-library unittest API, so pytest-style rules
 # do not apply; named test methods also do not need individual docstrings.
 "tests/**/*.py" = ["D102", "PT009", "PT027"]
+# A byte-identical copy of tools/pr_body.py, checked by tests/test_pr_body.py.
+"templates/github/scripts/pr_body.py" = ["INP001"]

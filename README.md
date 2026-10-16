@@ -37,6 +37,11 @@ host is a POSIX machine with Python 3.11+, Git, an authenticated `gh` for GitHub
 and a supported Codex CLI; [standalone](docs/standalone.md#scope-and-limits) lists the
 limits.
 
+[`tools/pr_body.py`](tools/pr_body.py) is separate from the worker helpers: it checks a
+PR body against the PR template (every `##` section present, a `Closes #N` or `Refs #N`
+link, exactly one risk box ticked). Run `python3 -I -S tools/pr_body.py --body-file FILE`
+locally; the `PR body` workflow runs it on `pull_request` events from the event payload.
+
 ## Adopting Ballast in a project
 
 Review and copy what you want from [`templates/`](templates/), then follow
@@ -49,7 +54,8 @@ Review and copy what you want from [`templates/`](templates/), then follow
 - [`skills/`](templates/skills/): `ballast-*` review skills for engineering, tests,
   security, documentation, dependencies and database migrations;
 - [`github/`](templates/github/): PR and issue templates, Dependabot and a
-  Conventional Commit PR-title check.
+  Conventional Commit PR-title check, plus an optional PR-body check
+  (`workflows/pr-body.yml` with its `scripts/pr_body.py`, copied to `.github/scripts/`).
 
 ## Decisions and history
 
