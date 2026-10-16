@@ -27,6 +27,10 @@ class ProgressValidationTests(unittest.TestCase):
             "See https://github.com/x/y/pull/1 for evidence",
             "Docs at https://example.com/a/b updated",
             "Task-force risk-review done",
+            "Compass=north, bypass=on",
+            "Tests pass: all green",
+            "XOXO-style notes",
+            "Notes eyJ and EYJ.EYJ",
         )
         rejected = (
             "key sk-abc123def456",
@@ -61,6 +65,12 @@ class ProgressValidationTests(unittest.TestCase):
             "a,/home/x/y",
             "AKIAABCDEFGHIJKLMNOP",
             "glpat-abc123",
+            "ASIAABCDEFGHIJKLMNOP",
+            "see file:///home/x/y",
+            "file:///x",
+            "pwd=hunter2",
+            "DB_PASS=hunter2",
+            "pass = abc",
             "-----BEGIN RSA PRIVATE KEY-----",
             "see /dev/sda",
             "see /Volumes/Work",
