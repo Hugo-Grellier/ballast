@@ -11,8 +11,11 @@ This slice supports GitHub.com and the installed Codex app-server with authorize
 ChatGPT subscription access. Other hosts, providers, API-key access, unsupported
 models/efforts and missing configuration receipts block. No implicit paid fallback.
 Use a POSIX host with Python 3.11+, Git, authenticated `gh` and the qualified
-Codex CLI outside CI. Windows execution is currently blocked because this worker
-requires bounded nonblocking pipe writes.
+Codex CLI outside CI. `worker.py` runs only on Linux: it binds its client's
+lifetime with the Linux parent-death signal and reads `/proc` to settle.
+Elsewhere it refuses before starting a client (`not_started`, reservation
+released). Windows execution is also blocked because this worker requires
+bounded nonblocking pipe writes.
 
 Without a [queue](#bounded-queue), run one issue and one worker at a time. Each
 worker has a `--timeout` of at most 900 seconds (300 by default); settling after
@@ -104,17 +107,17 @@ worker as a background command of the harness and wait for it to exit, or choose
 a `--timeout` that leaves that margin below the harness limit. A SIGKILL leaves
 the worker `unknown` with its lock held.
 
-The worker starts the Codex client in its own session, so SIGTERM/SIGINT sent to
-the worker process or to its whole process group (Ctrl-C in its terminal, a
-harness stopping the process tree) reaches only the worker, which settles
-through the interrupt path. A signal sent to the client's own PID or session is
-not one: the client then ends without terminal evidence and the worker stays
-`unknown`. The worker binds the client's lifetime to its own through the Linux
-parent-death signal and refuses to start a client where it cannot: if the worker
-dies first, even by SIGKILL, the kernel SIGKILLs the client. Commands the client
-started in their own sessions can still outlive it; nothing settles that
-worker, which stays `unknown` with its lock held until an operator inspects the
-checkout.
+The worker starts the Codex client in its own session. SIGTERM/SIGINT sent to
+the worker's PID or to its process group (Ctrl-C in its terminal, `kill` on the
+group) reaches only the worker, which settles through the interrupt path. A
+signal that reaches the client directly still ends the worker `unknown` with its
+lock held: one sent to the client's PID or session, or a recursive tree kill
+that enumerates the worker's descendants and signals each PID. Stop a worker by
+signalling its PID or its process group. The worker binds the client's lifetime
+to its own through the Linux parent-death signal: if the worker dies first, even
+by SIGKILL, the kernel SIGKILLs the client. Commands the client started in their
+own sessions can still outlive it; nothing settles that worker, which stays
+`unknown` with its lock held until an operator inspects the checkout.
 
 The same executing session must establish authorized subscription access, catalog
 support and matching resolved model/effort, provider, working directory, sandbox,
@@ -231,8 +234,8 @@ cannot be recreated to reset its budget.
   `turn/interrupt` and wait at most 30 seconds for terminal evidence; otherwise
   the worker stays `unknown` with its lock. Sandboxed tool commands can outlive
   the client, so any worker settles only once no process runs inside its
-  checkout in two consecutive scans (Linux `/proc`; elsewhere the outcome stays
-  `unknown`). A same-user process started after the worker whose working
+  checkout in two consecutive scans (Linux `/proc`; the worker refuses to start
+  elsewhere). A same-user process started after the worker whose working
   directory cannot be read counts as still running. A process that forks
   between scans can still escape detection; a per-worker cgroup would close
   that gap. `running` after a pause also clears

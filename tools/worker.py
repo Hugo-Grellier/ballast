@@ -67,9 +67,11 @@ class WorkerServer(codex.AppServer):
     def isolation() -> dict:
         """Keep the client out of group-wide signals, but never let it outlive us.
 
-        In its own session, a terminal Ctrl-C or a harness stopping the process
-        tree reaches only the worker, which then interrupts the turn. The kernel
-        SIGKILLs the client if the worker dies first (Linux parent-death signal).
+        In its own session, a signal to the worker's PID or process group (a
+        terminal Ctrl-C) reaches only the worker, which then interrupts the turn;
+        a recursive tree kill that signals each descendant still reaches the
+        client. The kernel SIGKILLs the client if the worker dies first (Linux
+        parent-death signal).
         """
         try:
             prctl = ctypes.CDLL(None, use_errno=True).prctl
