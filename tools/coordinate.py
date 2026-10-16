@@ -23,7 +23,9 @@ MAX_LINE = 1024
 BATCH = 100
 ISSUE_FIELDS = """fragment F on Issue{
 number state body subIssuesSummary{total}
-blockedBy(first:50){pageInfo{hasNextPage} nodes{number state repository{nameWithOwner}}}
+blockedBy(first:50){pageInfo{hasNextPage} nodes{number state repository{nameWithOwner}
+...C}} ...C}
+fragment C on Issue{
 closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{merged}}}"""
 NAME = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 # `#5`, `owner/repo#5` or `https://github.com/owner/repo/issues/5`.
@@ -165,18 +167,30 @@ def preload(cwd: Path, repo: str, numbers: list[int], cache: dict) -> None:
 
 
 def preload_prerequisites(cwd: Path, queue: dict, cache: dict) -> None:
-    """Second batch: same-repo prerequisites of the queue issues just read."""
+    """Second batch: same-repo `Blocked by` lines and unreadable native nodes."""
     repo = queue["repository"]
     wanted: list[int] = []
     for number in queue["issues"]:
         if cache.get(number) is None:
             continue
         with contextlib.suppress(*LOOKUP_ERRORS):
-            for key in prerequisites(repo, cache[number]):
+            for key, node in prerequisites(repo, cache[number]).items():
                 owner, dependency = key.rsplit("#", 1)
-                if owner.lower() == repo.lower():
+                if owner.lower() == repo.lower() and not known(node):
                     wanted.append(int(dependency))
     preload(cwd, repo, wanted, cache)
+
+
+def known(node: dict) -> bool:
+    """Tell whether a native node carries its closing PRs (no second call)."""
+    with contextlib.suppress(*LOOKUP_ERRORS):
+        refs = node["closedByPullRequestsReferences"]["nodes"]
+        return (
+            isinstance(node["state"], str)
+            and isinstance(refs, list)
+            and all(isinstance(ref, dict) for ref in refs)
+        )
+    return False
 
 
 def merged(value: dict) -> bool:
@@ -201,12 +215,12 @@ def blockers(cwd: Path, queue: dict, number: int, context: tuple) -> list[str]:
         found = prerequisites(repo, current)
     except LOOKUP_ERRORS:
         return [*reasons, "prerequisites could not be evaluated"]
-    for key in found:
+    for key, node in found.items():
         owner, dependency = key.rsplit("#", 1)
         if owner.lower() != repo.lower():
             reasons.append(f"unknown cross-repository prerequisite {key}")
             continue
-        target = lookup(cwd, repo, int(dependency), cache)
+        target = node if known(node) else lookup(cwd, repo, int(dependency), cache)
         if int(dependency) in queue["issues"]:
             graph.setdefault(number, set()).add(int(dependency))
         if target is None:

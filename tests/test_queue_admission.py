@@ -509,8 +509,16 @@ class QueueTests(unittest.TestCase):
         self.assertIn("no merged change", blocked["23"][0])
 
     @staticmethod
-    def node(number: int, state: str) -> dict:
-        return {"number": number, "state": state, "repository": {"nameWithOwner": REPO}}
+    def node(number: int, state: str, *, merged: bool = False) -> dict:
+        """Build a native `blockedBy` node as the first query returns it."""
+        return {
+            "number": number,
+            "state": state,
+            "repository": {"nameWithOwner": REPO},
+            "closedByPullRequestsReferences": {
+                "nodes": [{"merged": True}] if merged else []
+            },
+        }
 
     def publish_ready(self, issue: int) -> Path:
         """Push the base head and run a completed independent review of it."""
@@ -930,6 +938,33 @@ class QueueTests(unittest.TestCase):
         self.queue([80, 81, 82])
         coordinate.select(self.repo)
         self.assertEqual(len(self.graphql), 2)  # queue issues, then prerequisites
+
+    def test_native_prerequisites_need_no_second_call(self) -> None:
+        native = {"pageInfo": {"hasNextPage": False}}
+        self.issues = {
+            83: {"blockedBy": {**native, "nodes": [self.node(92, "CLOSED")]}},
+            84: {
+                "blockedBy": {**native, "nodes": [self.node(93, "CLOSED", merged=True)]}
+            },
+        }
+        self.queue([83, 84])
+        selected = coordinate.select(self.repo)
+        self.assertEqual(len(self.graphql), 1)
+        self.assertEqual(selected["eligible"], [84])
+        self.assertIn("no merged change", selected["blocked"]["83"][0])
+
+    def test_unreadable_native_prerequisite_is_looked_up_alone(self) -> None:
+        self.missing = {94}
+        partial = {**self.node(94, "CLOSED"), "closedByPullRequestsReferences": None}
+        self.issues = {
+            85: {"blockedBy": {"pageInfo": {"hasNextPage": False}, "nodes": [partial]}}
+        }
+        self.queue([85, 86])
+        selected = coordinate.select(self.repo)
+        # The partial node falls back to a lookup, which fails, then retries alone.
+        self.assertEqual(len(self.graphql), 3)
+        self.assertEqual(selected["eligible"], [86])
+        self.assertEqual(selected["blocked"], {"85": ["unknown prerequisite #94"]})
 
     def test_pull_request_numbered_prerequisite_stays_batched(self) -> None:
         self.pr_numbers = {95}
