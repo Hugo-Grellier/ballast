@@ -50,10 +50,12 @@ evidence, and `blocked` when missing access or an unresolved decision prevents
 review. With no findings, say so and name what was inspected. Approval covers
 only the reviewed head and scope; it is not a human merge decision.
 
-Approval requires CI `pass` on the reviewed head. Check the PR's checks for that
-exact SHA; a local gate does not stand in for it. With `fail` or `pending`, do not
-approve; if CI is unavailable for the head, approve only with the gap stated under
-`Verification gaps`.
+Report CI as observed on the exact reviewed SHA; a local gate does not stand in
+for it. `fail` blocks approval. `pending` (no PR yet, or still running) does not
+block approval but is stated under `Verification gaps`. The coordinator confirms
+CI `pass` on that same head before marking the PR ready or merging
+([issue workflow, step 6](issue-workflow.md#6-publish-and-finish)). Any head
+change after approval invalidates both the review and the CI check.
 
 ## Repair rounds
 
