@@ -109,7 +109,37 @@ def integration_revision(cwd: Path, repo: str, base: str) -> str:
     return remote_base
 
 
-def prepare(cwd: Path, repo: str, issue: int, base: str) -> Path:
+def stacked(state: Path, record: dict, parent: int) -> dict:
+    """Validate an explicit stack parent; caller holds the shared mutex.
+
+    Its pushed branch is the base, checked like any base by ``prepare``.
+    """
+    path = state / f"issue-{parent}.json"
+    if parent == record["issue"] or not path.exists():
+        fail("Parent claim is missing")
+    value = admission.read(path)
+    if (
+        str(value.get("repository")).lower() != record["repository"].lower()
+        or value.get("branch") != record["base"]
+        or value.get("coordinator") != record.get("coordinator")
+    ):
+        fail("Parent claim is foreign: another repository, branch or coordinator")
+    if value.get("activity") in {"merged", "stopped"}:
+        fail("Parent claim is settled; base the issue on the integration branch")
+    if any(
+        (item.get("parent") or {}).get("issue") == parent
+        for item in admission.records(state)
+    ):
+        fail("Parent already has a stacked child; stacks stay linear")
+    return {
+        "parent": {"issue": parent, "attempt": value["attempt"]},
+        "stack_position": value.get("stack_position", 1) + 1,
+    }
+
+
+def prepare(
+    cwd: Path, repo: str, issue: int, base: str, parent: int | None = None
+) -> Path:
     """Claim before mutation; preserve the claim and residual files on failure."""
     repository(cwd, repo)
     if issue < 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9/_.-]{0,127}", base):
@@ -161,6 +191,8 @@ def prepare(cwd: Path, repo: str, issue: int, base: str) -> Path:
         if claim.exists():
             fail("Issue already claimed; reconcile its attempt before retrying")
         admission.admit_issue(state, record)
+        if parent is not None:
+            record.update(stacked(state, record, parent))
         with claim.open("x") as stream:
             json.dump(record, stream)
     try:
@@ -231,10 +263,13 @@ def main() -> int:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--base", required=True)
+    parser.add_argument("--parent", type=int, help="stack on this issue's claim")
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
     args = parser.parse_args()
     try:
-        claim = prepare(args.cwd.resolve(strict=True), args.repo, args.issue, args.base)
+        claim = prepare(
+            args.cwd.resolve(strict=True), args.repo, args.issue, args.base, args.parent
+        )
     except (
         OSError,
         ValueError,

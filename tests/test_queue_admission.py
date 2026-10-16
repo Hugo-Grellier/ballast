@@ -113,6 +113,7 @@ class QueueTests(unittest.TestCase):
         self.pr_numbers: set[int] = set()
         self.graphql: list[list[str]] = []
         self.lose_create_response = False
+        self.edits: list[list[str]] = []
         native = worktree.command
 
         def hosting(argv: list[str], cwd: Path) -> str:
@@ -134,23 +135,8 @@ class QueueTests(unittest.TestCase):
 
     def host(self, argv: list[str]) -> object:
         """Answer the few GitHub calls the helpers make."""
-        if argv[1:3] == ["pr", "create"]:
-            branch = argv[argv.index("--head") + 1]
-            self.prs.append(
-                {
-                    "number": 50 + len(self.prs),
-                    "html_url": f"https://github.com/{REPO}/pull/{50 + len(self.prs)}",
-                    "base": {"ref": argv[argv.index("--base") + 1]},
-                    "head": {
-                        "ref": branch,
-                        "sha": self.heads[branch],
-                        "repo": {"full_name": REPO},
-                    },
-                }
-            )
-            if self.lose_create_response:
-                worktree.fail("Fictional lost response")
-            return {}
+        if argv[1] == "pr":
+            return self.pr_command(argv)
         if "graphql" in argv:
             return self.answer_graphql(argv)
         path = argv[-1]
@@ -162,9 +148,39 @@ class QueueTests(unittest.TestCase):
             branch = path.rsplit(":", 1)[1]
             return [pr for pr in self.prs if pr["head"]["ref"] == branch]
         if "/pulls/" in path:
-            return {"merged": int(path.rsplit("/", 1)[1]) in self.merged}
+            number = int(path.rsplit("/", 1)[1])
+            heads = [pr["head"] for pr in self.prs if pr["number"] == number]
+            return {"merged": number in self.merged, "head": (heads or [{}])[0]}
         number = int(path.rsplit("/", 1)[1])
         return {"number": number, "state": "open", "body": "Fictional leaf"}
+
+    def pr_command(self, argv: list[str]) -> object:
+        """Answer `gh pr create` and `gh pr edit` against the fictional PRs."""
+        if argv[2] == "create":
+            branch = argv[argv.index("--head") + 1]
+            self.prs.append(
+                {
+                    "number": 50 + len(self.prs),
+                    "html_url": f"https://github.com/{REPO}/pull/{50 + len(self.prs)}",
+                    "base": {"ref": argv[argv.index("--base") + 1]},
+                    "head": {
+                        "ref": branch,
+                        "sha": self.heads[branch],
+                        "repo": {"full_name": REPO},
+                    },
+                    "body": Path(argv[argv.index("--body-file") + 1]).read_text(),
+                }
+            )
+            if self.lose_create_response:
+                worktree.fail("Fictional lost response")
+            return {}
+        self.edits.append(argv)
+        pr = next(pr for pr in self.prs if pr["number"] == int(argv[3]))
+        if "--base" in argv:
+            pr["base"]["ref"] = argv[argv.index("--base") + 1]
+        if "--body-file" in argv:
+            pr["body"] = Path(argv[argv.index("--body-file") + 1]).read_text()
+        return {}
 
     def answer_graphql(self, argv: list[str]) -> dict:
         """Answer one aliased issue query with only the fields it selects."""
@@ -1415,6 +1431,206 @@ class QueueTests(unittest.TestCase):
 
         with patch.object(Path, "readlink", hidden):
             self.assertIn(os.getpid(), worker.survivors(self.root / "elsewhere"))
+
+    def commit(self, checkout: Path, name: str, text: str) -> str:
+        """Commit one file in a checkout and return the new head."""
+        (checkout / name).write_text(text)
+        worktree.git(checkout, "add", ".")
+        worktree.git(checkout, "commit", "-m", name)
+        return worktree.git(checkout, "rev-parse", "HEAD")
+
+    def push(self, branch: str, head: str) -> None:
+        """Fictional push: GitHub and the fetched remote ref both see the head."""
+        self.heads[branch] = head
+        worktree.git(self.repo, "update-ref", f"refs/remotes/origin/{branch}", head)
+
+    def stacked_pair(self) -> tuple[Path, Path]:
+        """Prepare a pushed parent claim and a child claim on its branch."""
+        self.queue([60, 61, 62], issues=3, backlog=3)
+        parent = self.prepare(60)
+        record = json.loads(parent.read_text())
+        self.push(
+            record["branch"],
+            self.commit(Path(record["checkout"]), "parent.txt", "parent\n"),
+        )
+        child = worktree.prepare(self.repo, REPO, 61, record["branch"], parent=60)
+        return parent, child
+
+    def review(self, claim: Path) -> str:
+        """Push the claim's head and record a completed review of it."""
+        record = json.loads(claim.read_text())
+        self.claim, self.cwd = claim, Path(record["checkout"])
+        head = worktree.git(self.cwd, "rev-parse", "HEAD")
+        self.push(record["branch"], head)
+        self.run_worker(
+            self.script(sandbox={"type": "readOnly", "networkAccess": False}),
+            role="review",
+        )
+        return head
+
+    def test_stacked_preparation_records_parent_and_refuses_bad_parents(
+        self,
+    ) -> None:
+        parent, child = self.stacked_pair()
+        above, below = json.loads(parent.read_text()), json.loads(child.read_text())
+        self.assertEqual(below["base"], above["branch"])
+        self.assertEqual(below["base_sha"], self.heads[above["branch"]])
+        self.assertEqual(below["parent"], {"issue": 60, "attempt": above["attempt"]})
+        self.assertEqual(below["stack_position"], 2)
+        refusals = {
+            "missing": (above["branch"], 99, "Parent claim is missing"),
+            "itself": (above["branch"], 62, "Parent claim is missing"),
+            "foreign branch": ("main", 60, "foreign"),
+            "second child": (above["branch"], 60, "stacked child"),
+        }
+        for name, (base, issue, reason) in refusals.items():
+            with self.subTest(name), self.assertRaisesRegex(RuntimeError, reason):
+                worktree.prepare(self.repo, REPO, 62, base, parent=issue)
+        # A grandchild extends the linear stack.
+        self.push(below["branch"], below["base_sha"])
+        grandchild = worktree.prepare(self.repo, REPO, 62, below["branch"], parent=61)
+        self.assertEqual(json.loads(grandchild.read_text())["stack_position"], 3)
+        grandchild.unlink()
+        coordinate.settle(parent, "stopped", "fictional stop")
+        with self.assertRaisesRegex(RuntimeError, "settled"):
+            worktree.prepare(self.repo, REPO, 62, above["branch"], parent=60)
+        self.assertFalse((self.state / "issue-62.json").exists())
+
+    def test_stacked_publication_targets_parent_and_writes_order(self) -> None:
+        parent, child = self.stacked_pair()
+        branch = json.loads(parent.read_text())["branch"]
+        body = self.root / "body.md"
+        body.write_text("Fictional PR body")
+        self.review(child)
+        coordinate.publish(child, "Child", body)
+        self.assertEqual(self.prs[0]["base"]["ref"], branch)
+        self.assertIn("1. #60\n2. #61 (this PR)\n", self.prs[0]["body"])
+        self.assertEqual(body.read_text(), "Fictional PR body")
+        self.review(parent)
+        coordinate.publish(parent, "Parent", body)
+        self.assertEqual(self.prs[1]["base"]["ref"], "main")
+        self.assertIn("1. #60 (this PR)\n2. #61\n", self.prs[1]["body"])
+        # Re-publishing an existing stacked PR rewrites its body, nothing else.
+        coordinate.publish(child, "Child", body)
+        self.assertEqual(len(self.prs), 2)
+        self.assertEqual(self.edits[-1][3], "50")
+        # The parent moved after the child was based on it: rebase first.
+        checkout = Path(json.loads(parent.read_text())["checkout"])
+        self.push(branch, self.commit(checkout, "later.txt", "later\n"))
+        with self.assertRaisesRegex(RuntimeError, "Parent branch moved"):
+            coordinate.publish(child, "Child", body)
+        self.merged.add(51)
+        with self.assertRaisesRegex(RuntimeError, "retarget"):
+            coordinate.publish(child, "Child", body)
+
+    def merge_parent(self, parent: Path, child: Path, squashed: str) -> str:
+        """Publish both, merge the parent on GitHub by squash; return main."""
+        body = self.root / "body.md"
+        body.write_text("Fictional PR body")
+        self.review(parent)
+        coordinate.publish(parent, "Parent", body)
+        self.review(child)
+        coordinate.publish(child, "Child", body)
+        self.merged.add(50)
+        main = self.commit(self.repo, "parent.txt", squashed)
+        self.push("main", main)
+        return main
+
+    def test_retarget_after_github_merge_rebases_and_invalidates_review(
+        self,
+    ) -> None:
+        parent, child = self.stacked_pair()
+        record = json.loads(child.read_text())
+        checkout = Path(record["checkout"])
+        self.commit(checkout, "child.txt", "child\n")
+        grandchild = None
+        with self.subTest("unmerged parent"):
+            self.push(record["branch"], worktree.git(checkout, "rev-parse", "HEAD"))
+            self.review(parent)
+            body = self.root / "body.md"
+            body.write_text("Fictional PR body")
+            coordinate.publish(parent, "Parent", body)
+            with self.assertRaisesRegex(RuntimeError, "does not report the parent"):
+                coordinate.retarget(child, "fictional")
+            self.prs.clear()
+        self.push(record["branch"], worktree.git(checkout, "rev-parse", "HEAD"))
+        grandchild = worktree.prepare(self.repo, REPO, 62, record["branch"], parent=61)
+        main = self.merge_parent(parent, child, "parent\n")
+        lock = child.with_suffix(".worker")
+        lock.write_text("{}")
+        with self.assertRaisesRegex(RuntimeError, "Release or reconcile"):
+            coordinate.retarget(child, "fictional")
+        lock.unlink()
+        before = worktree.git(checkout, "rev-parse", "HEAD")
+        result = coordinate.retarget(child, "GitHub reports #50 merged")
+        after = worktree.git(checkout, "rev-parse", "HEAD")
+        self.assertNotEqual(after, before)
+        self.assertEqual(worktree.git(checkout, "rev-parse", "HEAD^"), main)
+        self.assertEqual((result["base"], result["base_sha"]), ("main", main))
+        self.assertNotIn("parent", result)
+        self.assertEqual(result["history"][-1]["event"], "retargeted")
+        self.assertEqual(result["history"][-1]["head_after"], after)
+        self.assertEqual(self.edits[-1][-2:], ["--base", "main"])
+        self.assertEqual(json.loads(grandchild.read_text())["stack_position"], 2)
+        self.assertTrue(worktree.validate(child))
+        # The old review covered the old head: publication needs a new one.
+        self.push(record["branch"], after)
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(child, "Child", self.root / "body.md")
+        with self.assertRaisesRegex(RuntimeError, "not stacked"):
+            coordinate.retarget(child, "again")
+
+    def test_retarget_refuses_missing_foreign_and_conflicting_parents(self) -> None:
+        parent, child = self.stacked_pair()
+        checkout = Path(json.loads(child.read_text())["checkout"])
+        self.commit(checkout, "parent.txt", "child edit\n")
+        self.merge_parent(parent, child, "squashed differently\n")
+        before = worktree.git(checkout, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(RuntimeError, "conflict"):
+            coordinate.retarget(child, "fictional")
+        self.assertEqual(worktree.git(checkout, "rev-parse", "HEAD"), before)
+        self.assertEqual(worktree.git(checkout, "status", "--porcelain"), "")
+        self.assertIn("parent", json.loads(child.read_text()))
+        saved = parent.read_text()
+        parent.write_text(json.dumps(json.loads(saved) | {"attempt": "another"}))
+        with self.assertRaisesRegex(RuntimeError, "foreign"):
+            coordinate.retarget(child, "fictional")
+        parent.unlink()
+        with self.assertRaisesRegex(RuntimeError, "Parent claim is missing"):
+            coordinate.retarget(child, "fictional")
+        with self.assertRaisesRegex(RuntimeError, "Parent claim is missing"):
+            coordinate.publish(child, "Child", self.root / "body.md")
+
+    def test_overlap_report_suggests_parallel_serialize_or_stack(self) -> None:
+        self.queue([1, 2, 3, 4], issues=2)
+        planned = self.root / "planned.json"
+        planned.write_text(
+            json.dumps(
+                {
+                    "1": ["tools/worker.py::launch", "docs/a.md"],
+                    "2": ["tools/worker.py"],
+                    "3": ["tools/worker.py::settle"],
+                    "4": ["tools/other.py"],
+                }
+            )
+        )
+        report = coordinate.select(self.repo, planned)
+        self.assertEqual(report["eligible"], [1, 2])
+        pairs = {tuple(item["issues"]): item for item in report["overlap"]}
+        self.assertEqual(pairs[1, 2]["suggestion"], "stack")
+        self.assertEqual(
+            pairs[1, 2]["shared"], ["tools/worker.py", "tools/worker.py::launch"]
+        )
+        self.assertEqual(pairs[2, 3]["suggestion"], "serialize")
+        self.assertEqual(
+            pairs[1, 3], {"issues": [1, 3], "shared": [], "suggestion": "parallel"}
+        )
+        self.assertEqual(pairs[1, 4]["suggestion"], "parallel")
+        self.assertNotIn("overlap", coordinate.select(self.repo))
+        for bad in ({"9": ["a"]}, {"1": "a"}, {"1": [""]}, ["1"], {"x": ["a"]}):
+            planned.write_text(json.dumps(bad))
+            with self.subTest(bad), self.assertRaisesRegex(RuntimeError, "Planned"):
+                coordinate.select(self.repo, planned)
 
 
 def response_account(kind: str) -> dict:

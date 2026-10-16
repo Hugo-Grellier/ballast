@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -231,7 +232,51 @@ def blockers(cwd: Path, queue: dict, number: int, context: tuple) -> list[str]:
     return reasons
 
 
-def select(cwd: Path) -> dict:
+def planned_paths(path: Path, queue: list[int]) -> dict[int, list[str]]:
+    """Coordinator-supplied plan: queue issue -> `path` or `path::function`."""
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or not all(
+        key.isdigit()
+        and int(key) in queue
+        and isinstance(entries, list)
+        and len(entries) <= MAX_DEPENDENCIES
+        and all(isinstance(e, str) and 0 < len(e) <= MAX_LINE for e in entries)
+        for key, entries in value.items()
+    ):
+        worktree.fail("Planned paths must map queue issues to lists of paths")
+    return {int(key): entries for key, entries in value.items()}
+
+
+def touches(one: str, other: str) -> bool:
+    """Match the same file, as a whole or through the same function."""
+    file, _, function = one.partition("::")
+    other_file, _, other_function = other.partition("::")
+    return file == other_file and (
+        not function or not other_function or function == other_function
+    )
+
+
+def overlap(planned: dict[int, list[str]], eligible: list[int]) -> list[dict]:
+    """Advice per planned pair; stacking stays the coordinator's explicit choice."""
+    report = []
+    for one, other in itertools.combinations(sorted(planned), 2):
+        shared = sorted(
+            {a for a in planned[one] for b in planned[other] if touches(a, b)}
+            | {b for a in planned[one] for b in planned[other] if touches(a, b)}
+        )
+        if not shared:
+            suggestion = "parallel"
+        elif one in eligible and other in eligible:
+            suggestion = "stack"
+        else:
+            suggestion = "serialize"
+        report.append(
+            {"issues": [one, other], "shared": shared, "suggestion": suggestion}
+        )
+    return report
+
+
+def select(cwd: Path, planned: Path | None = None) -> dict:
     """Report blocked issues and eligible work within the remaining budgets."""
     state = state_directory(cwd)
     with admission.locked(state):
@@ -261,7 +306,7 @@ def select(cwd: Path) -> dict:
     except admission.AdmissionError as error:
         halted, room = str(error), 0
     ready = [n for n in value["issues"] if not blocked[n] and n not in claimed]
-    return {
+    report = {
         "mode": value["mode"],
         "halted": halted,
         "used": used,
@@ -270,6 +315,10 @@ def select(cwd: Path) -> dict:
         "claimed": sorted(n for n in value["issues"] if n in claimed),
         "blocked": {str(n): r for n, r in blocked.items() if r},
     }
+    if planned is not None:
+        paths = planned_paths(planned, value["issues"])
+        report["overlap"] = overlap(paths, report["eligible"])
+    return report
 
 
 def pulls(cwd: Path, record: dict) -> list[dict]:
@@ -337,19 +386,79 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
     )
 
 
-def publish(claim: Path, title: str, body: Path) -> dict:
-    """Create or reuse one draft PR; re-query after an uncertain response."""
-    # Refuse before any GitHub write; record_pr rechecks under the lock.
-    admission.require_coordinator(admission.policy(claim.parent))
-    record = worktree.validate(claim)
-    cwd = Path(record["checkout"])
-    # Pinned admin directory: never follow the worker-writable gitfile.
-    head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=Path(record["git_dir"]))
-    if not reviewed(claim, record["attempt"], head):
-        worktree.fail("Publish requires a completed independent review of this head")
-    remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
-    if remote != head:
-        worktree.fail("Push the reviewed head before publication")
+def parent_claim(claim: Path, record: dict) -> dict:
+    """Read the recorded stack parent; a missing or replaced one blocks."""
+    link = record["parent"]
+    path = claim.parent / f"issue-{link['issue']}.json"
+    if not path.exists():
+        worktree.fail("Parent claim is missing")
+    parent = admission.read(path)
+    if (
+        parent.get("attempt") != link["attempt"]
+        or parent.get("branch") != (record["base"])
+    ):
+        worktree.fail("Parent claim is foreign: another attempt or branch")
+    return parent
+
+
+def parent_merged(cwd: Path, parent: dict) -> dict | None:
+    """GitHub's view of the parent PR when it reports it merged, else None."""
+    pr = parent.get("pr")
+    if not isinstance(pr, dict):
+        return None
+    data = gh(
+        cwd,
+        "api",
+        "--hostname",
+        "github.com",
+        f"repos/{parent['repository']}/pulls/{pr['number']}",
+    )
+    if not isinstance(data, dict):
+        worktree.fail("Pull request response is malformed")
+    return data if data.get("merged") is True else None
+
+
+def stack(state: Path, record: dict) -> list[int]:
+    """Merge order of the linear stack holding this claim, root first."""
+    claims = {item.get("issue"): item for item in admission.records(state)}
+    order, current = [record["issue"]], record
+    while link := current.get("parent"):
+        current = claims.get(link["issue"]) or {}
+        if current.get("attempt") != link["attempt"] or link["issue"] in order:
+            break
+        order.insert(0, link["issue"])
+    while child := next(
+        (
+            item
+            for item in claims.values()
+            if item.get("parent")
+            == {"issue": order[-1], "attempt": claims[order[-1]]["attempt"]}
+            and item.get("issue") not in order
+        ),
+        None,
+    ):
+        order.append(child["issue"])
+    return order
+
+
+def stacked_body(state: Path, record: dict, body: Path) -> str:
+    """Append the merge order to the body when the claim is part of a stack."""
+    text = body.read_text()
+    order = stack(state, record)
+    if len(order) < 2:  # noqa: PLR2004 -- a stack has a parent and a child
+        return text
+    lines = [
+        f"{place}. #{issue}{' (this PR)' if issue == record['issue'] else ''}"
+        for place, issue in enumerate(order, 1)
+    ]
+    return (
+        f"{text.rstrip()}\n\n## Stack\n\nMerge in this order; each PR is based on "
+        "the previous one's branch until that one merges:\n\n" + "\n".join(lines) + "\n"
+    )
+
+
+def pull_request(cwd: Path, record: dict, head: str, title: str, body: Path) -> dict:
+    """Reuse the one matching PR or create a draft; re-query after a lost reply."""
     found = matching(cwd, record, head)
     if found is None:
         # A lost response may follow creation; the re-query decides.
@@ -376,6 +485,57 @@ def publish(claim: Path, title: str, body: Path) -> dict:
         found = matching(cwd, record, head)
         if found is None:
             worktree.fail("PR creation failed; nothing was published")
+    return found
+
+
+def publish(claim: Path, title: str, body: Path) -> dict:
+    """Create or reuse one draft PR; re-query after an uncertain response."""
+    # Refuse before any GitHub write; record_pr rechecks under the lock.
+    admission.require_coordinator(admission.policy(claim.parent))
+    record = worktree.validate(claim)
+    cwd = Path(record["checkout"])
+    git_dir = Path(record["git_dir"])
+    # Pinned admin directory: never follow the worker-writable gitfile.
+    head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+    if not reviewed(claim, record["attempt"], head):
+        worktree.fail("Publish requires a completed independent review of this head")
+    if record.get("parent"):
+        parent = parent_claim(claim, record)
+        if parent_merged(cwd, parent):
+            worktree.fail("Parent PR merged; retarget the child before publication")
+        pushed = worktree.integration_revision(
+            cwd, record["repository"], record["base"]
+        )
+        try:
+            worktree.git(
+                cwd, "merge-base", "--is-ancestor", pushed, head, git_dir=git_dir
+            )
+        except RuntimeError:
+            worktree.fail("Parent branch moved; rebase the child onto its pushed head")
+    remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
+    if remote != head:
+        worktree.fail("Push the reviewed head before publication")
+    text = stacked_body(claim.parent, record, body)
+    # A private copy carries the stack order; the coordinator's file stays intact.
+    with tempfile.NamedTemporaryFile("w", dir=claim.parent, suffix=".md") as copy:
+        copy.write(text)
+        copy.flush()
+        found = pull_request(cwd, record, head, title, Path(copy.name))
+        if text != body.read_text():
+            # Re-publishing refreshes the order once later stack members exist.
+            worktree.command(
+                [
+                    "gh",
+                    "pr",
+                    "edit",
+                    str(found["number"]),
+                    "--repo",
+                    record["repository"],
+                    "--body-file",
+                    copy.name,
+                ],
+                cwd,
+            )
     pr = {"number": found["number"], "url": found["html_url"], "head": head}
     return admission.record_pr(claim, pr)
 
@@ -554,6 +714,103 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
         if not isinstance(data, dict) or data.get("merged") is not True:
             worktree.fail("GitHub does not report this PR merged")
     return admission.settle(claim, activity, evidence)
+
+
+def rebased(
+    claim: Path, record: dict, merged_head: str, target: tuple, evidence: str
+) -> dict:
+    """Rebase the child onto ``target`` under the lock and record the new base."""
+    base, base_sha = target
+    cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
+    with admission.locked(claim.parent):
+        # One writer: the coordinator rewrites the checkout only without a worker.
+        if claim.with_suffix(".worker").exists():
+            worktree.fail("Release or reconcile the recorded worker before retargeting")
+        current = admission.read(claim)
+        if current.get("attempt") != record["attempt"]:
+            worktree.fail("Claim changed during retargeting")
+        before = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+        try:
+            worktree.git(
+                cwd, "rebase", "--onto", base_sha, merged_head, git_dir=git_dir
+            )
+        except RuntimeError:
+            with contextlib.suppress(RuntimeError):
+                worktree.git(cwd, "rebase", "--abort", git_dir=git_dir)
+            worktree.fail("Rebase stopped on a conflict; the checkout is unchanged")
+        after = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+        descendants = stack(claim.parent, current)
+        descendants = descendants[descendants.index(current["issue"]) + 1 :]
+        current.update(base=base, base_sha=base_sha)
+        del current["parent"], current["stack_position"]
+        admission.milestone(
+            current,
+            "retargeted",
+            base=base,
+            head_before=before,
+            head_after=after,
+            evidence=evidence,
+        )
+        admission.write(claim, current)
+        for issue in descendants:
+            path = claim.parent / f"issue-{issue}.json"
+            child = admission.read(path)
+            child["stack_position"] -= 1
+            admission.write(path, child)
+    return current
+
+
+def retarget(claim: Path, evidence: str) -> dict:
+    """Move a stacked child onto its parent's base once GitHub reports the merge.
+
+    The rebased head carries no review or check evidence: publish needs a fresh
+    completed review of it, and CI runs on the coordinator's push.
+    """
+    admission.require_coordinator(admission.policy(claim.parent))
+    if not admission.bounded(evidence, admission.MAX_REASON):
+        worktree.fail("Retarget requires bounded evidence")
+    record = worktree.validate(claim)
+    if not record.get("parent"):
+        worktree.fail("Claim is not stacked on a parent")
+    cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
+    parent = parent_claim(claim, record)
+    data = parent_merged(cwd, parent)
+    if data is None:
+        worktree.fail("GitHub does not report the parent PR merged")
+    merged_head = (data.get("head") or {}).get("sha")
+    if not isinstance(merged_head, str) or not re.fullmatch(
+        r"[0-9a-f]{40}|[0-9a-f]{64}", merged_head
+    ):
+        worktree.fail("Pull request response is malformed")
+    base = parent["base"]
+    base_sha = worktree.integration_revision(cwd, record["repository"], base)
+    local = worktree.git(
+        cwd, "rev-parse", "--verify", f"refs/remotes/origin/{base}^{{commit}}"
+    )
+    if local != base_sha:
+        worktree.fail("Integration base is stale; fetch and reconsider before dispatch")
+    try:
+        worktree.git(
+            cwd, "merge-base", "--is-ancestor", merged_head, "HEAD", git_dir=git_dir
+        )
+    except RuntimeError:
+        worktree.fail("Child lacks the parent's merged head; rebase it by hand first")
+    current = rebased(claim, record, merged_head, (base, base_sha), evidence)
+    if isinstance(current.get("pr"), dict):
+        worktree.command(
+            [
+                "gh",
+                "pr",
+                "edit",
+                str(current["pr"]["number"]),
+                "--repo",
+                current["repository"],
+                "--base",
+                base,
+            ],
+            cwd,
+        )
+    return current
 
 
 def seconds(start: str, end: str) -> float:
@@ -758,7 +1015,7 @@ def parser() -> argparse.ArgumentParser:
         execution.add_argument(f"--{name}")
     execution.add_argument("--status", choices=("completed", "cancelled"))
     execution.add_argument("--round", type=int)
-    commands.add_parser("select")
+    commands.add_parser("select").add_argument("--planned", type=Path)
     commands.add_parser("status")
     record = commands.add_parser("record")
     record.add_argument("--claim", type=Path, required=True)
@@ -773,7 +1030,7 @@ def parser() -> argparse.ArgumentParser:
     control.add_argument("--reason", required=True)
     close = commands.add_parser("close")
     close.add_argument("--reason", required=True)
-    for name in ("settle", "publish", "recover", "release"):
+    for name in ("settle", "publish", "recover", "release", "retarget"):
         command = commands.add_parser(name)
         command.add_argument("--claim", type=Path, required=True)
         if name != "publish":
@@ -819,7 +1076,7 @@ def run(args: argparse.Namespace) -> dict:
         )
         return admission.create(state, spec)
     queue = {
-        "select": lambda: select(cwd),
+        "select": lambda: select(cwd, args.planned),
         "status": lambda: observe(state),
         "control": lambda: admission.control(state, args.action, args.reason),
         "close": lambda: admission.close(state, args.reason),
@@ -839,6 +1096,7 @@ def run(args: argparse.Namespace) -> dict:
         "settle": lambda: settle(claim, args.activity, args.evidence),
         "recover": lambda: recover(cwd, claim, args.evidence),
         "release": lambda: admission.release(claim, args.worker, args.evidence),
+        "retarget": lambda: retarget(claim, args.evidence),
         "publish": lambda: publish(claim, args.title, args.body_file),
     }
     return operations[args.command]()

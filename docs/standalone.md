@@ -203,7 +203,7 @@ To work several selected leaf issues, configure one finite queue in the same
 clone. Queue state shares the `ballast-v2/` directory and one short local
 `flock`; GitHub stays authoritative for dependencies, PRs, merges and CI. Every
 helper invocation in a queue needs `BALLAST_COORDINATOR` set to the queue's
-coordinator reference; `control`, `settle`, `release`, `publish` and `recover`
+coordinator reference; `control`, `settle`, `release`, `publish`, `recover` and `retarget`
 refuse otherwise, and an unset or empty value is never recorded. Workers inherit
 it and cannot raise a limit.
 
@@ -227,9 +227,21 @@ and any worker lock; settle, release or reconcile them first.
 - `select` reports eligible issues within the remaining budgets, issues waiting
   for capacity, existing claims, and blocked issues with their reasons: native
   `blockedBy` or `Blocked by:` prerequisites that are unmerged, cross-repository
-  or cyclic. A closed prerequisite counts only with a merged closing PR. `select`
-  still reports stacked work as blocked; stacking stays an explicit coordinator
-  exception, prepared directly, with its merge order recorded in the PRs.
+  or cyclic. A closed prerequisite counts only with a merged closing PR. A
+  `Blocked by:` prerequisite still blocks; stacking stays an explicit
+  coordinator choice. `select --planned FILE` also reports overlap: `FILE` is a
+  JSON object mapping queue issue numbers to planned entries, `"path"` or
+  `"path::function"` (no code analysis). Entries overlap when they name the
+  same file and either names no function or both name the same one. Each pair
+  of planned issues gets its shared entries and a suggestion: `parallel`
+  (nothing shared), `stack` (shared, both eligible now) or `serialize` (shared,
+  one cannot start now). A malformed file or an issue outside the queue refuses.
+- `worktree.py --parent P --base BRANCH` prepares a stacked claim on the
+  parent claim's pushed branch (`BRANCH` must be that claim's branch, pushed and
+  fetched like any base). The parent claim must exist in this clone, share
+  repository and coordinator, not be `merged` or `stopped`, and have no other
+  stacked child. The claim records `parent` (issue and attempt) and
+  `stack_position` (root 1).
 - `worktree.py` admits a claim and `worker.py` reserves a worker under the same
   lock. Claims and worker locks from before the queue, or with unknown outcome,
   consume capacity. A fresh turn needs a permit that rechecks controls and spends
@@ -260,7 +272,22 @@ and any worker lock; settle, release or reconcile them first.
   execution's review (below) never satisfies it. It then requires that
   head pushed, reuses the one matching PR on the claim branch, creates a draft
   only when none exists, and re-queries after an uncertain response. Several,
-  foreign or stale PRs block.
+  foreign or stale PRs block. A stacked claim targets its parent branch;
+  `publish` refuses when its parent claim is missing or replaced, when GitHub
+  reports the parent PR merged (retarget first), or when the parent's pushed
+  head is not in the child (rebase first). For any claim in a stack, the PR body
+  gets a `## Stack` section with the merge order, root first, and re-publishing
+  an existing PR rewrites its body with `gh pr edit` so each PR carries the
+  current order.
+- `retarget --claim CLAIM --evidence TEXT`, after the parent merges: requires
+  GitHub to report the parent's recorded PR merged, the parent's base pushed and
+  fetched, the parent's merged head in the child, and no worker lock on the
+  child. It rebases the child `--onto` the base from the parent's merged head
+  (squash merges included; a conflict aborts and changes nothing), records the
+  new base, drops `parent`, moves later stack members up one position, records a
+  `retargeted` milestone with both heads, and moves an existing child PR to the
+  base. It does not push. The new head has no review or check evidence: push it,
+  run a fresh review, then `publish` again; CI runs on the push.
 - `settle --claim CLAIM ACTIVITY --evidence TEXT` records positive coordinator
   evidence. Allowed moves: `active` to `pr_wait`, `stopped` or `unknown`;
   `unknown` to `stopped` or `active`; `pr_wait` to `active`, `stopped` or
