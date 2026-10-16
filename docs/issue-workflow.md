@@ -100,9 +100,10 @@ Scale the plan to the work:
   and exact decision for human approval before implementing the affected part.
 
 Routine technical plans need no human approval checkpoint. Resolve blocking plan
-review findings before coding; use the same three-round limit and escalation
-rule as the final review. If a required plan review is unavailable, report that
-block before implementing the affected work.
+review findings before coding; use the same round limit and escalation
+rule as the final review ([pair-review.md](pair-review.md#round-limit)). If a
+required plan review is unavailable, report that block before implementing the
+affected work.
 
 Post a concise issue progress note before implementation. Include:
 
@@ -154,8 +155,8 @@ An earlier plan review does not replace this review of the implemented change.
 Fix actionable findings, rerun affected checks, and request review of the updated
 head. For a disputed finding, record the evidence and request pair reassessment;
 the author cannot dismiss a blocker alone. Escalate product disagreements to the
-human. After three review/fix rounds, stop automatic repair and report unresolved
-findings in a draft PR. If an independent reviewer is unavailable, do not
+human. Repair-round scope, nonblocking findings and the round limit are in
+[pair-review.md](pair-review.md#repair-rounds). If an independent reviewer is unavailable, do not
 publish; report the missing review to the human. The standalone `publish` helper
 refuses a head without a completed review.
 
