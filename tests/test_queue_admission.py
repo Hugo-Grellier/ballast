@@ -128,23 +128,7 @@ class QueueTests(unittest.TestCase):
                 worktree.fail("Fictional lost response")
             return {}
         if "graphql" in argv:
-            self.graphql.append(argv)
-            query = next(a for a in argv if a.startswith("query="))
-            numbers = [
-                int(n)
-                for n in re.findall(r"i\d+:issueOrPullRequest\(number:(\d+)\)", query)
-            ]
-            if self.missing.intersection(numbers):
-                # The real gh exits non-zero when any alias is unresolved.
-                worktree.fail("Fictional unresolved issue")
-            return {
-                "data": {
-                    "repository": {
-                        f"i{n}": {} if n in self.pr_numbers else self.issue(n)
-                        for n in numbers
-                    }
-                }
-            }
+            return self.answer_graphql(argv)
         path = argv[-1]
         if "/git/ref/heads/" in path:
             return {
@@ -157,6 +141,56 @@ class QueueTests(unittest.TestCase):
             return {"merged": int(path.rsplit("/", 1)[1]) in self.merged}
         number = int(path.rsplit("/", 1)[1])
         return {"number": number, "state": "open", "body": "Fictional leaf"}
+
+    def answer_graphql(self, argv: list[str]) -> dict:
+        """Answer one aliased issue query with only the fields it selects."""
+        self.graphql.append(argv)
+        query = next(a for a in argv if a.startswith("query="))
+        numbers = [
+            int(n)
+            for n in re.findall(r"i\d+:issueOrPullRequest\(number:(\d+)\)", query)
+        ]
+        if self.missing.intersection(numbers):
+            # The real gh exits non-zero when any alias is unresolved.
+            worktree.fail("Fictional unresolved issue")
+        nodes = {n: {} if n in self.pr_numbers else self.issue(n) for n in numbers}
+        if not self.selects_native_prs(query):
+            # Like GitHub, return only the fields the query selects.
+            for value in nodes.values():
+                if "blockedBy" in value:
+                    native = value["blockedBy"]
+                    value["blockedBy"] = {
+                        **native,
+                        "nodes": [
+                            {
+                                k: v
+                                for k, v in node.items()
+                                if k != "closedByPullRequestsReferences"
+                            }
+                            for node in native["nodes"]
+                        ],
+                    }
+        return {"data": {"repository": {f"i{n}": v for n, v in nodes.items()}}}
+
+    @staticmethod
+    def selects_native_prs(query: str) -> bool:
+        """Tell whether `blockedBy` nodes select closing PRs, fragments expanded."""
+        fragments = dict(
+            re.findall(
+                r"fragment (\w+) on Issue\{(.*?)\}(?=\s*fragment|\s*$)",
+                query,
+                re.DOTALL,
+            )
+        )
+        for _ in fragments:
+            query = re.sub(r"\.\.\.(\w+)", lambda m: fragments.get(m[1], m[0]), query)
+        start = query.find("{", query.index("blockedBy("))
+        depth = 0
+        for end in range(start, len(query)):
+            depth += {"{": 1, "}": -1}.get(query[end], 0)
+            if not depth:
+                return "closedByPullRequestsReferences" in query[start:end]
+        return False
 
     def issue(self, number: int) -> dict:
         """Default: an open leaf with no prerequisites."""
