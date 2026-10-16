@@ -9,3 +9,5 @@ Use the smallest test seam that proves the behavior. Use the real database for c
 Do not game a metric with trivial assertions, mocks of the behavior under test, deleted difficult tests, or exclusions of important modules. Never weaken a failing test merely to pass CI. Record commands and outcomes in the PR, including skipped gates and why.
 
 Run the project's fast local gate on every change and its full local gate before a behavior-bearing PR.
+
+Tests must not depend on agent CLIs, credentials or other tools that happen to be installed on the developer host; CI has none, so a test that passes only locally is not evidence. Fake or skip with an explicit reason.

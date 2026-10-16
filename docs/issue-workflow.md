@@ -125,6 +125,8 @@ a human decision. Separate spec/plan/task files are unnecessary for routine work
 Use a dedicated issue worktree and branch based on the repository's current
 target branch. Follow [portable execution](execution.md) for creation, dispatch,
 and recovery; reuse the matching worktree and branch when continuing.
+To dispatch workers as agent-native subagents, see
+[subagent workers](subagent-workers.md).
 Implement the plan in small coherent changes.
 Verify acceptance criteria, failure behavior, and relevant compatibility.
 
