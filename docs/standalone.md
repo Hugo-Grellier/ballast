@@ -104,11 +104,17 @@ worker as a background command of the harness and wait for it to exit, or choose
 a `--timeout` that leaves that margin below the harness limit. A SIGKILL leaves
 the worker `unknown` with its lock held.
 
-Only SIGTERM/SIGINT sent to the worker process itself settles through the
-interrupt path. The Codex client shares the worker's process group, so a
-group-wide signal (Ctrl-C in its terminal, a harness stopping the process tree)
-also stops the client: the worker then ends `unknown` with its lock held. Stop a
-worker with `kill -TERM` on its own PID.
+The worker starts the Codex client in its own session, so SIGTERM/SIGINT sent to
+the worker process or to its whole process group (Ctrl-C in its terminal, a
+harness stopping the process tree) reaches only the worker, which settles
+through the interrupt path. A signal sent to the client's own PID or session is
+not one: the client then ends without terminal evidence and the worker stays
+`unknown`. The worker binds the client's lifetime to its own through the Linux
+parent-death signal and refuses to start a client where it cannot: if the worker
+dies first, even by SIGKILL, the kernel SIGKILLs the client. Commands the client
+started in their own sessions can still outlive it; nothing settles that
+worker, which stays `unknown` with its lock held until an operator inspects the
+checkout.
 
 The same executing session must establish authorized subscription access, catalog
 support and matching resolved model/effort, provider, working directory, sandbox,
