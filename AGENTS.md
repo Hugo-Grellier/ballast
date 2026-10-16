@@ -5,7 +5,7 @@ Ballast is a portable agent workflow: an existing agent session turns GitHub iss
 ## Work from the right artifact
 
 - Layout: `docs/` (the workflow: [issue workflow](docs/issue-workflow.md), [pair review](docs/pair-review.md), [model routing](docs/model-routing.md), [execution contract](docs/execution.md), [standalone adapter](docs/standalone.md), the unimplemented [Orca contract](docs/orca-execution.md), [migration](docs/migration.md)), `tools/` (Codex transport and probe, worker, worktree claims, bounded queue), `templates/` (policies, `ballast-*` review skills, starter `AGENTS.md`, GitHub files), `tests/` (unittest), `docs/plans/` and `docs/evidence/` (per-issue plans and live evidence).
-- Architecture: [ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and [ADR-0024](docs/adr/0024-ballast-2-migration.md) govern the current design. ADRs 0001–0021 and `specs/` are history, not current authority.
+- Architecture: [ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and [ADR-0024](docs/adr/0024-ballast-2-migration.md) govern the current design. ADRs 0001–0021 and `specs/` are history, not current authority. New ADRs take the next free number; the historical 0019 and 0021 duplicates are intentionally left, and `tests/test_adr_numbers.py` refuses a duplicate from 0022 on.
 
 Accepted ADRs govern design; the issue states the outcome and acceptance criteria. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR under `docs/adr/` for an accepted architecture change.
 
