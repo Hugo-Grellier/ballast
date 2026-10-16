@@ -22,7 +22,7 @@ in CI. Projects still on a `v1.x` pin keep working; see
 | [Standalone adapter](docs/standalone.md) | Workers, worktree claims and the bounded queue without Orca |
 | [Orca adapter](docs/orca-execution.md) | Not available yet: contract only, blocked upstream ([#179](https://github.com/Hugo-Grellier/ballast/issues/179)) |
 
-The [standalone adapter](docs/standalone.md) uses three helpers, run with
+The [standalone adapter](docs/standalone.md) uses these helpers, run with
 `python3 -I -S` from a Ballast checkout:
 
 - [`tools/worktree.py`](tools/worktree.py) claims an issue and prepares its worktree.
@@ -31,6 +31,9 @@ The [standalone adapter](docs/standalone.md) uses three helpers, run with
 - [`tools/coordinate.py`](tools/coordinate.py) runs a finite issue queue: admission,
   limits, pause/cancel/quota, recovery, idempotent draft publication and timing
   status.
+- [`tools/merge_check.py`](tools/merge_check.py) checks that an R0 PR may merge without a
+  human approval ([ADR-0026](docs/adr/0026-r0-merge-on-reviewed-green-head.md)) and prints,
+  or with `--merge` runs, the squash merge pinned to the reviewed head.
 
 Live evidence for each slice is in [`docs/evidence/`](docs/evidence/). The supported
 host is a POSIX machine with Python 3.11+, Git, an authenticated `gh` for GitHub.com

@@ -4,8 +4,8 @@ Ballast is a portable agent workflow: an existing agent session turns GitHub iss
 
 ## Work from the right artifact
 
-- Layout: `docs/` (the workflow: [issue workflow](docs/issue-workflow.md), [pair review](docs/pair-review.md), [model routing](docs/model-routing.md), [execution contract](docs/execution.md), [standalone adapter](docs/standalone.md), the unimplemented [Orca contract](docs/orca-execution.md), [migration](docs/migration.md)), `tools/` (Codex transport and probe, worker, worktree claims, bounded queue), `templates/` (policies, `ballast-*` review skills, starter `AGENTS.md`, GitHub files), `tests/` (unittest), `docs/plans/` and `docs/evidence/` (per-issue plans and live evidence).
-- Architecture: [ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and [ADR-0024](docs/adr/0024-ballast-2-migration.md) govern the current design. ADRs 0001–0021 and `specs/` are history, not current authority. New ADRs take the next free number; the historical 0019 and 0021 duplicates are intentionally left, and `tests/test_adr_numbers.py` refuses a duplicate from 0022 on.
+- Layout: `docs/` (the workflow: [issue workflow](docs/issue-workflow.md), [pair review](docs/pair-review.md), [model routing](docs/model-routing.md), [execution contract](docs/execution.md), [standalone adapter](docs/standalone.md), the unimplemented [Orca contract](docs/orca-execution.md), [migration](docs/migration.md)), `tools/` (Codex transport and probe, worker, worktree claims, bounded queue, R0 merge check), `templates/` (policies, `ballast-*` review skills, starter `AGENTS.md`, GitHub files), `tests/` (unittest), `docs/plans/` and `docs/evidence/` (per-issue plans and live evidence).
+- Architecture: [ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and [ADR-0024](docs/adr/0024-ballast-2-migration.md) govern the current design; [ADR-0026](docs/adr/0026-r0-merge-on-reviewed-green-head.md) amends its merge rule. ADRs 0001–0021 and `specs/` are history, not current authority. New ADRs take the next free number; the historical 0019 and 0021 duplicates are intentionally left, and `tests/test_adr_numbers.py` refuses a duplicate from 0022 on.
 
 Accepted ADRs govern design; the issue states the outcome and acceptance criteria. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR under `docs/adr/` for an accepted architecture change.
 
@@ -23,7 +23,7 @@ Accepted ADRs govern design; the issue states the outcome and acceptance criteri
 - Every worker has an explicit model and effort, verified before task input; a mismatch or missing observation blocks it.
 - One writer per issue worktree. Unknown liveness consumes capacity and blocks a duplicate; settlement needs terminal evidence.
 - GitHub is authoritative for issue relationships, PRs, merges and CI; local records never become a second source of truth.
-- Agents never run in CI. Merge, release, destructive cleanup and paid services need explicit human approval.
+- Agents never run in CI. Release, destructive cleanup and paid services need explicit human approval. A merge needs it too, except an R0 PR under [ADR-0026](docs/adr/0026-r0-merge-on-reviewed-green-head.md).
 - Shipped templates carry no project's names or domain rules. Behavior changes need tests that fail when the behavior breaks, including refusal paths.
 
 ## Issue workflow
@@ -32,7 +32,7 @@ For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow the [issue w
 
 ## Risk and conditional guidance
 
-Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2. R2 here, beyond the [base list](templates/policies/workflow.md#risk): what the worker launches and its sandbox/permission arguments; claim, lock, admission and settlement semantics; what the helpers execute, push or write to GitHub; the release workflow. R2 needs explicit human approval of the change and the merge. Every PR needs human merge approval. The [review matrix](templates/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
+Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2. R2 here, beyond the [base list](templates/policies/workflow.md#risk): what the worker launches and its sandbox/permission arguments; claim, lock, admission and settlement semantics; what the helpers execute, push or write to GitHub; the release workflow. R2 needs explicit human approval of the change and the merge. R1 and R2 PRs need human merge approval. An R0 PR may be merged by the coordinator once an independent review approved its exact head and confirmed R0 (the classification is reviewed evidence), and every required check passed on that unchanged head; `tools/merge_check.py` checks this ([ADR-0026](docs/adr/0026-r0-merge-on-reviewed-green-head.md)). Release, dependency and `.github/` changes always need a human merge. The [review matrix](templates/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
 
 | When changing | Read and use |
 | --- | --- |

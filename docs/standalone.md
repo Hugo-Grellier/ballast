@@ -188,11 +188,12 @@ to the reviewed head and relevant base. Missing, pending, failed, unrelated or
 stale checks keep the PR draft. If authentication cannot create a workflow, report
 that concrete capability gap and retain draft; do not claim CI passed. An empty
 check list is not success. Mark ready only when acceptance, fresh independent
-review and all intended checks are complete. Human approval is required to merge.
+review and all intended checks are complete. Human approval is required to merge, except an R0 PR that
+`tools/merge_check.py` accepts ([ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)).
 
 Record the PR URL, submitted head, review worker/verdict and workflow run in the
 local claim as publication evidence; retain its preparation status separately
-from PR readiness. Keep the claim and checkout while the PR awaits merge. Do not merge, release,
+from PR readiness. Keep the claim and checkout while the PR awaits merge. Do not merge (outside that R0 rule), release,
 delete worktrees/repositories or schedule recurring work automatically.
 
 ## Bounded queue

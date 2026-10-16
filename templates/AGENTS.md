@@ -31,7 +31,7 @@ Accepted ADRs and the accepted architecture govern design; the issue states the 
 
 ## Risk and conditional guidance
 
-Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval of the risky change and of the merge. Every PR needs human merge approval; an agent never merges, releases or deploys, and an agent decision is never presented as human approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
+Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval of the risky change and of the merge. R1 and R2 PRs need human merge approval. An R0 PR may be squash-merged by the coordinator only when an independent review approved its exact head and confirmed R0 (the risk classification is reviewed evidence), every required check passed on that unchanged head, and it is not a release or dependency PR and changes no workflow, permission, release or dependency file; `BALLAST_SOURCE/tools/merge_check.py` checks this. Otherwise an agent never merges; it never releases or deploys, and an agent decision is never presented as human approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
 
 | When changing | Read and use |
 | --- | --- |
