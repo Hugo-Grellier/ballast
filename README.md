@@ -40,7 +40,8 @@ limits.
 [`tools/pr_body.py`](tools/pr_body.py) is separate from the worker helpers: it checks a
 PR body against the PR template (every `##` section present, a `Closes #N` or `Refs #N`
 link, exactly one risk box ticked, and an issue or PR comment URL in the Risk section when R2 is ticked). Run `python3 -I -S tools/pr_body.py --body-file FILE`
-locally; the `PR body` workflow runs it on `pull_request` events from the event payload.
+locally; the `PR body` workflow runs it on `pull_request` events from the event payload,
+skipping Dependabot and Release Please PRs, whose bodies are generated.
 
 ## Adopting Ballast in a project
 
