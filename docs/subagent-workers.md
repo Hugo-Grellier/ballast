@@ -26,5 +26,6 @@ example; the rules hold for any agent with a subagent mechanism.
 Record each subagent run as a
 [coordinator execution](standalone.md#coordinator-executions)
 (`coordinate.py execution start|finish`). Its route is self-reported and stays
-unverified. `coordinate.py publish` accepts such a review only with
-`--accept-unverified-review`, and the PR must say so.
+unverified. `coordinate.py publish` still requires a completed
+`worker.py --role review` worker, so a subagent review does not satisfy it;
+reference it in the PR's execution evidence as unverified.

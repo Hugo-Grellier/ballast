@@ -278,7 +278,7 @@ class CoordinatorExecutionTests(unittest.TestCase):
         done = run(*finish, "--status", "completed")
         self.assertEqual(done["status"], "completed")
 
-    def test_publish_accepts_a_coordinator_review_only_when_asked(self) -> None:
+    def test_publish_never_counts_a_coordinator_review(self) -> None:
         self.policy = self.queue([11])
         claim = self.prepare(11)
         record = admission.read(claim)
@@ -291,28 +291,80 @@ class CoordinatorExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "completed independent"):
             coordinate.publish(claim, "Fictional", self.root / "body.md")
         self.assertEqual(self.prs, [])
-        published = coordinate.publish(
-            claim, "Fictional", self.root / "body.md", unverified=True
-        )
-        self.assertEqual(
-            published["pr"]["review"],
-            {"worker": review["worker"], "route": "unverified"},
-        )
+        with self.assertRaises(SystemExit), patch("sys.stderr"):
+            coordinate.parser().parse_args(
+                [
+                    "publish",
+                    "--claim",
+                    str(claim),
+                    "--title",
+                    "Fictional",
+                    "--body-file",
+                    str(self.root / "body.md"),
+                    "--accept-unverified-review",
+                ]
+            )
 
-    def test_publish_prefers_and_records_a_verified_review(self) -> None:
-        self.policy = self.queue([12])
-        claim = self.publish_ready(12)
-        review = coordinate.start_execution(claim, "review", ROUTE)
-        coordinate.finish_execution(
-            claim, review["worker"], "completed", ("approved", 1)
-        )
-        published = coordinate.publish(
-            claim, "Fictional", self.root / "body.md", unverified=True
-        )
-        self.assertEqual(
-            published["pr"]["review"],
-            {"worker": self.review["worker"], "route": "verified"},
-        )
+    def test_interrupted_finish_resumes_with_the_same_outcome(self) -> None:
+        claim = self.claimed(12)
+        native_write, native_event = admission.write, coordinate.worker.event
+
+        def fail_on(target: str) -> object:
+            def write(path: Path, value: dict) -> None:
+                if path == claim and target == "claim":
+                    raise OSError
+                native_write(path, value)
+
+            def event(directory: Path, kind: str, **values: object) -> None:
+                if target == "event" and kind != "created":
+                    raise OSError
+                native_event(directory, kind, **values)
+
+            return (
+                patch.object(admission, "write", write),
+                patch.object(coordinate.worker, "event", event),
+            )
+
+        for target in ("event", "claim"):
+            with self.subTest(target):
+                review = coordinate.start_execution(claim, "review", ROUTE)
+                identifier = review["worker"]
+                write, event = fail_on(target)
+                with write, event, self.assertRaises(OSError):
+                    coordinate.finish_execution(
+                        claim, identifier, "completed", ("approved", 1)
+                    )
+                self.assertIn(
+                    identifier, admission.open_executions(admission.read(claim))
+                )
+                # A retry may not change the recorded outcome.
+                for status, judgement in (
+                    ("cancelled", (None, None)),
+                    ("completed", ("changes_required", 1)),
+                    ("completed", ("approved", 2)),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "not an open"):
+                        coordinate.finish_execution(
+                            claim, identifier, status, judgement
+                        )
+                # The head may move after the recorded review; the retry still closes.
+                self.commit(f"after {target}\n")
+                done = coordinate.finish_execution(
+                    claim, identifier, "completed", ("approved", 1)
+                )
+                self.assertEqual(done["verdict"], "approved")
+                self.assertEqual(done["head_after"], review["head_before"])
+                self.assertEqual(
+                    self.events(done), ["created", "task_accepted", "completed"]
+                )
+                self.assertEqual(
+                    admission.open_executions(admission.read(claim)), set()
+                )
+                with self.assertRaisesRegex(RuntimeError, "No open coordinator"):
+                    coordinate.finish_execution(
+                        claim, identifier, "completed", ("approved", 1)
+                    )
+        admission.reserve_worker(claim, "f" * 32, "implement")
 
 
 if __name__ == "__main__":

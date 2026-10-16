@@ -61,20 +61,27 @@ worker. The dashboard lists executor, an "unverified route" marker, source
 
 ## Publish
 
-`publish` keeps requiring a completed review by a verified `worker.py --role
-review` worker. With an explicit `--accept-unverified-review`, a completed
-coordinator review of this attempt and this unchanged head also satisfies it, and
-the claim's `published` milestone records `review_route: "unverified"` with the
-review record's ID (`verified` otherwise). Why accept it at all: without it, a
-shortcut run must bypass `publish` and then the PR, backlog and dashboard lose the
-issue, which is the gap #197 closes. Why only on an explicit flag: the default
-gate (#217) stays a verified independent review, and the PR evidence states the
-route was self-reported. The verdict is still not read, as for a worker review.
+`publish` keeps requiring a completed `worker.py --role review` worker, and a
+coordinator review record never satisfies it (`reviewed` skips any record with an
+`executor`). Coordinator decision after review round 1: changing what `publish`
+accepts would need live qualification on a disposable repository, which this run
+does not have. A coordinator review is referenced only from the PR body's
+execution evidence or a `review`/`readiness` progress record, stated as
+self-reported and unverified. Publishing a shortcut-reviewed head therefore
+stays outside `publish` until a verified review exists.
+
+## Partial failure
+
+`finish` persists the result, the final event and the claim milestone in turn.
+A retry with the same outcome completes whatever is missing (the head check is
+not repeated: the outcome was already recorded); a different outcome is refused.
+A failure in `start` after its record but before the claim milestone leaves an
+orphan `running` record that holds nothing; `status` shows it.
 
 ## Evidence
 
 Unit tests: lifecycle (start/finish, events, timing), refusals (malformed route,
 wrong executor, duplicate open, finish twice, finish a worker record, verdict on
 implement, dirty or moved review head), capacity and lock independence (both
-directions), marker tamper, status and dashboard projection, publish with and
-without the flag.
+directions), marker tamper, status and dashboard projection, publish refusing a
+coordinator review, finish resumed after a failure between each persistence step.

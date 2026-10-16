@@ -244,18 +244,14 @@ cannot be recreated to reset its budget.
   worker as `quota` and pauses dispatch until the backend-reported window reset,
   or until an explicit `running` control when no window was reported. Nothing
   retries, buys capacity or skips review.
-- `publish --claim CLAIM --title TEXT --body-file FILE [--accept-unverified-review]`
-  first requires a
+- `publish --claim CLAIM --title TEXT --body-file FILE` first requires a
   `--role review` worker of the claim's attempt whose recorded status is
   `completed` and whose recorded head before and after the turn both equal the
   checkout head; a review of another head or attempt, or a `cancelled`,
   `quota`, `unknown` or `released` review, blocks before any GitHub call. It
   does not read the verdict: a completed review is not an approval, and the
-  coordinator still reads the findings before publishing. A completed
-  coordinator review record (below) satisfies it only with
-  `--accept-unverified-review`; the recorded PR then carries
-  `review: {worker, route: "unverified"}` (`verified` for a review worker,
-  which is preferred when both exist). It then requires that
+  coordinator still reads the findings before publishing. A coordinator
+  execution's review (below) never satisfies it. It then requires that
   head pushed, reuses the one matching PR on the claim branch, creates a draft
   only when none exists, and re-queries after an uncertain response. Several,
   foreign or stale PRs block.
@@ -337,6 +333,11 @@ review takes them.
   so it never settles a worker, and `release` never applies to one.
 - Setup is zero (the work starts when recorded); running time counts in the
   issue's `implement` and `review` phases and review rounds, as for workers.
+- A coordinator review never satisfies `publish`. Reference it from the PR's
+  execution evidence or a `review`/`readiness` progress record, as
+  self-reported and unverified.
+- If `finish` fails partway, rerun it with the same outcome: it completes the
+  missing steps without rechecking the head. A different outcome is refused.
 
 ## Local execution dashboard
 

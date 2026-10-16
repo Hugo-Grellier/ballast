@@ -161,10 +161,9 @@ the author cannot dismiss a blocker alone. Escalate product disagreements to the
 human. Repair-round scope, nonblocking findings and the round limit are in
 [pair-review.md](pair-review.md#repair-rounds). If an independent reviewer is unavailable, do not
 publish; report the missing review to the human. The standalone `publish` helper
-refuses a head without a completed review. A recorded coordinator review counts
-only when the coordinator passes `--accept-unverified-review`, and the PR's
-execution evidence must then say the review route was self-reported and
-unverified.
+refuses a head without a completed review, and a recorded coordinator review
+never counts as one. Reference a coordinator review in the PR's execution
+evidence as self-reported and unverified.
 
 ## 6. Publish and finish
 

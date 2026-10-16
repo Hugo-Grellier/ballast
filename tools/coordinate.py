@@ -316,35 +316,28 @@ def verified(result: dict) -> bool:
     return "executor" not in result and result.get("source") == RECEIPT
 
 
-def reviewed(
-    claim: Path, attempt: str, head: str, *, unverified: bool = False
-) -> dict | None:
-    """Find a review of this attempt completed on this unchanged head.
+def reviewed(claim: Path, attempt: str, head: str) -> bool:
+    """Find a review worker of this attempt completed on this unchanged head.
 
-    A verified review worker is preferred; a coordinator review counts only when
-    the caller accepts an unverified route. The verdict is not read here: a
-    completed review is not an approval.
+    The verdict is not read here: a completed review is not an approval. A
+    coordinator execution's review is never one: its route is self-reported.
     """
     # Read every record first: a malformed one blocks regardless of scan order.
     results = [
         admission.read(path)
         for path in (claim.parent / "workers").glob("*/result.json")
     ]
-    found = [
-        result
-        for result in results
-        if result.get("attempt") == attempt
+    return any(
+        result.get("attempt") == attempt
         and result.get("role") == "review"
         and result.get("status") == "completed"
         and result.get("head_before") == result.get("head_after") == head
-    ]
-    return next((r for r in found if verified(r)), None) or next(
-        (r for r in found if unverified and r.get("executor") == "coordinator"),
-        None,
+        and "executor" not in result
+        for result in results
     )
 
 
-def publish(claim: Path, title: str, body: Path, *, unverified: bool = False) -> dict:
+def publish(claim: Path, title: str, body: Path) -> dict:
     """Create or reuse one draft PR; re-query after an uncertain response."""
     # Refuse before any GitHub write; record_pr rechecks under the lock.
     admission.require_coordinator(admission.policy(claim.parent))
@@ -352,8 +345,7 @@ def publish(claim: Path, title: str, body: Path, *, unverified: bool = False) ->
     cwd = Path(record["checkout"])
     # Pinned admin directory: never follow the worker-writable gitfile.
     head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=Path(record["git_dir"]))
-    review = reviewed(claim, record["attempt"], head, unverified=unverified)
-    if review is None:
+    if not reviewed(claim, record["attempt"], head):
         worktree.fail("Publish requires a completed independent review of this head")
     remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
     if remote != head:
@@ -384,15 +376,7 @@ def publish(claim: Path, title: str, body: Path, *, unverified: bool = False) ->
         found = matching(cwd, record, head)
         if found is None:
             worktree.fail("PR creation failed; nothing was published")
-    pr = {
-        "number": found["number"],
-        "url": found["html_url"],
-        "head": head,
-        "review": {
-            "worker": review["worker"],
-            "route": "verified" if verified(review) else "unverified",
-        },
-    }
+    pr = {"number": found["number"], "url": found["html_url"], "head": head}
     return admission.record_pr(claim, pr)
 
 
@@ -456,7 +440,11 @@ def finish_execution(
     status: str,
     review: tuple[str | None, int | None] = (None, None),
 ) -> dict:
-    """Close one open coordinator execution; never a worker.py record."""
+    """Close one open coordinator execution; never a worker.py record.
+
+    Each step is persisted separately. A retry after a partial finish repeats
+    the recorded outcome and completes the remaining steps; it never changes it.
+    """
     verdict, number = review
     if status not in {"completed", "cancelled"} or not re.fullmatch(
         r"[0-9a-f]{32}", identifier
@@ -473,11 +461,12 @@ def finish_execution(
             worktree.fail("No open coordinator execution with this ID")
         directory = claim.parent / "workers" / identifier
         result = admission.read(directory / "result.json")
+        resumed = result.get("status") != "running"
         if (
             result.get("worker") != identifier
             or result.get("executor") != "coordinator"
             or result.get("route_verified") is not False
-            or result.get("status") != "running"
+            or result.get("status") not in {"running", status}
             or result.get("attempt") != item.get("attempt")
         ):
             worktree.fail("Record is not an open coordinator execution")
@@ -495,13 +484,19 @@ def finish_execution(
             )
         ):
             worktree.fail("Only a completed review takes a verdict and round 1..3")
-        if judged and (head != result.get("head_before") or dirty):
-            worktree.fail("Reviewed checkout changed; review evidence is invalid")
-        result.update(status=status, head_after=head)
-        if judged:
-            result.update(reviewed_head=head, verdict=verdict, round=number)
-        admission.write(directory / "result.json", result)
-        worker.event(directory, status)
+        if resumed:
+            if judged and (result.get("verdict"), result.get("round")) != review:
+                worktree.fail("Record is not an open coordinator execution")
+        else:
+            if judged and (head != result.get("head_before") or dirty):
+                worktree.fail("Reviewed checkout changed; review evidence is invalid")
+            result.update(status=status, head_after=head)
+            if judged:
+                result.update(reviewed_head=head, verdict=verdict, round=number)
+            admission.write(directory / "result.json", result)
+        log = directory / "events.jsonl"
+        if json.loads(log.read_text().splitlines()[-1])["event"] != status:
+            worker.event(directory, status)
         admission.milestone(
             item, "execution_finished", worker=identifier, status=status
         )
@@ -780,9 +775,6 @@ def parser() -> argparse.ArgumentParser:
     commands.choices["release"].add_argument("--worker", required=True)
     commands.choices["publish"].add_argument("--title", required=True)
     commands.choices["publish"].add_argument("--body-file", type=Path, required=True)
-    commands.choices["publish"].add_argument(
-        "--accept-unverified-review", action="store_true"
-    )
     return root
 
 
@@ -836,9 +828,7 @@ def run(args: argparse.Namespace) -> dict:
         "settle": lambda: settle(claim, args.activity, args.evidence),
         "recover": lambda: recover(cwd, claim, args.evidence),
         "release": lambda: admission.release(claim, args.worker, args.evidence),
-        "publish": lambda: publish(
-            claim, args.title, args.body_file, unverified=args.accept_unverified_review
-        ),
+        "publish": lambda: publish(claim, args.title, args.body_file),
     }
     return operations[args.command]()
 
