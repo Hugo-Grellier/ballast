@@ -628,7 +628,48 @@ class QueueTests(unittest.TestCase):
         # A claim recorded under another reference, e.g. before #200.
         claim.write_text(json.dumps({**record, "coordinator": "previous"}))
         with self.assertRaisesRegex(admission.AdmissionError, "stop evidence"):
-            admission.settle(claim, "stopped", "taking over")
+            admission.settle(claim, "unknown", "taking over")
+        self.assertEqual(json.loads(claim.read_text())["coordinator"], "previous")
+
+    def test_queue_coordinator_stops_a_stranded_foreign_claim(self) -> None:
+        self.queue([49])
+        claim = self.prepare(49)
+        record = json.loads(claim.read_text())
+        for previous, activity in (("previous", "active"), ("", "unknown")):
+            claim.write_text(
+                json.dumps({**record, "coordinator": previous, "activity": activity})
+            )
+            stranded = claim.read_text()
+            # A recorded writer lock blocks the stop; release or reconcile first.
+            claim.with_suffix(".worker").write_text("fixture-worker")
+            with self.assertRaisesRegex(admission.AdmissionError, "recorded worker"):
+                admission.settle(claim, "stopped", "previous session gone")
+            claim.with_suffix(".worker").unlink()
+            # Neither the recorded owner nor another caller may stop it.
+            for caller in (previous, "other"):
+                with (
+                    self.subTest(caller=caller),
+                    patch.dict(os.environ, {"BALLAST_COORDINATOR": caller}),
+                    self.assertRaisesRegex(
+                        admission.AdmissionError, "queue's coordinator reference"
+                    ),
+                ):
+                    admission.settle(claim, "stopped", "previous session gone")
+            self.assertEqual(claim.read_text(), stranded)
+            result = admission.settle(claim, "stopped", "previous session gone")
+            self.assertEqual(
+                (result["activity"], result["coordinator"]), ("stopped", "lead")
+            )
+            self.assertEqual(
+                {
+                    k: result["history"][-1][k]
+                    for k in ("event", "previous_coordinator")
+                },
+                {"event": "stopped", "previous_coordinator": previous},
+            )
+        self.assertEqual(
+            admission.settle(claim, "active", "resume")["activity"], "active"
+        )
         claim.write_text(
             json.dumps({**record, "coordinator": "", "activity": "stopped"})
         )
