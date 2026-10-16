@@ -251,9 +251,11 @@ cannot be recreated to reset its budget.
   `merged` (only when GitHub reports the PR merged); `stopped` to `active`.
   Moving into `active` rechecks controls and the issue cap. Any recorded PR
   consumes backlog until merged. A claim left `active` or `unknown` under
-  another coordinator reference cannot be settled until its record is
-  reconciled; any other claim passes to the queue's coordinator on its next
-  settle.
+  another coordinator reference (a record written before queue mutations
+  required the queue's coordinator) can only be settled `stopped`, by the
+  queue's coordinator, while no `.worker` lock exists for it; the history entry
+  records the previous owner. Any other claim passes to the queue's coordinator
+  on its next settle.
 - `release --claim CLAIM --worker ID --evidence TEXT` frees an `unknown` worker
   lock after the coordinator has positive stop evidence (for example the backend
   thread's terminal state) and marks that worker's result `released`. Nothing

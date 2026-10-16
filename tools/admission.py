@@ -480,10 +480,16 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
         value = governing(claim.parent, record)
         coordinator = require_coordinator(value)
         # An owner-less pre-queue claim may only move to unknown/stopped (TRANSITIONS).
-        if value and record.get("coordinator") not in (None, coordinator):
-            # Transfer needs the prior owner's recorded stop/handoff evidence.
-            if record.get("activity", "unknown") in ACTIVE:
+        previous = record.get("coordinator")
+        foreign = bool(value) and previous not in (None, coordinator)
+        if foreign and record.get("activity", "unknown") in ACTIVE:
+            # A claim stranded under another reference (before #200) may only be
+            # stopped, and only while no writer lock exists for it.
+            if activity != "stopped":
                 fail("Active issue transfer needs recorded stop evidence first")
+            if claim.with_suffix(".worker").exists():
+                fail("Release or reconcile the recorded worker before stopping")
+        if foreign:
             record["coordinator"] = coordinator
         if activity not in TRANSITIONS.get(record.get("activity"), set()):
             fail("Unsupported activity transition; recover or stop explicitly")
@@ -491,7 +497,8 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
             runnable(value)
             issue_room(claim.parent, value, record)
         record["activity"] = activity
-        milestone(record, activity, evidence=evidence)
+        owner = {"previous_coordinator": previous} if foreign else {}
+        milestone(record, activity, evidence=evidence, **owner)
         write(claim, record)
         return record
 
