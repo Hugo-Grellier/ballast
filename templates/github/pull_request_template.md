@@ -26,7 +26,7 @@ Reviewer (provider + model, effort), reviewed head, verdict, rounds, and finding
 
 ## Execution evidence
 
-Link the issue's phase/attempt history and instruction revision. State requested versus observed worker routes, known waits and remaining gaps. Keep local destinations, raw worker output and account details private.
+Link the issue's phase/attempt history and instruction revision. State requested versus observed worker routes, known waits and remaining gaps. For coordinator executions, name them and say their routes are self-reported and unverified. Keep local destinations, raw worker output and account details private.
 
 ## Migration impact
 

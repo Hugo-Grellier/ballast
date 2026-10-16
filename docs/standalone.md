@@ -244,13 +244,18 @@ cannot be recreated to reset its budget.
   worker as `quota` and pauses dispatch until the backend-reported window reset,
   or until an explicit `running` control when no window was reported. Nothing
   retries, buys capacity or skips review.
-- `publish --claim CLAIM --title TEXT --body-file FILE` first requires a
+- `publish --claim CLAIM --title TEXT --body-file FILE [--accept-unverified-review]`
+  first requires a
   `--role review` worker of the claim's attempt whose recorded status is
   `completed` and whose recorded head before and after the turn both equal the
   checkout head; a review of another head or attempt, or a `cancelled`,
   `quota`, `unknown` or `released` review, blocks before any GitHub call. It
   does not read the verdict: a completed review is not an approval, and the
-  coordinator still reads the findings before publishing. It then requires that
+  coordinator still reads the findings before publishing. A completed
+  coordinator review record (below) satisfies it only with
+  `--accept-unverified-review`; the recorded PR then carries
+  `review: {worker, route: "unverified"}` (`verified` for a review worker,
+  which is preferred when both exist). It then requires that
   head pushed, reuses the one matching PR on the claim branch, creates a draft
   only when none exists, and re-queries after an uncertain response. Several,
   foreign or stale PRs block.
@@ -270,6 +275,8 @@ cannot be recreated to reset its budget.
   thread's terminal state) and marks that worker's result `released`. Nothing
   releases a lock by age or PID. Coordinator identity and evidence are trusted
   references, not authentication.
+- `execution start|finish` records work the coordinator does itself instead of
+  dispatching a worker (see [Coordinator executions](#coordinator-executions)).
 - `recover --claim CLAIM --evidence TEXT` adopts an existing attempt after an
   interrupted preparation or restart, or binds a pre-queue claim to the queue.
   If preparation died before its checkout existed, it creates that checkout at
@@ -278,9 +285,12 @@ cannot be recreated to reset its budget.
   deletes or replaces a checkout.
 - `status` projects the queue, used capacity and per-issue control history,
   derived only from recorded timestamps:
-  - per worker: role, outcome, setup (until the task was accepted) and running
-    seconds, token totals or `unavailable`; a directory without a result is
-    `unrecorded`; a worker still running or `unknown` counts up to now;
+  - per worker: role, outcome, `executor` (`worker` or `coordinator`),
+    `route_verified`, setup (until the task was accepted) and running seconds,
+    token totals or `unavailable`, and a review's verdict and round when
+    recorded; a directory without a result is `unrecorded`; a worker still
+    running or `unknown`, or an open coordinator execution (`running`), counts
+    up to now;
   - per issue: elapsed time split into `implement`, `review`, `worker_setup`,
     `human_review_wait` (time in `pr_wait`) and `coordinator` (the rest: checks,
     decisions, publication); rework, review rounds, `reopened` (a `pr_wait` sent
@@ -291,6 +301,42 @@ cannot be recreated to reset its budget.
 
   Compare runs by these fields. `status` never deletes checkouts, merges or
   schedules work.
+
+### Coordinator executions
+
+A coordinator may implement or review an issue itself, or through its own
+subagents, instead of dispatching `worker.py`. Record that shortcut so it stays
+observable:
+
+```sh
+python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+  execution start --claim CLAIM --executor coordinator --role implement|review \
+  --provider PROVIDER --model MODEL --effort EFFORT
+python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+  execution finish --claim CLAIM --worker ID --status completed|cancelled \
+  [--verdict approved|changes_required|blocked --round 1..3]
+```
+
+`start` writes `workers/ID/result.json` and `events.jsonl` in the worker record
+shape with `executor: coordinator`, `route_verified: false`, `source:
+coordinator-reported` and status `running`, and adds `execution_started` to the
+claim history. It requires the queue's coordinator, a running queue and an
+active claim, as a worker reservation does; a review also needs a clean
+committed head. `finish` sets the final status and head, and a completed review
+must carry a verdict and round and an unchanged clean head. Only a completed
+review takes them.
+
+- The route is self-reported, never verified. No option sets it verified;
+  `status` and the dashboard derive `route_verified` from `worker.py`'s thread
+  receipt, so an edited record still shows as unverified, and `finish` refuses
+  it.
+- An execution takes no worker capacity, spends no attempt and holds no
+  `.worker` lock. One writer per checkout still holds: `start` refuses while a
+  worker lock or another open execution exists, and a worker reservation refuses
+  while an execution is open. `finish` accepts only an open coordinator record,
+  so it never settles a worker, and `release` never applies to one.
+- Setup is zero (the work starts when recorded); running time counts in the
+  issue's `implement` and `review` phases and review rounds, as for workers.
 
 ## Local execution dashboard
 
@@ -332,7 +378,9 @@ issue titles appear only when supplied by an authoritative snapshot. Selected
 issue evidence lists recorded entries first and groups missing kinds as unknown.
 Pending questions and blockers point back to the main conversation. Worker
 settings and evidence appear beside the selected issue, with requested and
-observed settings shown separately. The header labels live, stale and
+observed settings shown separately; each names its executor, and any route
+without a `worker.py` receipt, including every coordinator execution, is marked
+"unverified route". The header labels live, stale and
 disconnected observations; polling preserves issue and worker selection.
 Dependency selection uses the existing selector at most once per minute, with a
 two-second bound on the complete helper process group. A failed source is unknown;

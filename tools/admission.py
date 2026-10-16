@@ -271,6 +271,15 @@ def admit_issue(state: Path, record: dict) -> None:
     milestone(record, "admitted")
 
 
+def open_executions(record: dict) -> set[str]:
+    """Coordinator executions started on this claim and not yet finished."""
+    history = record.get("history") or []
+    started = {h.get("worker") for h in history if h["event"] == "execution_started"}
+    return started - {
+        h.get("worker") for h in history if h["event"] == "execution_finished"
+    }
+
+
 def reserve_worker(claim: Path, identifier: str, role: str) -> Path:
     """Reserve all-worker capacity and the per-issue writer lock together."""
     state = claim.parent
@@ -281,6 +290,8 @@ def reserve_worker(claim: Path, identifier: str, role: str) -> Path:
         if lock.exists():
             fail("Another worker holds this issue")
         record = read(claim)
+        if open_executions(record):
+            fail("A coordinator execution holds this issue")
         value = governing(state, record)
         if value:
             require_coordinator(value)

@@ -23,7 +23,8 @@ example; the rules hold for any agent with a subagent mechanism.
   [testing policy](../templates/policies/testing.md)); read CI on the PR head
   before calling a PR ready, as in [issue workflow](issue-workflow.md) step 6.
 
-Current limits: executions dispatched this way are not yet recorded as
-Ballast executions (#197), and `coordinate.py publish` still requires a
-completed review from a `worker.py --role review` worker, so a subagent review
-does not satisfy it.
+Record each subagent run as a
+[coordinator execution](standalone.md#coordinator-executions)
+(`coordinate.py execution start|finish`). Its route is self-reported and stays
+unverified. `coordinate.py publish` accepts such a review only with
+`--accept-unverified-review`, and the PR must say so.
