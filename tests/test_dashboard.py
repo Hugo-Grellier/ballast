@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_queue_admission as queue_tests
+from tests.test_standalone_execution import setUpModule  # noqa: F401 -- #233
 from tools import admission, codex, dashboard, progress, worktree
 
 REPO = queue_tests.REPO

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -17,6 +19,20 @@ from unittest.mock import patch
 
 from tests.test_codex_routing import MemoryProcess, response
 from tools import admission, codex, coordinate, worker, worktree
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def setUpModule() -> None:
+    """Run from a neutral directory, never from an issue checkout (#233).
+
+    The helpers refuse to start inside one (`worktree.inside_checkout`), and the
+    gate itself may run from a `worktree.py` checkout. Modules that launch
+    helpers import this.
+    """
+    directory = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(directory.cleanup)
+    unittest.enterModuleContext(contextlib.chdir(directory.name))
 
 
 class ExecutionTests(unittest.TestCase):
@@ -446,6 +462,29 @@ def worktree_error(reason: str) -> Exception:
     except admission.FixedReasonError as error:
         return error
     raise AssertionError
+
+
+class CheckoutCwdTests(unittest.TestCase):
+    """The gate passes when started from a worktree.py issue checkout (#233)."""
+
+    def test_helper_launching_test_passes_from_a_ballast_v2_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary, "ballast-v2", "worktrees", "issue-1-x")
+            checkout.mkdir(parents=True)
+            name = "test_completed_worker_records_receipt_before_dispatch"
+            result = subprocess.run(  # noqa: S603 -- fixed argv
+                [
+                    *(sys.executable, "-m", "unittest"),
+                    f"tests.test_standalone_execution.ExecutionTests.{name}",
+                ],
+                cwd=checkout,
+                env={**os.environ, "PYTHONPATH": str(ROOT)},
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
