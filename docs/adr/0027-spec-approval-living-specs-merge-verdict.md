@@ -143,19 +143,21 @@ gives `HUMAN`.
   head and confirmed the risk, every required check passed on it, not a draft,
   nothing changed after review, no excluded path), the confirmed risk is not
   below the floor, and the PR is R0 with no changed path matched by a `Covers:`
-  glob, or R1 with an approval, green conformance and every changed path
+  glob and only added entries (or none) in its `docs/specs/` delta, or R1 with an approval, green conformance and every changed path
   covered.
 - `HUMAN`: R2; an excluded path; a confirmed risk below the floor; no closing
   issue or no parseable risk; a disputed or raised risk; an uncovered changed
-  path; an R0 PR changing a path a `Covers:` glob matches; a
+  path; an R0 PR changing a path a `Covers:` glob matches or modifying or
+  removing a spec entry; a
   missing, unreadable or malformed `project/workflow.md` on the target branch.
   The output is the handoff: approved spec, risky paths, surviving review
   findings. The human reviews that, not the full diff.
 - `BLOCK`: missing or stale review, a failing or missing required check, a
   draft, a head that moved, a hash mismatch, an edited delta or approval, a
   stale delta, an R1 PR without an approval, or an R1 PR changing no spec
-  without an approved empty delta. Any state not listed under `MERGE` is
-  `BLOCK`.
+  without an approved empty delta. Any state not listed under `MERGE` or
+  `HUMAN` is `BLOCK`. `BLOCK` conditions take precedence over `HUMAN`, and
+  `HUMAN` over `MERGE`.
 
 Excluded paths are the ADR-0026 list plus the project's human-only globs in
 `project/workflow.md`. `merge_check.py` reads that file from the target branch,
