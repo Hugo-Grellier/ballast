@@ -46,6 +46,15 @@ Findings:
 Verification gaps: <none, or missing evidence>
 ```
 
+A finding is dismissed only with a `file:line` citation in the diff that shows
+it does not hold; the pair reassesses it, and the author still cannot dismiss a
+blocker alone. A dismissal without a citation leaves the finding standing. For a
+change to `docs/specs/`, the test review records per added or modified scenario
+that its test fails on the base and passes on the head, and per removed scenario
+that its tests were removed or no longer assert it
+([test review](../templates/skills/ballast-test-review/SKILL.md)). The merge
+verdict trusts this record; it does not rerun tests on the base.
+
 Use `changes_required` for concrete defects or missing required acceptance
 evidence, and `blocked` when missing access or an unresolved decision prevents
 review. With no findings, say so and name what was inspected. Approval covers

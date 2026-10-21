@@ -14,6 +14,9 @@ from tools import pr_body
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / ".github/pull_request_template.md").read_text(encoding="utf-8")
 HEADINGS = pr_body.HEADING.findall(TEMPLATE)
+HASH = "ab" * 32
+SPEC_LINK = "https://github.com/o/r/issues/5#issuecomment-77"
+SPEC = f"Spec hash: {HASH}\nSpec approval: {SPEC_LINK}\n"
 
 
 def body(
@@ -22,6 +25,7 @@ def body(
     link: str = "Closes #7",
     ticks: tuple[str, ...] = ("R1",),
     approval: str = "",
+    spec: str = SPEC,
 ) -> str:
     """Build a conforming body, then break one thing."""
     parts = []
@@ -36,6 +40,8 @@ def body(
                 f"- [{'x' if r in ticks else ' '}] {r}\n" for r in ("R0", "R1", "R2")
             )
             text += f"{approval}\n\n" if approval else "\n"
+        if heading == "Spec":
+            text += f"{spec}\n"
         parts.append(text)
     return "".join(parts)
 
@@ -91,6 +97,42 @@ class PrBodyTests(unittest.TestCase):
     def test_r0_and_r1_need_no_approval_link(self) -> None:
         for tick in ("R0", "R1"):
             self.assertEqual(self.check(body(ticks=(tick,))), [])
+
+    def test_r1_and_r2_need_a_spec_hash_and_approval_link(self) -> None:
+        link = "https://github.com/o/r/issues/5#issuecomment-123"
+        no_hash = f"Spec approval: {SPEC_LINK}\n"
+        no_link = f"Spec hash: {HASH}\n"
+        for tick, approval in (("R1", ""), ("R2", link)):
+            for label, spec, fragment in (
+                ("no hash", no_hash, "Spec hash"),
+                ("short hash", no_hash + "Spec hash: abc\n", "Spec hash"),
+                ("no link", no_link, "Spec approved"),
+                (
+                    "PR comment link",
+                    no_link + link.replace("issues", "pull"),
+                    "Spec approved",
+                ),
+                ("commented out", f"<!-- {SPEC} -->", "Spec hash"),
+                (
+                    "reviewer waiver",
+                    "No behavior changed (reviewer).\n" + no_hash,
+                    "Spec hash",
+                ),
+            ):
+                with self.subTest(tick=tick, case=label):
+                    found = self.check(
+                        body(ticks=(tick,), approval=approval, spec=spec)
+                    )
+                    self.assertTrue(any(fragment in p for p in found), found)
+
+    def test_spec_hash_outside_the_spec_section_does_not_count(self) -> None:
+        text = body(spec="").replace("## Summary\n", f"## Summary\n{SPEC}\n")
+        found = self.check(text)
+        self.assertTrue(any("Spec hash" in p for p in found), found)
+        self.assertTrue(any("Spec approved" in p for p in found), found)
+
+    def test_r0_needs_no_spec_hash(self) -> None:
+        self.assertEqual(self.check(body(ticks=("R0",), spec="none")), [])
 
     def test_commented_out_content_does_not_count(self) -> None:
         self.assertTrue(self.check(body(link="<!-- Closes #7 -->")))

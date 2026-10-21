@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -466,6 +467,124 @@ class DeltaHashTests(unittest.TestCase):
         text = DELTA_MODIFIED.replace("Base:\n", "")
         with self.assertRaises(spec_check.SpecError):
             spec_check.parse_delta(text)
+
+
+EMPTY = spec_check.delta_hash([])
+
+
+class ConformanceTests(unittest.TestCase):
+    """The PR's three-dot docs/specs/ diff must hash to the stated approved hash."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Repo(Path(tmp.name))
+        self.repo.write("docs/specs/queue.md", SPEC)
+        self.repo.commit("base")
+        run_git(self.repo.root, "branch", "target")
+        self.body = Path(tmp.name) / "body.md"
+        self.approved = spec_check.delta_hash(spec_check.parse_delta(DELTA_MODIFIED))
+
+    def run_check(self, stated: str, *extra: str) -> tuple[int, str]:
+        self.body.write_text(f"## Spec\n\nSpec hash: {stated}\n\n## Risk\n")
+        code, _, err = self.repo.main(
+            "--conformance", "target", "--body-file", str(self.body), *extra
+        )
+        return code, err
+
+    def test_matching_diff_passes(self) -> None:
+        self.repo.write("docs/specs/queue.md", MODIFIED)
+        self.repo.commit("head")
+        self.assertEqual(self.run_check(self.approved), (0, ""))
+
+    def test_drift_from_the_approved_delta_is_refused(self) -> None:
+        self.repo.write("docs/specs/queue.md", MODIFIED.replace("in order", "last"))
+        self.repo.commit("head")
+        code, err = self.run_check(self.approved)
+        self.assertEqual(code, 1)
+        self.assertIn("spec drift: the docs/specs/ diff hashes", err)
+        self.assertIn(f"approved {self.approved}", err)
+
+    def test_no_spec_change_needs_an_approved_empty_delta(self) -> None:
+        self.repo.write("tools/queue.py", "x = 1\n")
+        self.repo.commit("head")
+        self.assertEqual(self.run_check(EMPTY)[0], 0)
+        code, err = self.run_check(self.approved)
+        self.assertEqual(code, 1)
+        self.assertIn(f"needs an approved empty delta ({EMPTY})", err)
+        empty_doc = "## Spec delta\nHash: x\nRisk: R1\n\n## Open questions\n"
+        self.assertEqual(
+            spec_check.delta_hash(spec_check.parse_delta(empty_doc)), EMPTY
+        )
+
+    def test_diff_is_three_dot_from_the_merge_base(self) -> None:
+        run_git(self.repo.root, "checkout", "-q", "-b", "feature")
+        self.repo.write("docs/specs/queue.md", MODIFIED)
+        self.repo.commit("feature")
+        run_git(self.repo.root, "checkout", "-q", "target")
+        self.repo.write("docs/specs/o.md", SPEC.replace("tools/queue.py", "o.py"))
+        self.repo.commit("target moves on")
+        self.assertEqual(self.run_check(self.approved, "--head", "feature")[0], 0)
+
+    def test_two_stated_hashes_are_refused(self) -> None:
+        self.body.write_text(f"## Spec\nSpec hash: {EMPTY}\nSpec hash: {'a' * 64}\n")
+        code, _, err = self.repo.main(
+            "--conformance", "target", "--body-file", str(self.body)
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("more than one hash", err)
+
+    def test_hash_outside_the_spec_section_or_commented_is_not_read(self) -> None:
+        for text in (
+            f"## Summary\nSpec hash: {self.approved}\n## Spec\nnone\n",
+            f"## Spec\n<!-- Spec hash: {self.approved} -->\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(spec_check.stated_hashes(text), [])
+        self.body.write_text("## Spec\nnone\n")
+        code, _, err = self.repo.main(
+            "--conformance", "target", "--body-file", str(self.body)
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("states no spec hash", err)
+
+    def test_event_payload(self) -> None:
+        event = self.body.with_name("event.json")
+        for payload, expected in (
+            ({"pull_request": {"body": f"## Spec\nSpec hash: {EMPTY}\n"}}, 0),
+            ({"pull_request": {"body": f"## Spec\nSpec hash: {'a' * 64}\n"}}, 1),
+            ({"pull_request": {"body": None}}, 0),
+            ({}, 2),
+            ([], 2),
+            ({"pull_request": {"body": 3}}, 2),
+        ):
+            with self.subTest(payload=payload):
+                event.write_text(json.dumps(payload))
+                code, _, _ = self.repo.main(
+                    "--conformance", "target", "--event-file", str(event)
+                )
+                self.assertEqual(code, expected)
+        event.write_text("{not json")
+        args = ("--conformance", "target", "--event-file", str(event))
+        self.assertEqual(self.repo.main(*args)[0], 2)
+
+    def test_unknown_base_is_a_usage_error(self) -> None:
+        self.body.write_text(f"## Spec\nSpec hash: {EMPTY}\n")
+        code, _, err = self.repo.main(
+            "--conformance", "nope", "--body-file", str(self.body)
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("merge-base", err)
+
+    def test_conformance_needs_one_body_source(self) -> None:
+        for args in (
+            ("--conformance", "target"),
+            ("--body-file", str(self.body)),
+        ):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    self.repo.main(*args)
+                self.assertEqual(raised.exception.code, 2)
 
 
 DELTA_ADDED = """\

@@ -87,6 +87,17 @@ keys (`sort_keys`, no whitespace, UTF-8).
 hashes a delta document. Both print the same hash exactly when they describe
 the same behavior change.
 
+`--conformance BASE [--head REF] --body-file FILE` (or `--event-file` with a
+GitHub `pull_request` payload) compares the `--diff-hash` of a PR with the
+`Spec hash:` line of its body's `## Spec` section, which states the approved
+hash. It exits 1 on drift, or when the section states two hashes, and 0 with a
+notice when it states none (`pr_body.py` requires one for R1 and R2). A PR
+changing no spec hashes to the empty delta's hash, so an R1/R2 PR without a
+spec change needs an approved empty delta; a reviewer cannot waive it. CI runs
+this as early feedback only: the body is untrusted, and the merge verdict
+([#269](https://github.com/Hugo-Grellier/ballast/issues/269)) recomputes the
+hash from the reviewed head and checks it against the approval itself.
+
 ## A delta document
 
 ```markdown

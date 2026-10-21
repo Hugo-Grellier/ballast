@@ -1,6 +1,7 @@
 """Check a PR body against the PR template.
 
-Checks headings, issue link, one risk box, and an approval link when R2 is ticked.
+Checks headings, issue link, one risk box, an approval link when R2 is ticked,
+and, for R1 and R2, a Spec section with the spec hash and the approval link.
 """
 
 from __future__ import annotations
@@ -17,8 +18,16 @@ ISSUE_LINK = re.compile(
 )
 RISK_BOX = re.compile(r"^[ \t]*[-*][ \t]+\[[xX]\][ \t]+R[0-2]\b", re.MULTILINE)
 R2_BOX = re.compile(r"^[ \t]*[-*][ \t]+\[[xX]\][ \t]+R2\b", re.MULTILINE)
+R1_R2_BOX = re.compile(r"^[ \t]*[-*][ \t]+\[[xX]\][ \t]+R[12]\b", re.MULTILINE)
 RISK_SECTION = re.compile(
     r"^##[ \t]+Risk[ \t]*$(.*?)(?=^##[ \t]|\Z)", re.MULTILINE | re.DOTALL
+)
+SPEC_SECTION = re.compile(
+    r"^##[ \t]+Spec[ \t]*$(.*?)(?=^##[ \t]|\Z)", re.MULTILINE | re.DOTALL
+)
+SPEC_HASH = re.compile(r"^[ \t]*Spec hash:[ \t]*[0-9a-f]{64}\b", re.MULTILINE)
+SPEC_APPROVAL = re.compile(
+    r"https://github\.com/[\w.-]+/[\w.-]+/issues/\d+#issuecomment-\d+"
 )
 APPROVAL_LINK = re.compile(
     r"https://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+"
@@ -47,6 +56,18 @@ def problems(body: str, template: str) -> list[str]:
         found.append(
             "R2 needs a link to the human approval comment in the Risk section"
             " (…/issues/N#issuecomment-ID or …/pull/N#issuecomment-ID)"
+        )
+    spec = "".join(SPEC_SECTION.findall(body))
+    if R1_R2_BOX.search(body) and not SPEC_HASH.search(spec):
+        found.append(
+            "R1/R2 needs `Spec hash: <sha256>` in the Spec section"
+            " (spec_check.py --diff-hash BASE); a PR changing no spec states"
+            " its approved empty delta's hash"
+        )
+    if R1_R2_BOX.search(body) and not SPEC_APPROVAL.search(spec):
+        found.append(
+            "R1/R2 needs a link to the `Spec approved:` comment in the Spec"
+            " section (…/issues/N#issuecomment-ID)"
         )
     return found
 
