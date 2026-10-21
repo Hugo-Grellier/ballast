@@ -154,6 +154,7 @@ class QueueTests(unittest.TestCase):
             pr = next((pr for pr in self.prs if pr["number"] == number), {})
             return {
                 "merged": number in self.merged,
+                "state": pr.get("state", "open"),
                 "head": pr.get("head", {}),
                 "base": pr.get("base", {}),
             }
@@ -1961,6 +1962,175 @@ class QueueTests(unittest.TestCase):
             coordinate.retarget(child, "fictional")
         with self.assertRaisesRegex(RuntimeError, "Parent claim is missing"):
             coordinate.publish(child, "Child", self.root / "body.md")
+
+    def test_missing_parent_object_asks_for_a_fetch(self) -> None:
+        parent, child = self.stacked_pair()
+        above = json.loads(parent.read_text())
+        self.commit(Path(json.loads(child.read_text())["checkout"]), "c.txt", "c\n")
+        body = self.root / "body.md"
+        body.write_text("Fictional PR body")
+        self.review(child)
+        # GitHub's parent head was never fetched: no advice to abandon the child.
+        self.heads[above["branch"]] = "f" * 40
+        with self.assertRaisesRegex(RuntimeError, "fetch the parent's head first"):
+            coordinate.publish(child, "Child", body)
+        self.assertEqual(self.prs, [])
+        # Retarget refuses the same way when the merged head is missing.
+        self.push(above["branch"], json.loads(child.read_text())["base_sha"])
+        self.merge_parent(parent, child, "parent\n")
+        self.prs[0]["head"]["sha"] = "e" * 40
+        with self.assertRaisesRegex(RuntimeError, "fetch the parent's head first"):
+            coordinate.retarget(child, "fictional")
+        self.assertIn("parent", json.loads(child.read_text()))
+
+    def test_fetched_parent_commit_missing_locally_asks_for_a_rebase(self) -> None:
+        parent, child = self.stacked_pair()
+        above = json.loads(parent.read_text())
+        body = self.root / "body.md"
+        body.write_text("Fictional PR body")
+        self.review(child)
+        # A web commit on the parent PR, fetched; the parent checkout lacks it.
+        upper = Path(above["checkout"])
+        self.push(above["branch"], self.commit(upper, "web.txt", "web\n"))
+        worktree.git(upper, "reset", "-q", "--hard", "HEAD^")
+        with self.assertRaisesRegex(RuntimeError, "Parent branch moved"):
+            coordinate.publish(child, "Child", body)
+        self.assertEqual(self.prs, [])
+
+    def retire_refused_while_held(self, claim: Path) -> str:
+        """Check a worker lock or open execution blocks retirement; return the claim."""
+        lock = claim.with_suffix(".worker")
+        lock.write_text("worker")
+        with self.assertRaisesRegex(RuntimeError, "worker or execution"):
+            coordinate.retire(claim, "fictional")
+        lock.unlink()
+        saved = claim.read_text()
+        item = json.loads(saved)
+        admission.milestone(item, "execution_started", worker="execution-1")
+        admission.write(claim, item)
+        with self.assertRaisesRegex(RuntimeError, "worker or execution"):
+            coordinate.retire(claim, "fictional")
+        claim.write_text(saved)
+        return saved
+
+    def retire_refused_on_identity_or_race(self, claim: Path) -> None:
+        """Check refusals that leave a stopped claim in place."""
+        with self.assertRaises(FileNotFoundError):
+            coordinate.retire(self.state / "issue-99.json", "fictional")
+        renamed = self.state / "issue-98.json"
+        renamed.write_text(claim.read_text())
+        with self.assertRaisesRegex(RuntimeError, "identity is malformed"):
+            coordinate.retire(renamed, "fictional")
+        renamed.unlink()
+        saved = claim.read_text()
+        record = json.loads(saved)
+        refusals = {
+            "empty evidence": ("", "bounded evidence"),
+            "long evidence": ("x" * (admission.MAX_REASON + 1), "bounded evidence"),
+        }
+        for name, (evidence, reason) in refusals.items():
+            with self.subTest(name), self.assertRaisesRegex(RuntimeError, reason):
+                coordinate.retire(claim, evidence)
+        with (
+            patch.dict(os.environ, {"BALLAST_COORDINATOR": "another"}),
+            self.assertRaisesRegex(RuntimeError, "queue's coordinator"),
+        ):
+            coordinate.retire(claim, "fictional")
+        # The archive name comes from the record: no traversal out of the state.
+        claim.write_text(json.dumps(record | {"attempt": "../../escaped"}))
+        with self.assertRaisesRegex(RuntimeError, "identity is malformed"):
+            coordinate.retire(claim, "fictional")
+        claim.write_text(saved)
+        archive = self.state / f"retired-issue-61-{record['attempt']}.json"
+        archive.write_text("{}")
+        with self.assertRaisesRegex(RuntimeError, "already retired"):
+            coordinate.retire(claim, "fictional")
+        archive.unlink()
+        # Activity or PR changed between the GitHub check and the lock.
+        checked = {"activity": "stopped", "pr": record["pr"]}
+        with self.assertRaisesRegex(RuntimeError, "changed during retirement"):
+            admission.retire(claim, "fictional", {**checked, "pr": None})
+        claim.write_text(json.dumps(record | {"activity": "merged"}))
+        with self.assertRaisesRegex(RuntimeError, "changed during retirement"):
+            admission.retire(claim, "fictional", checked)
+        claim.write_text(saved)
+        self.assertEqual(claim.read_text(), saved)
+        self.assertEqual(list(self.state.glob("retired-*")), [])
+
+    def test_new_attempt_keeps_this_queues_spent_attempts(self) -> None:
+        value = self.queue([61])
+        archives = {
+            "a" * 32: (value["id"], {"review": 3}),
+            "b" * 32: (value["id"], {"implement": 2, "review": 1}),
+            "c" * 32: ("another-queue", {"implement": 9, "review": 9}),
+        }
+        for attempt, (queue, spent) in archives.items():
+            record = {"issue": 61, "attempt": attempt, "queue": queue}
+            admission.write(
+                self.state / f"retired-issue-61-{attempt}.json",
+                record | {"activity": "stopped", "worker_attempts": spent},
+            )
+        claim = self.prepare(61)
+        self.assertEqual(
+            json.loads(claim.read_text())["worker_attempts"],
+            {"implement": 2, "review": 3},
+        )
+
+    def test_retire_moves_a_settled_claim_aside_and_refuses_otherwise(self) -> None:
+        parent, child = self.stacked_pair()
+        branch = json.loads(parent.read_text())["branch"]
+        self.review(child)
+        body = self.root / "body.md"
+        body.write_text("Fictional PR body")
+        coordinate.publish(child, "Child", body)
+        for activity in ("active", "unknown", "pr_wait"):
+            if activity != "active":
+                coordinate.settle(child, activity, "fictional")
+            with (
+                self.subTest(activity),
+                self.assertRaisesRegex(RuntimeError, "stopped or merged"),
+            ):
+                coordinate.retire(child, "fictional")
+            if activity == "unknown":
+                coordinate.settle(child, "active", "fictional")
+        coordinate.settle(child, "stopped", "parent rewritten")
+        with self.assertRaisesRegex(RuntimeError, "Close the stopped attempt's PR"):
+            coordinate.retire(child, "fictional")
+        self.prs[0]["state"] = "closed"
+        saved = self.retire_refused_while_held(child)
+        with self.assertRaisesRegex(RuntimeError, "already claimed"):
+            worktree.prepare(self.repo, REPO, 61, branch, parent=60)
+        self.retire_refused_on_identity_or_race(child)
+        old = json.loads(saved)
+        result = coordinate.retire(child, "parent rewritten; PR #50 closed")
+        self.assertFalse(child.exists())
+        self.assertEqual(result["history"][-1]["event"], "retired")
+        retired = coordinate.observe(self.state)["retired"]
+        self.assertEqual([r["attempt"] for r in retired], [old["attempt"]])
+        self.assertEqual(
+            retired[0]["history"][-1]["evidence"], result["history"][-1]["evidence"]
+        )
+        # A new attempt is prepared on the same parent; spent attempts carry over.
+        again = worktree.prepare(self.repo, REPO, 61, branch, parent=60)
+        record = json.loads(again.read_text())
+        self.assertNotEqual(record["attempt"], old["attempt"])
+        self.assertEqual(record["worker_attempts"], old["worker_attempts"])
+        # A merged parent with a live stacked child stays until the child moves.
+        self.review(parent)
+        coordinate.publish(parent, "Parent", body)
+        self.merged.add(51)
+        coordinate.settle(parent, "pr_wait", "fictional")
+        coordinate.settle(parent, "merged", "GitHub reports #51 merged")
+        with self.assertRaisesRegex(RuntimeError, "stacked child depends"):
+            coordinate.retire(parent, "fictional")
+        again.unlink()
+        coordinate.retire(parent, "merged")
+        view = coordinate.observe(self.state)
+        self.assertEqual(len(view["retired"]), 2)
+        # Retired records keep their derived timing and still count.
+        self.assertTrue(all("phases" in item for item in view["retired"]))
+        self.assertEqual(view["summary"]["merged"], 1)
+        self.assertEqual(view["summary"]["throughput"]["published"], 2)
 
     def test_overlap_report_suggests_parallel_serialize_or_stack(self) -> None:
         self.queue([1, 2, 3, 4], issues=2)

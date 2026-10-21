@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 
 from tests import test_queue_admission as queue_tests
 from tests.test_standalone_execution import setUpModule  # noqa: F401 -- #233
-from tools import admission, codex, dashboard, progress, worker, worktree
+from tools import admission, codex, coordinate, dashboard, progress, worker, worktree
 
 REPO = queue_tests.REPO
 
@@ -380,6 +380,18 @@ class DashboardTests(unittest.TestCase):
             admission.control(
                 self.state, "paused", "fixture", expected=binding.expected
             )
+
+    def test_retired_attempt_stays_in_projection_until_replaced(self) -> None:
+        self.policy = self.queue([7])
+        claim = self.prepare(7)
+        coordinate.settle(claim, "stopped", "fixture stop")
+        coordinate.retire(claim, "fixture retire")
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        binding.next_refresh = float("inf")
+        self.assertEqual(binding.snapshot()["issues"][0]["activity"], "stopped")
+        attempt = json.loads(self.prepare(7).read_text())["attempt"]
+        row = binding.snapshot()["issues"][0]
+        self.assertEqual((row["activity"], row["attempt"]), ("active", attempt))
 
     def test_snapshot_derives_outside_lock_and_refuses_replacement(self) -> None:
         self.policy = self.queue([7])

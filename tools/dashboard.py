@@ -355,9 +355,11 @@ class Binding:
         with admission.locked(self.state):
             queue = admission.policy(self.state)
             admission.require_context(queue, self.expected)
+            # Retired attempts first: a live claim of the same issue replaces them.
             claims = [
                 item
-                for item in admission.records(self.state)
+                for item in admission.retired(self.state)
+                + admission.records(self.state)
                 if item.get("repository") == queue["repository"]
                 and item.get("queue") == queue["id"]
                 and type(item.get("issue")) is int

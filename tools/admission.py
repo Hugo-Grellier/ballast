@@ -331,6 +331,14 @@ def admit_issue(state: Path, record: dict) -> None:
     ):
         fail("Queue issue or human-review backlog limit reached")
     record.update(queue=value["id"], coordinator=coordinator, activity="active")
+    # A retired attempt of this queue keeps its spent worker attempts.
+    spent: dict[str, int] = {}
+    for item in retired(state):
+        if item.get("issue") == record["issue"] and item.get("queue") == value["id"]:
+            for role, count in (item.get("worker_attempts") or {}).items():
+                spent[role] = max(spent.get(role, 0), count)
+    if spent:
+        record["worker_attempts"] = spent
     milestone(record, "admitted")
 
 
@@ -636,6 +644,57 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
         return record
 
 
+def retired(state: Path) -> list[dict]:
+    """Retired attempts, kept readable; they never count as claims."""
+    return [read(path) for path in sorted(state.glob("retired-issue-*.json"))]
+
+
+def retire(claim: Path, evidence: str, checked: dict) -> dict:
+    """Retire a settled attempt so the issue can be prepared again.
+
+    Only a `stopped` or `merged` claim, without a worker lock or an open
+    execution, and only while its activity and PR are still those the caller
+    checked on GitHub (``checked``). The record moves aside with a `retired`
+    milestone, so `status` keeps its history; nothing is deleted. Like
+    `close`, it reads the current policy, not the claim's own queue: with a
+    queue only its coordinator retires, and a closed queue's claims can retire.
+    """
+    if not bounded(evidence, MAX_REASON):
+        fail("Retirement requires bounded evidence")
+    state = claim.parent
+    with locked(state):
+        coordinator = require_coordinator(policy(state))
+        record = read(claim)
+        issue, attempt = record.get("issue"), record.get("attempt")
+        # The archive name comes from the record: accept only prepare()'s shapes.
+        if (
+            type(issue) is not int
+            or claim.name != f"issue-{issue}.json"
+            or not isinstance(attempt, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", attempt)
+        ):
+            fail("Claim identity is malformed; inspect it before retirement")
+        if record.get("activity") not in {"stopped", "merged"}:
+            fail("Only a stopped or merged claim can be retired; settle it first")
+        if claim.with_suffix(".worker").exists() or open_executions(record):
+            fail("Release or reconcile the recorded worker or execution first")
+        if (record.get("activity"), record.get("pr")) != (
+            checked.get("activity"),
+            checked.get("pr"),
+        ):
+            fail("Claim changed during retirement")
+        link = {"issue": issue, "attempt": attempt}
+        if any(item.get("parent") == link for item in records(state)):
+            fail("A stacked child depends on this claim; retarget or retire it first")
+        target = state / f"retired-issue-{issue}-{attempt}.json"
+        if target.exists():
+            fail("Attempt is already retired")
+        milestone(record, "retired", evidence=evidence, retired_by=coordinator)
+        write(claim, record)
+        claim.replace(target)
+        return record
+
+
 def status(state: Path) -> dict:
     """Project queue, capacity and per-issue history from durable records."""
     keys = (
@@ -656,4 +715,7 @@ def status(state: Path) -> dict:
             "closed": [read(path) for path in sorted(state.glob("queue-*.json"))],
             "used": capacity(state),
             "issues": [{key: item.get(key) for key in keys} for item in records(state)],
+            "retired": [
+                {key: item.get(key) for key in keys} for item in retired(state)
+            ],
         }
