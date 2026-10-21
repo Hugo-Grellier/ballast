@@ -94,8 +94,11 @@ class QualificationTests(unittest.TestCase):
 
     def open_server(self, process: MemoryProcess) -> routing.AppServer:
         """Replace process creation, preserving the real JSON-lines transport."""
+        # A generous bound: these tests expect a receipt or a protocol error, so a
+        # loaded host must not turn them into a timeout (#241). Timeout behavior
+        # is tested by setting the deadline explicitly.
         with patch.object(routing.subprocess, "Popen", return_value=process):
-            server = routing.AppServer("fake-codex", self.cwd, 0.2)
+            server = routing.AppServer("fake-codex", self.cwd, 30)
         self.addCleanup(server.close)
         return server
 
