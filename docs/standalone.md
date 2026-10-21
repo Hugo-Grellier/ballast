@@ -84,6 +84,8 @@ shared by its linked worktrees. They contain local paths and stay untracked.
 This prevents duplicate dispatch within that clone. It does not coordinate other
 clones or hosts. A failed setup preserves its claim and residual files. Do not
 remove a claim or infer exit from age/PID to retry; inspect and reconcile first.
+A settled attempt makes room for a new one only through `coordinate.py retire`
+(below).
 
 ## Execute and observe
 
@@ -305,10 +307,11 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
   foreign or stale PRs block. A stacked claim targets its parent branch;
   `publish` refuses when its parent claim is missing or replaced, when GitHub
   reports the parent PR merged (retarget first), or when the parent's pushed
-  head is not in the child: rebase first when the parent only gained commits,
-  push the parent first when a retarget restacked it locally, and a fixed
-  refusal (below) when the parent's pushed branch no longer contains the
-  child's recorded base revision. For any claim in a stack, the PR body
+  head is not in the child: fetch first when that head (or any commit it
+  compares) is missing from the local object store, rebase first when the
+  parent's pushed branch still contains the child's recorded base revision,
+  push the parent first when a retarget restacked it locally, and otherwise a
+  fixed refusal (below): the parent's pushed branch was rewritten. For any claim in a stack, the PR body
   gets a `## Stack` section with the merge order, root first, and re-publishing
   an existing PR rewrites its body with `gh pr edit` so each PR carries the
   current order.
@@ -325,16 +328,18 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
   heads. An existing child PR is marked `retarget_pending` until GitHub reports
   it on the new base: retarget reads the PR's base and edits it only when it
   differs, so after a failed or uncertain edit, run `retarget` again; it only
-  reconciles the PR. It does not push. The new heads have no review or check
+  reconciles the PR. A parent merged head missing from the local object store
+  refuses with "fetch the parent's head first". It does not push. The new heads
+  have no review or check
   evidence: push them, run fresh reviews, then `publish` again; CI runs on the
   push.
 - Never rewrite a stacked parent's pushed branch (amend, rebase onto a moved
   base, force-push) while it has a child: rebasing the child onto it would drop
   the child's recorded base revision and leave a claim nothing validates again.
   `publish` and `retarget` refuse the child with a fixed reason instead of
-  advising a rebase. If it happens anyway, `settle` the child `stopped`,
-  reconcile its claim like any stopped attempt, and prepare a new child attempt
-  on the parent's current head. The helpers rewrite a parent only inside
+  advising a rebase. If it happens anyway, `settle` the child `stopped`, close
+  its PR, `retire` its claim, and prepare a new child attempt on the parent's
+  current head. The helpers rewrite a parent only inside
   `retarget`, which restacks every later member and records its new base
   revision in the same step.
 - `settle --claim CLAIM ACTIVITY --evidence TEXT` records positive coordinator
@@ -348,6 +353,16 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
   queue's coordinator, while no `.worker` lock exists for it; the history entry
   records the previous owner. Any other claim passes to the queue's coordinator
   on its next settle.
+- `retire --claim CLAIM --evidence TEXT` moves a `stopped` or `merged` claim
+  aside as `retired-issue-N-ATTEMPT.json` with a `retired` milestone, so
+  `worktree.py` can prepare the issue again and `--parent` no longer counts it
+  as the parent's child. It refuses any other activity, a `.worker` lock, an
+  open coordinator execution, a live stacked child of the claim, and a stopped
+  claim whose recorded PR GitHub does not report closed (a recorded PR
+  consumes backlog until merged; a closed one no longer awaits review). A new
+  attempt of the same issue in the same queue keeps the retired attempts' spent
+  worker attempts. Nothing is deleted: the checkout and branch stay, and
+  `status` lists retired records under `retired` with their history.
 - `release --claim CLAIM --worker ID --evidence TEXT` frees an `unknown` worker
   lock after the coordinator has positive stop evidence (for example the backend
   thread's terminal state) and marks that worker's result `released`. Nothing

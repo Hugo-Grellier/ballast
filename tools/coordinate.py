@@ -474,8 +474,25 @@ REWRITTEN = (
 )
 
 
+MISSING = (
+    "A stacked parent's head is not in the local object store; fetch the "
+    "parent's head first"
+)
+
+
 def ancestor(cwd: Path, git_dir: Path, old: str, new: str) -> bool:
-    """Whether ``old`` is an ancestor of ``new`` in the pinned checkout."""
+    """Whether ``old`` is an ancestor of ``new`` in the pinned checkout.
+
+    A commit missing locally (a parent updated on GitHub, not fetched) refuses
+    instead of reading as "not an ancestor", which would advise a wrong recovery.
+    """
+    for revision in (old, new):
+        try:
+            worktree.git(
+                cwd, "cat-file", "-e", f"{revision}^{{commit}}", git_dir=git_dir
+            )
+        except RuntimeError:
+            worktree.fail(MISSING)
     try:
         worktree.git(cwd, "merge-base", "--is-ancestor", old, new, git_dir=git_dir)
     except RuntimeError:
@@ -610,13 +627,15 @@ def publish(claim: Path, title: str, body: Path) -> dict:
                 "HEAD",
                 git_dir=Path(above["git_dir"]),
             )
+            if ancestor(cwd, git_dir, record["base_sha"], pushed):
+                # The child's base stays in its history: rebasing here is safe.
+                worktree.fail(
+                    "Parent branch moved; rebase the child onto its pushed head"
+                )
             if local == record["base_sha"]:
                 # A retarget restacked the parent and recorded its new head here.
                 worktree.fail("Push the parent's restacked head before the child")
-            if not ancestor(cwd, git_dir, record["base_sha"], pushed):
-                worktree.fail(REWRITTEN)
-            # The child's base stays in its history: rebasing here is safe.
-            worktree.fail("Parent branch moved; rebase the child onto its pushed head")
+            worktree.fail(REWRITTEN)
     remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
     if remote != head:
         worktree.fail("Push the reviewed head before publication")
@@ -830,6 +849,27 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
         if not isinstance(data, dict) or data.get("merged") is not True:
             worktree.fail("GitHub does not report this PR merged")
     return admission.settle(claim, activity, evidence)
+
+
+def retire(claim: Path, evidence: str) -> dict:
+    """Retire a stopped or merged claim; an open PR must be closed first.
+
+    A recorded PR consumes backlog until merged, so a stopped claim whose PR
+    GitHub still reports open stays; a closed or merged one may go.
+    """
+    record = admission.read(claim)
+    pr = record.get("pr")
+    if record.get("activity") == "stopped" and isinstance(pr, dict):
+        data = gh(
+            Path(record["checkout"]),
+            "api",
+            "--hostname",
+            "github.com",
+            f"repos/{record['repository']}/pulls/{pr['number']}",
+        )
+        if not isinstance(data, dict) or data.get("state") != "closed":
+            worktree.fail("Close the stopped attempt's PR before retiring it")
+    return admission.retire(claim, evidence, pr)
 
 
 def rebased(
@@ -1138,7 +1178,7 @@ def observe(state: Path) -> dict:
         worker_view(directory, now)
         for directory in sorted((state / "workers").glob("*"))
     ]
-    for item in view["issues"]:
+    for item in view["issues"] + view["retired"]:
         item.update(issue_view(item, workers, now))
     queue = view["queue"] or {}
     history = queue.get("history") or []
@@ -1216,7 +1256,7 @@ def parser() -> argparse.ArgumentParser:
     control.add_argument("--reason", required=True)
     close = commands.add_parser("close")
     close.add_argument("--reason", required=True)
-    for name in ("settle", "publish", "recover", "release", "retarget"):
+    for name in ("settle", "publish", "recover", "release", "retarget", "retire"):
         command = commands.add_parser(name)
         command.add_argument("--claim", type=Path, required=True)
         if name != "publish":
@@ -1300,6 +1340,7 @@ def run(args: argparse.Namespace) -> dict:
         "recover": lambda: recover(cwd, claim, args.evidence),
         "release": lambda: admission.release(claim, args.worker, args.evidence),
         "retarget": lambda: retarget(claim, args.evidence),
+        "retire": lambda: retire(claim, args.evidence),
         "publish": lambda: publish(claim, args.title, args.body_file),
     }
     return operations[args.command]()
