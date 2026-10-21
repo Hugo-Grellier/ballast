@@ -37,6 +37,8 @@ TRANSITIONS = {
     "merged": set(),
 }
 QUOTA_ERRORS = {"usageLimitExceeded", "rateLimitExceeded"}
+# The quota-limited worker backend; a review fallback never routes back to it.
+WORKER_PROVIDER = "openai"
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ class QueueSpec:
     limits: dict[str, int]
     coordinator: str
     revision: str
+    # Operator policy: {"provider", "model"} reviewing after a recorded quota.
+    review_fallback: dict | None = None
 
 
 class FixedReasonError(RuntimeError):
@@ -117,6 +121,16 @@ def valid_quota(quota: object) -> bool:
     return retry is None or (type(retry) in (int, float) and math.isfinite(retry))
 
 
+def valid_fallback(route: object) -> bool:
+    """Accept a review fallback naming another provider and a model only."""
+    return (
+        isinstance(route, dict)
+        and set(route) == {"provider", "model"}
+        and all(bounded(item) for item in route.values())
+        and route["provider"].lower() != WORKER_PROVIDER
+    )
+
+
 def policy(state: Path) -> dict | None:
     """Read the optional finite queue policy; malformed policy fails closed."""
     path = state / "queue.json"
@@ -140,6 +154,7 @@ def policy(state: Path) -> dict | None:
         or not bounded(value.get("id"))
         or not bounded(value.get("repository"))
         or (quota is not None and not valid_quota(quota))
+        or ("review_fallback" in value and not valid_fallback(value["review_fallback"]))
     ):
         fail("Queue policy is malformed")
     return value
@@ -173,6 +188,20 @@ def runnable(value: dict | None) -> None:
     quota = value.get("quota")
     if quota and (quota.get("retry_at") is None or time.time() < quota["retry_at"]):
         fail("Provider quota is paused; no eligible retry window")
+
+
+def quota_fallback(value: dict | None, role: str, route: tuple) -> bool:
+    """Whether a coordinator review may run on the operator's fallback route.
+
+    Only while dispatch is blocked by a recorded quota pause alone: a pause,
+    cancel or deadline still refuses, and the pause itself stays in place.
+    """
+    if value is None or role != "review" or "review_fallback" not in value:
+        return False
+    if finished(value) or value["mode"] != "running" or not value.get("quota"):
+        return False
+    provider, model, _ = route
+    return value["review_fallback"] == {"provider": provider, "model": model}
 
 
 def records(state: Path) -> list[dict]:
@@ -227,6 +256,8 @@ def create(state: Path, spec: QueueSpec) -> dict:
         bounded(item) for item in (spec.repository, spec.coordinator, spec.revision)
     ):
         fail("Repository, coordinator and revision must be bounded references")
+    if spec.review_fallback is not None and not valid_fallback(spec.review_fallback):
+        fail("A review fallback names a provider other than the worker's and a model")
     with locked(state):
         if (state / "queue.json").exists():
             fail("Queue already exists; recover it instead of resetting its budget")
@@ -242,6 +273,8 @@ def create(state: Path, spec: QueueSpec) -> dict:
             "deadline": time.time() + limits["seconds"],
             "mode": "running",
         }
+        if spec.review_fallback is not None:
+            value["review_fallback"] = dict(spec.review_fallback)
         milestone(value, "configured")
         write(state / "queue.json", value)
         return value

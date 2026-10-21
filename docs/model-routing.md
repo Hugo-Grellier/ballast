@@ -59,7 +59,10 @@ The execution integration must:
 
 Never silently substitute a model, provider, effort, inherited session, or paid
 API. A fallback must be allowed by the project route map or an explicit human
-decision, and must receive its own launch verification. Provider credentials and
+decision, and must receive its own launch verification. The one exception is
+the standalone [quota review fallback](standalone.md#quota-review-fallback): an
+operator-approved review route used only after a recorded quota outcome, whose
+publication states the route unverified. Provider credentials and
 permissions are separate from model selection; changing model does not establish
 cross-provider execution capability.
 

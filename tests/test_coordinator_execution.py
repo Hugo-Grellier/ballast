@@ -14,6 +14,7 @@ from tools import admission, coordinate, dashboard, worktree
 
 REPO = queue_tests.REPO
 ROUTE = ("anthropic", "fixture-model", "high")
+FALLBACK = {"provider": "anthropic", "model": "fixture-model"}
 
 
 class CoordinatorExecutionTests(unittest.TestCase):
@@ -28,6 +29,7 @@ class CoordinatorExecutionTests(unittest.TestCase):
     script = queue_tests.QueueTests.script
     run_worker = queue_tests.QueueTests.run_worker
     publish_ready = queue_tests.QueueTests.publish_ready
+    pr_command = queue_tests.QueueTests.pr_command
 
     def claimed(self, issue: int) -> Path:
         self.policy = self.queue([issue])
@@ -366,6 +368,132 @@ class CoordinatorExecutionTests(unittest.TestCase):
                         claim, identifier, "completed", ("approved", 1)
                     )
         admission.reserve_worker(claim, "f" * 32, "implement")
+
+    def fallback_claim(self, issue: int, fallback: dict | None = FALLBACK) -> Path:
+        """Queue with the operator's review fallback policy, base head pushed."""
+        spec = admission.QueueSpec(
+            REPO, [issue], dict(admission.DEFAULTS), "lead", "rev-1", fallback
+        )
+        self.policy = admission.create(self.state, spec)
+        claim = self.prepare(issue)
+        record = admission.read(claim)
+        self.checkout = Path(record["checkout"])
+        self.heads[record["branch"]] = self.base
+        (self.root / "body.md").write_text("Fictional PR body")
+        return claim
+
+    def approve(self, claim: Path, route: tuple = ROUTE) -> dict:
+        review = coordinate.start_execution(claim, "review", route)
+        return coordinate.finish_execution(
+            claim, review["worker"], "completed", ("approved", 1)
+        )
+
+    def test_quota_fallback_review_publishes_under_the_operator_policy(self) -> None:
+        claim = self.fallback_claim(13)
+        admission.quota(self.state, "usageLimitExceeded", None)
+        # Only the named route, and only a review, runs during the quota pause.
+        for role, route in (
+            ("review", ("anthropic", "other-model", "high")),
+            ("review", ("openai", "fixture-model", "high")),
+            ("implement", ROUTE),
+        ):
+            with (
+                self.subTest(role=role, route=route),
+                self.assertRaisesRegex(RuntimeError, "quota is paused"),
+            ):
+                coordinate.start_execution(claim, role, route)
+        done = self.approve(claim)
+        self.assertEqual(done["fallback"], "quota")
+        self.assertFalse(done["route_verified"])
+        # The pause still blocks Codex dispatch: no worker, no retry.
+        self.assertIsNotNone(admission.policy(self.state).get("quota"))
+        with self.assertRaisesRegex(RuntimeError, "quota is paused"):
+            admission.reserve_worker(claim, "f" * 32, "review")
+        published = coordinate.publish(claim, "Fictional", self.root / "body.md")
+        (pr,) = self.prs
+        self.assertEqual(published["pr"]["number"], pr["number"])
+        self.assertTrue(pr["body"].startswith("Fictional PR body"))
+        for text in (
+            "## Review route",
+            "quota fallback route",
+            "`anthropic`",
+            "`fixture-model`",
+            "unverified",
+            "effort is not verifiable",
+        ):
+            self.assertIn(text, pr["body"])
+        self.assertEqual((self.root / "body.md").read_text(), "Fictional PR body")
+
+    def test_fallback_refused_without_policy(self) -> None:
+        claim = self.fallback_claim(14, None)
+        admission.quota(self.state, "usageLimitExceeded", None)
+        with self.assertRaisesRegex(RuntimeError, "quota is paused"):
+            coordinate.start_execution(claim, "review", ROUTE)
+        admission.control(self.state, "running", "operator resumed")
+        self.approve(claim)
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(self.prs, [])
+
+    def test_fallback_refused_without_a_quota_outcome(self) -> None:
+        claim = self.fallback_claim(15)
+        done = self.approve(claim)
+        self.assertNotIn("fallback", done)
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        # A record marked as a fallback still needs the recorded quota pause.
+        path = self.state / "workers" / done["worker"] / "result.json"
+        admission.write(path, done | {"fallback": "quota"})
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(self.prs, [])
+
+    def test_fallback_refused_for_a_review_of_another_head(self) -> None:
+        claim = self.fallback_claim(16)
+        admission.quota(self.state, "usageLimitExceeded", None)
+        self.approve(claim)
+        self.commit("after the review\n")
+        record = admission.read(claim)
+        self.heads[record["branch"]] = worktree.git(self.checkout, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(self.prs, [])
+
+    def test_fallback_refused_while_paused_and_policy_is_validated(self) -> None:
+        claim = self.fallback_claim(17)
+        admission.quota(self.state, "usageLimitExceeded", None)
+        admission.control(self.state, "paused", "operator pause")
+        with self.assertRaisesRegex(RuntimeError, "Queue is paused"):
+            coordinate.start_execution(claim, "review", ROUTE)
+        for name, fallback in {
+            "worker provider": {"provider": "OpenAI", "model": "m"},
+            "missing model": {"provider": "anthropic"},
+            "extra key": FALLBACK | {"effort": "high"},
+            "empty": {"provider": "", "model": "m"},
+        }.items():
+            spec = admission.QueueSpec(
+                REPO, [18], dict(admission.DEFAULTS), "lead", "rev-1", fallback
+            )
+            with (
+                self.subTest(name),
+                self.assertRaisesRegex(RuntimeError, "review fallback"),
+            ):
+                admission.create(self.root / name, spec)
+            value = self.policy | {"review_fallback": fallback}
+            admission.write(self.state / "queue.json", value)
+            with (
+                self.subTest(name),
+                self.assertRaisesRegex(RuntimeError, "policy is malformed"),
+            ):
+                admission.policy(self.state)
+        arguments = ["--cwd", str(self.repo), "create", "--repo", REPO]
+        arguments += ["--issue", "18", "--coordinator", "lead", "--revision", "r"]
+        with self.assertRaisesRegex(RuntimeError, "PROVIDER:MODEL"):
+            coordinate.run(
+                coordinate.parser().parse_args(
+                    [*arguments, "--review-fallback", "anthropic"]
+                )
+            )
 
 
 if __name__ == "__main__":

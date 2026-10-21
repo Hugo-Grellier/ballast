@@ -369,7 +369,8 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
     """Find a review worker of this attempt completed on this unchanged head.
 
     The verdict is not read here: a completed review is not an approval. A
-    coordinator execution's review is never one: its route is self-reported.
+    coordinator execution's review is never one: its route is self-reported
+    (see ``fallback_review`` for the only, operator-allowed exception).
     """
     # Read every record first: a malformed one blocks regardless of scan order.
     results = [
@@ -383,6 +384,69 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
         and result.get("head_before") == result.get("head_after") == head
         and "executor" not in result
         for result in results
+    )
+
+
+def fallback_review(claim: Path, record: dict, head: str) -> dict | None:
+    """Find the completed quota-fallback review of this attempt and head.
+
+    Only under the queue's operator policy naming the fallback route, after a
+    recorded quota pause, and only for an execution started during that pause
+    (``start_execution`` marks it) on exactly that route.
+    """
+    value = admission.governing(claim.parent, record)
+    route = (value or {}).get("review_fallback")
+    if route is None or not any(
+        entry.get("event") == "quota_paused" for entry in value.get("history") or []
+    ):
+        return None
+    results = [
+        admission.read(path)
+        for path in (claim.parent / "workers").glob("*/result.json")
+    ]
+    return next(
+        (
+            result
+            for result in results
+            if result.get("attempt") == record["attempt"]
+            and result.get("role") == "review"
+            and result.get("status") == "completed"
+            and result.get("executor") == "coordinator"
+            and result.get("fallback") == "quota"
+            and result.get("head_before")
+            == result.get("head_after")
+            == result.get("reviewed_head")
+            == head
+            and {
+                key: (result.get("requested") or {}).get(key)
+                for key in ("provider", "model")
+            }
+            == route
+        ),
+        None,
+    )
+
+
+def review_evidence(claim: Path, record: dict, head: str) -> dict | None:
+    """Require a review of this head: None for a worker's, else the fallback."""
+    if reviewed(claim, record["attempt"], head):
+        return None
+    fallback = fallback_review(claim, record, head)
+    if fallback is None:
+        worktree.fail("Publish requires a completed independent review of this head")
+    return fallback
+
+
+def fallback_body(text: str, result: dict) -> str:
+    """State the unverified fallback route a published review ran on."""
+    requested = result["requested"]
+    return (
+        f"{text.rstrip()}\n\n## Review route\n\nThe independent review ran on the "
+        "operator's quota fallback route, provider "
+        f"`{requested['provider']}` and model `{requested['model']}` (requested "
+        f"effort `{requested['effort']}`), after a recorded Codex `quota` outcome "
+        "paused worker dispatch. This route is unverified: the model is "
+        "coordinator-reported and the effort is not verifiable.\n"
     )
 
 
@@ -515,8 +579,7 @@ def publish(claim: Path, title: str, body: Path) -> dict:
     git_dir = Path(record["git_dir"])
     # Pinned admin directory: never follow the worker-writable gitfile.
     head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
-    if not reviewed(claim, record["attempt"], head):
-        worktree.fail("Publish requires a completed independent review of this head")
+    fallback = review_evidence(claim, record, head)
     if record.get("parent"):
         parent = parent_claim(claim, record)
         if parent_merged(cwd, parent):
@@ -543,6 +606,8 @@ def publish(claim: Path, title: str, body: Path) -> dict:
     if remote != head:
         worktree.fail("Push the reviewed head before publication")
     text = stacked_body(claim.parent, record, body)
+    if fallback is not None:
+        text = fallback_body(text, fallback)
     # A private copy carries the stack order; the coordinator's file stays intact.
     with tempfile.NamedTemporaryFile("w", dir=claim.parent, suffix=".md") as copy:
         copy.write(text)
@@ -583,7 +648,14 @@ def start_execution(claim: Path, role: str, route: tuple[str, str, str]) -> dict
     with admission.locked(state):
         item = admission.read(claim)
         value = admission.governing(state, item)
-        admission.runnable(value)
+        try:
+            admission.runnable(value)
+            fallback = False
+        except admission.AdmissionError:
+            # The quota pause stays: no worker dispatch, no Codex retry.
+            if not admission.quota_fallback(value, role, route):
+                raise
+            fallback = True
         coordinator = admission.require_coordinator(value)
         if value and (
             item.get("queue") != value["id"]
@@ -612,6 +684,8 @@ def start_execution(claim: Path, role: str, route: tuple[str, str, str]) -> dict
             "head_before": head,
             "tokens": "unavailable",
         }
+        if fallback:
+            result["fallback"] = "quota"
         admission.write(directory / "result.json", result)
         worker.event(directory, "created", role=role, model=model, effort=effort)
         # Coordinator work has no setup phase: it starts when it is recorded.
@@ -1101,6 +1175,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--revision", required=True)
     for key in admission.DEFAULTS:
         create.add_argument(f"--{key}", type=int)
+    create.add_argument("--review-fallback", metavar="PROVIDER:MODEL")
     execution = commands.add_parser("execution")
     execution.add_argument("action", choices=("start", "finish"))
     execution.add_argument("--claim", type=Path, required=True)
@@ -1166,8 +1241,19 @@ def run(args: argparse.Namespace) -> dict:
         worktree.fail("Run queue commands from the project checkout, not an issue")
     if args.command == "create":
         worktree.repository(cwd, args.repo)
+        fallback = None
+        if args.review_fallback is not None:
+            provider, _, model = args.review_fallback.partition(":")
+            fallback = {"provider": provider, "model": model}
+            if not all(ROUTE.fullmatch(part) for part in fallback.values()):
+                worktree.fail("Review fallback must be PROVIDER:MODEL")
         spec = admission.QueueSpec(
-            args.repo, args.issue, limits(args), args.coordinator, args.revision
+            args.repo,
+            args.issue,
+            limits(args),
+            args.coordinator,
+            args.revision,
+            fallback,
         )
         return admission.create(state, spec)
     queue = {

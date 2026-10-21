@@ -228,8 +228,10 @@ python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" se
 
 Defaults are one active issue, two workers (review and helpers included), two
 PRs awaiting humans, three attempts per worker role and one hour; override each
-with `--issues`, `--workers`, `--backlog`, `--attempts` and `--seconds`. A queue
-cannot be recreated to reset its budget. Once it is finished, `close --reason
+with `--issues`, `--workers`, `--backlog`, `--attempts` and `--seconds`.
+`--review-fallback PROVIDER:MODEL` records the operator's
+[quota review fallback](#quota-review-fallback) policy; omit it unless the
+operator approved that route. A queue cannot be recreated to reset its budget. Once it is finished, `close --reason
 TEXT` archives it as `queue-ID.json` (still shown by `status` under `closed`) so the
 clone can create the next queue. Close refuses a queue that is neither cancelled
 nor past its deadline, any of its claims still `active`, `unknown` or `pr_wait`,
@@ -284,7 +286,9 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
 - A structured `usageLimitExceeded`/`rateLimitExceeded` turn error settles the
   worker as `quota` and pauses dispatch until the backend-reported window reset,
   or until an explicit `running` control when no window was reported. Nothing
-  retries, buys capacity or skips review.
+  retries, buys capacity or skips review. Under the queue's operator policy, a
+  coordinator review may continue on the named
+  [fallback route](#quota-review-fallback) while the pause blocks dispatch.
 - `publish --claim CLAIM --title TEXT --body-file FILE` first requires a
   `--role review` worker of the claim's attempt whose recorded status is
   `completed` and whose recorded head before and after the turn both equal the
@@ -292,7 +296,9 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
   `quota`, `unknown` or `released` review, blocks before any GitHub call. It
   does not read the verdict: a completed review is not an approval, and the
   coordinator still reads the findings before publishing. A coordinator
-  execution's review (below) never satisfies it. It then requires that
+  execution's review (below) never satisfies it, except a
+  [quota review fallback](#quota-review-fallback) under the queue's operator
+  policy. It then requires that
   head pushed, reuses the one matching PR on the claim branch, creates a draft
   only when none exists, and re-queries after an uncertain response. Several,
   foreign or stale PRs block. A stacked claim targets its parent branch;
@@ -408,11 +414,39 @@ review takes them.
   so it never settles a worker, and `release` never applies to one.
 - Setup is zero (the work starts when recorded); running time counts in the
   issue's `implement` and `review` phases and review rounds, as for workers.
-- A coordinator review never satisfies `publish`. Reference it from the PR's
-  execution evidence or a `review`/`readiness` progress record, as
+- A coordinator review never satisfies `publish`, except under the
+  [quota review fallback](#quota-review-fallback) below. Reference it from the
+  PR's execution evidence or a `review`/`readiness` progress record, as
   self-reported and unverified.
 - If `finish` fails partway, rerun it with the same outcome: it completes the
   missing steps without rechecking the head. A different outcome is refused.
+
+### Quota review fallback
+
+When the worker backend's quota is exhausted, independent review may continue
+as a coordinator execution on another provider, only under an explicit operator
+policy recorded in the queue configuration:
+`create ... --review-fallback PROVIDER:MODEL`. The operator approves that route
+before the queue is created; it cannot be added to an existing queue, and the
+worker's own provider (`openai`) is refused. Without it nothing changes.
+
+- It applies only after a recorded `quota` outcome: while the queue is running
+  and dispatch is blocked by a quota pause alone, `execution start --role
+  review` on exactly the policy's provider and model is accepted and marked
+  `fallback: quota`. A pause, cancel, deadline, another route or an
+  implementation execution is still refused.
+- The quota pause stays in place: worker reservations and turns keep refusing,
+  nothing retries the worker backend or buys capacity, and only an explicit
+  `running` control or the reported reset window ends it.
+- `publish` accepts, in place of a worker review, a completed fallback execution
+  of the claim's attempt whose recorded head before, after and reviewed all equal
+  the checkout head, on the policy's route, in a queue whose history records the
+  quota pause. Its verdict is not read. A review of another head, without the
+  policy or without the quota outcome is refused before any GitHub call.
+- The PR body gets a `## Review route` section naming the fallback provider,
+  model and requested effort, and stating that the route is unverified: the
+  model is coordinator-reported and the effort is not verifiable. `publish`
+  records the PR in the claim as usual, so `settle merged` later sees it.
 
 ## Qualification
 
