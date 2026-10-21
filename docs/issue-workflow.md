@@ -173,7 +173,11 @@ Push only the intended issue branch. Create or update one PR using the repositor
 template; reuse an existing matching PR. Link the leaf issue with a closing
 reference only when that PR delivers its complete outcome. Link the parent as
 context without closing it prematurely. Record the reviewer verdict and reviewed
-head in the PR body, with a link to detailed findings when available.
+head in the PR body, with a link to detailed findings when available. Before
+creating or editing the PR, run the PR body check on the body file
+(`python3 -I -S .github/scripts/pr_body.py --body-file FILE` in an adopting
+project, `tools/pr_body.py` in Ballast) and publish nothing while it fails; an R2
+body without its approval comment link fails it.
 
 Check required CI and merge status after publication. Resolve failures introduced
 by this change. If the branch changes to resolve conflicts, rerun affected checks
