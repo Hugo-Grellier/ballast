@@ -19,7 +19,7 @@ bounded nonblocking pipe writes.
 
 Without a [queue](#bounded-queue), run one issue and one worker at a time. Each
 worker has a `--timeout` of at most 900 seconds (300 by default); settling after
-it can take about 70 seconds more (see [execute and observe](#execute-and-observe)
+it can take about 190 seconds more (see [execute and observe](#execute-and-observe)
 for running it as a background command). Task and final messages are limited to
 64 KiB, protocol messages to 1 MiB. The coordinator enforces the [round limit](pair-review.md#round-limit)
 and permits one issue PR. A fresh session is required for each worker. Worker
@@ -99,9 +99,10 @@ python3 -I -S "$BALLAST_SOURCE/tools/worker.py" \
 ```
 
 At `--timeout` the worker interrupts its turn rather than abandoning it, so it
-can run up to about 70 seconds longer: at most 30 seconds for the interrupted
-turn's terminal evidence, then up to 30 seconds for the checkout to go quiet and
-a few seconds for client shutdown. An agent harness may stop foreground commands
+can run up to about 190 seconds longer: at most 30 seconds for the interrupted
+turn's terminal evidence, then up to 150 seconds for the checkout to go quiet
+(30 seconds, plus 120 for a sandboxed tool command that outlives the interrupt)
+and a few seconds for client shutdown. An agent harness may stop foreground commands
 sooner (Claude Code's Bash tool defaults to 120 seconds, at most 600). Run the
 worker as a background command of the harness and wait for it to exit, or choose
 a `--timeout` that leaves that margin below the harness limit. A SIGKILL leaves
@@ -148,7 +149,12 @@ SIGTERM or SIGINT before the task is dispatched. After dispatch, the deadline an
 SIGTERM/SIGINT take the queue cancellation path: the worker sends
 `turn/interrupt` and waits at most 30 seconds for the matching terminal turn.
 A backend-confirmed interrupted turn in a quiet checkout settles as `timeout`
-(deadline) or `cancelled` (signal) and releases the worker lock. Uncertain
+(deadline) or `cancelled` (signal) and releases the worker lock. A tool command
+can outlive the interrupt, so after one the worker watches the checkout up to
+150 seconds (a completed turn: 30) and settles once two consecutive scans find
+it quiet, recording `survivors_exited` with the seconds it waited in
+`events.jsonl`. A process still running at that bound keeps the worker `unknown`
+with its lock; nothing is inferred from a process's age or PID. Uncertain
 delivery, a rejected interrupt or missing terminal evidence, malformed
 completion, failed turn, survivors or unconfirmed shutdown preserve `unknown`
 and the worker lock. The helper closes/reaps its client, but
@@ -241,8 +247,9 @@ and any worker lock; settle, release or reconcile them first.
   queue fails closed if that queue's policy is missing or replaced.
 - `control paused|running|cancelled --reason TEXT` records a control. Pause
   blocks new admissions and turns. Cancel makes live workers send
-  `turn/interrupt` and wait at most 30 seconds for terminal evidence; otherwise
-  the worker stays `unknown` with its lock. Sandboxed tool commands can outlive
+  `turn/interrupt` and wait at most 30 seconds for terminal evidence, then up to
+  150 seconds for the checkout to go quiet; otherwise the worker stays `unknown`
+  with its lock. Sandboxed tool commands can outlive
   the client, so any worker settles only once no process runs inside its
   checkout in two consecutive scans (Linux `/proc`; the worker refuses to start
   elsewhere). A same-user process started after the worker whose working
