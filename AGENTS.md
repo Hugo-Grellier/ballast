@@ -11,7 +11,7 @@ Accepted ADRs govern design; the issue states the outcome and acceptance criteri
 
 ## Commands
 
-- Install: `uv sync --locked`. The shipped tools are stdlib-only; only the gate's `ruff` is pinned in `uv.lock`.
+- Install: `uv sync --locked`. The shipped tools are stdlib-only; only the gate's `ruff` is pinned in `uv.lock`. `uv_build`, the only build requirement, packages `tools/` as the `ballast` command (`tools/cli.py`) for `uvx --from git+...@vX.Y.Z`; the gate never builds it.
 - Fast gate (also CI): `uv run --locked ruff check && uv run --locked ruff format --check` and `uv run --locked python tests/parallel.py tests/test_*.py` (the same classes as `python -m unittest tests/test_*.py`, one process per class, in parallel), and `python3 -I -S tools/spec_check.py` (the [living specs](docs/spec-format.md); passes with a notice while `docs/specs/` is absent).
 - Qualification ([modes and authorization](docs/standalone.md#qualification)): `python3 -I -S tools/qualify.py local` (fakes only, in the gate) for any change to the coordinator path; when a change touches worker launch, routing or publication, also `tools/qualify.py live` on an `OWNER/ballast-qualification-*` disposable repository, outside CI and under operator authorization, recorded under `docs/evidence/`.
 - Record exact verification commands and any unavailable gate in the PR. See the [testing policy](templates/policies/testing.md) for evidence requirements.

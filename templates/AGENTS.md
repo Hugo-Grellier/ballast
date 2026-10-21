@@ -22,16 +22,16 @@ Accepted ADRs and the accepted architecture govern design; the issue states the 
 
 ## Issue workflow
 
-`BALLAST_SOURCE` below means [PATH TO A BALLAST CHECKOUT AT THE ADOPTED TAG], outside this repository. Its `docs/` holds the workflow; read only the file the current phase needs. Paths under `BALLAST_SOURCE` never resolve in this repository.
+The workflow is copied from Ballast [ADOPTED TAG] into `docs/policies/`; read only the file the current phase needs. `ballast` below means `uvx --from git+https://github.com/Hugo-Grellier/ballast@[ADOPTED TAG] ballast`, which runs the helpers (`worktree`, `worker`, `coordinate`, `dashboard`, `merge-check`) from that tag; `ballast <command> --help` lists each one's options, and Ballast's `docs/standalone.md` at that tag documents them.
 
-- For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow `BALLAST_SOURCE/docs/issue-workflow.md`: read the issue and comments, scope and decompose, ask only consequential questions, plan as needed, implement, verify, review, publish. Dispatch only an actionable leaf issue, never an unresolved Epic.
-- Each implementing issue gets its own branch and worktree with one writer. Workers use an explicit model and effort, verified before task input (`BALLAST_SOURCE/docs/model-routing.md`). Run workers with `BALLAST_SOURCE/docs/standalone.md`.
-- An independent reviewer follows `BALLAST_SOURCE/docs/pair-review.md`, including its round limit and what follows it.
+- For `Start #N`, `Fix #N`, `Investigate #N` or `Continue #N`, follow the [issue workflow](docs/policies/issue-workflow.md): read the issue and comments, scope and decompose, ask only consequential questions, plan as needed, implement, verify, review, publish. Dispatch only an actionable leaf issue, never an unresolved Epic.
+- Each implementing issue gets its own branch and worktree with one writer (`ballast worktree`). Workers use an explicit model and effort, verified before task input ([model routing](docs/policies/model-routing.md)), and run with `ballast worker`.
+- An independent reviewer follows [pair review](docs/policies/pair-review.md), including its round limit and what follows it.
 - Record phases, blockers, review rounds and waits on the issue; unknown stays unknown. Agents run outside CI; CI runs deterministic checks only.
 
 ## Risk and conditional guidance
 
-Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval of the risky change and of the merge. R1 and R2 PRs need human merge approval. An R0 PR may be squash-merged by the coordinator only when an independent review approved its exact head and confirmed R0 (the risk classification is reviewed evidence), every required check passed on that unchanged head, and it is not a release or dependency PR and changes no workflow, permission, release or dependency file; `BALLAST_SOURCE/tools/merge_check.py` checks this. Otherwise an agent never merges; it never releases or deploys, and an agent decision is never presented as human approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
+Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2 ([PROJECT R2 BOUNDARIES; see `docs/policies/workflow.md`]). R2 requires explicit human approval of the risky change and of the merge. R1 and R2 PRs need human merge approval. An R0 PR may be squash-merged by the coordinator only when an independent review approved its exact head and confirmed R0 (the risk classification is reviewed evidence), every required check passed on that unchanged head, and it is not a release or dependency PR and changes no workflow, permission, release or dependency file; `ballast merge-check` checks this. Otherwise an agent never merges; it never releases or deploys, and an agent decision is never presented as human approval. The [review matrix](docs/policies/workflow.md#review-triggers) selects reviewers; do not run every specialist on every change.
 
 | When changing | Read and use |
 | --- | --- |

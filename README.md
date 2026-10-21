@@ -22,8 +22,11 @@ in CI. Projects still on a `v1.x` pin keep working; see
 | [Standalone adapter](docs/standalone.md) | Workers, worktree claims and the bounded queue without Orca |
 | [Orca adapter](docs/orca-execution.md) | Not available yet: contract only, blocked upstream ([#179](https://github.com/Hugo-Grellier/ballast/issues/179)) |
 
-The [standalone adapter](docs/standalone.md) uses these helpers, run with
-`python3 -I -S` from a Ballast checkout:
+The [standalone adapter](docs/standalone.md) uses these helpers. A project runs them
+from a pinned tag as
+`uvx --from git+https://github.com/Hugo-Grellier/ballast@vX.Y.Z ballast COMMAND`
+(`worktree`, `worker`, `coordinate`, `dashboard`, `merge-check`); each still runs
+under `python3 -I -S`, as it does from a checkout:
 
 - [`tools/worktree.py`](tools/worktree.py) claims an issue and prepares its worktree.
 - [`tools/worker.py`](tools/worker.py) runs a fresh Codex worker after verifying its
@@ -48,8 +51,9 @@ skipping Dependabot and Release Please PRs, whose bodies are generated.
 
 ## Adopting Ballast in a project
 
-Review and copy what you want from [`templates/`](templates/), then follow
-[adopting Ballast](docs/migration.md#adopting-20):
+Review and copy what you want from [`templates/`](templates/), copy the
+[workflow documents](docs/migration.md#workflow-copies) your `AGENTS.md` cites, then
+follow [adopting Ballast](docs/migration.md#adopting-20):
 
 - [`AGENTS.md`](templates/AGENTS.md): a short agent entry point to fill in;
 - [`policies/`](templates/policies/): engineering, security, testing, dependency,

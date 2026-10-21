@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 TOOLS = Path(__file__).resolve().parent
+# Every step goes through the `ballast` command an adopter runs; `--entry`
+# substitutes an installed one, e.g. `uvx --from git+...@vX.Y.Z ballast`.
+ENTRY = (sys.executable, "-I", "-S", str(TOOLS / "cli.py"))
 COORDINATOR = "qualification"
 PREFIX = "ballast-qualification-"
 DISPOSABLE = re.compile(rf"[A-Za-z0-9-]+/{PREFIX}[A-Za-z0-9_.-]+")
@@ -84,27 +87,28 @@ def worker_summary(result: dict) -> dict:
     return {key: result.get(key) for key in (*keys, "head_before", "head_after")}
 
 
-def scenario(
+def scenario(  # noqa: PLR0913 -- the entry is the one keyword option
     project: Path,
     repo: str,
     issue: int,
     route: tuple[str, str],
     created: Callable[[str, object], None],
+    *,
+    entry: tuple[str, ...] = ENTRY,
 ) -> dict:
     """Drive the documented coordinator steps through the shipped helpers."""
 
     def helper(name: str, *args: str) -> dict:
-        argv = [sys.executable, "-I", "-S", str(TOOLS / name), *args]
-        return json.loads(run(argv, project))
+        return json.loads(run([*entry, name, *args], project))
 
     def queue(*args: str) -> dict:
-        return helper("coordinate.py", "--cwd", str(project), *args)
+        return helper("coordinate", "--cwd", str(project), *args)
 
     def work(role: str, text: str) -> dict:
         task = scratch / f"{role}.txt"
         task.write_text(text)
         result = helper(
-            "worker.py",
+            "worker",
             *("--claim", claim, "--task", str(task), "--role", role),
             *("--model", route[0], "--effort", route[1], "--timeout", "600"),
         )
@@ -127,7 +131,7 @@ def scenario(
         message = f"queue did not select #{issue}: {selected}"
         raise QualificationError(message)
     claim = helper(
-        "worktree.py",
+        "worktree",
         *("--repo", repo, "--issue", str(issue), "--base", "main"),
         *("--cwd", str(project)),
     )["claim"]
@@ -187,7 +191,7 @@ def scenario(
     }
 
 
-def local(root: Path) -> dict:
+def local(root: Path, entry: tuple[str, ...] = ENTRY) -> dict:
     """Seed a clone whose GitHub, push target and Codex are local fakes."""
     bin_dir, project = root / "bin", root / "project"
     bin_dir.mkdir()
@@ -224,7 +228,9 @@ def local(root: Path) -> dict:
     origin = f"https://github.com/{LOCAL_REPO}.git"
     git(project, "remote", "add", "origin", origin)
     git(project, "push", "-q", "origin", "main")
-    evidence = scenario(project, LOCAL_REPO, 1, LOCAL_ROUTE, lambda *_: None)
+    evidence = scenario(
+        project, LOCAL_REPO, 1, LOCAL_ROUTE, lambda *_: None, entry=entry
+    )
     return {"mode": "local", **evidence}
 
 
@@ -500,7 +506,13 @@ def parser() -> argparse.ArgumentParser:
     """Modes; see docs/standalone.md#qualification."""
     root = argparse.ArgumentParser(description=__doc__)
     modes = root.add_subparsers(dest="mode", required=True)
-    modes.add_parser("local")
+    local_mode = modes.add_parser("local")
+    local_mode.add_argument(
+        "--entry",
+        type=lambda value: tuple(shlex.split(value)),
+        default=ENTRY,
+        help="the ballast command to drive (default: this checkout's tools/cli.py)",
+    )
     live_mode = modes.add_parser("live")
     live_mode.add_argument("--repo", required=True)
     live_mode.add_argument("--confirm-disposable", action="store_true")
@@ -519,7 +531,7 @@ def main() -> int:
     try:
         if args.mode == "local":
             with tempfile.TemporaryDirectory(prefix=PREFIX) as root:
-                result: dict = local(Path(root))
+                result: dict = local(Path(root), args.entry)
         else:
             result = live(args)
     except (RuntimeError, OSError, ValueError, KeyError) as error:
