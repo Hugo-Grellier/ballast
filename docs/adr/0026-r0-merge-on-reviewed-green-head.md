@@ -37,7 +37,8 @@ Excluded, so a human still merges them whatever their stated risk:
   dependency manifests and lockfiles of common ecosystems (Python, JavaScript,
   Go, Rust, Ruby, PHP, JVM, .NET, Elixir, Nix and any `*.lock`); a project names
   its other manifests or deployment paths with repeatable `--exclude GLOB`;
-- a PR whose changed-file list is incomplete or malformed;
+- a renamed file whose old or new path is excluded, and a PR whose
+  changed-file list (read from the REST files API) is incomplete or malformed;
 - a PR whose risk is disputed or raised by the reviewer or by its actual diff.
 
 Release, deployment, destructive cleanup and paid services still need explicit

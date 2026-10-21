@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import admission, worktree
 
 SHA = re.compile(r"[0-9a-f]{40}")
-FIELDS = "number,state,isDraft,headRefOid,headRefName,author,body,changedFiles,files"
+FIELDS = "number,state,isDraft,headRefOid,headRefName,author,body,changedFiles"
 # File names whose change always needs a human merge (ADR-0026): release files,
 # dependency manifests and lockfiles of common ecosystems. A project adds its own
 # with --exclude.
@@ -88,9 +88,7 @@ def excluded(path: str, extra: tuple[str, ...] = ()) -> bool:
     )
 
 
-def pull_request(
-    pr: object, number: int, head: str, extra: tuple[str, ...] = ()
-) -> None:
+def pull_request(pr: object, number: int, head: str) -> None:
     """Refuse a PR that is not an open, ready, R0-ticked PR at the reviewed head."""
     if not isinstance(pr, dict) or pr.get("number") != number:
         worktree.fail("Pull request response is malformed")
@@ -105,14 +103,30 @@ def pull_request(
         worktree.fail("Release and dependency PRs need a human merge")
     if TICKED.findall(pr.get("body") or "") != ["R0"]:
         worktree.fail("The PR body must tick R0 and no other risk")
-    files = pr.get("files")
-    if not isinstance(files, list) or len(files) != pr.get("changedFiles"):
-        worktree.fail("The changed file list is incomplete")
-    paths = [item.get("path") if isinstance(item, dict) else None for item in files]
-    if not all(isinstance(path, str) and path for path in paths):
+
+
+def changed_paths(pages: object, count: object) -> list[str]:
+    """Every current and previous path of the PR's files, or refuse.
+
+    A rename counts under both names, so moving a workflow out of `.github/`
+    still needs a human merge.
+    """
+    if not isinstance(pages, list) or not all(isinstance(p, list) for p in pages):
         worktree.fail("The changed file list is malformed")
-    if any(excluded(path, extra) for path in paths):
-        worktree.fail("The PR changes a workflow, release or dependency path")
+    files = [item for page in pages for item in page]
+    if len(files) != count:
+        worktree.fail("The changed file list is incomplete")
+    paths = []
+    for item in files:
+        if not isinstance(item, dict):
+            worktree.fail("The changed file list is malformed")
+        names = [item.get("filename")]
+        if "previous_filename" in item:
+            names.append(item["previous_filename"])
+        if not all(isinstance(name, str) and name for name in names):
+            worktree.fail("The changed file list is malformed")
+        paths += names
+    return paths
 
 
 def check(args: argparse.Namespace) -> dict:
@@ -125,12 +139,17 @@ def check(args: argparse.Namespace) -> dict:
     if not SHA.fullmatch(head):
         worktree.fail("The reviewed head is not a full commit SHA")
     target = f"github.com/{args.repo}"
-    pull_request(
-        read("pr", "view", str(number), "--repo", target, "--json", FIELDS),
-        number,
-        head,
-        tuple(args.exclude),
+    pr = read("pr", "view", str(number), "--repo", target, "--json", FIELDS)
+    pull_request(pr, number, head)
+    pages = read(
+        "api",
+        f"repos/{args.repo}/pulls/{number}/files?per_page=100",
+        "--paginate",
+        "--slurp",
     )
+    paths = changed_paths(pages, pr.get("changedFiles"))
+    if any(excluded(path, tuple(args.exclude)) for path in paths):
+        worktree.fail("The PR changes a workflow, release or dependency path")
     checks = read(
         "pr", "checks", str(number), "--repo", target, "--required", "--json", "bucket"
     )

@@ -26,8 +26,8 @@ class MergeCheckTests(unittest.TestCase):
             "author": {"login": "someone", "is_bot": False},
             "body": BODY,
             "changedFiles": 1,
-            "files": [{"path": "docs/guide.md"}],
         }
+        self.files: list = [{"filename": "docs/guide.md"}]
         self.checks: object = [{"bucket": "pass"}, {"bucket": "pass"}]
         self.merge_code = 0
         self.calls: list[tuple[str, ...]] = []
@@ -44,6 +44,10 @@ class MergeCheckTests(unittest.TestCase):
         output, code = "", 0
         if args[:2] == ("pr", "view"):
             output = json.dumps(self.pr)
+        elif args[0] == "api":
+            # --paginate --slurp: one array per page of up to 100 files.
+            pages = [self.files[i : i + 100] for i in range(0, len(self.files), 100)]
+            output = json.dumps(pages)
         elif args[:2] == ("pr", "checks"):
             # gh exits 1 or 8 for failing or pending checks but still prints them.
             output = json.dumps(self.checks)
@@ -150,21 +154,43 @@ class MergeCheckTests(unittest.TestCase):
             "Gemfile.lock",
             "build.gradle.kts",
         ):
-            self.pr["files"] = [{"path": "docs/guide.md"}, {"path": path}]
+            self.files = [{"filename": "docs/guide.md"}, {"filename": path}]
             self.pr["changedFiles"] = 2
             self.refuses("workflow, release or dependency")
 
     def test_refuses_project_excluded_paths(self) -> None:
-        self.pr["files"] = [{"path": "deploy/values.yaml"}]
+        self.files = [{"filename": "deploy/values.yaml"}]
         self.assertIn("merge", self.check())
         with self.assertRaises(admission.FixedReasonError) as raised:
             self.check("approved", "R0", "deploy/*")
         self.assertIn("workflow, release or dependency", str(raised.exception))
 
     def test_refuses_malformed_file_entries(self) -> None:
-        for entry in ({}, {"path": None}, {"path": ""}, {"path": 3}, "docs/x.md"):
-            self.pr["files"] = [entry]
+        for entry in (
+            {},
+            {"filename": None},
+            {"filename": ""},
+            {"filename": 3},
+            {"filename": "docs/x.md", "previous_filename": None},
+            "docs/x.md",
+        ):
+            self.files = [entry]
             self.refuses("malformed")
+
+    def test_refuses_renames_from_excluded_paths(self) -> None:
+        for old in (".github/workflows/ci.yml", "requirements.txt", "deploy/app.yaml"):
+            self.files = [{"filename": "docs/archived", "previous_filename": old}]
+            with self.assertRaises(admission.FixedReasonError) as raised:
+                self.check("approved", "R0", "deploy/*")
+            self.assertIn("workflow, release or dependency", str(raised.exception))
+        self.files = [{"filename": "docs/b.md", "previous_filename": "docs/a.md"}]
+        self.assertIn("merge", self.check())
+
+    def test_reads_every_page_of_files(self) -> None:
+        self.files = [{"filename": f"docs/{n}.md"} for n in range(150)]
+        self.files.append({"filename": "uv.lock"})
+        self.pr["changedFiles"] = 151
+        self.refuses("workflow, release or dependency")
 
     def test_refuses_truncated_file_list(self) -> None:
         self.pr["changedFiles"] = 101
