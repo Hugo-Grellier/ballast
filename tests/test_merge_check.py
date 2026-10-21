@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from tools import admission, merge_check, spec_check, worktree
+
+FETCH = merge_check.fetch  # the real fetch; setUp replaces it with a fake
 
 REPO = "example/fixture"
 ISSUE = 5
@@ -203,6 +208,7 @@ class MergeVerdictTests(unittest.TestCase):
         """Make an R1 PR adding scenario Second, its delta posted and approved."""
         self.change({"docs/specs/cap.md": SPEC + SECOND, "tools/a.py": "x = 1\n"})
         self.pr["body"] = body("R1")
+        self.pr["headRefName"] = f"issue-{ISSUE}-abcdef12"
         self.issue = {"body": "Risk: R1"}
         self.comments = [delta(entries), approval(entries, **approval_fields)]
 
@@ -610,6 +616,9 @@ class MergeVerdictTests(unittest.TestCase):
         self.comments = [delta(EMPTY_DELTA), approval(EMPTY_DELTA)]
         self.pr["headRefName"] = "issue-9-abcdef12"
         self.human("claim branch names issue #9", "approved", "R1")
+        for branch in ("feat-x", "Issue-5-x"):
+            self.pr["headRefName"] = branch
+            self.human("needs a claim branch", "approved", "R1")
         self.pr["headRefName"] = f"issue-{ISSUE}-abcdef12"
         self.merges("approved", "R1")
 
@@ -638,6 +647,7 @@ class MergeVerdictTests(unittest.TestCase):
             None,
             "- Human-only: tools/gate.py\n",
             "Human-only:\n",
+            "Human-only: tools/gate.py\n```\nCoverage-exempt: docs/**\n",
             "",
             "No keys here.\n",
             "```\nHuman-only: tools/gate.py\n```\n",
@@ -703,7 +713,9 @@ class MergeVerdictTests(unittest.TestCase):
         self.advance_target(
             {
                 "project/workflow.md": text,
-                "docs/specs/cap.md": SPEC.replace("tools/a.py", "tools/dashboard.py"),
+                "docs/specs/cap.md": SPEC.replace(
+                    "tools/a.py", "templates/github/pull_request_template.md"
+                ),
             }
         )
         self.base = self.tip
@@ -711,6 +723,7 @@ class MergeVerdictTests(unittest.TestCase):
     def test_ballast_gate_surfaces_need_a_human(self) -> None:
         text = (BALLAST / "project/workflow.md").read_text(encoding="utf-8")
         globs = re.findall(r"(?m)^Human-only: (\S+)$", text)
+        # Every file CI executes or imports, and the gate's own code and text.
         for required in (
             "tools/merge_check.py",
             "tools/spec_check.py",
@@ -724,8 +737,10 @@ class MergeVerdictTests(unittest.TestCase):
             "tools/cli.py",
             "tools/progress.py",
             "tools/qualify.py",
-            "tests/**",
-            ".github/**",
+            "tools/dashboard.py",
+            "tools/dashboard_assets/app.js",
+            "tests/parallel.py",
+            ".github/workflows/ci.yml",
             "project/workflow.md",
             "AGENTS.md",
             "CLAUDE.md",
@@ -734,15 +749,16 @@ class MergeVerdictTests(unittest.TestCase):
             "docs/standalone.md",
             "docs/execution.md",
             "docs/model-routing.md",
-            "docs/adr/**",
-            "templates/policies/**",
-            "templates/skills/ballast-*/**",
+            "docs/adr/0027-x.md",
+            "templates/policies/workflow.md",
+            "templates/skills/ballast-test-review/SKILL.md",
         ):
-            self.assertIn(required, globs)
+            self.assertTrue(spec_check.matches(required, globs), required)
         self.ballast()
         # One sample path per glob, so deleting any glob from the file fails.
         samples = [g.replace("**", "x/y.md").replace("*", "x") for g in globs]
-        for path in [*samples, "tests/test_zz.py", "tests/__init__.py"]:
+        extra = ["tests/test_zz.py", "tests/__init__.py", "tools/dashboard.py"]
+        for path in [*samples, *extra]:
             with self.subTest(path=path):
                 self.change({path: "changed\n"})
                 self.human("human-only")
@@ -751,12 +767,15 @@ class MergeVerdictTests(unittest.TestCase):
         self.ballast()
         self.change(
             {
-                "docs/specs/cap.md": SPEC.replace("tools/a.py", "tools/dashboard.py")
+                "docs/specs/cap.md": SPEC.replace(
+                    "tools/a.py", "templates/github/pull_request_template.md"
+                )
                 + SECOND,
-                "tools/dashboard.py": "x = 1\n",
+                "templates/github/pull_request_template.md": "## Summary\n",
             }
         )
         self.pr["body"] = body("R1")
+        self.pr["headRefName"] = f"issue-{ISSUE}-abcdef12"
         self.issue = {"body": "Risk: R1"}
         self.comments = [delta(DELTA), approval(DELTA)]
         self.merges("approved", "R1")
@@ -790,8 +809,33 @@ class MergeVerdictTests(unittest.TestCase):
             self.arguments("approved", "R0", "--merge")
         )
         result = merge_check.run(args)
-        self.assertEqual((result["merged"], result["queued"]), (False, True))
+        self.assertEqual((result["merged"], result["state"]), (False, "queued"))
         self.assertFalse([call for call in self.calls if call[:2] == ("pr", "comment")])
+        # A state GitHub does not report is unknown, not queued.
+        self.failing = {"--json state": 1}
+        result = merge_check.run(args)
+        self.assertEqual((result["merged"], result["state"]), (False, "unknown"))
+
+    def test_failing_fetch_blocks_without_reading_fetch_head(self) -> None:
+        failed = subprocess.CompletedProcess(["git"], 1, "", "")
+        with (
+            patch.object(merge_check.subprocess, "run", return_value=failed),
+            patch.object(spec_check, "git") as git_call,
+            self.assertRaises(admission.FixedReasonError),
+        ):
+            FETCH(self.root, REPO, "main", self.head)
+        git_call.assert_not_called()
+
+    def test_main_reports_spec_errors_as_block(self) -> None:
+        argv = ["merge_check", *self.arguments("approved", "R0")]
+        out = io.StringIO()
+        with (
+            patch.object(merge_check, "run", side_effect=spec_check.SpecError("x")),
+            patch.object(sys, "argv", argv),
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(merge_check.main(), 1)
+        self.assertEqual(json.loads(out.getvalue())["verdict"], "BLOCK")
 
     def test_refuses_to_run_inside_an_issue_checkout(self) -> None:
         args = merge_check.parser().parse_args(

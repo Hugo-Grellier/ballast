@@ -308,21 +308,23 @@ def project_workflow(root: Path, tip: str, found: Findings) -> dict | None:
     """Read the human-only and coverage-exempt globs from the target branch.
 
     Never from the PR head, so a PR cannot remove its own exclusion. A missing
-    or unreadable file, one without a key line, or a key line not of the form
-    `Key: GLOB` gives HUMAN.
+    or unreadable file, one without a key line or with an unclosed code fence,
+    or a key line not of the form `Key: GLOB` gives HUMAN.
     """
     try:
         text = spec_check.git(root, "show", f"{tip}:{spec_check.WORKFLOW}")
     except spec_check.SpecError:
         text = None
-    # Key lines inside a code fence are examples, not keys.
+    # Key lines inside a code fence are examples, not keys; a fence left open
+    # would hide every key after it.
+    fenced_lines, unclosed = spec_check.fenced_lines(text or "")
     lines = [
         line
-        for _, line, fenced in spec_check.fenced_lines(text or "")[0]
+        for _, line, fenced in fenced_lines
         if not fenced and WORKFLOW_KEY.fullmatch(line)
     ]
     parsed = [WORKFLOW_LINE.match(line) for line in lines]
-    if not parsed or not all(parsed):
+    if unclosed or not parsed or not all(parsed):
         found.add(
             "HUMAN",
             f"{spec_check.WORKFLOW} is missing or malformed on the target branch",
@@ -562,10 +564,11 @@ def approved_spec(
 
 
 def issue_match(pr: dict, risk: str, found: Findings) -> None:
-    """Tie the PR to one issue: the one its claim branch names, if any.
+    """Tie the PR to one issue: the one its claim branch names.
 
-    An R1 or R2 PR closes exactly one issue, so an approval of one issue cannot
-    carry an unapproved second one; a claim branch `issue-N-...` must close #N.
+    An R1 or R2 PR comes from a claim branch `issue-N-...` and closes exactly
+    #N, so an approval of one issue cannot carry another; any claim branch
+    must close the issue it names.
     """
     numbers = [r.get("number") for r in pr["closingIssuesReferences"]]
     if risk != "R0" and len(numbers) > 1:
@@ -575,6 +578,12 @@ def issue_match(pr: dict, risk: str, found: Findings) -> None:
             "close exactly one issue, or split the PR",
         )
     claim = CLAIM_BRANCH.match(pr.get("headRefName") or "")
+    if risk != "R0" and not claim:
+        found.add(
+            "HUMAN",
+            "An R1 or R2 PR needs a claim branch `issue-N-...`",
+            "publish from the issue's claim branch",
+        )
     if claim and int(claim.group(1)) not in numbers:
         found.add(
             "HUMAN",
@@ -730,7 +739,10 @@ def run(args: argparse.Namespace) -> dict:
         except admission.FixedReasonError:
             state = None
         merged = isinstance(state, dict) and state.get("state") == "MERGED"
-        result["merged"], result["queued"] = merged, not merged
+        result["merged"] = merged
+        result["state"] = (
+            "merged" if merged else "queued" if isinstance(state, dict) else "unknown"
+        )
         if merged:
             note = MERGED_NOTE.format(head=args.reviewed_head, risk=args.risk)
             comment = ("pr", "comment", str(args.pr), "--repo", target)
@@ -745,7 +757,7 @@ def main() -> int:
     """Print the verdict as JSON; the exit code follows the verdict."""
     try:
         result = run(parser().parse_args())
-    except admission.FixedReasonError as error:
+    except (admission.FixedReasonError, spec_check.SpecError) as error:
         result = {"verdict": "BLOCK", "block": [{"reason": str(error)}]}
     except (OSError, subprocess.SubprocessError, AttributeError, TypeError) as error:
         result = {"verdict": "BLOCK", "block": [{"reason": type(error).__name__}]}

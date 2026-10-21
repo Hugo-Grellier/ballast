@@ -21,9 +21,10 @@ be `BLOCK`. Every reason SHALL carry what would raise the verdict.
 
 #### Scenario: Malformed PR response
 - WHEN GitHub returns something other than the PR object, or malformed closing issues, or an unexpected error or a Git timeout occurs
-- THEN the verdict is `BLOCK`
+- THEN the verdict is `BLOCK`, also from the command line
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_refuses_unreadable_github_response
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_unexpected_errors_and_git_timeouts_block
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_main_reports_spec_errors_as_block
 
 ### Requirement: MERGE
 The check SHALL return `MERGE` for an R0 PR that meets the ADR-0026 conditions,
@@ -157,8 +158,8 @@ never the PR head), a missing, unreadable or malformed `project/workflow.md`
 on the target branch, no closing issue, a closing issue that is closed, outside
 the repository, or without one parseable `Risk:` line in a body by a trusted
 author, a confirmed risk below the highest closing-issue `Risk:` line and
-approved risk, an R1 or R2 PR closing more than one issue, a claim branch
-`issue-N-...` whose PR does not close #N, a changed path no `Covers:` glob or
+approved risk, an R1 or R2 PR closing more than one issue or not published
+from a claim branch `issue-N-...`, a claim branch whose PR does not close #N, a changed path no `Covers:` glob or
 `Coverage-exempt:` glob of the target branch matches (never the PR head's), and an R0 PR changing
 a covered path or modifying or removing a spec entry.
 
@@ -192,7 +193,7 @@ a covered path or modifying or removing a spec entry.
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_ballast_gate_surfaces_need_a_human
 
 #### Scenario: Missing or malformed project workflow
-- WHEN the target branch has no `project/workflow.md`, one without a key line outside code fences, or a key line not of the form `Key: GLOB`
+- WHEN the target branch has no `project/workflow.md`, one without a key line outside code fences or with an unclosed fence, or a key line not of the form `Key: GLOB`
 - THEN the verdict is `HUMAN`; a key line inside a code fence is ignored
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_workflow_key_lines_in_code_fences_are_ignored
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_missing_or_malformed_workflow_on_target_needs_a_human
@@ -204,7 +205,7 @@ a covered path or modifying or removing a spec entry.
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_approved_risk_raises_the_floor
 
 #### Scenario: One issue, the one the branch names
-- WHEN an R1 PR closes a second issue besides the approved one, or comes from a claim branch `issue-N-...` and does not close #N
+- WHEN an R1 PR closes a second issue besides the approved one, comes from a branch that is not a claim branch `issue-N-...`, or comes from one and does not close #N
 - THEN the verdict is `HUMAN`, so one issue's approval, an empty delta's included, cannot authorize another issue's work
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_r1_closes_exactly_one_issue_its_branch_names
 
@@ -244,7 +245,8 @@ a covered path or modifying or removing a spec entry.
 The check SHALL merge only on `MERGE` and only with `--merge`, squash and
 pinned with `--match-head-commit` to the reviewed head, after fetching the
 target branch again and finding the tip the verdict used, SHALL report
-`merged` only when GitHub then shows the PR merged and `queued` otherwise, SHALL then comment that
+`merged` only when GitHub then shows the PR merged, `queued` when it shows
+another state and `unknown` when the state cannot be read, SHALL then comment that
 it merged under ADR-0027 and that this is not a human approval, SHALL report a
 merge GitHub refuses as `BLOCK`, and SHALL refuse to run inside an issue
 checkout.
@@ -254,9 +256,14 @@ checkout.
 - THEN no merge call is made; with it on `MERGE`, the pinned merge runs and the merge comment names ADR-0027
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_merge_only_on_merge_and_with_explicit_flag
 
+#### Scenario: Failing fetch
+- WHEN fetching the target branch or the reviewed head fails
+- THEN the check refuses without reading a stale `FETCH_HEAD`
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_failing_fetch_blocks_without_reading_fetch_head
+
 #### Scenario: Merge queue
 - WHEN GitHub accepts the merge command but the PR is not merged yet
-- THEN the result says `queued`, not `merged`, and no merge comment is posted
+- THEN the result says `queued`, not `merged`, or `unknown` when the state cannot be read, and no merge comment is posted
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_merge_queue_is_reported_queued_not_merged
 
 #### Scenario: Target moved before the merge

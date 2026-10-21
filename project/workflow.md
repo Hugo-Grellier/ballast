@@ -11,24 +11,13 @@ for every PR. Key lines inside code fences are ignored.
 
 A PR changing one of these paths always needs a human merge, whatever its risk
 and coverage: they are the code and the text of the gate that would merge it,
-and the modules the gate helpers import. Every file under `tests/` is
-human-only too: CI runs `tests/test_*.py`, so any test file, new or changed,
-can end the run early (`os._exit(0)` at import) and turn the gate green. A
-narrower rule by file name would not close that, since an existing test file
-can do the same. Matching ignores case.
+and every file CI executes: all of `tools/` (the gate helpers and every
+module the tests import) and all of `tests/`. Any file CI runs or imports can
+end the run early (`os._exit(0)` at import) and turn the required checks
+green, so a narrower rule by file name would not close that. Matching ignores
+case.
 
-Human-only: tools/merge_check.py
-Human-only: tools/spec_check.py
-Human-only: tools/spec_approval.py
-Human-only: tools/pr_body.py
-Human-only: tools/admission.py
-Human-only: tools/coordinate.py
-Human-only: tools/worker.py
-Human-only: tools/worktree.py
-Human-only: tools/codex.py
-Human-only: tools/progress.py
-Human-only: tools/cli.py
-Human-only: tools/qualify.py
+Human-only: tools/**
 Human-only: tests/**
 Human-only: .github/**
 Human-only: project/workflow.md
