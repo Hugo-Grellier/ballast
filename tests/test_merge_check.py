@@ -50,6 +50,7 @@ class MergeCheckTests(unittest.TestCase):
             {"name": "advisory", "bucket": "fail"},
         ]
         self.merge_code = 0
+        self.failing: dict[str, int] = {}
         self.calls: list[tuple[str, ...]] = []
         patcher = patch.object(merge_check, "gh", side_effect=self.fake)
         patcher.start()
@@ -78,6 +79,9 @@ class MergeCheckTests(unittest.TestCase):
             code = 8 if any(c.get("bucket") != "pass" for c in self.checks) else 0
         elif args[:2] == ("pr", "merge"):
             code = self.merge_code
+        for marker, failure in self.failing.items():
+            if marker in " ".join(args):
+                code = failure
         return subprocess.CompletedProcess(["gh", *args], code, output, "")
 
     def check(self, verdict: str = "approved", risk: str = "R0", *exclude: str) -> dict:
@@ -243,6 +247,25 @@ class MergeCheckTests(unittest.TestCase):
         self.assertIn("merge", self.check())
         self.rules, self.branch = [[]], {"name": "main"}
         self.refuses("No required checks are configured")
+
+    def test_refuses_failed_github_reads_even_with_parseable_output(self) -> None:
+        # A failed paginated rules read printed only its first page: "test" is
+        # missing from the required set, but the exit code refuses it.
+        self.rules = [
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "lint"}]},
+                }
+            ]
+        ]
+        self.checks = [{"name": "lint", "bucket": "pass"}]
+        for marker in ("/rules/branches/", "/branches/main", "/files", "pr view"):
+            self.failing = {marker: 1}
+            self.refuses("GitHub read failed")
+        # gh pr checks reports failures and pending checks with 1 and 8.
+        self.failing = {"pr checks": 4}
+        self.refuses("GitHub read failed")
 
     def test_refuses_unreadable_base_rules(self) -> None:
         for rules in (

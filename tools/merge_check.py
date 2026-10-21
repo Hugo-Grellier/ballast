@@ -74,10 +74,17 @@ def gh(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def read(*args: str) -> object:
-    """Parse a gh JSON response; anything unreadable refuses."""
+def read(*args: str, codes: frozenset[int] = frozenset({0})) -> object:
+    """Parse a gh JSON response; a failed call or unreadable output refuses.
+
+    A failed call can still print parseable partial output (one page of a
+    paginated read), so the exit code is checked before the output is used.
+    """
+    result = gh(*args)
+    if result.returncode not in codes:
+        worktree.fail("A GitHub read failed; nothing was merged")
     try:
-        return json.loads(gh(*args).stdout)
+        return json.loads(result.stdout)
     except ValueError:
         worktree.fail("GitHub response is unreadable; nothing was merged")
 
@@ -195,8 +202,17 @@ def check(args: argparse.Namespace) -> dict:
     required = required_contexts(args.repo, pr.get("baseRefName"))
     if not required:
         worktree.fail("No required checks are configured for the base branch")
+    # gh pr checks exits 1 for a failing and 8 for a pending check, still
+    # printing the list; each bucket is checked below.
     checks = read(
-        "pr", "checks", str(number), "--repo", target, "--json", "name,bucket"
+        "pr",
+        "checks",
+        str(number),
+        "--repo",
+        target,
+        "--json",
+        "name,bucket",
+        codes=frozenset({0, 1, 8}),
     )
     if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
         worktree.fail("The PR check list is unreadable")
