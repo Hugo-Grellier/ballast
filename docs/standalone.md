@@ -233,7 +233,13 @@ cannot be recreated to reset its budget. Once it is finished, `close --reason
 TEXT` archives it as `queue-ID.json` (still shown by `status` under `closed`) so the
 clone can create the next queue. Close refuses a queue that is neither cancelled
 nor past its deadline, any of its claims still `active`, `unknown` or `pr_wait`,
-and any worker lock; settle, release or reconcile them first.
+and any worker lock; settle, release or reconcile them first. When the queue's
+coordinator session has ended, another coordinator (its own `BALLAST_COORDINATOR`,
+never the ended one's) may close it under exactly those conditions; the archive
+records `closed_by` and `previous_coordinator`. Age or PID never decides it: a
+queue with budget left still requires its own coordinator. While a finished
+queue stays open, `worktree.py` and `select` name it, its coordinator and the
+`close` command instead of claiming work.
 
 - `select` reports eligible issues within the remaining budgets, issues waiting
   for capacity, existing claims, and blocked issues with their reasons: native

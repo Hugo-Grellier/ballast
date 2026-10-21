@@ -152,14 +152,24 @@ def milestone(record: dict, event_type: str, **values: object) -> None:
     )
 
 
+def finished(value: dict) -> bool:
+    """Report whether a queue is cancelled or past its deadline: no budget left."""
+    return value["mode"] == "cancelled" or time.time() >= value["deadline"]
+
+
 def runnable(value: dict | None) -> None:
     """Check queue controls before admission or a fresh turn permit."""
     if value is None:
         return
+    if finished(value):
+        # Name the finished queue and its exit; repr escapes control characters.
+        fail(
+            f"Queue {value['id']!r} of coordinator {value['coordinator']!r} is "
+            "cancelled or past its elapsed-time limit; once its claims are "
+            "settled, archive it with `coordinate.py close --reason TEXT`"
+        )
     if value["mode"] != "running":
-        fail("Queue is paused or cancelled")
-    if time.time() >= value["deadline"]:
-        fail("Queue elapsed-time limit reached")
+        fail("Queue is paused")
     quota = value.get("quota")
     if quota and (quota.get("retry_at") is None or time.time() < quota["retry_at"]):
         fail("Provider quota is paused; no eligible retry window")
@@ -510,7 +520,9 @@ def close(state: Path, reason: str) -> dict:
 
     Only a cancelled queue or one past its deadline closes, so closing never
     resets a live budget. Its claims must be settled and no worker lock held:
-    nothing it admitted may still run under the next queue's budget.
+    nothing it admitted may still run under the next queue's budget. Under
+    exactly those conditions another coordinator may close a queue whose
+    coordinator has ended; the archive records both references.
     """
     if not bounded(reason, MAX_REASON):
         fail("Close requires a bounded reason reference")
@@ -518,8 +530,11 @@ def close(state: Path, reason: str) -> dict:
         value = policy(state)
         if value is None:
             fail("No queue to close")
-        require_coordinator(value)
-        if value["mode"] != "cancelled" and time.time() < value["deadline"]:
+        caller = os.environ.get("BALLAST_COORDINATOR", "")
+        foreign = caller != value["coordinator"]
+        if foreign and not (bounded(caller) and finished(value)):
+            fail("Queue operations require the queue's coordinator reference")
+        if not finished(value):
             fail("Queue still has budget; cancel it or wait for its deadline")
         if any(
             item.get("queue") == value["id"]
@@ -529,7 +544,8 @@ def close(state: Path, reason: str) -> dict:
             fail("A claim of this queue is active, unknown or awaiting merge")
         if any(state.glob("issue-*.worker")):
             fail("A worker lock is held; release or reconcile it first")
-        milestone(value, "closed", reason=reason)
+        owner = {"previous_coordinator": value["coordinator"]} if foreign else {}
+        milestone(value, "closed", reason=reason, closed_by=caller, **owner)
         write(state / f"queue-{value['id']}.json", value)
         (state / "queue.json").unlink()
         return value
