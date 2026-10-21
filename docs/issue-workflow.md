@@ -99,6 +99,13 @@ Scale the plan to the work:
 - A decision crossing the authority boundaries in `AGENTS.md`: present the plan
   and exact decision for human approval before implementing the affected part.
 
+Record an R2 approval (plan or merge) durably on GitHub, never only in chat: a
+comment on the issue or PR by the human (direct), or a coordinator comment
+quoting the human's words verbatim with the date and scope (plan or merge),
+marked as relayed. A relayed approval is evidence, not authentication. Link the
+comment URL on the R2 line of the PR's Risk section and say which kind it is;
+`tools/pr_body.py` fails an R2 body without an issue or PR comment URL there.
+
 Routine technical plans need no human approval checkpoint. Resolve blocking plan
 review findings before coding; use the same round limit and escalation
 rule as the final review ([pair-review.md](pair-review.md#round-limit)). If a
@@ -171,7 +178,11 @@ Push only the intended issue branch. Create or update one PR using the repositor
 template; reuse an existing matching PR. Link the leaf issue with a closing
 reference only when that PR delivers its complete outcome. Link the parent as
 context without closing it prematurely. Record the reviewer verdict and reviewed
-head in the PR body, with a link to detailed findings when available.
+head in the PR body, with a link to detailed findings when available. Before
+creating or editing the PR, run the PR body check on the body file
+(`python3 -I -S .github/scripts/pr_body.py --body-file FILE` in an adopting
+project, `tools/pr_body.py` in Ballast) and publish nothing while it fails; an R2
+body without its approval comment link fails it.
 
 Check required CI and merge status after publication. Resolve failures introduced
 by this change. If the branch changes to resolve conflicts, rerun affected checks

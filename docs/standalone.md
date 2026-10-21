@@ -178,8 +178,10 @@ review. Any subsequent code/base change invalidates affected evidence.
 Revalidate the repository, issue branch, reviewed head and integration base.
 Inspect existing linked PRs again, then push using the authorized native Git
 credentials and create or update **one draft PR** with `gh`. Use a body file for
-multiline text. Include issue linkage, risk, acceptance evidence, check commands,
-reviewed head/verdict and limitations. Public records use opaque worker/attempt
+multiline text and run the PR body check on it first, as in the
+[issue workflow](issue-workflow.md#6-publish-and-finish); a failure, such as an R2
+body without its approval link, stops publication. Include issue linkage, risk,
+acceptance evidence, check commands, reviewed head/verdict and limitations. Public records use opaque worker/attempt
 references and links; remove local paths and private model output.
 
 Inspect GitHub's submitted head/base and required checks. Record intended workflow,

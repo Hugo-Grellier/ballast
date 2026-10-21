@@ -1,4 +1,7 @@
-"""Check a PR body against the PR template: headings, issue link, one risk box."""
+"""Check a PR body against the PR template.
+
+Checks headings, issue link, one risk box, and an approval link when R2 is ticked.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +16,14 @@ ISSUE_LINK = re.compile(
     r"\b(?:Closes|Refs)[ \t]+(?:[\w.-]+/[\w.-]+)?#\d+\b", re.IGNORECASE
 )
 RISK_BOX = re.compile(r"^[ \t]*[-*][ \t]+\[[xX]\][ \t]+R[0-2]\b", re.MULTILINE)
+R2_BOX = re.compile(r"^[ \t]*[-*][ \t]+\[[xX]\][ \t]+R2\b", re.MULTILINE)
+RISK_SECTION = re.compile(
+    r"^##[ \t]+Risk[ \t]*$(.*?)(?=^##[ \t]|\Z)", re.MULTILINE | re.DOTALL
+)
+APPROVAL_LINK = re.compile(
+    r"https://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+"
+    r"#(?:issuecomment|pullrequestreview)-\d+"
+)
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
@@ -31,6 +42,12 @@ def problems(body: str, template: str) -> list[str]:
     ticked = len(RISK_BOX.findall(body))
     if ticked != 1:
         found.append(f"tick exactly one risk box (R0, R1 or R2); found {ticked}")
+    risk = RISK_SECTION.search(body)
+    if R2_BOX.search(body) and not (risk and APPROVAL_LINK.search(risk.group(1))):
+        found.append(
+            "R2 needs a link to the human approval comment in the Risk section"
+            " (…/issues/N#issuecomment-ID or …/pull/N#issuecomment-ID)"
+        )
     return found
 
 
