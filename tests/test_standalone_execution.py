@@ -359,7 +359,11 @@ class ExecutionTests(unittest.TestCase):
                     self.assertEqual(writes["writable_roots"], [str(scratch)])
                     self.assertNotIn("project_root_markers", thread["config"])
                 self.assertEqual(sent["turn/start"]["cwd"], thread["cwd"])
-                self.assertIn(str(self.cwd), sent["turn/start"]["input"][0]["text"])
+                text = sent["turn/start"]["input"][0]["text"]
+                self.assertIn(str(self.cwd), text)
+                # Only a review needs telling: it loads no project instructions.
+                reading = f"Read {self.cwd}/AGENTS.md and the instructions and skills"
+                self.assertEqual(reading in text, role == "review")
                 environment = thread["config"]["shell_environment_policy"]["set"]
                 self.assertEqual(
                     environment,

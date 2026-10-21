@@ -90,6 +90,9 @@ remove a claim or infer exit from age/PID to retry; inspect and reconcile first.
 Select explicit model and effort from [model routing](model-routing.md). Write a
 bounded local task file with issue, phase, acceptance criteria, relevant decisions,
 scope, allowed checks and completion evidence. Keep publication with the coordinator.
+A review worker loads no project instructions by itself (see below): the helper
+tells it to read the checkout's `AGENTS.md` and what that names, and a review
+task names any other instructions or skills the review needs.
 
 ```sh
 python3 -I -S "$BALLAST_SOURCE/tools/worker.py" \
@@ -147,8 +150,8 @@ use the client's workspace-write sandbox:
   `project_root_markers = []` for review, and the receipt's
   `instructionSources` must list nothing in the scratch directory or above it;
   anything else fails the launch. The reviewer gets only the client's own
-  instructions, so the review task names the project instructions to read in
-  the checkout.
+  instructions; the helper's turn text tells it to read the checkout's
+  `AGENTS.md` and the instructions and skills it names before reviewing.
 
 Any other root, working directory or temporary-directory setting fails the
 launch before task input. When the worker settles, as `completed`, `cancelled`,

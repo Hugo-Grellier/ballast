@@ -334,6 +334,9 @@ def run_turn(
         + (
             "It is read-only and your working directory is a private scratch "
             "directory: cd into the checkout or use git -C to inspect it. "
+            # The client loads no project instructions for a review (#256).
+            f"Read {cwd}/AGENTS.md and the instructions and skills it names "
+            "before reviewing. "
             if workdir != cwd
             else ""
         )
