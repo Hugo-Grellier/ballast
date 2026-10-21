@@ -3,14 +3,15 @@
 Ballast 2.0 drops the v1 installer, trusted launcher and `ballast run`. An existing
 agent session follows the [issue workflow](issue-workflow.md), runs workers through
 the [standalone adapter](standalone.md), and gets an
-[independent review](pair-review.md). A project copies the templates it wants. Nothing
-is installed, and `ballast.toml` is no longer read.
+[independent review](pair-review.md). A project copies the templates and workflow
+documents it wants and runs the helpers from a pinned tag with `uvx`. Nothing is
+installed, and `ballast.toml` is no longer read.
 
 [ADR-0024](adr/0024-ballast-2-migration.md#removed-guarantees) lists every v1 guarantee
 2.0 removes. Read it before migrating. The main ones:
 
 - No launcher refuses a tampered checkout, and no protected input fails a step.
-- The helpers run with your authority from the Ballast checkout you choose.
+- The helpers run with your authority from the Ballast tag you pin.
 - There are no gates or run ledger. The issue, the PR and the review hold the evidence,
   and human merge stays the approval.
 
@@ -27,17 +28,22 @@ Nothing changes for a project that keeps a `v1.x` pin:
 
 ## Adopting 2.0
 
-Prerequisites: a POSIX host with Python 3.11+, Git, an authenticated `gh` for
-GitHub.com, and a supported Codex CLI for workers (see [standalone](standalone.md#scope-and-limits)).
+Prerequisites: a POSIX host with Python 3.11+, Git, [uv](https://docs.astral.sh/uv/)
+for `uvx`, an authenticated `gh` for GitHub.com, and a supported Codex CLI for workers
+(see [standalone](standalone.md#scope-and-limits)).
 
 1. **Finish v1 work.** With the v1 command, finish or `ballast discard-runs` every
    open run. Merge or close its Draft PRs.
-2. **Select a Ballast source.** Clone this repository at a 2.x tag outside the
-   project. The coordinator runs the helpers from that checkout and reads its `docs/`.
+2. **Pick a Ballast tag.** The coordinator runs the helpers as
+   `uvx --from git+https://github.com/Hugo-Grellier/ballast@vX.Y.Z ballast COMMAND`
+   (`worktree`, `worker`, `coordinate`, `dashboard`, `merge-check`). The tag in that
+   line is the version record; no checkout or local path is needed.
 3. **Copy the templates you want.** Review each one and replace the placeholders.
    - `templates/AGENTS.md` → `AGENTS.md`. Merge it with your existing file, keep
-     `CLAUDE.md` linked to it, and set the "Ballast source" path.
+     `CLAUDE.md` linked to it, and replace `[ADOPTED TAG]` with your tag.
    - `templates/policies/*.md` → `docs/policies/`.
+   - `docs/issue-workflow.md`, `docs/pair-review.md` and `docs/model-routing.md` →
+     `docs/policies/`, as described in [workflow copies](#workflow-copies).
    - `templates/skills/ballast-*` → `.agents/skills/`. Link `.claude/skills/` to
      them when you use Claude Code.
    - `templates/github/` → `.github/`: PR template, issue template, Dependabot and
@@ -65,6 +71,47 @@ GitHub.com, and a supported Codex CLI for workers (see [standalone](standalone.m
    whether those variables are set first. This cleanup cannot be undone except by
    reinstalling v1.
 
+## Workflow copies
+
+`AGENTS.md` cites the issue workflow, pair review and model routing, so the project
+keeps copies of them in `docs/policies/` rather than pointing outside the repository.
+Copy each from the tag you pin and start it with one header line naming that tag and
+its commit (`git rev-list -n 1 vX.Y.Z`):
+
+```markdown
+<!-- Copied from Hugo-Grellier/ballast vX.Y.Z (COMMIT) docs/issue-workflow.md; update per its docs/migration.md. -->
+```
+
+Links between the three copies resolve as they are. Point the others at the tag
+or at your own copies:
+
+- `../templates/policies/workflow.md` → `workflow.md`, your policy copy;
+- `standalone.md`, `execution.md`, `subagent-workers.md` and `adr/...` →
+  `https://github.com/Hugo-Grellier/ballast/blob/vX.Y.Z/docs/...` with your tag.
+
+## Moving a 2.1.0 adopter to the pinned form
+
+A project adopted at 2.1.0 or earlier names a `BALLAST_SOURCE` checkout, usually in an
+ignored `AGENTS.local.md`, and its `AGENTS.md` cites `BALLAST_SOURCE/docs/*.md`. In one
+reviewed commit:
+
+1. Pick the first tag that ships the `ballast` command, or a later one.
+2. Add the [workflow copies](#workflow-copies) under `docs/policies/` from that tag.
+3. Re-apply the template `AGENTS.md` Issue workflow section: replace each
+   `BALLAST_SOURCE/docs/...` reference with the link to its copy, and each
+   `python3 -I -S "$BALLAST_SOURCE/tools/NAME.py"` with
+   `uvx --from git+https://github.com/Hugo-Grellier/ballast@vX.Y.Z ballast NAME`
+   (`merge_check.py` becomes `merge-check`).
+4. Remove the `BALLAST_SOURCE` entry from `AGENTS.local.md`, and the file itself if
+   nothing else is left in it. The checkout outside the project is no longer read; delete
+   it when no other project uses it.
+5. Check that `grep -rn BALLAST_SOURCE AGENTS.md docs/` finds nothing and that every
+   relative link in `AGENTS.md` opens a file in the repository.
+
+Claims and queues already under `.git/ballast-v2/` stay valid: the pinned command runs
+the same helpers. Finish or release an issue claimed with the old checkout before
+switching tags mid-issue, so one issue runs one helper version.
+
 ## Rolling back
 
 Revert the adoption commit. This restores `ballast.toml` with its `v1.x` pin and the
@@ -74,19 +121,21 @@ under 2.0 stay valid GitHub history.
 
 ## Upgrading within 2.x
 
-Fetch a newer 2.x tag in the Ballast source checkout and read `CHANGELOG.md`. Then
-update your template copies as described next.
+Read `CHANGELOG.md` for the newer tag, change the tag in the `uvx` line of `AGENTS.md`,
+and update your template and workflow copies as described next, including their header
+lines.
 
 ## Updating adopted templates
 
 Templates are copy-once: Ballast never overwrites your copies, so they drift unless you
 compare them. Between your adopted tag `vA` and the new tag `vB`:
 
-- From the Ballast checkout, run `git diff vA..vB -- templates/`. Without a checkout, use
-  the compare view `https://github.com/Hugo-Grellier/ballast/compare/vA...vB` with
-  your tags, and look only at the files under `templates/`.
+- Use the compare view `https://github.com/Hugo-Grellier/ballast/compare/vA...vB` with
+  your tags, and look at the files under `templates/` and the three workflow documents.
+  From a Ballast checkout, `git diff vA..vB -- templates/ docs/issue-workflow.md
+  docs/pair-review.md docs/model-routing.md` shows the same.
 - Re-apply the changes that matter to your project and keep your project-specific edits.
   Skip a change when you removed or rewrote that rule on purpose.
-- Template links assume the layout in [Adopting 2.0](#adopting-20): policies in
-  `docs/policies/` and skills in `.agents/skills/`. If you placed them elsewhere, fix the
+- Template links assume the layout in [Adopting 2.0](#adopting-20): policies and workflow
+  copies in `docs/policies/` and skills in `.agents/skills/`. If you placed them elsewhere, fix the
   links in the copies you update.

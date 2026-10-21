@@ -26,7 +26,7 @@ An R0 PR may be squash-merged by the coordinating agent without a separate human
 - every required check passed on that head, and at least one check is required;
 - the PR is open, not a draft, ticks R0 and no other risk, and its head equals the reviewed head.
 
-Release PRs, dependency PRs and any change to `.github/` (workflows, permissions), release files or dependency manifests and lockfiles always need a human merge, as does a PR whose risk is disputed. The Ballast `tools/merge_check.py` helper checks these conditions, refuses an incomplete or malformed changed-file list, and merges only on explicit request, pinned to the reviewed head; pass the project's other dependency manifests or deployment paths with `--exclude GLOB`. A project can keep human merge for every PR in its project file.
+Release PRs, dependency PRs and any change to `.github/` (workflows, permissions), release files or dependency manifests and lockfiles always need a human merge, as does a PR whose risk is disputed. The Ballast `ballast merge-check` helper checks these conditions, refuses an incomplete or malformed changed-file list, and merges only on explicit request, pinned to the reviewed head; pass the project's other dependency manifests or deployment paths with `--exclude GLOB`. A project can keep human merge for every PR in its project file.
 
 ## Model routing
 

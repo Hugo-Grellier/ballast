@@ -2,8 +2,16 @@
 
 Use this adapter when an existing agent starts one leaf issue without Orca.
 The coordinator follows [the issue workflow](issue-workflow.md), owns decisions,
-checks and publication, and uses two helpers from the operator-selected Ballast
-checkout.
+checks and publication, and runs the helpers from a pinned Ballast tag.
+
+The commands below write `ballast COMMAND`. In an adopting repository that is
+`uvx --from git+https://github.com/Hugo-Grellier/ballast@vX.Y.Z ballast COMMAND`
+with the adopted tag. The tag is the version record; nothing is installed or
+configured, and only uv's own cache lives outside the repository. For
+Ballast development, a checkout may stand in instead: `ballast COMMAND` is then
+`python3 -I -S "$BALLAST_SOURCE/tools/cli.py" COMMAND` with `BALLAST_SOURCE` at
+that checkout's root, kept in an ignored `AGENTS.local.md` when it is not the
+current repository. Either way each helper runs isolated under `python3 -I -S`.
 
 ## Scope and limits
 
@@ -39,12 +47,11 @@ operator's existing authority; these helpers authorize no sandbox escalation.
    and active work. Ask consequential questions and plan only as needed. Existing
    linked work must be reconciled before creating another attempt.
 2. Select the integration branch explicitly. Fetch it with native Git, then use
-   the operator-selected helper source. From that Ballast source checkout, set
-   its root; `PROJECT_CHECKOUT` names the already selected target repository:
+   the pinned helpers; `PROJECT_CHECKOUT` names the already selected target
+   repository:
 
    ```sh
-   BALLAST_SOURCE="$(git rev-parse --show-toplevel)"
-   python3 -I -S "$BALLAST_SOURCE/tools/worktree.py" \
+   ballast worktree \
      --repo OWNER/REPOSITORY --issue NUMBER --base main --cwd "$PROJECT_CHECKOUT"
    ```
 
@@ -97,7 +104,7 @@ tells it to read the checkout's `AGENTS.md` and what that names, and a review
 task names any other instructions or skills the review needs.
 
 ```sh
-python3 -I -S "$BALLAST_SOURCE/tools/worker.py" \
+ballast worker \
   --claim "$ISSUE_CLAIM" --task "$TASK_FILE" \
   --model CONCRETE_MODEL --effort SUPPORTED_EFFORT \
   --role implement --timeout 300
@@ -259,10 +266,10 @@ it and cannot raise a limit.
 
 ```sh
 export BALLAST_COORDINATOR=COORDINATOR_REF
-python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+ballast coordinate --cwd "$PROJECT_CHECKOUT" \
   create --repo OWNER/REPOSITORY --issue 12 --issue 13 \
   --coordinator "$BALLAST_COORDINATOR" --revision INSTRUCTION_REVISION
-python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" select
+ballast coordinate --cwd "$PROJECT_CHECKOUT" select
 ```
 
 Defaults are one active issue, two workers (review and helpers included), two
@@ -442,10 +449,10 @@ subagents, instead of dispatching `worker.py`. Record that shortcut so it stays
 observable:
 
 ```sh
-python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+ballast coordinate --cwd "$PROJECT_CHECKOUT" \
   execution start --claim CLAIM --executor coordinator --role implement|review \
   --provider PROVIDER --model MODEL --effort EFFORT
-python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+ballast coordinate --cwd "$PROJECT_CHECKOUT" \
   execution finish --claim CLAIM --worker ID --status completed|cancelled \
   [--verdict approved|changes_required|blocked --round 1..3]
 ```
@@ -540,6 +547,10 @@ agent may run it:
 python3 -I -S "$BALLAST_SOURCE/tools/qualify.py" local
 ```
 
+Every step goes through the `ballast` command, by default this checkout's
+`tools/cli.py`. `--entry` drives another one instead, such as the pinned form
+built from a commit: `--entry "uvx --from git+https://github.com/Hugo-Grellier/ballast@COMMIT ballast"`.
+
 It builds a throwaway clone in a temporary directory whose origin is the
 canonical `https://github.com/example/ballast-qualification-local`, with pushes
 rewritten to a local bare repository. The `gh` and `codex` found on `PATH` are
@@ -605,7 +616,7 @@ queue and observe it in one call (defaults are the bounded queue defaults above)
 
 ```sh
 export BALLAST_COORDINATOR=COORDINATOR_REF
-python3 -I -S "$BALLAST_SOURCE/tools/dashboard.py" \
+ballast dashboard \
   --cwd "$PROJECT_CHECKOUT" --repo OWNER/REPOSITORY \
   --coordinator "$BALLAST_COORDINATOR" --create --issue 12 --issue 13 \
   --revision INSTRUCTION_REVISION
@@ -658,7 +669,7 @@ The coordinator records actual public evidence in existing claim history; this
 is the only progress producer. For example, after a real check:
 
 ```sh
-python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" \
+ballast coordinate --cwd "$PROJECT_CHECKOUT" \
   record --claim "$ISSUE_CLAIM" --kind check --state passed \
   --summary 'Focused checks passed' --revision FULL_COMMIT_SHA \
   --reference https://github.com/OWNER/REPOSITORY/actions/runs/123
