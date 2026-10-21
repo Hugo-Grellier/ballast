@@ -35,8 +35,11 @@ The queue SHALL admit an issue while a slot is free.
   line and a `THEN` line, and one or more `Test: path::Class::method`
   references. Names are unique within the requirement.
 - Any other `###` or `####` heading is a defect. `#` and `##` headings are free
-  prose sections and end the current requirement. A `#` line inside a fenced
-  code block is text, not a heading.
+  prose sections and end the current requirement. Inside a fenced code block
+  (CommonMark rules: up to three spaces of indent, three or more backticks or
+  tildes, closed by the same character at least as long with nothing after it)
+  headings and `Covers:` lines are text. A fence left open at the end of a spec
+  or delta document is refused.
 - `docs/specs/` holds only flat `*.md` spec files: a subdirectory or another
   file type there is refused, by the check and by `--diff-hash`.
 - A `Test:` reference names a repository-relative file and a test method

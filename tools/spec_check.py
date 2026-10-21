@@ -29,6 +29,7 @@ SCENARIO_LEVEL = 4  # `#### Scenario: NAME`
 SHALL = re.compile(r"\bSHALL\b")
 WHEN = re.compile(r"\bWHEN\b")
 THEN = re.compile(r"\bTHEN\b")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 ITEM = re.compile(r"^(?:[-*+]|\d+[.)])[ \t]")
 DELTA_FILE = re.compile(r"^Capability:[ \t]*(\S+)$")
 DELTA_ENTRY = re.compile(
@@ -84,22 +85,46 @@ def body_text(lines: list[str]) -> str:
     return normalize(kept)
 
 
-def sections(text: str) -> list[tuple[int, int, str, list[str]]]:
+def fenced_lines(text: str) -> tuple[list[tuple[int, str, bool]], bool]:
+    """Return ((line number, line, inside a code fence), whether a fence is open).
+
+    CommonMark fences: up to three spaces of indent, then three or more
+    backticks or tildes; it closes on the same character, at least as long, with
+    nothing after it. A line indented four spaces is never a fence.
+    """
+    out = []
+    fence = ""
+    for number, line in enumerate(split_lines(text), 1):
+        match = FENCE.match(line)
+        run, rest = (match.group(1), match.group(2)) if match else ("", "")
+        if fence:
+            closes = run[:1] == fence[0] and len(run) >= len(fence) and not rest.strip()
+            fence = "" if closes else fence
+            out.append((number, line, True))
+        elif run and not (run[0] == "`" and "`" in rest):
+            fence = run
+            out.append((number, line, True))
+        else:
+            out.append((number, line, False))
+    return out, bool(fence)
+
+
+def sections(text: str) -> tuple[list[tuple[int, int, str, list[str]]], bool]:
     """Split text at headings into (line number, level, title, body lines).
 
     The first block is the preamble before any heading, with level 0. A `#`
-    line inside a fenced code block is body text, not a heading.
+    line inside a fenced code block is body text, not a heading. The flag says
+    a fence is left open at the end, which would hide what follows it.
     """
     out: list[tuple[int, int, str, list[str]]] = [(0, 0, "", [])]
-    fenced = False
-    for number, line in enumerate(split_lines(text), 1):
-        fenced ^= line.lstrip().startswith(("```", "~~~"))
+    lines, unclosed = fenced_lines(text)
+    for number, line, fenced in lines:
         heading = None if fenced else HEADING.match(line)
         if heading:
             out.append((number, len(heading.group(1)), heading.group(2), []))
         else:
             out[-1][3].append(line)
-    return out
+    return out, unclosed
 
 
 def parse_covers(text: str, name: str) -> tuple[list[str], list[str]]:
@@ -107,10 +132,10 @@ def parse_covers(text: str, name: str) -> tuple[list[str], list[str]]:
     covers: list[str] = []
     defects: list[str] = []
     opened = False
-    for number, line in enumerate(split_lines(text), 1):
-        heading = HEADING.match(line)
+    for number, line, fenced in fenced_lines(text)[0]:
+        heading = None if fenced else HEADING.match(line)
         opened = opened or bool(heading and REQUIREMENT.match(heading.group(2)))
-        cover = COVERS.match(line.strip())
+        cover = None if fenced else COVERS.match(line.strip())
         if not cover:
             continue
         if opened:
@@ -144,7 +169,10 @@ def parse_spec(text: str, name: str) -> tuple[list[str], dict, list[str]]:
     covers, defects = parse_covers(text, name)
     requirements: dict = {}
     requirement = None
-    for number, level, title, body in sections(text)[1:]:
+    blocks, unclosed = sections(text)
+    if unclosed:
+        defects.append(f"{name}: code fence left open at the end of the file")
+    for number, level, title, body in blocks[1:]:
         where = f"{name}:{number}"
         req, scen = REQUIREMENT.match(title), SCENARIO.match(title)
         if level == REQUIREMENT_LEVEL and req:
@@ -442,7 +470,11 @@ def parse_delta(text: str) -> list[dict]:
     file = requirement = None
     kinds = {REQUIREMENT_LEVEL: "Requirement", SCENARIO_LEVEL: "Scenario"}
     seen: set[tuple] = set()
-    for _, level, title, body in sections(text)[1:]:
+    blocks, unclosed = sections(text)
+    if unclosed:
+        message = "code fence left open at the end of the delta document"
+        raise SpecError(message)
+    for _, level, title, body in blocks[1:]:
         if level < REQUIREMENT_LEVEL:
             capability = DELTA_FILE.match(title)
             file = capability.group(1) if capability else None

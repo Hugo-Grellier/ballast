@@ -155,6 +155,38 @@ class SpecFormatTests(unittest.TestCase):
             self.defects(SPEC.replace("- THEN the issue waits\n", fence)), []
         )
 
+    def in_scenario(self, block: str) -> str:
+        """Insert block into the last scenario body of the valid spec."""
+        return SPEC.replace(
+            "- THEN the issue waits\n", "- THEN the issue waits\n" + block
+        )
+
+    def test_fence_rules_follow_commonmark(self) -> None:
+        for label, block in (
+            ("tilde fence", "~~~\n### Notes\n~~~\n"),
+            ("backticks inside tildes", "~~~\n```\n### Requirement: Hidden\n~~~\n"),
+            ("shorter close", "````\n```\n### Notes\n````\n"),
+            ("close with text after it", "```\n``` x\n### Notes\n```\n"),
+            ("backtick in the info string", "```a`b\n"),
+            ("indented four spaces", "    ```\n"),
+        ):
+            with self.subTest(case=label):
+                self.assertEqual(self.defects(self.in_scenario(block)), [])
+
+    def test_unclosed_fence_is_refused(self) -> None:
+        for block in ("```\n", "~~~\n```\n", "```\n~~~\n"):
+            with self.subTest(block=block):
+                self.assert_defect(self.in_scenario(block), "code fence left open")
+
+    def test_fenced_lines_do_not_count_as_covers(self) -> None:
+        example = "```\n### Requirement: Example\nCovers: fenced/**\n```\n\n"
+        text = SPEC.replace(
+            "Covers: tools/queue.py", example + "Covers: tools/queue.py"
+        )
+        self.assertEqual(self.defects(text), [])
+        covers, _, _ = spec_check.parse_spec(text, "q")
+        self.assertEqual(covers, ["tools/queue.py"])
+
     def test_missing_or_late_covers(self) -> None:
         self.assert_defect(SPEC.replace("Covers: tools/queue.py\n", ""), "no `Covers:")
         self.assert_defect(SPEC + "\nCovers: y\n", "Covers: lines must open")
@@ -336,6 +368,14 @@ class DeltaHashTests(unittest.TestCase):
         entries = spec_check.parse_delta(fenced)
         self.assertEqual(len(entries), 3)
         self.assertIn("## Risk", entries[-1]["text"])
+
+    def test_unclosed_fence_in_a_delta_is_refused(self) -> None:
+        with self.assertRaises(spec_check.SpecError):
+            spec_check.parse_delta(
+                DELTA_ADDED.replace(
+                    "#### Added Scenario: Full", "```\n#### Added Scenario: Full"
+                )
+            )
 
     def test_three_dot_diff_ignores_target_branch_progress(self) -> None:
         expected = self.doc_hash(DELTA_MODIFIED)
