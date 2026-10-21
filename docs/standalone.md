@@ -408,6 +408,84 @@ review takes them.
 - If `finish` fails partway, rerun it with the same outcome: it completes the
   missing steps without rechecking the head. A different outcome is refused.
 
+## Qualification
+
+`tools/qualify.py` drives the coordinator path above end to end, running every
+shipped helper as a subprocess: `coordinate create` and `select`, `worktree.py`,
+an `implement` worker, a coordinator commit, a `review` worker on that head, a
+push, `coordinate publish` and `settle pr_wait`. The run fails on any helper
+failure, a worker that does not end `completed`, an issue the queue does not
+select, an implementation that commits anything or changes anything but adding
+a regular `QUALIFICATION.md` with the single line `qualified`, or a review whose last line is not
+`Verdict: approve`. The review output is read for that line only and never
+enters the evidence. It prints JSON evidence without local paths: Ballast revision, base and
+head, each worker's requested and observed route, sandbox and heads, the PR and
+the final activity. Run it from outside any issue checkout. Once a worker has
+run, its Git calls in the checkout use the claim's pinned Git directory with
+hooks and the filesystem monitor off, never the worker-writable `.git` gitfile.
+
+**Local mode** needs no network, model, account, credentials or approval, so any
+agent may run it:
+
+```sh
+python3 -I -S "$BALLAST_SOURCE/tools/qualify.py" local
+```
+
+It builds a throwaway clone in a temporary directory whose origin is the
+canonical `https://github.com/example/ballast-qualification-local`, with pushes
+rewritten to a local bare repository. The `gh` and `codex` found on `PATH` are
+fakes served by the same script: the fake app-server reports the requested
+route and sandbox and completes one turn, the implementation turn writing
+`QUALIFICATION.md`; the fake `gh` answers issue, branch, pull request and
+GraphQL reads from the local repository and records created PRs. Global and
+system Git configuration are ignored, and the directory is removed on exit.
+The gate runs it (`tests/test_qualify.py`). It cannot show that the real Codex
+client, GitHub or the operator's credentials behave as the fakes do.
+
+**Live mode** runs the same path with the installed Codex and the real `gh`:
+
+```sh
+python3 -I -S "$BALLAST_SOURCE/tools/qualify.py" live \
+  --repo OWNER/ballast-qualification-NAME --confirm-disposable \
+  --model CONCRETE_MODEL --effort SUPPORTED_EFFORT --ledger FILE
+```
+
+It refuses without `--confirm-disposable` or when the repository name does not
+start with `ballast-qualification-`. It reuses an existing repository of that
+name or creates a private one with a README (its default branch must be
+`main`), opens one fictional issue, clones the repository into a temporary
+directory and runs the path. The ledger `FILE` must not exist; the run reserves
+it exclusively, so a second or concurrent run never overwrites it. It records
+what the run created before each step: the repository creation attempt, its
+confirmed creation once `gh repo create` succeeded, then GitHub's immutable
+repository id; the issue's unique title, then its number; and the
+issue branch with its pushed commit. If an issue's creation response is lost,
+the printed commands include a search for that title.
+
+Live mode never deletes anything. Removing a repository or branch is
+destructive cleanup and needs an explicit human decision. A successful run
+prints, under `leftovers`, the commands that would remove what it created: the
+repository if this run confirmed creating it, otherwise the branch (which
+closes its PR) and the issue. An attempted but unconfirmed creation lists
+`gh repo view REPO --json id,createdAt` to check, never a deletion. After a failed run the ledger lists the same items. The operator
+checks the repository id and branch head against the ledger before running
+them. The worker turns use the operator's Codex subscription.
+
+| Change | Mode |
+| --- | --- |
+| Documentation only | none |
+| Coordinator steps, claims, admission, settlement, publish rules | local (in the gate) |
+| Worker launch, sandbox or permission arguments, Codex protocol, routing, the `gh` or `git push` calls of publication | local, then live |
+
+Live mode may create a GitHub repository and spends subscription usage, so it
+needs operator authorization. The operator can grant it once,
+in the conversation or in the ignored `AGENTS.local.md`, naming the owner, the
+route and the limits, for example: "Agents may run `qualify.py live` on
+`OWNER/ballast-qualification-*` with model M and effort E, at most N runs per
+issue, creating repositories under that prefix." Without such an
+authorization each live run needs its own approval, and the PR lists the
+missing live run as a gap. Record the printed evidence under `docs/evidence/`.
+
 ## Local execution dashboard
 
 The existing agent conversation can start a foreground dashboard directly from

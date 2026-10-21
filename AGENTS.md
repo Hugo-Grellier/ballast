@@ -4,7 +4,7 @@ Ballast is a portable agent workflow: an existing agent session turns GitHub iss
 
 ## Work from the right artifact
 
-- Layout: `docs/` (the workflow: [issue workflow](docs/issue-workflow.md), [pair review](docs/pair-review.md), [model routing](docs/model-routing.md), [execution contract](docs/execution.md), [standalone adapter](docs/standalone.md), the unimplemented [Orca contract](docs/orca-execution.md), [migration](docs/migration.md)), `tools/` (Codex transport and probe, worker, worktree claims, bounded queue, R0 merge check), `templates/` (policies, `ballast-*` review skills, starter `AGENTS.md`, GitHub files), `tests/` (unittest), `docs/plans/` and `docs/evidence/` (per-issue plans and live evidence).
+- Layout: `docs/` (the workflow: [issue workflow](docs/issue-workflow.md), [pair review](docs/pair-review.md), [model routing](docs/model-routing.md), [execution contract](docs/execution.md), [standalone adapter](docs/standalone.md), the unimplemented [Orca contract](docs/orca-execution.md), [migration](docs/migration.md)), `tools/` (Codex transport and probe, worker, worktree claims, bounded queue, R0 merge check, end-to-end qualification), `templates/` (policies, `ballast-*` review skills, starter `AGENTS.md`, GitHub files), `tests/` (unittest), `docs/plans/` and `docs/evidence/` (per-issue plans and live evidence).
 - Architecture: [ADR-0023](docs/adr/0023-ballast-2-portable-agent-workflow.md) and [ADR-0024](docs/adr/0024-ballast-2-migration.md) govern the current design; [ADR-0026](docs/adr/0026-r0-merge-on-reviewed-green-head.md) amends its merge rule. ADRs 0001–0021 and `specs/` are history, not current authority. New ADRs take the next free number; the historical 0019 and 0021 duplicates are intentionally left, and `tests/test_adr_numbers.py` refuses a duplicate from 0022 on.
 
 Accepted ADRs govern design; the issue states the outcome and acceptance criteria. Current code is evidence of behavior, not permission to supersede a decision. Surface conflicts and write a new ADR under `docs/adr/` for an accepted architecture change.
@@ -13,7 +13,7 @@ Accepted ADRs govern design; the issue states the outcome and acceptance criteri
 
 - Install: `uv sync --locked`. The shipped tools are stdlib-only; only the gate's `ruff` is pinned in `uv.lock`.
 - Fast gate (also CI): `uv run --locked ruff check && uv run --locked ruff format --check` and `uv run --locked python tests/parallel.py tests/test_*.py` (the same classes as `python -m unittest tests/test_*.py`, one process per class, in parallel).
-- Live qualification (outside CI, when a change touches worker launch, routing or publication): a fictional issue on a disposable repository, recorded under `docs/evidence/`.
+- Qualification ([modes and authorization](docs/standalone.md#qualification)): `python3 -I -S tools/qualify.py local` (fakes only, in the gate) for any change to the coordinator path; when a change touches worker launch, routing or publication, also `tools/qualify.py live` on an `OWNER/ballast-qualification-*` disposable repository, outside CI and under operator authorization, recorded under `docs/evidence/`.
 - Record exact verification commands and any unavailable gate in the PR. See the [testing policy](templates/policies/testing.md) for evidence requirements.
 
 ## Invariants
