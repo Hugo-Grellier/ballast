@@ -148,6 +148,21 @@ class PrBodyTests(unittest.TestCase):
         )
         self.assertNotIn("github.event.pull_request.body", workflow)
 
+    def test_generated_prs_are_skipped(self) -> None:
+        for path in (
+            ".github/workflows/pr-body.yml",
+            "templates/github/workflows/pr-body.yml",
+        ):
+            workflow = (ROOT / path).read_text()
+            self.assertIn(
+                "github.event.pull_request.user.login != 'dependabot[bot]'",
+                workflow,
+                path,
+            )
+            self.assertIn(
+                "!startsWith(github.head_ref, 'release-please--')", workflow, path
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
