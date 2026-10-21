@@ -609,7 +609,8 @@ def execute(
         admission.write(directory / "result.json", result)
         event(directory, result["status"])
         if settled or not dispatched:
-            admission.release_worker(claim, identifier)
+            refund = role if settled and result["status"] == "cancelled" else None
+            admission.release_worker(claim, identifier, refund)
     return result
 
 
