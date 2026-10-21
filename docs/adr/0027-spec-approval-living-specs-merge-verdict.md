@@ -1,6 +1,6 @@
 # ADR-0027: the human approves the spec; living specs record behavior; a computed verdict decides the merge
 
-- Status: proposed (2026-10-21, [#264](https://github.com/Hugo-Grellier/ballast/issues/264), Epic [#263](https://github.com/Hugo-Grellier/ballast/issues/263)). Merging its PR is the human approval that accepts it; the leaves implement it.
+- Status: proposed (2026-10-21, [#264](https://github.com/Hugo-Grellier/ballast/issues/264), Epic [#263](https://github.com/Hugo-Grellier/ballast/issues/263)). The operator approved its merge on 2026-10-21 (relayed, [#264](https://github.com/Hugo-Grellier/ballast/issues/264#issuecomment-6312008769)); the coordinator merges it on an approved, green head, and that merge is not itself a human approval. The leaves implement it.
 - Risk: R2 (changes merge authority and admission semantics, invariants of `AGENTS.md`).
 - Amends: [ADR-0023](0023-ballast-2-portable-agent-workflow.md) ("routine tasks need no parallel spec tree", "preserve human merge approval") and [ADR-0024](0024-ballast-2-migration.md). Extends [ADR-0026](0026-r0-merge-on-reviewed-green-head.md) (R0 merge on a reviewed green head, [#219](https://github.com/Hugo-Grellier/ballast/issues/219)) to R1. Their text stays as history; where they conflict, this ADR governs once accepted.
 - Basis: operator's conversation of 2026-10-21, after reading [Interlock](https://github.com/renzrollon/interlock) and [OpenSpec](https://github.com/Fission-AI/OpenSpec).
@@ -48,8 +48,9 @@ exact head, CI on that head); it lacks the spec half.
   spec files.
 - A changed path is *covered* when a `Covers:` glob of some spec matches it, or
   when it matches a coverage-exempt glob that `project/workflow.md` lists (for
-  example documentation and test directories). There is no implicit exemption:
-  with no list, every changed path needs coverage. Existing behavior is described
+  example documentation and test directories). `docs/specs/` itself is always
+  exempt; there is no other implicit exemption: with no list, every other
+  changed path needs coverage. Existing behavior is described
   once, without code changes; until then, an R1 PR that changes an uncovered path
   gets `HUMAN`.
 
@@ -60,7 +61,8 @@ The approved object is the *normalized delta*: a list of entries, each keyed by
 itself) with a change type (added, modified or removed), the resulting text
 (SHALL, WHEN/THEN) and, for modified or removed entries, the base text it
 replaces. Moving a scenario to another requirement is a removal plus an
-addition. Text is normalized before hashing: LF line endings, trailing
+addition; removing a requirement lists it and each of its scenarios as removed
+entries. Text is normalized before hashing: LF line endings, trailing
 whitespace removed, wrapped lines of one paragraph joined by a single space.
 `Test:` lines, `Covers:` lines, open questions and risk are not part of the
 delta, so choosing or renaming tests and resolving questions need no new
@@ -71,20 +73,26 @@ document posted on the issue and from the three-dot Git diff
 they describe the same behavior change.
 
 If the base text of a modified or removed entry no longer matches the target
-branch (a concurrent PR changed it), the delta is stale: the verdict is `BLOCK`
+branch (a concurrent PR changed it), or an added key already exists there, the
+delta is stale: the verdict is `BLOCK`
 until a new delta is posted and approved. A stale delta is never handed to the
 human to merge as is.
 
 ### The human approves the spec delta
 
-- For an R1 or R2 leaf, the clarify/plan phase posts the delta document on the
+- Every leaf issue states its risk on one line `Risk: R0|R1|R2` in its body.
+  For an R1 or R2 leaf, the clarify/plan phase posts the delta document on the
   issue together with open questions, the proposed risk and the hash. R0 work
   and investigations skip it.
-- The approval is an issue comment that quotes the hash and the risk: either
-  the human's own comment, or a coordinator comment relaying the human's words
-  verbatim with their date, marked as relayed, as for R2 approvals today. Both
-  count for `MERGE` (operator decision, 2026-10-21). The approved risk is a
-  floor: a PR or reviewer classification below it gives `HUMAN`.
+- The approval is an issue comment whose first line has the fixed form
+  `Spec approved: <hash> risk <Rn> delta <comment URL>`, linking the delta
+  comment it approves. It is either the human's own comment, or a coordinator
+  comment relaying the human's words verbatim with their date, marked as
+  relayed, as for R2 approvals today; both count for `MERGE` (operator decision,
+  2026-10-21). The delta document and the helpers never emit that line, and
+  dispatch and `merge_check.py` accept no other form. The approved risk, and the
+  issue's `Risk:` line, are a floor: a PR or reviewer classification below the
+  higher of the two gives `HUMAN`.
 - The implement dispatch refuses an R1/R2 leaf without an approval whose quoted
   hash equals the hash it recomputes from the posted delta document. A changed
   requirement or scenario needs a new approval. Questions that change no
@@ -127,21 +135,27 @@ human's own comments checkable; relays would still rest on that trust.
 
 `tools/merge_check.py` returns one verdict for the PR's current head, with its
 reasons and what would raise it. On every PR, R0 included, it resolves the
-closing issue and reads the risk proposed or approved there.
+closing issues and reads each one's `Risk:` line and approved risk; the floor
+is the highest of them. No closing issue, or one without a parseable risk,
+gives `HUMAN`.
 
 - `MERGE`: the ADR-0026 conditions hold (independent review approved the exact
   head and confirmed the risk, every required check passed on it, not a draft,
   nothing changed after review, no excluded path), the confirmed risk is not
-  below the issue's risk, and the PR is R0, or R1 with an approval, green
-  conformance and every changed path covered.
-- `HUMAN`: R2; an excluded path; a confirmed risk below the issue's proposed or
-  approved risk; a disputed or raised risk; an uncovered changed path; a
+  below the floor, and the PR is R0 with no changed path matched by a `Covers:`
+  glob, or R1 with an approval, green conformance and every changed path
+  covered.
+- `HUMAN`: R2; an excluded path; a confirmed risk below the floor; no closing
+  issue or no parseable risk; a disputed or raised risk; an uncovered changed
+  path; an R0 PR changing a path a `Covers:` glob matches; a
   missing, unreadable or malformed `project/workflow.md` on the target branch.
   The output is the handoff: approved spec, risky paths, surviving review
   findings. The human reviews that, not the full diff.
 - `BLOCK`: missing or stale review, a failing or missing required check, a
-  draft, a head that moved, a hash mismatch, an edited delta or approval, or a
-  stale delta.
+  draft, a head that moved, a hash mismatch, an edited delta or approval, a
+  stale delta, an R1 PR without an approval, or an R1 PR changing no spec
+  without an approved empty delta. Any state not listed under `MERGE` is
+  `BLOCK`.
 
 Excluded paths are the ADR-0026 list plus the project's human-only globs in
 `project/workflow.md`. `merge_check.py` reads that file from the target branch,
@@ -152,7 +166,8 @@ at least `tools/merge_check.py`, `tools/spec_check.py`, `tools/pr_body.py`,
 `tools/worktree.py`, `tools/codex.py`, `tools/progress.py`, every module these
 import, `tests/parallel.py` and any other runner CI executes as a gate,
 `.github/`, `project/workflow.md`, `AGENTS.md`, `CLAUDE.md`,
-`docs/issue-workflow.md`, `docs/pair-review.md`, `docs/adr/`,
+`docs/issue-workflow.md`, `docs/pair-review.md`, `docs/standalone.md`,
+`docs/execution.md`, `docs/model-routing.md`, `docs/adr/`,
 `templates/policies/` and `templates/skills/ballast-*`. These paths are excluded
 whatever the stated risk and whatever their coverage, so a PR changing the gate
 that would merge it, in code or in prose, never merges itself.
@@ -196,8 +211,10 @@ confirmation, the excluded paths and the revert workflow. A coordinator that
 posted or relayed an approval the human never gave would defeat the spec gate;
 that is the trust boundary named above, the same one R2 approvals rely on today,
 and with relays accepted for `MERGE` it is the gate's main assumption.
-Bootstrapping specs for existing behavior is real work and delays `MERGE` for
-paths not yet covered.
+An R1 change ticked R0 is bounded by the issue's `Risk:` floor and by R0 never
+merging a path a spec covers. Bootstrapping specs for existing behavior is real
+work and delays `MERGE` for paths not yet covered. A project without
+`project/workflow.md` gets `HUMAN` for every PR, R0 included, until it adds one.
 
 ## Alternatives
 
