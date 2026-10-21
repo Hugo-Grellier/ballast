@@ -284,12 +284,17 @@ def matches(path: str, globs: list[str]) -> bool:
 
 def git(root: Path, *args: str) -> str:
     """Run a read-only git command in root and return its stdout."""
-    result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
-        ["git", "-C", str(root), *args],  # noqa: S607 -- git from PATH
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
+            ["git", "-C", str(root), *args],  # noqa: S607 -- git from PATH
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        message = f"git {' '.join(args)} timed out"
+        raise SpecError(message) from error
     if result.returncode:
         message = f"git {' '.join(args)} failed: {result.stderr.strip()}"
         raise SpecError(message)

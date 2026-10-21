@@ -272,4 +272,9 @@ verdict of the [workflow policy](../templates/policies/workflow.md#risk): run
 `ballast merge-check` on the reviewed head, merge only through it on `MERGE`,
 hand the `HUMAN` handoff to a human, and fix what `BLOCK` names
 ([ADR-0027](adr/0027-spec-approval-living-specs-merge-verdict.md)). Report a
-merge as merged under ADR-0027, never as a human approval.
+merge as merged under ADR-0027, never as a human approval. The verdict takes
+the review evidence (`--verdict`, `--risk`, `--reviewed-head`) on trust from the
+coordinator, as under ADR-0026: pass exactly what the independent review of
+that head recorded
+([#302](https://github.com/Hugo-Grellier/ballast/issues/302) binds it to the
+recorded review).

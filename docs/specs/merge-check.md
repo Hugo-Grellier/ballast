@@ -20,9 +20,10 @@ be `BLOCK`. Every reason SHALL carry what would raise the verdict.
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_block_takes_precedence_over_human_and_human_over_merge
 
 #### Scenario: Malformed PR response
-- WHEN GitHub returns something other than the PR object, or malformed closing issues
+- WHEN GitHub returns something other than the PR object, or malformed closing issues, or an unexpected error or a Git timeout occurs
 - THEN the verdict is `BLOCK`
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_refuses_unreadable_github_response
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_unexpected_errors_and_git_timeouts_block
 
 ### Requirement: MERGE
 The check SHALL return `MERGE` for an R0 PR that meets the ADR-0026 conditions,
@@ -156,8 +157,9 @@ never the PR head), a missing, unreadable or malformed `project/workflow.md`
 on the target branch, no closing issue, a closing issue that is closed, outside
 the repository, or without one parseable `Risk:` line in a body by a trusted
 author, a confirmed risk below the highest closing-issue `Risk:` line and
-approved risk, a changed path no `Covers:` glob or `Coverage-exempt:` glob of
-the target branch matches (never the PR head's), and an R0 PR changing
+approved risk, an R1 or R2 PR closing more than one issue, a claim branch
+`issue-N-...` whose PR does not close #N, a changed path no `Covers:` glob or
+`Coverage-exempt:` glob of the target branch matches (never the PR head's), and an R0 PR changing
 a covered path or modifying or removing a spec entry.
 
 #### Scenario: R2
@@ -183,21 +185,28 @@ a covered path or modifying or removing a spec entry.
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_refuses_renames_from_excluded_paths
 
 #### Scenario: Human-only globs from the target branch
-- WHEN a PR changes a human-only path, also while removing its glob
-- THEN the verdict is `HUMAN`, judged by the target branch's globs
+- WHEN a PR changes a human-only path, also while removing its glob or in another letter case
+- THEN the verdict is `HUMAN`, judged by the target branch's globs, ignoring case
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_human_only_matching_ignores_case
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_human_only_globs_come_from_the_target_branch
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_ballast_gate_surfaces_need_a_human
 
 #### Scenario: Missing or malformed project workflow
-- WHEN the target branch has no `project/workflow.md`, or a key line not of the form `Key: GLOB`
-- THEN the verdict is `HUMAN`
+- WHEN the target branch has no `project/workflow.md`, one without a key line outside code fences, or a key line not of the form `Key: GLOB`
+- THEN the verdict is `HUMAN`; a key line inside a code fence is ignored
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_workflow_key_lines_in_code_fences_are_ignored
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_missing_or_malformed_workflow_on_target_needs_a_human
 
 #### Scenario: Risk floor
-- WHEN the PR closes no issue, one without a parseable risk, one in another repository, or one whose risk or approved risk is above the confirmed risk
-- THEN the verdict is `HUMAN`
+- WHEN the PR closes no issue, one without exactly one parseable risk, one in another repository, or one whose risk or approved risk is above the confirmed risk
+- THEN the verdict is `HUMAN`, and an unparsed floor is reported `unknown`
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_closing_issue_and_its_risk_set_the_floor
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_approved_risk_raises_the_floor
+
+#### Scenario: One issue, the one the branch names
+- WHEN an R1 PR closes a second issue besides the approved one, or comes from a claim branch `issue-N-...` and does not close #N
+- THEN the verdict is `HUMAN`, so one issue's approval, an empty delta's included, cannot authorize another issue's work
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_r1_closes_exactly_one_issue_its_branch_names
 
 #### Scenario: Closed or untrusted closing issue
 - WHEN the closing issue is closed, or its body's author is not an owner, member or collaborator
@@ -214,11 +223,17 @@ a covered path or modifying or removing a spec entry.
 - THEN the path is still uncovered and the verdict is `HUMAN`
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_coverage_comes_from_the_target_branch
 
+#### Scenario: Specs always exempt
+- WHEN the target's `project/workflow.md` lists no coverage exemption and an R0 PR only adds spec entries
+- THEN `docs/specs/` is still exempt and the verdict is `MERGE`
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_docs_specs_is_always_coverage_exempt
+
 #### Scenario: R0 touching specified behavior
 - WHEN an R0 PR changes a covered path, or modifies or removes a spec entry
 - THEN the verdict is `HUMAN`
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_r0_changing_a_covered_path_needs_a_human
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_r0_modifying_or_removing_a_spec_entry_needs_a_human
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_r0_covered_check_uses_target_and_head_covers
 
 #### Scenario: Handoff
 - WHEN the verdict is `HUMAN`
@@ -228,7 +243,8 @@ a covered path or modifying or removing a spec entry.
 ### Requirement: Merge command
 The check SHALL merge only on `MERGE` and only with `--merge`, squash and
 pinned with `--match-head-commit` to the reviewed head, after fetching the
-target branch again and finding the tip the verdict used, SHALL then comment that
+target branch again and finding the tip the verdict used, SHALL report
+`merged` only when GitHub then shows the PR merged and `queued` otherwise, SHALL then comment that
 it merged under ADR-0027 and that this is not a human approval, SHALL report a
 merge GitHub refuses as `BLOCK`, and SHALL refuse to run inside an issue
 checkout.
@@ -237,6 +253,11 @@ checkout.
 - WHEN `--merge` is absent, or the verdict is `HUMAN`
 - THEN no merge call is made; with it on `MERGE`, the pinned merge runs and the merge comment names ADR-0027
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_merge_only_on_merge_and_with_explicit_flag
+
+#### Scenario: Merge queue
+- WHEN GitHub accepts the merge command but the PR is not merged yet
+- THEN the result says `queued`, not `merged`, and no merge comment is posted
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_merge_queue_is_reported_queued_not_merged
 
 #### Scenario: Target moved before the merge
 - WHEN the target branch tip changed between the verdict and the merge

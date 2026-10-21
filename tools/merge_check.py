@@ -67,12 +67,13 @@ EXCLUDED_NAMES = (
     ".pre-commit-config.yaml",
     ".tool-versions",
 )
+CLAIM_BRANCH = re.compile(r"issue-(\d+)-")
 EXCLUDED_BRANCHES = ("release-please--", "dependabot/", "renovate/")
 TICKED = re.compile(r"(?im)^[ \t]*[-*][ \t]*\[[xX]\][ \t]*(R[012])\b")
 # Any line that looks like a workflow key; only the strict form counts, so a
 # misspelled or list-item key is malformed rather than silently ignored.
 WORKFLOW_KEY = re.compile(
-    r"(?im)^[ \t]*(?:[-*+][ \t]+)?(?:human-only|coverage-exempt)[ \t]*:.*$"
+    r"[ \t]*(?:[-*+][ \t]+)?(?:human-only|coverage-exempt)[ \t]*:.*", re.IGNORECASE
 )
 WORKFLOW_LINE = re.compile(r"^(Human-only|Coverage-exempt):[ \t]+(\S+)[ \t]*$")
 MERGED_NOTE = (
@@ -306,16 +307,22 @@ def required_checks(repo: str, number: int, base: str, found: Findings) -> None:
 def project_workflow(root: Path, tip: str, found: Findings) -> dict | None:
     """Read the human-only and coverage-exempt globs from the target branch.
 
-    Never from the PR head, so a PR cannot remove its own exclusion. A missing,
-    unreadable or malformed file gives HUMAN.
+    Never from the PR head, so a PR cannot remove its own exclusion. A missing
+    or unreadable file, one without a key line, or a key line not of the form
+    `Key: GLOB` gives HUMAN.
     """
     try:
         text = spec_check.git(root, "show", f"{tip}:{spec_check.WORKFLOW}")
     except spec_check.SpecError:
         text = None
-    lines = WORKFLOW_KEY.findall(text or "")
+    # Key lines inside a code fence are examples, not keys.
+    lines = [
+        line
+        for _, line, fenced in spec_check.fenced_lines(text or "")[0]
+        if not fenced and WORKFLOW_KEY.fullmatch(line)
+    ]
     parsed = [WORKFLOW_LINE.match(line) for line in lines]
-    if text is None or not all(parsed):
+    if not parsed or not all(parsed):
         found.add(
             "HUMAN",
             f"{spec_check.WORKFLOW} is missing or malformed on the target branch",
@@ -373,13 +380,14 @@ def issue_risks(number: int, data: dict, found: Findings) -> list[str]:
     return risks
 
 
-def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str, list]:
+def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str | None, list]:
     """Return the risk floor and each closing issue's (approval, comments).
 
     The floor is the highest `Risk:` line and approved risk of the closing
-    issues. No closing issue, one in another repository, a closed one (its
-    approval cannot be replayed by a later PR), or one without a single
-    parseable `Risk:` line in a body a trusted author wrote gives HUMAN.
+    issues, None when unknown. No closing issue, one in another repository, a
+    closed one (its approval cannot be replayed by a later PR), or one without
+    a single parseable `Risk:` line in a body a trusted author wrote gives
+    HUMAN.
     """
     references = pr.get("closingIssuesReferences")
     if not isinstance(references, list):
@@ -390,7 +398,7 @@ def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str, list]:
             "The PR closes no issue, so its risk floor is unknown",
             "link the issue with `Closes #N`",
         )
-    floor, approvals = "R0", []
+    floor, approvals, known = "R0", [], bool(references)
     for reference in references:
         if not isinstance(reference, dict):
             worktree.fail("Pull request response is malformed")
@@ -404,9 +412,11 @@ def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str, list]:
                 "The PR closes an issue outside this repository",
                 "close only issues of this repository",
             )
+            known = False
             continue
         data, comments = issue(repo, number)
         risks = issue_risks(number, data, found)
+        known = known and len(risks) == 1
         try:
             approval = spec_approval.approval(repo, number, comments)
         except admission.FixedReasonError:
@@ -414,7 +424,7 @@ def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str, list]:
         floor = max([floor, *risks, *([approval["approved_risk"]] if approval else [])])
         if approval:
             approvals.append((approval, comments))
-    return floor, approvals
+    return (floor if known else None), approvals
 
 
 def edited(approval: dict, comments: list[dict]) -> bool:
@@ -469,7 +479,8 @@ def specs(args: argparse.Namespace, tip: str, paths: list, found: Findings) -> d
     risky = [
         p
         for p in paths
-        if excluded(p, tuple(args.exclude)) or spec_check.matches(p, human_only)
+        if excluded(p, tuple(args.exclude))
+        or spec_check.matches(p.lower(), [g.lower() for g in human_only])
     ]
     if risky:
         found.add(
@@ -550,6 +561,29 @@ def approved_spec(
     return None
 
 
+def issue_match(pr: dict, risk: str, found: Findings) -> None:
+    """Tie the PR to one issue: the one its claim branch names, if any.
+
+    An R1 or R2 PR closes exactly one issue, so an approval of one issue cannot
+    carry an unapproved second one; a claim branch `issue-N-...` must close #N.
+    """
+    numbers = [r.get("number") for r in pr["closingIssuesReferences"]]
+    if risk != "R0" and len(numbers) > 1:
+        found.add(
+            "HUMAN",
+            "An R1 or R2 PR closes more than one issue",
+            "close exactly one issue, or split the PR",
+        )
+    claim = CLAIM_BRANCH.match(pr.get("headRefName") or "")
+    if claim and int(claim.group(1)) not in numbers:
+        found.add(
+            "HUMAN",
+            f"The claim branch names issue #{claim.group(1)}, which the PR does"
+            " not close",
+            f"close #{claim.group(1)} from this branch",
+        )
+
+
 def evaluate(args: argparse.Namespace, found: Findings) -> dict:
     """Collect every BLOCK and HUMAN reason for the reviewed head."""
     number, head, risk = args.pr, args.reviewed_head, args.risk
@@ -577,7 +611,8 @@ def evaluate(args: argparse.Namespace, found: Findings) -> dict:
     )
     paths = changed_paths(pages, pr.get("changedFiles"))
     floor, approvals = closing_issues(args.repo, pr, found)
-    if floor > risk:
+    issue_match(pr, risk, found)
+    if floor and floor > risk:
         found.add(
             "HUMAN",
             f"The confirmed risk {risk} is below the closing issue's {floor}",
@@ -589,7 +624,7 @@ def evaluate(args: argparse.Namespace, found: Findings) -> dict:
     required_checks(args.repo, number, base, found)
     return {
         "risk": risk,
-        "floor": floor,
+        "floor": floor or "unknown",
         "target": {"branch": base, "tip": tip},
         "spec": {**spec, **(approval or {})},
     }
@@ -607,6 +642,12 @@ def check(args: argparse.Namespace) -> dict:
         facts = evaluate(args, found)
     except (admission.FixedReasonError, spec_check.SpecError) as error:
         found.add("BLOCK", str(error), "fix the cause and run the check again")
+    except (KeyError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+        found.add(
+            "BLOCK",
+            f"Unexpected {type(error).__name__}",
+            "fix the cause and run the check again",
+        )
     result: dict = {"verdict": found.verdict(), **facts}
     if found.block:
         result["block"] = found.block
@@ -679,10 +720,21 @@ def run(args: argparse.Namespace) -> dict:
                 }
             ]
             return result
-        result["merged"] = True
-        note = MERGED_NOTE.format(head=args.reviewed_head, risk=args.risk)
-        comment = ("pr", "comment", str(args.pr), "--repo", result["merge"][5])
-        result["noted"] = gh(*comment, "--body", note).returncode == 0
+        # A merge queue accepts the command without merging yet: report merged
+        # only when GitHub says so.
+        target = result["merge"][5]
+        try:
+            state = read(
+                "pr", "view", str(args.pr), "--repo", target, "--json", "state"
+            )
+        except admission.FixedReasonError:
+            state = None
+        merged = isinstance(state, dict) and state.get("state") == "MERGED"
+        result["merged"], result["queued"] = merged, not merged
+        if merged:
+            note = MERGED_NOTE.format(head=args.reviewed_head, risk=args.risk)
+            comment = ("pr", "comment", str(args.pr), "--repo", target)
+            result["noted"] = gh(*comment, "--body", note).returncode == 0
     return result
 
 

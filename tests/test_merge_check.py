@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -156,6 +157,7 @@ class MergeVerdictTests(unittest.TestCase):
             {"name": "advisory", "bucket": "fail"},
         ]
         self.merge_code = 0
+        self.queue = False
         self.failing: dict[str, int] = {}
         self.calls: list[tuple[str, ...]] = []
         for target, name, fake in (
@@ -210,6 +212,12 @@ class MergeVerdictTests(unittest.TestCase):
             return self.issue
         return {"state": "open", "author_association": "OWNER", **self.issue}
 
+    def merged(self) -> int:
+        """Return the merge exit code; without a queue a merge is immediate."""
+        if not self.merge_code and not self.queue:
+            self.pr["state"] = "MERGED"
+        return self.merge_code
+
     def fake(self, *args: str) -> subprocess.CompletedProcess:
         self.calls.append(args)
         output, code = "", 0
@@ -231,7 +239,7 @@ class MergeVerdictTests(unittest.TestCase):
             output = json.dumps(self.checks)
             code = 8 if any(c.get("bucket") != "pass" for c in self.checks) else 0
         elif args[:2] == ("pr", "merge"):
-            code = self.merge_code
+            code = self.merged()
         for marker, failure in self.failing.items():
             if marker in " ".join(args):
                 code = failure
@@ -394,6 +402,13 @@ class MergeVerdictTests(unittest.TestCase):
         self.pr = "not a pr"  # type: ignore[assignment]
         self.blocks("malformed")
 
+    def test_unexpected_errors_and_git_timeouts_block(self) -> None:
+        with patch.object(spec_check, "git_delta", side_effect=ValueError):
+            self.blocks("Unexpected ValueError")
+        timeout = subprocess.TimeoutExpired("git", 120)
+        with patch.object(spec_check.subprocess, "run", side_effect=timeout):
+            self.blocks("timed out")
+
     def test_refuses_malformed_file_entries(self) -> None:
         for entry in (
             {},
@@ -518,6 +533,10 @@ class MergeVerdictTests(unittest.TestCase):
         result = self.human("human-only")
         self.assertIn("tools/gate.py", result["handoff"]["risky_paths"])
 
+    def test_human_only_matching_ignores_case(self) -> None:
+        self.change({"Tools/Gate.PY": "x\n"})
+        self.human("human-only")
+
     def test_refuses_renames_from_excluded_paths(self) -> None:
         for old in (".github/workflows/ci.yml", "requirements.txt", "tools/gate.py"):
             self.files = [{"filename": "docs/archived", "previous_filename": old}]
@@ -536,6 +555,8 @@ class MergeVerdictTests(unittest.TestCase):
         self.human("closes no issue")
         self.setUp()
         self.issue = {"body": "No risk line"}
+        self.assertEqual(self.human("no single parseable")["floor"], "unknown")
+        self.issue = {"body": "Risk: R0\nRisk: R1"}
         self.human("no single parseable `Risk:` line")
         self.setUp()
         self.pr["closingIssuesReferences"][0]["repository"]["name"] = "other"
@@ -573,6 +594,25 @@ class MergeVerdictTests(unittest.TestCase):
         self.assertIn("moved since the verdict", result["block"][0]["reason"])
         self.assertFalse([call for call in self.calls if call[:2] == ("pr", "merge")])
 
+    def test_r1_closes_exactly_one_issue_its_branch_names(self) -> None:
+        # One approved issue cannot carry a second, unapproved R1 issue.
+        self.r1()
+        second = {
+            "number": 6,
+            "repository": {"name": "fixture", "owner": {"login": "example"}},
+        }
+        self.pr["closingIssuesReferences"].append(second)
+        self.human("closes more than one issue", "approved", "R1")
+        # An approved empty delta of another issue cannot authorize this PR.
+        self.setUp()
+        self.r1()
+        self.change({"tools/a.py": "x = 1\n"})
+        self.comments = [delta(EMPTY_DELTA), approval(EMPTY_DELTA)]
+        self.pr["headRefName"] = "issue-9-abcdef12"
+        self.human("claim branch names issue #9", "approved", "R1")
+        self.pr["headRefName"] = f"issue-{ISSUE}-abcdef12"
+        self.merges("approved", "R1")
+
     def test_approved_risk_raises_the_floor(self) -> None:
         self.r1(risk="R2")
         self.human("below the closing issue's R2", "approved", "R1")
@@ -594,10 +634,42 @@ class MergeVerdictTests(unittest.TestCase):
         self.human("R0 PR modifies or removes a spec entry")
 
     def test_missing_or_malformed_workflow_on_target_needs_a_human(self) -> None:
-        for text in (None, "- Human-only: tools/gate.py\n", "Human-only:\n"):
+        for text in (
+            None,
+            "- Human-only: tools/gate.py\n",
+            "Human-only:\n",
+            "",
+            "No keys here.\n",
+            "```\nHuman-only: tools/gate.py\n```\n",
+        ):
             self.setUp()
             self.advance_target({"project/workflow.md": text})
             self.human("missing or malformed")
+
+    def test_workflow_key_lines_in_code_fences_are_ignored(self) -> None:
+        fenced = WORKFLOW + "```\n- Human-only: example, malformed\n```\n"
+        self.advance_target({"project/workflow.md": fenced})
+        self.base = self.tip
+        self.change({"docs/guide.md": "x\n"})
+        self.merges()
+
+    def test_docs_specs_is_always_coverage_exempt(self) -> None:
+        self.advance_target({"project/workflow.md": "Human-only: tools/gate.py\n"})
+        self.base = self.tip
+        self.change({"docs/specs/cap.md": SPEC + SECOND})
+        self.merges()
+
+    def test_r0_covered_check_uses_target_and_head_covers(self) -> None:
+        # A PR adding a Covers: line for the path it changes still touches
+        # specified behavior; so does one dropping the target's Covers: line.
+        moved = SPEC.replace(
+            "Covers: tools/a.py", "Covers: tools/a.py\nCovers: tools/b.py"
+        )
+        self.change({"docs/specs/cap.md": moved, "tools/b.py": ""})
+        self.human("R0 PR changes paths a spec covers")
+        dropped = SPEC.replace("Covers: tools/a.py", "Covers: tools/z.py")
+        self.change({"docs/specs/cap.md": dropped, "tools/a.py": "x = 1\n"})
+        self.human("R0 PR changes paths a spec covers")
 
     def test_handoff_lists_paths_spec_and_findings(self) -> None:
         self.r1()
@@ -637,8 +709,9 @@ class MergeVerdictTests(unittest.TestCase):
         self.base = self.tip
 
     def test_ballast_gate_surfaces_need_a_human(self) -> None:
-        self.ballast()
-        for path in (
+        text = (BALLAST / "project/workflow.md").read_text(encoding="utf-8")
+        globs = re.findall(r"(?m)^Human-only: (\S+)$", text)
+        for required in (
             "tools/merge_check.py",
             "tools/spec_check.py",
             "tools/pr_body.py",
@@ -650,15 +723,29 @@ class MergeVerdictTests(unittest.TestCase):
             "tools/spec_approval.py",
             "tools/cli.py",
             "tools/progress.py",
-            "tests/parallel.py",
+            "tools/qualify.py",
+            "tests/**",
+            ".github/**",
             "project/workflow.md",
             "AGENTS.md",
-            "docs/adr/0027-x.md",
-            "templates/policies/workflow.md",
-            "templates/skills/ballast-test-review/SKILL.md",
+            "CLAUDE.md",
+            "docs/issue-workflow.md",
+            "docs/pair-review.md",
+            "docs/standalone.md",
+            "docs/execution.md",
+            "docs/model-routing.md",
+            "docs/adr/**",
+            "templates/policies/**",
+            "templates/skills/ballast-*/**",
         ):
-            self.change({path: "changed\n"})
-            self.human("human-only")
+            self.assertIn(required, globs)
+        self.ballast()
+        # One sample path per glob, so deleting any glob from the file fails.
+        samples = [g.replace("**", "x/y.md").replace("*", "x") for g in globs]
+        for path in [*samples, "tests/test_zz.py", "tests/__init__.py"]:
+            with self.subTest(path=path):
+                self.change({path: "changed\n"})
+                self.human("human-only")
 
     def test_covered_ballast_r1_pr_merges(self) -> None:
         self.ballast()
@@ -667,7 +754,6 @@ class MergeVerdictTests(unittest.TestCase):
                 "docs/specs/cap.md": SPEC.replace("tools/a.py", "tools/dashboard.py")
                 + SECOND,
                 "tools/dashboard.py": "x = 1\n",
-                "tests/test_dashboard.py": "",
             }
         )
         self.pr["body"] = body("R1")
@@ -693,9 +779,19 @@ class MergeVerdictTests(unittest.TestCase):
         self.assertTrue(result["noted"])
         # A HUMAN verdict never merges, even with --merge.
         self.calls.clear()
+        self.pr["state"] = "OPEN"
         self.pr["body"] = body("R2")
         self.assertEqual(merge_check.run(args)["verdict"], "HUMAN")
         self.assertFalse([call for call in self.calls if call[:2] == ("pr", "merge")])
+
+    def test_merge_queue_is_reported_queued_not_merged(self) -> None:
+        self.queue = True
+        args = merge_check.parser().parse_args(
+            self.arguments("approved", "R0", "--merge")
+        )
+        result = merge_check.run(args)
+        self.assertEqual((result["merged"], result["queued"]), (False, True))
+        self.assertFalse([call for call in self.calls if call[:2] == ("pr", "comment")])
 
     def test_refuses_to_run_inside_an_issue_checkout(self) -> None:
         args = merge_check.parser().parse_args(

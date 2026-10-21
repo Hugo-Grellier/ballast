@@ -3,14 +3,19 @@
 The merge verdict (`tools/merge_check.py`,
 [ADR-0027](../docs/adr/0027-spec-approval-living-specs-merge-verdict.md)) reads
 this file from the target branch, never from the PR head. Each key line stands
-alone at the start of a line, `Key: GLOB` with one glob; any other form of a
-key line makes the file malformed, which gives `HUMAN` for every PR.
+alone at the start of a line, `Key: GLOB` with one glob; a key line of any
+other form, or a file without any key line, is malformed, which gives `HUMAN`
+for every PR. Key lines inside code fences are ignored.
 
 ## Human-only paths
 
 A PR changing one of these paths always needs a human merge, whatever its risk
 and coverage: they are the code and the text of the gate that would merge it,
-and the modules the gate helpers import.
+and the modules the gate helpers import. Every file under `tests/` is
+human-only too: CI runs `tests/test_*.py`, so any test file, new or changed,
+can end the run early (`os._exit(0)` at import) and turn the gate green. A
+narrower rule by file name would not close that, since an existing test file
+can do the same. Matching ignores case.
 
 Human-only: tools/merge_check.py
 Human-only: tools/spec_check.py
@@ -24,7 +29,7 @@ Human-only: tools/codex.py
 Human-only: tools/progress.py
 Human-only: tools/cli.py
 Human-only: tools/qualify.py
-Human-only: tests/parallel.py
+Human-only: tests/**
 Human-only: .github/**
 Human-only: project/workflow.md
 Human-only: AGENTS.md
