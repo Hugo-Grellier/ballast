@@ -93,6 +93,8 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   assert.match(ids.get("worker").textContent, /requested/);
   assert.match(ids.get("worker").textContent, /verified/);
   assert.match(ids.get("worker").textContent, /Completion alone/);
+  assert.match(workerButton.textContent, /implement · completed · worker · unverified route · abc/);
+  assert.match(ids.get("worker").textContent, /Executor: worker · Route: unverified route/);
   const evidenceLink = find(find(ids.get("detail"), "evidence-0"), "ref");
   const evidenceTime = find(find(ids.get("detail"), "evidence-0"), "time");
   assert.equal(evidenceTime.dateTime, question.at.replace("Z", ".000Z"));
@@ -153,8 +155,9 @@ const find = (parent, key) => parent.children.find(child => child.dataset.key ==
   loseMutationResponse = false;
   observed = {...observed, mode: "paused"}; await timers.shift()();
   assert.equal(ids.get("resume").disabled, false);
-  worker.tokens = {}; worker.timing = {};
+  worker.tokens = {}; worker.timing = {}; Object.assign(worker, {executor: "coordinator", verdict: "approved", round: 1});
   workerButton.onclick();
+  assert.match(ids.get("worker").textContent, /Executor: coordinator · Route: unverified route .* Review verdict: approved, round 1/);
   assert.match(ids.get("worker").textContent, /Setup: unknown · Running: unknown/);
   assert.match(ids.get("worker").textContent, /Usage — unknown/);
   observed = {...observed, mode: "cancelled", limits: {}, clone_wide_used: {}, quota: {}, issues: [{issue: 2, activity: "unclaimed", readiness: "unknown", evidence: [], workers: []}]};

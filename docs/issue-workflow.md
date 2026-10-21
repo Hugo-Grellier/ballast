@@ -127,7 +127,10 @@ Use a dedicated issue worktree and branch based on the repository's current
 target branch. Follow [portable execution](execution.md) for creation, dispatch,
 and recovery; reuse the matching worktree and branch when continuing.
 To dispatch workers as agent-native subagents, see
-[subagent workers](subagent-workers.md).
+[subagent workers](subagent-workers.md). When the coordinator implements or
+reviews itself, or through such subagents, record each run as a
+[coordinator execution](standalone.md#coordinator-executions): it appears in
+`status` and the dashboard with its self-reported route marked unverified.
 Implement the plan in small coherent changes.
 Verify acceptance criteria, failure behavior, and relevant compatibility.
 
@@ -158,7 +161,9 @@ the author cannot dismiss a blocker alone. Escalate product disagreements to the
 human. Repair-round scope, nonblocking findings and the round limit are in
 [pair-review.md](pair-review.md#repair-rounds). If an independent reviewer is unavailable, do not
 publish; report the missing review to the human. The standalone `publish` helper
-refuses a head without a completed review.
+refuses a head without a completed review, and a recorded coordinator review
+never counts as one. Reference a coordinator review in the PR's execution
+evidence as self-reported and unverified.
 
 ## 6. Publish and finish
 

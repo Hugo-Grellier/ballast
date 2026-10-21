@@ -175,7 +175,7 @@
     const list = byId("worker-list"), keys = [];
     for (const worker of issue?.workers ?? []) {
       const key = worker.worker; keys.push(key);
-      const button = put(list, key, "button", `${worker.role} · ${worker.status} · ${worker.worker}`);
+      const button = put(list, key, "button", `${worker.role} · ${worker.status} · ${worker.executor === "coordinator" ? "coordinator" : "worker"}${worker.route_verified ? "" : " · unverified route"} · ${worker.worker}`);
       button.setAttribute("aria-pressed", state.worker === worker.worker ? "true" : "false");
       button.onclick = () => {state.worker = worker.worker; renderWorkers(issue);};
     }
@@ -183,8 +183,9 @@
     trim(list, keys);
     const panel = byId("worker"), worker = issue?.workers.find(w => w.worker === state.worker);
     if (!worker) {put(panel, "empty", "p", "Select a worker. Missing outcomes and receipts are unknown."); trim(panel, ["empty"]); return;}
-    const panelKeys = ["outcome", "settings", "source", "timing", "usage"];
+    const panelKeys = ["outcome", "executor", "settings", "source", "timing", "usage"];
     put(panel, "outcome", "p", `Recorded worker outcome: ${worker.status}. Completion alone establishes no accepted review, green CI or PR readiness.`);
+    put(panel, "executor", "p", `Executor: ${worker.executor === "coordinator" ? "coordinator" : "worker"} · Route: ${worker.route_verified ? "verified" : "unverified route (self-reported or missing receipt)"}${worker.verdict ? ` · Review verdict: ${worker.verdict}, round ${worker.round ?? "unknown"}` : ""}`);
     const table = put(panel, "settings", "table");
     for (const [i, values] of [["Setting", "Requested", "Observed"], ...["provider", "model", "effort"].map(key => [key, worker.requested?.[key] ?? "unknown", worker.observed?.[key] ?? "unknown"])].entries()) {
       const row = put(table, String(i), "tr"); values.forEach((value, j) => put(row, String(j), i ? "td" : "th", value));

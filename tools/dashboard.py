@@ -233,8 +233,19 @@ class Binding:
             else "unknown",
             "requested": route(requested),
             "observed": route(result.get("observed")),
+            "executor": "coordinator"
+            if result.get("executor") == "coordinator"
+            else "worker",
+            "route_verified": coordinate.verified(result),
             "source": result.get("source")
-            if result.get("source") == "codex-app-server:thread/start"
+            if result.get("source") in {coordinate.RECEIPT, "coordinator-reported"}
+            else None,
+            "verdict": result.get("verdict")
+            if result.get("verdict") in coordinate.VERDICTS
+            else None,
+            "round": result.get("round")
+            if type(result.get("round")) is int
+            and 1 <= result["round"] <= progress.MAX_ROUNDS
             else None,
             "session": identifier(result.get("session")),
             "milestones": [
@@ -259,7 +270,7 @@ class Binding:
         workers = [
             self.worker(h, attempt)
             for h in history
-            if h.get("event") == "worker_reserved"
+            if h.get("event") in {"worker_reserved", "execution_started"}
             and identifier(h.get("worker"))
             and attempt
         ]

@@ -9,12 +9,13 @@ import json
 import re
 import subprocess
 import sys
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import admission, progress, worktree
+from tools import admission, progress, worker, worktree
 
 MAX_DEPENDENCIES = 50
 # Bound regex work on untrusted issue bodies (GitHub caps bodies at 65536).
@@ -310,10 +311,16 @@ def matching(cwd: Path, record: dict, head: str) -> dict | None:
     return found
 
 
+def verified(result: dict) -> bool:
+    """Only worker.py's thread receipt verifies a route; a coordinator never does."""
+    return "executor" not in result and result.get("source") == RECEIPT
+
+
 def reviewed(claim: Path, attempt: str, head: str) -> bool:
     """Find a review worker of this attempt completed on this unchanged head.
 
-    The verdict is not read here: a completed review is not an approval.
+    The verdict is not read here: a completed review is not an approval. A
+    coordinator execution's review is never one: its route is self-reported.
     """
     # Read every record first: a malformed one blocks regardless of scan order.
     results = [
@@ -325,6 +332,7 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
         and result.get("role") == "review"
         and result.get("status") == "completed"
         and result.get("head_before") == result.get("head_after") == head
+        and "executor" not in result
         for result in results
     )
 
@@ -370,6 +378,130 @@ def publish(claim: Path, title: str, body: Path) -> dict:
             worktree.fail("PR creation failed; nothing was published")
     pr = {"number": found["number"], "url": found["html_url"], "head": head}
     return admission.record_pr(claim, pr)
+
+
+def start_execution(claim: Path, role: str, route: tuple[str, str, str]) -> dict:
+    """Open a coordinator-executed record; it takes no worker capacity or lock."""
+    if role not in {"implement", "review"} or not all(
+        isinstance(part, str) and ROUTE.fullmatch(part) for part in route
+    ):
+        worktree.fail("Execution needs a role and an explicit provider, model, effort")
+    record = worktree.validate(claim)
+    cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
+    head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+    if role == "review" and worktree.git(cwd, "status", "--porcelain", git_dir=git_dir):
+        worktree.fail("Independent review requires a clean, committed head")
+    identifier = uuid.uuid4().hex
+    state = claim.parent
+    with admission.locked(state):
+        item = admission.read(claim)
+        value = admission.governing(state, item)
+        admission.runnable(value)
+        coordinator = admission.require_coordinator(value)
+        if value and (
+            item.get("queue") != value["id"]
+            or item.get("coordinator") != coordinator
+            or item.get("activity") != "active"
+        ):
+            worktree.fail("Issue is not admitted for active work")
+        # One writer per checkout: neither a worker nor another execution.
+        if claim.with_suffix(".worker").exists() or admission.open_executions(item):
+            worktree.fail("Another execution holds this issue")
+        if item.get("attempt") != record["attempt"]:
+            worktree.fail("Claim changed; inspect it before recording")
+        directory = state / "workers" / identifier
+        directory.mkdir(parents=True, mode=0o700)
+        provider, model, effort = route
+        result = {
+            "worker": identifier,
+            "attempt": record["attempt"],
+            "role": role,
+            "status": "running",
+            "task_started": True,
+            "executor": "coordinator",
+            "route_verified": False,
+            "source": "coordinator-reported",
+            "requested": {"provider": provider, "model": model, "effort": effort},
+            "head_before": head,
+            "tokens": "unavailable",
+        }
+        admission.write(directory / "result.json", result)
+        worker.event(directory, "created", role=role, model=model, effort=effort)
+        # Coordinator work has no setup phase: it starts when it is recorded.
+        worker.event(directory, "task_accepted")
+        admission.milestone(item, "execution_started", worker=identifier, role=role)
+        admission.write(claim, item)
+        return result
+
+
+def finish_execution(
+    claim: Path,
+    identifier: str,
+    status: str,
+    review: tuple[str | None, int | None] = (None, None),
+) -> dict:
+    """Close one open coordinator execution; never a worker.py record.
+
+    Each step is persisted separately. A retry after a partial finish repeats
+    the recorded outcome and completes the remaining steps; it never changes it.
+    """
+    verdict, number = review
+    if status not in {"completed", "cancelled"} or not re.fullmatch(
+        r"[0-9a-f]{32}", identifier
+    ):
+        worktree.fail("Finish needs a coordinator execution ID and a final status")
+    record = worktree.validate(claim)
+    cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
+    head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+    dirty = worktree.git(cwd, "status", "--porcelain", git_dir=git_dir)
+    with admission.locked(claim.parent):
+        item = admission.read(claim)
+        admission.require_coordinator(admission.governing(claim.parent, item))
+        if identifier not in admission.open_executions(item):
+            worktree.fail("No open coordinator execution with this ID")
+        directory = claim.parent / "workers" / identifier
+        result = admission.read(directory / "result.json")
+        resumed = result.get("status") != "running"
+        if (
+            result.get("worker") != identifier
+            or result.get("executor") != "coordinator"
+            or result.get("route_verified") is not False
+            or result.get("status") not in {"running", status}
+            or result.get("attempt") != item.get("attempt")
+        ):
+            worktree.fail("Record is not an open coordinator execution")
+        judged = result["role"] == "review" and status == "completed"
+        if (
+            judged != (verdict is not None)
+            or judged != (number is not None)
+            or (
+                judged
+                and (
+                    verdict not in VERDICTS
+                    or type(number) is not int
+                    or not 1 <= number <= progress.MAX_ROUNDS
+                )
+            )
+        ):
+            worktree.fail("Only a completed review takes a verdict and round 1..3")
+        if resumed:
+            if judged and (result.get("verdict"), result.get("round")) != review:
+                worktree.fail("Record is not an open coordinator execution")
+        else:
+            if judged and (head != result.get("head_before") or dirty):
+                worktree.fail("Reviewed checkout changed; review evidence is invalid")
+            result.update(status=status, head_after=head)
+            if judged:
+                result.update(reviewed_head=head, verdict=verdict, round=number)
+            admission.write(directory / "result.json", result)
+        log = directory / "events.jsonl"
+        if json.loads(log.read_text().splitlines()[-1])["event"] != status:
+            worker.event(directory, status)
+        admission.milestone(
+            item, "execution_finished", worker=identifier, status=status
+        )
+        admission.write(claim, item)
+        return result
 
 
 def recover(cwd: Path, claim: Path, evidence: str) -> dict:
@@ -456,11 +588,16 @@ def waited(history: list[dict], starts: set[str], stop: set[str], now: str) -> f
     return total
 
 
+RECEIPT = "codex-app-server:thread/start"
+ROUTE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# Pair-review verdicts a coordinator review record may carry.
+VERDICTS = {"approved", "changes_required", "blocked"}
 # Worker terminal events (worker.py writes its final status as the last event).
 # `unknown` is not among them: such a worker may still run until released.
 SETTLED = {"completed", "cancelled", "timeout", "quota", "not_started"}
 # Every status a worker result can record.
-WORKER_STATUSES = SETTLED | {"unknown", "released"}
+# `running` is an open coordinator execution: there is no process to lose.
+WORKER_STATUSES = SETTLED | {"unknown", "released", "running"}
 # Claim events that change an issue's activity; `recovered` re-enters active work.
 CHANGES = admission.ACTIVITIES | {"recovered"}
 
@@ -480,8 +617,14 @@ def worker_view(directory: Path, now: str) -> dict:
         else []
     )
     view = {key: result.get(key) for key in ("worker", "attempt", "role", "status")} | {
-        "tokens": result.get("tokens", "unavailable")
+        "tokens": result.get("tokens", "unavailable"),
+        "executor": "coordinator"
+        if result.get("executor") == "coordinator"
+        else "worker",
+        # Derived, never copied: a self-reported route is never verified.
+        "route_verified": verified(result),
     }
+    view |= {k: result[k] for k in ("verdict", "round", "reviewed_head") if k in result}
     if not events:
         return view | {"setup": "unavailable", "running": "unavailable"}
     accepted = next((e["at"] for e in events if e["event"] == "task_accepted"), None)
@@ -599,6 +742,15 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--revision", required=True)
     for key in admission.DEFAULTS:
         create.add_argument(f"--{key}", type=int)
+    execution = commands.add_parser("execution")
+    execution.add_argument("action", choices=("start", "finish"))
+    execution.add_argument("--claim", type=Path, required=True)
+    execution.add_argument("--role", choices=("implement", "review"))
+    execution.add_argument("--executor", choices=("coordinator",))
+    for name in ("provider", "model", "effort", "worker", "verdict"):
+        execution.add_argument(f"--{name}")
+    execution.add_argument("--status", choices=("completed", "cancelled"))
+    execution.add_argument("--round", type=int)
     commands.add_parser("select")
     commands.add_parser("status")
     record = commands.add_parser("record")
@@ -624,6 +776,21 @@ def parser() -> argparse.ArgumentParser:
     commands.choices["publish"].add_argument("--title", required=True)
     commands.choices["publish"].add_argument("--body-file", type=Path, required=True)
     return root
+
+
+def execution(claim: Path, args: argparse.Namespace) -> dict:
+    """Each action takes only its own options; the executor is always named."""
+    if args.action == "start":
+        if args.executor != "coordinator" or any(
+            (args.worker, args.status, args.verdict, args.round)
+        ):
+            worktree.fail("Start takes executor, role and route only")
+        return start_execution(
+            claim, args.role, (args.provider, args.model, args.effort)
+        )
+    if any((args.executor, args.role, args.provider, args.model, args.effort)):
+        worktree.fail("Finish takes worker, status, verdict and round only")
+    return finish_execution(claim, args.worker, args.status, (args.verdict, args.round))
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -657,6 +824,7 @@ def run(args: argparse.Namespace) -> dict:
         }
         return progress.record(claim, declaration)
     operations = {
+        "execution": lambda: execution(claim, args),
         "settle": lambda: settle(claim, args.activity, args.evidence),
         "recover": lambda: recover(cwd, claim, args.evidence),
         "release": lambda: admission.release(claim, args.worker, args.evidence),
