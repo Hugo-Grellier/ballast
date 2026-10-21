@@ -612,6 +612,8 @@ def parser() -> argparse.ArgumentParser:
     control = commands.add_parser("control")
     control.add_argument("action", choices=("running", "paused", "cancelled"))
     control.add_argument("--reason", required=True)
+    close = commands.add_parser("close")
+    close.add_argument("--reason", required=True)
     for name in ("settle", "publish", "recover", "release"):
         command = commands.add_parser(name)
         command.add_argument("--claim", type=Path, required=True)
@@ -642,12 +644,14 @@ def run(args: argparse.Namespace) -> dict:
             args.repo, args.issue, limits(args), args.coordinator, args.revision
         )
         return admission.create(state, spec)
-    if args.command == "select":
-        return select(cwd)
-    if args.command == "status":
-        return observe(state)
-    if args.command == "control":
-        return admission.control(state, args.action, args.reason)
+    queue = {
+        "select": lambda: select(cwd),
+        "status": lambda: observe(state),
+        "control": lambda: admission.control(state, args.action, args.reason),
+        "close": lambda: admission.close(state, args.reason),
+    }
+    if args.command in queue:
+        return queue[args.command]()
     claim = args.claim.resolve(strict=True)
     if args.command == "record":
         declaration = {

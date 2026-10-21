@@ -471,6 +471,36 @@ def control(
         return value
 
 
+def close(state: Path, reason: str) -> dict:
+    """Archive a finished queue so the clone can start another one.
+
+    Only a cancelled queue or one past its deadline closes, so closing never
+    resets a live budget. Its claims must be settled and no worker lock held:
+    nothing it admitted may still run under the next queue's budget.
+    """
+    if not bounded(reason, MAX_REASON):
+        fail("Close requires a bounded reason reference")
+    with locked(state):
+        value = policy(state)
+        if value is None:
+            fail("No queue to close")
+        require_coordinator(value)
+        if value["mode"] != "cancelled" and time.time() < value["deadline"]:
+            fail("Queue still has budget; cancel it or wait for its deadline")
+        if any(
+            item.get("queue") == value["id"]
+            and item.get("activity", "unknown") in {*ACTIVE, "pr_wait"}
+            for item in records(state)
+        ):
+            fail("A claim of this queue is active, unknown or awaiting merge")
+        if any(state.glob("issue-*.worker")):
+            fail("A worker lock is held; release or reconcile it first")
+        milestone(value, "closed", reason=reason)
+        write(state / f"queue-{value['id']}.json", value)
+        (state / "queue.json").unlink()
+        return value
+
+
 def settle(claim: Path, activity: str, evidence: str) -> dict:
     """Record positive coordinator evidence; never infer it from age or PID."""
     if activity not in ACTIVITIES or not bounded(evidence, MAX_REASON):
@@ -519,6 +549,7 @@ def status(state: Path) -> dict:
     with locked(state):
         return {
             "queue": policy(state),
+            "closed": [read(path) for path in sorted(state.glob("queue-*.json"))],
             "used": capacity(state),
             "issues": [{key: item.get(key) for key in keys} for item in records(state)],
         }

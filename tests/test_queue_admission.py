@@ -843,6 +843,7 @@ class QueueTests(unittest.TestCase):
             "release": lambda: admission.release(claim, held, "thread failed"),
             "publish": lambda: coordinate.publish(claim, "Fictional", body),
             "record_pr": lambda: admission.record_pr(claim, {"number": 1}),
+            "close": lambda: admission.close(self.state, "run finished"),
         }
 
         def refused(mutations: dict, callers: tuple = (None, "", "other")) -> None:
@@ -897,6 +898,48 @@ class QueueTests(unittest.TestCase):
         }
         refused(foreign, ("successor",))
         self.assertFalse(claim.with_suffix(".worker").exists())
+
+    def test_close_archives_a_finished_queue_for_a_new_one(self) -> None:
+        first = self.queue([51, 52], issues=2)
+        claim = self.prepare(51)
+        # A live budget never closes: no reset by close-and-recreate.
+        with self.assertRaisesRegex(admission.AdmissionError, "still has budget"):
+            admission.close(self.state, "run finished")
+        policy = json.loads((self.state / "queue.json").read_text())
+        policy["deadline"] = time.time() - 1
+        (self.state / "queue.json").write_text(json.dumps(policy))
+        # Unsettled claims of this queue and any worker lock block closing.
+        for activity in ("active", "unknown", "pr_wait"):
+            record = json.loads(claim.read_text())
+            claim.write_text(json.dumps({**record, "activity": activity}))
+            with self.assertRaisesRegex(admission.AdmissionError, "awaiting merge"):
+                admission.close(self.state, "run finished")
+        record = json.loads(claim.read_text())
+        claim.write_text(json.dumps({**record, "activity": "stopped"}))
+        lock = self.state / "issue-99.worker"
+        lock.write_text("unknown")
+        with self.assertRaisesRegex(admission.AdmissionError, "worker lock"):
+            admission.close(self.state, "run finished")
+        lock.unlink()
+        with self.assertRaisesRegex(RuntimeError, "already exists"):
+            self.queue([53])
+        closed = admission.close(self.state, "run finished")
+        self.assertEqual(closed["history"][-1]["event"], "closed")
+        self.assertFalse((self.state / "queue.json").exists())
+        second = self.queue([53])
+        self.assertNotEqual(second["id"], first["id"])
+        self.prepare(53)
+        view = coordinate.observe(self.state)
+        self.assertEqual([q["id"] for q in view["closed"]], [first["id"]])
+        self.assertEqual(view["queue"]["id"], second["id"])
+        with self.assertRaisesRegex(admission.AdmissionError, "No queue"):
+            admission.close(self.state / "missing", "run finished")
+
+    def test_close_accepts_a_cancelled_queue_before_its_deadline(self) -> None:
+        self.queue([54])
+        admission.control(self.state, "cancelled", "operator stop")
+        admission.close(self.state, "cancelled run")
+        self.assertFalse((self.state / "queue.json").exists())
 
     def test_pre_queue_claim_needs_no_coordinator(self) -> None:
         claim = self.prepare(48)
