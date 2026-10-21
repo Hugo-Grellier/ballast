@@ -15,7 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import admission, worktree
 
 SHA = re.compile(r"[0-9a-f]{40}")
-FIELDS = "number,state,isDraft,headRefOid,headRefName,author,body,changedFiles"
+FIELDS = (
+    "number,state,isDraft,headRefOid,headRefName,baseRefName,author,body,changedFiles"
+)
+BRANCH = re.compile(r"[\w.-]+(?:/[\w.-]+)*")
 # File names whose change always needs a human merge (ADR-0026): release files,
 # dependency manifests and lockfiles of common ecosystems. A project adds its own
 # with --exclude.
@@ -129,6 +132,45 @@ def changed_paths(pages: object, count: object) -> list[str]:
     return paths
 
 
+def required_contexts(repo: str, base: object) -> set[str]:
+    """Every status check the base branch requires, from rulesets and protection.
+
+    `gh pr checks --required` lists only required checks that reported, so a
+    required check that never started would go unnoticed without this set.
+    """
+    if not isinstance(base, str) or not BRANCH.fullmatch(base) or ".." in base:
+        worktree.fail("The PR base branch is malformed")
+    pages = read("api", f"repos/{repo}/rules/branches/{base}", "--paginate", "--slurp")
+    branch = read("api", f"repos/{repo}/branches/{base}")
+    if (
+        not isinstance(pages, list)
+        or not all(isinstance(page, list) for page in pages)
+        or not isinstance(branch, dict)
+        or branch.get("name") != base
+    ):
+        worktree.fail("The base branch rules are unreadable")
+    contexts = []
+    for rule in (rule for page in pages for rule in page):
+        if not isinstance(rule, dict):
+            worktree.fail("The base branch rules are unreadable")
+        if rule.get("type") == "required_status_checks":
+            parameters = rule.get("parameters") or {}
+            items = parameters.get("required_status_checks")
+            if not isinstance(items, list) or not all(
+                isinstance(item, dict) for item in items
+            ):
+                worktree.fail("The base branch rules are unreadable")
+            contexts += [item.get("context") for item in items]
+    protection = (branch.get("protection") or {}).get("required_status_checks") or {}
+    legacy = protection.get("contexts") or []
+    if not isinstance(legacy, list):
+        worktree.fail("The base branch rules are unreadable")
+    contexts += legacy
+    if not all(isinstance(name, str) and name for name in contexts):
+        worktree.fail("The base branch rules are unreadable")
+    return set(contexts)
+
+
 def check(args: argparse.Namespace) -> dict:
     """Refuse unless every R0 merge precondition holds on the reviewed head."""
     number, head = args.pr, args.reviewed_head
@@ -150,13 +192,20 @@ def check(args: argparse.Namespace) -> dict:
     paths = changed_paths(pages, pr.get("changedFiles"))
     if any(excluded(path, tuple(args.exclude)) for path in paths):
         worktree.fail("The PR changes a workflow, release or dependency path")
+    required = required_contexts(args.repo, pr.get("baseRefName"))
+    if not required:
+        worktree.fail("No required checks are configured for the base branch")
     checks = read(
-        "pr", "checks", str(number), "--repo", target, "--required", "--json", "bucket"
+        "pr", "checks", str(number), "--repo", target, "--json", "name,bucket"
     )
-    if not isinstance(checks, list) or not checks:
-        worktree.fail("No required checks are reported for the PR head")
-    if any(item.get("bucket") != "pass" for item in checks):
-        worktree.fail("A required check is not green on the PR head")
+    if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
+        worktree.fail("The PR check list is unreadable")
+    for name in sorted(required):
+        buckets = [item.get("bucket") for item in checks if item.get("name") == name]
+        if not buckets:
+            worktree.fail("A required check has not reported on the PR head")
+        if any(bucket != "pass" for bucket in buckets):
+            worktree.fail("A required check is not green on the PR head")
     command = ["gh", "pr", "merge", str(number), "--repo", target, "--squash"]
     return {"merge": [*command, "--match-head-commit", head]}
 

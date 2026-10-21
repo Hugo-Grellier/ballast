@@ -19,7 +19,9 @@ all of these hold for the PR's current head:
 - an independent pair review approved that exact head and confirmed R0 itself:
   the risk classification is reviewed evidence, so a reviewer who would raise the
   risk does not approve the PR as R0;
-- every required check passed on that head, and at least one is required;
+- every status check the base branch requires (rulesets and branch protection)
+  reported and passed on that head, and at least one is required; a required
+  check that never started refuses;
 - the PR is open, not a draft, ticks R0 and no other risk, and nothing changed
   after the review (PR head equals reviewed head).
 

@@ -28,7 +28,27 @@ class MergeCheckTests(unittest.TestCase):
             "changedFiles": 1,
         }
         self.files: list = [{"filename": "docs/guide.md"}]
-        self.checks: object = [{"bucket": "pass"}, {"bucket": "pass"}]
+        self.pr["baseRefName"] = "main"
+        self.rules: object = [
+            [
+                {"type": "deletion"},
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "lint"},
+                            {"context": "test"},
+                        ]
+                    },
+                },
+            ]
+        ]
+        self.branch: object = {"name": "main", "protection": {"enabled": False}}
+        self.checks: object = [
+            {"name": "lint", "bucket": "pass"},
+            {"name": "test", "bucket": "pass"},
+            {"name": "advisory", "bucket": "fail"},
+        ]
         self.merge_code = 0
         self.calls: list[tuple[str, ...]] = []
         patcher = patch.object(merge_check, "gh", side_effect=self.fake)
@@ -44,6 +64,10 @@ class MergeCheckTests(unittest.TestCase):
         output, code = "", 0
         if args[:2] == ("pr", "view"):
             output = json.dumps(self.pr)
+        elif args[0] == "api" and "/rules/branches/" in args[1]:
+            output = json.dumps(self.rules)
+        elif args[0] == "api" and "/branches/" in args[1]:
+            output = json.dumps(self.branch)
         elif args[0] == "api":
             # --paginate --slurp: one array per page of up to 100 files.
             pages = [self.files[i : i + 100] for i in range(0, len(self.files), 100)]
@@ -51,12 +75,7 @@ class MergeCheckTests(unittest.TestCase):
         elif args[:2] == ("pr", "checks"):
             # gh exits 1 or 8 for failing or pending checks but still prints them.
             output = json.dumps(self.checks)
-            code = (
-                0
-                if self.checks
-                and all(item.get("bucket") == "pass" for item in self.checks)
-                else 8
-            )
+            code = 8 if any(c.get("bucket") != "pass" for c in self.checks) else 0
         elif args[:2] == ("pr", "merge"):
             code = self.merge_code
         return subprocess.CompletedProcess(["gh", *args], code, output, "")
@@ -197,11 +216,48 @@ class MergeCheckTests(unittest.TestCase):
         self.refuses("incomplete")
 
     def test_refuses_missing_failing_or_pending_required_checks(self) -> None:
-        self.checks = []
-        self.refuses("No required checks")
+        # One required check passed, the other never started.
+        self.checks = [{"name": "lint", "bucket": "pass"}]
+        self.refuses("has not reported")
         for bucket in ("fail", "pending", "skipping", "cancel"):
-            self.checks = [{"bucket": "pass"}, {"bucket": bucket}]
+            self.checks = [
+                {"name": "lint", "bucket": "pass"},
+                {"name": "test", "bucket": bucket},
+            ]
             self.refuses("not green")
+        # A rerun that is still pending blocks even if an earlier run passed.
+        self.checks = [
+            {"name": "lint", "bucket": "pass"},
+            {"name": "test", "bucket": "pass"},
+            {"name": "test", "bucket": "pending"},
+        ]
+        self.refuses("not green")
+
+    def test_reads_required_checks_from_rulesets_and_protection(self) -> None:
+        self.branch = {
+            "name": "main",
+            "protection": {"required_status_checks": {"contexts": ["legacy"]}},
+        }
+        self.refuses("has not reported")
+        self.checks.append({"name": "legacy", "bucket": "pass"})
+        self.assertIn("merge", self.check())
+        self.rules, self.branch = [[]], {"name": "main"}
+        self.refuses("No required checks are configured")
+
+    def test_refuses_unreadable_base_rules(self) -> None:
+        for rules in (
+            {"message": "Not Found"},
+            [[3]],
+            [[{"type": "required_status_checks"}]],
+        ):
+            self.rules = rules
+            self.refuses("unreadable")
+        self.rules = [[]]
+        self.branch = {"message": "Branch not found"}
+        self.refuses("unreadable")
+        self.branch = {"name": "main"}
+        self.pr["baseRefName"] = "../x"
+        self.refuses("base branch is malformed")
 
     def test_refuses_unreadable_github_response(self) -> None:
         self.pr = "not a pr"  # type: ignore[assignment]
