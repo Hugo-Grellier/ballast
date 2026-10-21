@@ -32,17 +32,19 @@ def inside_checkout() -> bool:
     return "ballast-v2" in Path.cwd().parts
 
 
-def command(argv: list[str], cwd: Path) -> str:
+def command(argv: list[str], cwd: Path, pinned: dict[str, str] | None = None) -> str:
     """Run a bounded native command, keeping diagnostics private.
 
     Inherited GIT_* variables (GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
-    GIT_CONFIG_*, ...) would change what Git reads or writes, so none passes;
-    the helpers make no network Git call that would need one, and gh needs none.
+    GIT_CONFIG_*, ...) would change what Git reads or writes, so none passes
+    except the ``pinned`` ones the helper sets; the helpers make no network Git
+    call that would need one, and gh needs none.
     """
     result = subprocess.run(  # noqa: S603 -- argument arrays, no shell
         argv,
         cwd=cwd,
-        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        | (pinned or {}),
         capture_output=True,
         text=True,
         timeout=60,
@@ -57,8 +59,11 @@ def git(cwd: Path, *args: str, git_dir: Path | None = None) -> str:
     """Run Git without checkout hooks or an external filesystem monitor.
 
     A pinned ``git_dir`` keeps Git from following the worker-writable gitfile.
+    Its ``commondir`` file is worker-writable too (#255: the implement sandbox
+    writes the admin directory), so the common directory is pinned as well.
     """
     pinned = ["--git-dir", str(git_dir), "--work-tree", str(cwd)] if git_dir else []
+    common = {"GIT_COMMON_DIR": str(git_dir.parent.parent)} if git_dir else None
     return command(
         [
             "git",
@@ -70,6 +75,7 @@ def git(cwd: Path, *args: str, git_dir: Path | None = None) -> str:
             *args,
         ],
         cwd,
+        common,
     )
 
 

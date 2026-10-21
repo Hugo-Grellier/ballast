@@ -166,9 +166,9 @@ class CoordinatorExecutionTests(unittest.TestCase):
         claim = self.claimed(7)
         hosted = worktree.command
 
-        def unapproved(argv: list[str], cwd: Path) -> str:
+        def unapproved(argv: list[str], cwd: Path, pinned: object = None) -> str:
             if argv[0] != "gh":
-                return hosted(argv, cwd)
+                return hosted(argv, cwd, pinned)
             if argv[-1].endswith("/comments"):
                 return ""
             return json.dumps({"number": 7, "body": "Risk: R2"})

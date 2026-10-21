@@ -580,8 +580,8 @@ class DashboardTests(unittest.TestCase):
         self.policy = self.queue([15])
         claim = self.prepare(15)
         # One survivor, then quiet: the worker records survivors_exited. Each
-        # scan covers the checkout, then the scratch directory.
-        scan = Mock(side_effect=[[4242], [], [], [], [], []])
+        # scan covers the checkout, the scratch directory and the Git roots.
+        scan = Mock(side_effect=[[4242], *[[]] * 30])
         with (
             patch.object(
                 admission, "cancelled", side_effect=queue_tests.past_deadline()

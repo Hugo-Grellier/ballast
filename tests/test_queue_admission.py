@@ -119,9 +119,9 @@ class QueueTests(unittest.TestCase):
         self.edits: list[list[str]] = []
         native = worktree.command
 
-        def hosting(argv: list[str], cwd: Path) -> str:
+        def hosting(argv: list[str], cwd: Path, pinned: object = None) -> str:
             if argv[0] != "gh":
-                return native(argv, cwd)
+                return native(argv, cwd, pinned)
             return json.dumps(self.host(argv))
 
         patcher = patch.object(worktree, "command", side_effect=hosting)
