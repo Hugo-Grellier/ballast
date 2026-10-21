@@ -162,6 +162,27 @@ class CoordinatorExecutionTests(unittest.TestCase):
                 claim, implement["worker"], "completed", ("approved", 1)
             )
 
+    def test_unapproved_r2_implementation_is_refused_before_recording(self) -> None:
+        claim = self.claimed(7)
+        hosted = worktree.command
+
+        def unapproved(argv: list[str], cwd: Path) -> str:
+            if argv[0] != "gh":
+                return hosted(argv, cwd)
+            if argv[-1].endswith("/comments"):
+                return ""
+            return json.dumps({"number": 7, "body": "Risk: R2"})
+
+        with (
+            patch.object(worktree, "command", side_effect=unapproved),
+            self.assertRaisesRegex(RuntimeError, "No spec delta"),
+        ):
+            coordinate.start_execution(claim, "implement", ROUTE)
+        self.assertEqual(list((self.state / "workers").glob("*")), [])
+        with patch.object(worktree, "command", side_effect=unapproved):
+            self.commit("reviewed")
+            coordinate.start_execution(claim, "review", ROUTE)  # Review is not gated.
+
     def test_malformed_foreign_and_worker_records_are_refused(self) -> None:
         claim = self.claimed(7)
         for name, (role, route) in {

@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import admission, progress, worker, worktree
+from tools import admission, progress, spec_approval, worker, worktree
 
 MAX_DEPENDENCIES = 50
 # Bound regex work on untrusted issue bodies (GitHub caps bodies at 65536).
@@ -673,6 +673,8 @@ def start_execution(claim: Path, role: str, route: tuple[str, str, str]) -> dict
     ):
         worktree.fail("Execution needs a role and an explicit provider, model, effort")
     record = worktree.validate(claim)
+    if role == "implement":  # ADR-0027: an R1/R2 leaf needs its approved delta.
+        spec_approval.require(claim.parent, record["repository"], record["issue"])
     cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
     head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
     if role == "review" and worktree.git(cwd, "status", "--porcelain", git_dir=git_dir):

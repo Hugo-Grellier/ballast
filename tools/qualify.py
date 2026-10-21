@@ -333,7 +333,10 @@ def live(args: argparse.Namespace) -> dict:
         [
             *("gh", "issue", "create", "--repo", repo),
             *("--title", record["issue_title"]),
-            *("--body", f"Fictional. Create {ARTIFACT} containing `qualified`."),
+            *(
+                "--body",
+                f"Fictional. Create {ARTIFACT} containing `qualified`.\n\nRisk: R0",
+            ),
         ],
         workdir,
     )
@@ -376,7 +379,11 @@ def fake_gh(args: list[str]) -> int:
     ):
         repo, rest = found.groups()
         if issue := re.fullmatch(r"issues/(\d+)", rest):
-            answer = {"number": int(issue[1]), "state": "open", "body": "Fictional."}
+            answer = {
+                "number": int(issue[1]),
+                "state": "open",
+                "body": "Fictional.\n\nRisk: R0",
+            }
         elif branch := re.fullmatch(r"git/ref/heads/(.+)", rest):
             answer = {"object": {"sha": sha(repo, branch[1])}}
         elif head := re.fullmatch(r"pulls\?state=all&head=[^:]+:(.+)", rest):

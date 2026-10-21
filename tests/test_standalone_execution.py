@@ -74,7 +74,7 @@ class ExecutionTests(unittest.TestCase):
                     {
                         "number": int(argv[-1].rsplit("/", 1)[-1]),
                         "state": "open",
-                        "body": "Fictional leaf acceptance",
+                        "body": "Fictional leaf acceptance\n\nRisk: R0",
                     }
                 )
             return json.dumps({"object": {"sha": self.base}})
@@ -552,6 +552,36 @@ class ExecutionTests(unittest.TestCase):
                 timeout=2,
             )
         process.assert_not_called()
+
+    def test_unapproved_r1_implement_never_reserves_or_launches(self) -> None:
+        hosted = worktree.command
+
+        def unapproved(argv: list[str], cwd: Path) -> str:
+            if argv[0] != "gh":
+                return hosted(argv, cwd)
+            self.host_calls.append(argv)
+            if argv[-1].endswith("/comments"):
+                return ""
+            return json.dumps({"number": 7, "body": "Risk: R1"})
+
+        with (
+            patch.object(worktree, "command", side_effect=unapproved),
+            patch.object(worker, "WorkerServer") as process,
+            patch.object(worker.shutil, "which", return_value="/fictional/codex"),
+            self.assertRaisesRegex(RuntimeError, "No spec delta"),
+        ):
+            worker.execute(
+                self.claim,
+                self.task,
+                route=("fixture-model", "low"),
+                role="implement",
+                timeout=2,
+            )
+        process.assert_not_called()
+        self.assertFalse(self.claim.with_suffix(".worker").exists())
+        self.assertEqual(
+            self.host_calls[-1][-1], "repos/example/fixture/issues/7/comments"
+        )
 
     def test_stopped_reader_cannot_block_task_write(self) -> None:
         read_descriptor, write_descriptor = os.pipe()

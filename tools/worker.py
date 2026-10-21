@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import admission, codex, worktree
+from tools import admission, codex, spec_approval, worktree
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -588,11 +588,14 @@ def permit(claim: Path, identifier: str, role: str) -> None:
 
 
 def reserve(claim: Path, identifier: str, role: str) -> tuple[Path, Path]:
-    """Reserve capacity, the private worker directory and its scratch, or none.
+    """Check the spec gate; reserve capacity, the worker directory and scratch.
 
     One scratch per worker, so an `unknown` worker's kept scratch never collides.
     """
     check_stop()  # A stop before reservation never starts a client.
+    if role == "implement":  # ADR-0027: an R1/R2 leaf needs its approved delta.
+        record = admission.read(claim)
+        spec_approval.require(claim.parent, record["repository"], record["issue"])
     admission.reserve_worker(claim, identifier, role)
     directory = claim.parent / "workers" / identifier
     scratch = claim.parent / "scratch" / f"{role}-{identifier}"
