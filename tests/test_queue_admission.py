@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tests import test_standalone_execution as standalone
+from tests.test_standalone_execution import setUpModule  # noqa: F401 -- #233
 from tools import admission, codex, coordinate, dashboard, progress, worker, worktree
 
 REPO = "example/fixture"
