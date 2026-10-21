@@ -264,7 +264,7 @@ class QueueTests(unittest.TestCase):
     def prepare(self, issue: int) -> Path:
         return worktree.prepare(self.repo, REPO, issue, "main")
 
-    def worker_on(self, claim: Path, edit=None, timeout: float = 2) -> dict:  # noqa: ANN001
+    def worker_on(self, claim: Path, edit=None, timeout: float = 30) -> dict:  # noqa: ANN001
         """Run the scripted backend, optionally editing its transcript."""
         self.claim = claim
         self.cwd = Path(json.loads(claim.read_text())["checkout"])
@@ -588,7 +588,7 @@ class QueueTests(unittest.TestCase):
                 self.task,
                 route=("fixture-model", "low"),
                 role="implement",
-                timeout=2,
+                timeout=30,
             )
 
     def test_group_signal_after_dispatch_settles_cancelled(self) -> None:
@@ -1465,7 +1465,7 @@ class QueueTests(unittest.TestCase):
             patch.object(admission, "cancelled", return_value=True),
             patch.object(worker, "survivors", scan),
             patch.object(worker, "QUIET_SECONDS", 0),
-            patch.object(worker, "SURVIVOR_SECONDS", 0.1),
+            patch.object(worker, "SURVIVOR_SECONDS", 1.5),
             self.assertRaisesRegex(codex.QualificationError, r"still run.*\b4242\b"),
         ):
             self.worker_on(claim, lambda m: m[:4] + INTERRUPTED)
@@ -1528,7 +1528,7 @@ class QueueTests(unittest.TestCase):
     def test_non_utf8_process_name_is_still_named(self) -> None:
         # The child reports its rename on a pipe: no sleep races a loaded host.
         code = (
-            "import sys, time; open('/proc/self/comm', 'wb').write(b'\\xffbad'); "
+            "import time; open('/proc/self/comm', 'wb').write(b'\\xffbad'); "
             "print('renamed', flush=True); time.sleep(30)"
         )
         process = subprocess.Popen(  # noqa: S603

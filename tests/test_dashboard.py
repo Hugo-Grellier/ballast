@@ -14,11 +14,11 @@ import subprocess
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tests import test_queue_admission as queue_tests
 from tests.test_standalone_execution import setUpModule  # noqa: F401 -- #233
-from tools import admission, codex, dashboard, progress, worktree
+from tools import admission, codex, dashboard, progress, worker, worktree
 
 REPO = queue_tests.REPO
 
@@ -566,15 +566,22 @@ class DashboardTests(unittest.TestCase):
     def test_timed_out_worker_is_projected_settled(self) -> None:
         self.policy = self.queue([15])
         claim = self.prepare(15)
-        with patch.object(
-            admission, "cancelled", side_effect=queue_tests.past_deadline()
+        # One survivor, then quiet: the worker records survivors_exited.
+        scan = Mock(side_effect=[[4242], [], []])
+        with (
+            patch.object(
+                admission, "cancelled", side_effect=queue_tests.past_deadline()
+            ),
+            patch.object(worker, "survivors", scan),
         ):
             self.worker_on(claim, lambda m: m[:4] + queue_tests.INTERRUPTED, timeout=1)
         binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
         binding.next_refresh = float("inf")
         (projected,) = binding.snapshot()["issues"][0]["workers"]
         self.assertEqual(projected["status"], "timeout")
-        self.assertIn("timeout", [e["event"] for e in projected["milestones"]])
+        milestones = [e["event"] for e in projected["milestones"]]
+        self.assertIn("timeout", milestones)
+        self.assertIn("survivors_exited", milestones)
 
     @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
     def test_selection_timeout_kills_and_reaps_own_group(self) -> None:

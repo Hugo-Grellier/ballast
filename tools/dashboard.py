@@ -37,6 +37,7 @@ MILESTONES = {
     "task_dispatched",
     "task_accepted",
     "interrupt_requested",
+    "survivors_exited",
 } | coordinate.WORKER_STATUSES
 TOKENS = {
     "totalTokens",
