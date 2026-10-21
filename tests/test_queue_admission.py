@@ -914,6 +914,7 @@ class QueueTests(unittest.TestCase):
             claim.write_text(json.dumps({**record, "activity": activity}))
             with self.assertRaisesRegex(admission.AdmissionError, "awaiting merge"):
                 admission.close(self.state, "run finished")
+        admission.record_pr(claim, {"number": 1})
         admission.settle(claim, "stopped", "operator stop")
         lock = self.state / "issue-99.worker"
         lock.write_text("unknown")
@@ -930,6 +931,12 @@ class QueueTests(unittest.TestCase):
         self.prepare(53)
         view = coordinate.observe(self.state)
         self.assertEqual([q["id"] for q in view["closed"]], [first["id"]])
+        # The closed queue's published claim stays listed but its PR does not
+        # count toward the new queue's throughput.
+        self.assertEqual(json.loads(claim.read_text())["pr"]["number"], 1)
+        self.assertIn(51, [item["issue"] for item in view["issues"]])
+        self.assertEqual(view["summary"]["throughput"]["published"], 0)
+        self.assertEqual(view["summary"]["throughput"]["published_per_hour"], 0)
         self.assertEqual(view["queue"]["id"], second["id"])
         with self.assertRaisesRegex(admission.AdmissionError, "No queue"):
             admission.close(self.state / "missing", "run finished")

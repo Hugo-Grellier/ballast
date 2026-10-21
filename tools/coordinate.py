@@ -559,13 +559,20 @@ def observe(state: Path) -> dict:
     queue = view["queue"] or {}
     history = queue.get("history") or []
     hours = seconds(history[0]["at"], now) / 3600 if history else 0.0
-    published = sum(item.get("pr") is not None for item in view["issues"])
-    merged = sum(i["activity"] == "merged" for i in view["issues"])
+    # Counts share the elapsed time's scope: claims of a closed queue stay listed
+    # but do not count toward the current queue's throughput.
+    issues = [
+        item
+        for item in view["issues"]
+        if not queue or item.get("queue") == queue.get("id")
+    ]
+    published = sum(item.get("pr") is not None for item in issues)
+    merged = sum(i["activity"] == "merged" for i in issues)
     view["summary"] = {
         "merged": merged,
-        "awaiting_review": sum(i["activity"] == "pr_wait" for i in view["issues"]),
+        "awaiting_review": sum(i["activity"] == "pr_wait" for i in issues),
         "unknown_workers": sum(w["status"] == "unknown" for w in workers),
-        "reopened": sum(i["reopened"] for i in view["issues"]),
+        "reopened": sum(i["reopened"] for i in issues),
         "queue_paused": waited(
             history, {"paused", "cancelled", "quota_paused"}, {"running"}, now
         ),

@@ -544,6 +544,7 @@ def status(state: Path) -> dict:
         "coordinator",
         "worker_attempts",
         "pr",
+        "queue",
         "history",
     )
     with locked(state):
