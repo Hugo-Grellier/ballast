@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 import subprocess
@@ -15,25 +16,46 @@ from tools import admission, worktree
 
 SHA = re.compile(r"[0-9a-f]{40}")
 FIELDS = "number,state,isDraft,headRefOid,headRefName,author,body,changedFiles,files"
-# Paths whose change always needs a human merge (ADR-0026).
+# File names whose change always needs a human merge (ADR-0026): release files,
+# dependency manifests and lockfiles of common ecosystems. A project adds its own
+# with --exclude.
 EXCLUDED_PREFIXES = (".github/",)
-EXCLUDED_FILES = {
+EXCLUDED_NAMES = (
     "CHANGELOG.md",
     "release-please-config.json",
     ".release-please-manifest.json",
     "version.txt",
+    "*.lock",
+    "*.lockb",
+    "*-lock.json",
+    "*-lock.yaml",
     "pyproject.toml",
-    "uv.lock",
+    "requirements*.txt",
+    "requirements*.in",
+    "constraints*.txt",
+    "Pipfile",
+    "setup.py",
+    "setup.cfg",
     "package.json",
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "requirements.txt",
+    "packages.lock.json",
     "go.mod",
     "go.sum",
+    "go.work",
     "Cargo.toml",
-    "Cargo.lock",
-}
+    "Gemfile",
+    "*.gemspec",
+    "composer.json",
+    "pom.xml",
+    "build.gradle*",
+    "settings.gradle*",
+    "*.csproj",
+    "Directory.Packages.props",
+    "mix.exs",
+    "Podfile",
+    "flake.nix",
+    ".pre-commit-config.yaml",
+    ".tool-versions",
+)
 EXCLUDED_BRANCHES = ("release-please--", "dependabot/", "renovate/")
 TICKED = re.compile(r"(?im)^[ \t]*[-*][ \t]*\[[xX]\][ \t]*(R[012])\b")
 
@@ -57,13 +79,18 @@ def read(*args: str) -> object:
         worktree.fail("GitHub response is unreadable; nothing was merged")
 
 
-def excluded(path: str) -> bool:
+def excluded(path: str, extra: tuple[str, ...] = ()) -> bool:
     """Whether a path is a workflow, permission, release or dependency file."""
     name = path.rsplit("/", 1)[-1]
-    return path.startswith(EXCLUDED_PREFIXES) or name in EXCLUDED_FILES
+    return path.startswith(EXCLUDED_PREFIXES) or any(
+        fnmatch.fnmatchcase(name, pattern) or fnmatch.fnmatchcase(path, pattern)
+        for pattern in (*EXCLUDED_NAMES, *extra)
+    )
 
 
-def pull_request(pr: object, number: int, head: str) -> None:
+def pull_request(
+    pr: object, number: int, head: str, extra: tuple[str, ...] = ()
+) -> None:
     """Refuse a PR that is not an open, ready, R0-ticked PR at the reviewed head."""
     if not isinstance(pr, dict) or pr.get("number") != number:
         worktree.fail("Pull request response is malformed")
@@ -81,23 +108,28 @@ def pull_request(pr: object, number: int, head: str) -> None:
     files = pr.get("files")
     if not isinstance(files, list) or len(files) != pr.get("changedFiles"):
         worktree.fail("The changed file list is incomplete")
-    if any(excluded(str(item.get("path"))) for item in files):
+    paths = [item.get("path") if isinstance(item, dict) else None for item in files]
+    if not all(isinstance(path, str) and path for path in paths):
+        worktree.fail("The changed file list is malformed")
+    if any(excluded(path, extra) for path in paths):
         worktree.fail("The PR changes a workflow, release or dependency path")
 
 
-def check(repo: str, number: int, head: str, verdict: str, risk: str) -> dict:
+def check(args: argparse.Namespace) -> dict:
     """Refuse unless every R0 merge precondition holds on the reviewed head."""
-    if verdict != "approved":
+    number, head = args.pr, args.reviewed_head
+    if args.verdict != "approved":
         worktree.fail("The independent review did not approve this head")
-    if risk != "R0":
+    if args.risk != "R0":
         worktree.fail("The reviewer did not confirm R0; a human merges this PR")
     if not SHA.fullmatch(head):
         worktree.fail("The reviewed head is not a full commit SHA")
-    target = f"github.com/{repo}"
+    target = f"github.com/{args.repo}"
     pull_request(
         read("pr", "view", str(number), "--repo", target, "--json", FIELDS),
         number,
         head,
+        tuple(args.exclude),
     )
     checks = read(
         "pr", "checks", str(number), "--repo", target, "--required", "--json", "bucket"
@@ -118,6 +150,12 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--reviewed-head", required=True)
     root.add_argument("--verdict", required=True)
     root.add_argument("--risk", required=True, help="risk the reviewer confirmed")
+    root.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="extra glob (file name or path) that always needs a human merge",
+    )
     root.add_argument("--merge", action="store_true", help="perform the merge")
     return root
 
@@ -126,7 +164,7 @@ def run(args: argparse.Namespace) -> dict:
     """Check, then merge only on explicit request."""
     if worktree.inside_checkout():
         worktree.fail("Run merge checks from the project checkout, not an issue")
-    result = check(args.repo, args.pr, args.reviewed_head, args.verdict, args.risk)
+    result = check(args)
     if args.merge:
         # --match-head-commit makes GitHub refuse a head that moved since the check.
         if gh(*result["merge"][1:]).returncode:

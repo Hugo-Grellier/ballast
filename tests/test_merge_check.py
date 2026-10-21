@@ -57,8 +57,12 @@ class MergeCheckTests(unittest.TestCase):
             code = self.merge_code
         return subprocess.CompletedProcess(["gh", *args], code, output, "")
 
-    def check(self, verdict: str = "approved", risk: str = "R0") -> dict:
-        return merge_check.check("example/fixture", 7, HEAD, verdict, risk)
+    def check(self, verdict: str = "approved", risk: str = "R0", *exclude: str) -> dict:
+        arguments = ["--repo", "example/fixture", "--pr", "7"]
+        arguments += ["--reviewed-head", HEAD, "--verdict", verdict, "--risk", risk]
+        for pattern in exclude:
+            arguments += ["--exclude", pattern]
+        return merge_check.check(merge_check.parser().parse_args(arguments))
 
     def refuses(self, reason: str, **arguments: str) -> None:
         with self.assertRaises(admission.FixedReasonError) as raised:
@@ -90,7 +94,22 @@ class MergeCheckTests(unittest.TestCase):
 
     def test_refuses_short_reviewed_head(self) -> None:
         with self.assertRaises(admission.FixedReasonError):
-            merge_check.check("example/fixture", 7, "abc", "approved", "R0")
+            merge_check.check(
+                merge_check.parser().parse_args(
+                    [
+                        "--repo",
+                        "example/fixture",
+                        "--pr",
+                        "7",
+                        "--reviewed-head",
+                        "abc",
+                        "--verdict",
+                        "approved",
+                        "--risk",
+                        "R0",
+                    ]
+                )
+            )
 
     def test_refuses_head_changed_after_review(self) -> None:
         self.pr["headRefOid"] = "b" * 40
@@ -123,10 +142,29 @@ class MergeCheckTests(unittest.TestCase):
             "CHANGELOG.md",
             "uv.lock",
             "sub/package.json",
+            "requirements-dev.txt",
+            "Pipfile.lock",
+            "Pipfile",
+            "poetry.lock",
+            "web/pnpm-lock.yaml",
+            "Gemfile.lock",
+            "build.gradle.kts",
         ):
             self.pr["files"] = [{"path": "docs/guide.md"}, {"path": path}]
             self.pr["changedFiles"] = 2
             self.refuses("workflow, release or dependency")
+
+    def test_refuses_project_excluded_paths(self) -> None:
+        self.pr["files"] = [{"path": "deploy/values.yaml"}]
+        self.assertIn("merge", self.check())
+        with self.assertRaises(admission.FixedReasonError) as raised:
+            self.check("approved", "R0", "deploy/*")
+        self.assertIn("workflow, release or dependency", str(raised.exception))
+
+    def test_refuses_malformed_file_entries(self) -> None:
+        for entry in ({}, {"path": None}, {"path": ""}, {"path": 3}, "docs/x.md"):
+            self.pr["files"] = [entry]
+            self.refuses("malformed")
 
     def test_refuses_truncated_file_list(self) -> None:
         self.pr["changedFiles"] = 101

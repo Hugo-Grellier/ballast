@@ -2,7 +2,7 @@
 
 - Status: proposed (2026-10-16, with the change for [#219](https://github.com/Hugo-Grellier/ballast/issues/219)). The operator requested it on 2026-10-15 and approved the R2 change on 2026-10-16; merging the PR is the human approval that accepts it.
 - Risk: R2 (changes merge authority, an invariant of `AGENTS.md`).
-- Amends: [ADR-0023](0023-ballast-2-portable-agent-workflow.md), whose invariant required human approval for every merge.
+- Amends: [ADR-0023](0023-ballast-2-portable-agent-workflow.md) and [ADR-0024](0024-ballast-2-migration.md), whose invariants required human approval for every merge. Their text stays as history; for R0 PRs this ADR governs.
 
 ## Context
 
@@ -34,7 +34,10 @@ Excluded, so a human still merges them whatever their stated risk:
 - Release Please PRs, dependency PRs (Dependabot, Renovate, any bot author) and
   any change to `.github/` (workflows, permissions, ownership), release files
   (`CHANGELOG.md`, Release Please configuration and manifest, `version.txt`) or
-  dependency manifests and lockfiles;
+  dependency manifests and lockfiles of common ecosystems (Python, JavaScript,
+  Go, Rust, Ruby, PHP, JVM, .NET, Elixir, Nix and any `*.lock`); a project names
+  its other manifests or deployment paths with repeatable `--exclude GLOB`;
+- a PR whose changed-file list is incomplete or malformed;
 - a PR whose risk is disputed or raised by the reviewer or by its actual diff.
 
 Release, deployment, destructive cleanup and paid services still need explicit
