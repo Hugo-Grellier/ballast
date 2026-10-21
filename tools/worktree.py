@@ -33,10 +33,16 @@ def inside_checkout() -> bool:
 
 
 def command(argv: list[str], cwd: Path) -> str:
-    """Run a bounded native command, keeping diagnostics private."""
+    """Run a bounded native command, keeping diagnostics private.
+
+    Inherited GIT_* variables (GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
+    GIT_CONFIG_*, ...) would change what Git reads or writes, so none passes;
+    the helpers make no network Git call that would need one, and gh needs none.
+    """
     result = subprocess.run(  # noqa: S603 -- argument arrays, no shell
         argv,
         cwd=cwd,
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         capture_output=True,
         text=True,
         timeout=60,

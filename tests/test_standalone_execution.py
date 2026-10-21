@@ -180,6 +180,24 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "branch"):
             worktree.validate(self.claim)
 
+    def test_inherited_git_variables_cannot_redirect_helper_git(self) -> None:
+        # Hostile caller environment: another index and an empty object store.
+        before = worktree.validate(self.claim)
+        status = worktree.git(self.cwd, "status", "--porcelain")
+        objects = self.root / "empty-objects"
+        objects.mkdir()
+        hostile = {
+            "GIT_INDEX_FILE": str(self.root / "hostile-index"),
+            "GIT_OBJECT_DIRECTORY": str(objects),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_VALUE_0": str(self.root),
+        }
+        with patch.dict(os.environ, hostile):
+            self.assertEqual(worktree.validate(self.claim), before)
+            self.assertEqual(worktree.git(self.cwd, "status", "--porcelain"), status)
+        self.assertFalse((self.root / "hostile-index").exists())
+
     def test_worker_written_gitfile_cannot_run_host_commands(self) -> None:
         # A writing worker controls its checkout, including the `.git` gitfile.
         evil = self.root / "evil.git"
