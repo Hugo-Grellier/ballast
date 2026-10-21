@@ -743,9 +743,13 @@ def rebased(
                     "before retargeting"
                 )
         git_dirs = [Path(worktree.validate(path)["git_dir"]) for path in paths]
-        heads, onto, upstream = [], base_sha, merged_head
-        for item, git_dir in zip(items, git_dirs, strict=True):
+        heads, onto = [], base_sha
+        for index, (item, git_dir) in enumerate(zip(items, git_dirs, strict=True)):
             cwd = Path(item["checkout"])
+            # A descendant replays only its own commits, from its recorded and
+            # validated fork point: commits its parent rewrote since then (amend,
+            # local rebase) must not come back.
+            upstream = merged_head if index == 0 else item["base_sha"]
             before = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
             try:
                 worktree.git(cwd, "rebase", "--onto", onto, upstream, git_dir=git_dir)
@@ -764,7 +768,7 @@ def rebased(
                 )
             after = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
             heads.append((before, after))
-            onto, upstream = after, before
+            onto = after
         current.update(base=base, base_sha=base_sha)
         del current["parent"], current["stack_position"]
         if isinstance(current.get("pr"), dict):

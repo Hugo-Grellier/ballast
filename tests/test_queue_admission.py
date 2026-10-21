@@ -1672,6 +1672,25 @@ class QueueTests(unittest.TestCase):
             ["60.txt", "61.txt", "62.txt", "example.txt"],
         )
 
+    def test_restack_drops_commits_the_parent_rewrote(self) -> None:
+        parent, child = self.stacked_pair()
+        record = json.loads(child.read_text())
+        checkout = Path(record["checkout"])
+        self.push(record["branch"], self.commit(checkout, "child.txt", "first\n"))
+        grandchild = worktree.prepare(self.repo, REPO, 62, record["branch"], parent=61)
+        below = json.loads(grandchild.read_text())
+        self.commit(Path(below["checkout"]), "grandchild.txt", "grandchild\n")
+        # The child rewrites its commit after the grandchild branched from it.
+        (checkout / "child.txt").write_text("rewritten\n")
+        worktree.git(checkout, "commit", "-q", "--amend", "-a", "--no-edit")
+        main = self.merge_parent(parent, child, "parent\n")
+        coordinate.retarget(child, "fictional")
+        self.assertTrue(worktree.validate(grandchild))
+        cwd = Path(below["checkout"])
+        self.assertEqual((cwd / "child.txt").read_text(), "rewritten\n")
+        log = worktree.git(cwd, "log", "--format=%s", f"{main}..HEAD").split()
+        self.assertEqual(log, ["grandchild.txt", "child.txt"])
+
     def test_descendant_conflict_restores_every_checkout(self) -> None:
         parent, child = self.stacked_pair()
         record = json.loads(child.read_text())
