@@ -401,9 +401,12 @@ It refuses without `--confirm-disposable` or when the repository name does not
 start with `ballast-qualification-`. It reuses an existing repository of that
 name or creates a private one with a README (its default branch must be
 `main`), opens one fictional issue, clones the repository into a temporary
-directory and runs the path. The ledger `FILE` records what the run created as
-it goes: the repository with GitHub's immutable repository id and whether this
-run created it, the issue, and the issue branch with its pushed commit.
+directory and runs the path. The ledger `FILE` must not exist; the run reserves
+it exclusively, so a second or concurrent run never overwrites it. It records
+what the run created before each step: the repository creation, then GitHub's
+immutable repository id; the issue's unique title, then its number; and the
+issue branch with its pushed commit. If an issue's creation response is lost,
+the printed commands include a search for that title.
 
 Live mode never deletes anything. Removing a repository or branch is
 destructive cleanup and needs an explicit human decision. A successful run

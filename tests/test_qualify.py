@@ -168,6 +168,34 @@ class LiveModeTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.ledger.read_text(), '{"repository": "earlier run"}\n')
 
+    def test_concurrent_run_cannot_take_a_reserved_ledger(self) -> None:
+        # Another run reserved the ledger between our checks: refused, untouched.
+        real_open = Path.open
+
+        def reserved(path: Path, mode: str = "r", *args: object) -> object:
+            if path == self.ledger and mode == "x":
+                raise FileExistsError(path)
+            return real_open(path, mode, *args)
+
+        with (
+            patch.object(Path, "open", reserved),
+            self.assertRaisesRegex(qualify.QualificationError, "already exists"),
+        ):
+            qualify.live(self.args("owner/ballast-qualification-x"))
+        self.assertEqual(self.calls, [])
+
+    def test_lost_issue_response_leaves_a_findable_title(self) -> None:
+        self.failing = {"gh issue create"}
+        with self.assertRaises(qualify.QualificationError):
+            qualify.live(self.args("owner/ballast-qualification-x"))
+        ledger = json.loads(self.ledger.read_text())
+        self.assertEqual(ledger["issues"], [])
+        created = [a for a in self.calls if a[:3] == ["gh", "issue", "create"]]
+        self.assertIn(ledger["issue_title"], created[0])
+        commands = qualify.leftovers(ledger)
+        self.assertIn("--search", commands[-1])
+        self.assertIn(ledger["issue_title"], commands[-1])
+
     def test_creation_is_recorded_before_the_id_lookup(self) -> None:
         self.exists = False
         self.failing = {"id"}  # The id lookup fails after creation.

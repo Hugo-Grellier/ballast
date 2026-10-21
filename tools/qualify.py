@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -279,16 +280,23 @@ def leftovers(record: dict) -> list[str]:
         for branch in record["branches"]
     ]
     closes = [f"gh issue close {issue} --repo {repo}" for issue in record["issues"]]
+    if record.get("issue_title") and not record["issues"]:
+        # The create call's outcome is unknown: find the issue by its unique title.
+        title = shlex.quote(f"{record['issue_title']} in:title")
+        closes.append(f"gh issue list --repo {repo} --state all --search {title}")
     return commands + closes
 
 
 def live(args: argparse.Namespace) -> dict:
     """Qualify against real Codex and GitHub on a disposable repository."""
     repo = disposable(args.repo, confirmed=args.confirm_disposable)
-    if args.ledger.exists():
-        # An earlier run's ledger is the operator's cleanup record: never reuse it.
+    try:
+        # Reserve the ledger exclusively: an earlier or concurrent run's ledger
+        # is the operator's cleanup record and is never reused.
+        args.ledger.open("x").close()
+    except FileExistsError:
         message = "ledger already exists; pass a new file for each run"
-        raise QualificationError(message)
+        raise QualificationError(message) from None
     workdir = Path(tempfile.mkdtemp(prefix=PREFIX))
     ledger = args.ledger
     record = ensure_repository(repo, ledger, workdir)
@@ -297,10 +305,13 @@ def live(args: argparse.Namespace) -> dict:
         record[kind].append(value)
         save(ledger, record)
 
+    # Record the intent first: a lost response still leaves a findable title.
+    record["issue_title"] = f"Fictional: qualification marker {uuid.uuid4().hex}"
+    save(ledger, record)
     url = run(
         [
             *("gh", "issue", "create", "--repo", repo),
-            *("--title", "Fictional: add a qualification marker"),
+            *("--title", record["issue_title"]),
             *("--body", f"Fictional. Create {ARTIFACT} containing `qualified`."),
         ],
         workdir,
