@@ -20,13 +20,13 @@ SCRIPT = Path(qualify.__file__)
 class LocalModeTests(unittest.TestCase):
     """Every helper runs as a subprocess against the fake app-server and `gh`."""
 
-    def local(self, fault: str = "") -> subprocess.CompletedProcess:
+    def local(self, fault: str = "", **extra: str) -> subprocess.CompletedProcess:
         environment = {**os.environ, **dict.fromkeys(codex.CI_MARKERS, "")}
         with tempfile.TemporaryDirectory() as cwd:
             return subprocess.run(  # noqa: S603 -- fixed argv
                 [sys.executable, "-I", "-S", str(SCRIPT), "local"],
                 cwd=cwd,
-                env={**environment, "BALLAST_FAKE_FAULT": fault},
+                env={**environment, "BALLAST_FAKE_FAULT": fault, **extra},
                 capture_output=True,
                 text=True,
                 timeout=600,
@@ -52,6 +52,14 @@ class LocalModeTests(unittest.TestCase):
         self.assertNotIn("No findings", result.stdout)
         # Evidence is meant for docs/evidence/: no local paths.
         self.assertNotIn(tempfile.gettempdir(), result.stdout)
+
+    def test_worker_written_gitfile_cannot_run_host_commands(self) -> None:
+        # The implement worker points `.git` at a copy whose fsmonitor would run.
+        with tempfile.TemporaryDirectory() as outside:
+            marker = Path(outside) / "executed"
+            result = self.local("hostile-gitfile", BALLAST_FAKE_MARKER=str(marker))
+            self.assertFalse(marker.exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_wrong_work_or_rejected_review_fails_before_publication(self) -> None:
         for fault, reason in (
@@ -203,6 +211,20 @@ class LiveModeTests(unittest.TestCase):
             qualify.live(self.args("owner/ballast-qualification-x"))
         ledger = json.loads(self.ledger.read_text())
         self.assertEqual((ledger["created"], ledger["id"]), (True, None))
+        self.assertEqual(self.deletes(), [])
+
+    def test_unconfirmed_creation_lists_a_check_never_a_delete(self) -> None:
+        # The lookup failed transiently and the create failed: maybe not ours.
+        repo = "owner/ballast-qualification-x"
+        self.exists = False
+        self.failing = {"gh repo create"}
+        with self.assertRaises(qualify.QualificationError):
+            qualify.live(self.args(repo))
+        ledger = json.loads(self.ledger.read_text())
+        self.assertEqual((ledger["create_attempted"], ledger["created"]), (True, False))
+        self.assertEqual(
+            qualify.leftovers(ledger), [f"gh repo view {repo} --json id,createdAt"]
+        )
         self.assertEqual(self.deletes(), [])
 
     def test_failed_run_deletes_nothing_and_keeps_its_ledger(self) -> None:

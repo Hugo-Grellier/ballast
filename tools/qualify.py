@@ -5,6 +5,8 @@ fake `gh` in a throwaway clone: no network, model, account or approval. `live`
 runs the same path against the installed Codex and GitHub on an operator-named
 disposable repository. It deletes nothing: its ledger records what it created
 and it prints the commands that would remove it, for the operator to run.
+After a worker ran, coordinator Git in its checkout goes through the claim's
+pinned Git directory, never the worker-writable gitfile.
 """
 
 from __future__ import annotations
@@ -14,12 +16,17 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+# Direct isolated invocation loads only this operator-selected source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools import worktree
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,7 +73,7 @@ def run(argv: list[str], cwd: Path) -> str:
 
 
 def git(cwd: Path, *args: str) -> str:
-    """Coordinator Git without checkout hooks."""
+    """Coordinator Git without checkout hooks, only where no worker writes."""
     return run(["git", "-c", f"core.hooksPath={os.devnull}", *args], cwd)
 
 
@@ -126,9 +133,15 @@ def scenario(
     record = json.loads(Path(claim).read_text())
     checkout = Path(record["checkout"])
     implement = work("implement", IMPLEMENT_TASK)
+    # The worker controls the checkout's `.git` gitfile: pin the claim's Git dir.
+    git_dir = Path(worktree.validate(Path(claim))["git_dir"])
+
+    def pinned(*args: str) -> str:
+        return worktree.git(checkout, *args, git_dir=git_dir)
+
     # The whole result against the base: no commit, nothing but one regular file.
-    committed = git(checkout, "rev-parse", "HEAD") != record["base_sha"]
-    changed = git(checkout, "status", "--porcelain", "--untracked-files=all")
+    committed = pinned("rev-parse", "HEAD") != record["base_sha"]
+    changed = pinned("status", "--porcelain", "--untracked-files=all")
     artifact = checkout / ARTIFACT
     if (
         committed
@@ -138,9 +151,9 @@ def scenario(
     ):
         message = f"implementation must add only {ARTIFACT} containing `qualified`"
         raise QualificationError(message)
-    git(checkout, "add", "-A")
-    git(checkout, "commit", "-q", "-m", f"Qualification for #{issue}")
-    head = git(checkout, "rev-parse", "HEAD")
+    pinned("add", "-A")
+    pinned("commit", "-q", "-m", f"Qualification for #{issue}")
+    head = pinned("rev-parse", "HEAD")
     review = work("review", REVIEW_TASK.format(head=head, base=record["base_sha"]))
     # Read the private output for its verdict only; it never enters evidence.
     output = Path(claim).parent / "workers" / review["worker"] / "output.txt"
@@ -149,7 +162,7 @@ def scenario(
         message = "review did not end with `Verdict: approve`"
         raise QualificationError(message)
     created("branches", {"name": record["branch"], "sha": head})
-    git(checkout, "push", "-q", "origin", record["branch"])
+    pinned("push", "-q", "origin", record["branch"])
     body = scratch / "body.md"
     body.write_text(f"Fictional qualification for #{issue}. Do not merge.\n")
     published = queue(
@@ -242,13 +255,15 @@ def repository_id(repo: str, cwd: Path) -> str:
 def ensure_repository(repo: str, ledger: Path, cwd: Path) -> dict:
     """Reuse an existing disposable repository or create and record a new one.
 
-    The ledger is written before each external effect, so a failure after
-    `gh repo create` still records the attempt; `id` stays null until GitHub
-    identifies the repository.
+    The ledger is written before each external effect: `create_attempted`
+    before `gh repo create`, `created` only once it succeeded, so a failed
+    lookup of an existing repository never claims it. `id` stays null until
+    GitHub identifies the repository.
     """
     record = {
         "repository": repo,
         "id": None,
+        "create_attempted": False,
         "created": False,
         "issues": [],
         "branches": [],
@@ -256,9 +271,11 @@ def ensure_repository(repo: str, ledger: Path, cwd: Path) -> dict:
     try:
         run(["gh", "repo", "view", repo, "--json", "name"], cwd)
     except QualificationError:
-        record["created"] = True
+        record["create_attempted"] = True
         save(ledger, record)
         run(["gh", "repo", "create", repo, "--private", "--add-readme"], cwd)
+        record["created"] = True
+        save(ledger, record)
     # The id lets the operator confirm a later deletion targets this repository.
     record["id"] = repository_id(repo, cwd)
     save(ledger, record)
@@ -275,6 +292,9 @@ def leftovers(record: dict) -> list[str]:
     repo = record["repository"]
     if record["created"]:
         return [f"gh repo delete {repo}"]
+    if record.get("create_attempted"):
+        # Unconfirmed creation: the repository may predate this run. Check first.
+        return [f"gh repo view {repo} --json id,createdAt"]
     commands = [
         f"gh api -X DELETE repos/{repo}/git/refs/heads/{branch['name']}"
         for branch in record["branches"]
@@ -395,6 +415,16 @@ def unrelated(cwd: Path, fault: str) -> None:
     if fault == "committed-edit":
         # A committed edit leaves only the marker untracked.
         git(cwd, "commit", "-q", "-am", "Unrelated")
+    if fault == "hostile-gitfile":
+        # Redirect the gitfile to a copy whose fsmonitor runs a host command.
+        root = Path(os.environ["BALLAST_FAKE_ROOT"])
+        evil, monitor = root / "evil.git", root / "monitor"
+        shutil.copytree(root / "project" / ".git", evil)
+        monitor.write_text(f"#!/bin/sh\ntouch {os.environ['BALLAST_FAKE_MARKER']}\n")
+        monitor.chmod(0o755)
+        with (evil / "config").open("a") as stream:
+            stream.write(f"[core]\n\tfsmonitor = {monitor}\n")
+        (cwd / ".git").write_text(f"gitdir: {evil}\n")
 
 
 def fake_codex(_: list[str]) -> int:
@@ -489,7 +519,7 @@ def main() -> int:
                 result: dict = local(Path(root))
         else:
             result = live(args)
-    except (QualificationError, OSError, ValueError, KeyError) as error:
+    except (RuntimeError, OSError, ValueError, KeyError) as error:
         sys.stderr.write(f"Qualification failed: {error}\n")
         return 1
     sys.stdout.write(json.dumps(result, indent=2) + "\n")
