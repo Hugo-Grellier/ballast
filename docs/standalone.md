@@ -110,6 +110,13 @@ ballast worker \
   --role implement --timeout 300
 ```
 
+Before it reserves anything, an `implement` worker applies the spec gate
+(`tools/spec_approval.py`, [ADR-0027](adr/0027-spec-approval-living-specs-merge-verdict.md)):
+it reads the issue and its comments from GitHub and refuses an issue without
+exactly one `Risk: R0|R1|R2` line, and an R1 or R2 issue without a
+[spec approval](issue-workflow.md#spec-approval) of its current delta. A review
+worker is not gated.
+
 At `--timeout` the worker interrupts its turn rather than abandoning it, so it
 can run up to about 190 seconds longer: at most 30 seconds for the interrupted
 turn's terminal evidence, then up to 150 seconds for the checkout to go quiet
@@ -461,7 +468,8 @@ ballast coordinate --cwd "$PROJECT_CHECKOUT" \
 shape with `executor: coordinator`, `route_verified: false`, `source:
 coordinator-reported` and status `running`, and adds `execution_started` to the
 claim history. It requires the queue's coordinator, a running queue and an
-active claim, as a worker reservation does; a review also needs a clean
+active claim, as a worker reservation does; an implementation passes the same
+spec gate as an `implement` worker; a review also needs a clean
 committed head. `finish` sets the final status and head, and a completed review
 must carry a verdict and round and an unchanged clean head. Only a completed
 review takes them.

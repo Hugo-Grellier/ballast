@@ -11,6 +11,12 @@ What should change, for whom, and why?
 
 - [ ] Observable result
 
+## Risk
+
+Risk: R1
+
+Keep one line: R0 (docs, cleanup), R1 (behavior change) or R2.
+
 ## Constraints and boundaries
 
 Relevant compatibility, security, or product constraints. What is outside scope?

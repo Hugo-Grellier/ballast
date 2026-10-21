@@ -160,7 +160,7 @@ class QueueTests(unittest.TestCase):
                 "base": pr.get("base", {}),
             }
         number = int(path.rsplit("/", 1)[1])
-        return {"number": number, "state": "open", "body": "Fictional leaf"}
+        return {"number": number, "state": "open", "body": "Fictional leaf\nRisk: R0"}
 
     def pr_command(self, argv: list[str]) -> object:
         """Answer `gh pr create` and `gh pr edit` against the fictional PRs."""

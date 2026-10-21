@@ -106,6 +106,59 @@ marked as relayed. A relayed approval is evidence, not authentication. Link the
 comment URL on the R2 line of the PR's Risk section and say which kind it is;
 `tools/pr_body.py` fails an R2 body without an issue or PR comment URL there.
 
+### Spec approval
+
+Every leaf issue states its risk on one line `Risk: R0|R1|R2` in its body. For
+an R1 or R2 leaf, the clarify/plan phase posts the spec delta on the issue and
+asks for approval before implementation
+([ADR-0027](adr/0027-spec-approval-living-specs-merge-verdict.md)). R0 work and
+investigations skip it. The delta comment has this fixed shape, a
+[delta document](spec-format.md#a-delta-document) under three header lines:
+
+```markdown
+## Spec delta
+Hash: <python3 -I -S tools/spec_check.py --delta-hash FILE>
+Risk: <proposed R1 or R2>
+
+## Capability: docs/specs/<capability>.md
+...
+
+## Open questions
+...
+```
+
+A change to no spec posts an empty delta (no `## Capability:` section): its
+approval records that the human accepts "no behavior change". Without one, an
+R1/R2 PR changing no spec is R0 under
+[ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md), or the merge verdict
+([#269](https://github.com/Hugo-Grellier/ballast/issues/269)) blocks it.
+
+The approval is a later issue comment whose first line is exactly
+`Spec approved: <hash> risk <Rn> delta <delta comment URL>`. It is the human's
+own comment (direct), or a coordinator comment relaying the human's words
+verbatim with their date, marked as relayed; both count. The delta comment, the
+request for approval and the helpers never write that line; a comment quoting
+the hash and risk anywhere else is not an approval. The quoted risk is the
+approved risk: with the issue's `Risk:` line it sets the floor of the merge
+verdict.
+
+Trust boundary: the coordinator posts or relays an approval only when the human
+gave it, quoted verbatim. Agents post with the operator's GitHub identity, so no
+check tells the human's comment from an agent's; the gate rests on that rule,
+as R2 approvals do.
+
+The implement dispatch (`worker.py --role implement` and `coordinate.py
+execution start --role implement`) reads the issue and its comments from GitHub,
+counting only comments by the repository's owner, members and collaborators. It
+refuses a leaf without exactly one `Risk:` line and an R1/R2 leaf unless the
+latest delta comment's hash, recomputed from its content (and equal to its
+`Hash:` line), equals the hash an approval quotes, and that approval links an
+earlier delta comment of the same issue with that hash. So a later delta that
+changes a requirement or scenario needs a new approval; a re-post that changes
+only tests, open questions or wording outside the entries keeps the hash and the
+approval. Questions that change no observable behavior stay "decide, flag and
+continue".
+
 Routine technical plans need no human approval checkpoint. Resolve blocking plan
 review findings before coding; use the same round limit and escalation
 rule as the final review ([pair-review.md](pair-review.md#round-limit)). If a
@@ -126,7 +179,8 @@ Next action / blocker: ...
 
 Maintain that note at meaningful milestones and handoffs. Keep new product
 decisions in their own clearly attributed comments; an agent assumption is not
-a human decision. Separate spec/plan/task files are unnecessary for routine work.
+a human decision. Separate plan/task files are unnecessary for routine work; an
+R1 or R2 PR updates the affected [living spec](spec-format.md) in the same PR.
 
 ## 4. Implement and check
 
