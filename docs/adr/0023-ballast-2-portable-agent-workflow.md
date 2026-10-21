@@ -1,6 +1,7 @@
 # ADR-0023: Ballast 2.0 uses a portable agent workflow with explicit execution evidence
 
 - Status: accepted by [ADR-0024](0024-ballast-2-migration.md) when its PR merges ([#180](https://github.com/Hugo-Grellier/ballast/issues/180))
+- Amended by: [ADR-0027](0027-spec-approval-living-specs-merge-verdict.md) (living specs under `docs/specs/` for every behavior change, replacing "routine tasks need no parallel spec tree"; merges follow its verdict)
 - Issues: #174 (2.0), #175 (foundation)
 - Basis: operator's 2.0 design conversation, 2026-10-14
 
