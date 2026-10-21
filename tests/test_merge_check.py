@@ -588,7 +588,8 @@ class MergeVerdictTests(unittest.TestCase):
         )
         self.change({"docs/specs/cap.md": covered + SECOND, "tools/b.py": "x = 1\n"})
         result = self.human("no spec covers", "approved", "R1")
-        self.assertEqual(result["handoff"]["risky_paths"], ["tools/b.py"])
+        self.assertIn("tools/b.py", result["handoff"]["risky_paths"])
+        self.assertIn("no spec covers", str(result["human"]))
 
     def test_target_moved_before_merge_blocks(self) -> None:
         args = merge_check.parser().parse_args(
@@ -680,6 +681,31 @@ class MergeVerdictTests(unittest.TestCase):
         dropped = SPEC.replace("Covers: tools/a.py", "Covers: tools/z.py")
         self.change({"docs/specs/cap.md": dropped, "tools/a.py": "x = 1\n"})
         self.human("R0 PR changes paths a spec covers")
+
+    def test_changing_covers_lines_needs_a_human_at_any_risk(self) -> None:
+        widened = SPEC.replace("Covers: tools/a.py", "Covers: tools/a.py\nCovers: x.py")
+        # R0: a spec file is coverage-exempt, but its Covers: lines are not.
+        self.change({"docs/specs/cap.md": widened})
+        result = self.human("changes `Covers:` lines")
+        self.assertIn("docs/specs/cap.md", result["handoff"]["risky_paths"])
+        # R1 with an approved delta: Covers: lines are outside the delta hash.
+        self.r1()
+        self.change({"docs/specs/cap.md": widened + SECOND, "tools/a.py": "x = 1\n"})
+        self.human("changes `Covers:` lines", "approved", "R1")
+        # Unchanged Covers: lines still merge.
+        self.r1()
+        self.merges("approved", "R1")
+
+    def test_real_fetch_returns_the_target_tip(self) -> None:
+        git(self.root, "config", "uploadpack.allowReachableSHA1InWant", "true")
+        with tempfile.TemporaryDirectory() as clone:
+            local = Path(clone)
+            git(local, "init", "-q")
+            url = f"https://github.com/{REPO}.git"
+            git(local, "config", f"url.{self.root}.insteadOf", url)
+            self.assertEqual(FETCH(local, REPO, "main", self.head), self.tip)
+            self.assertNotEqual(self.tip, self.head)
+            git(local, "cat-file", "-e", f"{self.head}^{{commit}}")
 
     def test_handoff_lists_paths_spec_and_findings(self) -> None:
         self.r1()

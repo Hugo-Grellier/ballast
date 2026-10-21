@@ -159,7 +159,8 @@ on the target branch, no closing issue, a closing issue that is closed, outside
 the repository, or without one parseable `Risk:` line in a body by a trusted
 author, a confirmed risk below the highest closing-issue `Risk:` line and
 approved risk, an R1 or R2 PR closing more than one issue or not published
-from a claim branch `issue-N-...`, a claim branch whose PR does not close #N, a changed path no `Covers:` glob or
+from a claim branch `issue-N-...`, a claim branch whose PR does not close #N, any change to the `Covers:` lines
+between the target branch and the head, a changed path no `Covers:` glob or
 `Coverage-exempt:` glob of the target branch matches (never the PR head's), and an R0 PR changing
 a covered path or modifying or removing a spec entry.
 
@@ -224,6 +225,11 @@ a covered path or modifying or removing a spec entry.
 - THEN the path is still uncovered and the verdict is `HUMAN`
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_coverage_comes_from_the_target_branch
 
+#### Scenario: Covers lines changed
+- WHEN an R0 or R1 PR adds, removes or changes a `Covers:` line, even with an approved delta
+- THEN the verdict is `HUMAN` and the spec file is listed; unchanged `Covers:` lines still merge
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_changing_covers_lines_needs_a_human_at_any_risk
+
 #### Scenario: Specs always exempt
 - WHEN the target's `project/workflow.md` lists no coverage exemption and an R0 PR only adds spec entries
 - THEN `docs/specs/` is still exempt and the verdict is `MERGE`
@@ -255,6 +261,11 @@ checkout.
 - WHEN `--merge` is absent, or the verdict is `HUMAN`
 - THEN no merge call is made; with it on `MERGE`, the pinned merge runs and the merge comment names ADR-0027
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_merge_only_on_merge_and_with_explicit_flag
+
+#### Scenario: Fetched target tip
+- WHEN the target branch and the reviewed head are fetched
+- THEN the verdict uses the target branch tip, not the reviewed head
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_real_fetch_returns_the_target_tip
 
 #### Scenario: Failing fetch
 - WHEN fetching the target branch or the reviewed head fails

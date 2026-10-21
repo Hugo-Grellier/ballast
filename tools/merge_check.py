@@ -463,13 +463,12 @@ def stale(root: Path, tip: str, entries: list[dict]) -> bool:
     return False
 
 
-def covers_at(root: Path, revision: str) -> list[str]:
-    """Return every `Covers:` glob of the specs at a revision."""
-    return [
-        glob
+def covers_at(root: Path, revision: str) -> dict[str, list[str]]:
+    """Return {spec file: sorted `Covers:` globs} of the specs at a revision."""
+    return {
+        name: sorted(spec_check.parse_covers(text, name)[0])
         for name, text in spec_check.specs_at(root, revision).items()
-        for glob in spec_check.parse_covers(text, name)[0]
-    ]
+    }
 
 
 def specs(args: argparse.Namespace, tip: str, paths: list, found: Findings) -> dict:
@@ -500,7 +499,24 @@ def specs(args: argparse.Namespace, tip: str, paths: list, found: Findings) -> d
             " or already has an added entry",
             "rebase, then post and approve a new delta",
         )
-    head_covers, tip_covers = covers_at(root, head), covers_at(root, tip)
+    head_map, tip_map = covers_at(root, head), covers_at(root, tip)
+    head_covers = [glob for globs in head_map.values() for glob in globs]
+    tip_covers = [glob for globs in tip_map.values() for glob in globs]
+    if head_map != tip_map:
+        # `Covers:` lines decide coverage but are outside the approved delta,
+        # so changing them is an authority change a human reviews.
+        changed = sorted(
+            name
+            for name in head_map.keys() | tip_map.keys()
+            if head_map.get(name) != tip_map.get(name)
+        )
+        found.add(
+            "HUMAN",
+            "The PR changes `Covers:` lines, which decide coverage outside the"
+            " approved delta",
+            "a human reviews the coverage change",
+            changed,
+        )
     # Coverage comes from the target branch: a PR cannot cover its own new
     # path with a `Covers:` line, which is not part of the approved delta.
     uncovered = [p for p in paths if not spec_check.matches(p, tip_covers + exempt)]
