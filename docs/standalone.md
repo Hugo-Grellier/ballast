@@ -141,8 +141,14 @@ use the client's workspace-write sandbox:
 - Review works in the scratch directory itself, with no extra root, so the
   checkout stays read-only: the receipt must show the scratch directory as its
   working directory and no writable root. The task tells it where the checkout
-  is. A project's agent instructions in the checkout are not loaded
-  automatically; the review task should name what to read.
+  is. The scratch directory sits inside the repository's Git directory, so a
+  project root search from it would load the primary checkout's agent
+  instructions, not the reviewed head's. The helper sets
+  `project_root_markers = []` for review, and the receipt's
+  `instructionSources` must list nothing in the scratch directory or above it;
+  anything else fails the launch. The reviewer gets only the client's own
+  instructions, so the review task names the project instructions to read in
+  the checkout.
 
 Any other root, working directory or temporary-directory setting fails the
 launch before task input. When the worker settles, as `completed`, `cancelled`,

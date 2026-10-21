@@ -230,6 +230,21 @@ def sandbox_roots(role: str, cwd: Path, scratch: Path) -> tuple[Path, list[str]]
     return cwd, [str(scratch)]
 
 
+def walked_up(receipt: dict, scratch: Path) -> bool:
+    """Whether a review thread loaded instructions from above its scratch.
+
+    The scratch sits inside the repository's Git directory: a project root
+    search would load the primary checkout's instructions, not the reviewed head.
+    """
+    sources = receipt.get("instructionSources")
+    if not isinstance(sources, list):
+        return True
+    above = {scratch, *scratch.parents}
+    return any(
+        not isinstance(item, str) or Path(item).parent in above for item in sources
+    )
+
+
 def establish(
     server: WorkerServer, cwd: Path, scratch: Path, route: tuple[str, str], role: str
 ) -> dict:
@@ -263,6 +278,8 @@ def establish(
                 },
                 # Tool commands only: the unsandboxed client keeps its own temp.
                 "shell_environment_policy": {"set": scratch_env(scratch)},
+                # A review thread's project root is its scratch: no walk upward.
+                **({"project_root_markers": []} if role == "review" else {}),
             },
         },
     )
@@ -279,6 +296,7 @@ def establish(
         or policy.get("writableRoots") != roots
         or policy.get("excludeTmpdirEnvVar") is not True
         or policy.get("excludeSlashTmp") is not True
+        or (role == "review" and walked_up(receipt, scratch))
     ):
         codex.fail(
             "Executing session configuration differs from the authorized request"

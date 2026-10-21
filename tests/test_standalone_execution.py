@@ -103,6 +103,8 @@ class ExecutionTests(unittest.TestCase):
             "cwd": SCRATCH if review else str(self.cwd),
             "approvalPolicy": "never",
             "thread": {"id": "fixture-thread"},
+            # The client's own instructions, outside the repository.
+            "instructionSources": ["/fixture-codex-home/AGENTS.md"],
             "sandbox": {
                 "type": "workspaceWrite",
                 "networkAccess": False,
@@ -326,10 +328,18 @@ class ExecutionTests(unittest.TestCase):
 
     def test_each_role_writes_only_its_private_scratch(self) -> None:
         for role in ("implement", "review"):
+            modes = []
+
+            def inspect(thread: dict, found: list = modes) -> None:
+                roots = thread["config"]["sandbox_workspace_write"]["writable_roots"]
+                scratch = Path(roots[0] if roots else thread["cwd"])
+                found.append(scratch.stat().st_mode & 0o777)
+
             with self.subTest(role=role):
-                sent = self.threads(self.script(role=role), role)
+                sent = self.threads(self.script(role=role), role, inspect)
                 result, thread = sent["result"], sent["thread/start"]
                 scratch = self.claim.parent / "scratch" / f"{role}-{result['worker']}"
+                self.assertEqual(modes, [0o700])  # Private while the turn runs.
                 self.assertEqual(result["status"], "completed")
                 self.assertEqual(thread["sandbox"], "workspace-write")
                 writes = thread["config"]["sandbox_workspace_write"]
@@ -342,15 +352,23 @@ class ExecutionTests(unittest.TestCase):
                     self.assertEqual(thread["cwd"], str(scratch))
                     self.assertEqual(writes["writable_roots"], [])
                     self.assertEqual(result["checkout_access"], "read-only")
+                    # No project root search up into the primary checkout.
+                    self.assertEqual(thread["config"]["project_root_markers"], [])
                 else:
                     self.assertEqual(thread["cwd"], str(self.cwd))
                     self.assertEqual(writes["writable_roots"], [str(scratch)])
+                    self.assertNotIn("project_root_markers", thread["config"])
                 self.assertEqual(sent["turn/start"]["cwd"], thread["cwd"])
                 self.assertIn(str(self.cwd), sent["turn/start"]["input"][0]["text"])
                 environment = thread["config"]["shell_environment_policy"]["set"]
-                self.assertEqual(environment, worker.scratch_env(scratch))
-                for value in environment.values():
-                    self.assertTrue(Path(value).is_relative_to(scratch))
+                self.assertEqual(
+                    environment,
+                    {
+                        "TMPDIR": str(scratch),
+                        "UV_CACHE_DIR": str(scratch / "uv"),
+                        "XDG_CACHE_HOME": str(scratch / "cache"),
+                    },
+                )
                 self.assertEqual(self.scratches(), [])  # Removed once settled.
 
     def test_receipt_must_show_exactly_the_scratch_root(self) -> None:
@@ -374,11 +392,21 @@ class ExecutionTests(unittest.TestCase):
                 self.run_worker(self.script(role=role, sandbox=sandbox), role=role)
             self.assertFalse(self.claim.with_suffix(".worker").exists())
             self.assertEqual(self.scratches(), [])
-        # A review thread that works in the checkout could write it.
-        with self.assertRaisesRegex(codex.QualificationError, "differs"):
-            self.run_worker(
-                self.script(role="review", cwd=str(self.cwd)), role="review"
-            )
+        # A review thread that works in the checkout could write it; one that
+        # loaded instructions from above its scratch reads the primary checkout's.
+        for change in (
+            {"cwd": str(self.cwd)},
+            {"instructionSources": [str(self.repo / "AGENTS.md")]},
+            {"instructionSources": [f"{SCRATCH}/AGENTS.md"]},
+            {"instructionSources": None},
+            {"instructionSources": [None]},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(codex.QualificationError, "differs"),
+            ):
+                self.run_worker(self.script(role="review", **change), role="review")
+            self.assertEqual(self.scratches(), [])
         for record in (self.claim.parent / "workers").glob("*/events.jsonl"):
             self.assertNotIn("task_dispatched", record.read_text())
 
@@ -412,6 +440,19 @@ class ExecutionTests(unittest.TestCase):
             worktree.git(self.cwd, "status", "--porcelain", "--ignored"), ""
         )
 
+    def test_process_left_in_scratch_keeps_worker_unknown(self) -> None:
+        def scan(root: Path) -> list[int]:
+            return [4242] if root.parent.name == "scratch" else []
+
+        with (
+            patch.object(worker, "survivors", side_effect=scan),
+            patch.object(worker, "QUIET_SECONDS", 0),
+            self.assertRaisesRegex(codex.QualificationError, r"still run.*\b4242\b"),
+        ):
+            self.run_worker(self.script())
+        self.assertTrue(self.claim.with_suffix(".worker").exists())
+        self.assertEqual(len(self.scratches()), 1)
+
     @unittest.skipUnless(shutil.which("uv"), "uv required")
     def test_uv_run_with_scratch_environment_leaves_checkout_untouched(self) -> None:
         scratch = self.root / "scratch"
@@ -427,7 +468,12 @@ class ExecutionTests(unittest.TestCase):
                 *("python", "-c", "import tempfile; tempfile.mkstemp()"),
             ],
             cwd=self.cwd,
-            env={**environment, **worker.scratch_env(scratch)},
+            env={
+                **environment,
+                "TMPDIR": str(scratch),
+                "UV_CACHE_DIR": str(scratch / "uv"),
+                "XDG_CACHE_HOME": str(scratch / "cache"),
+            },
             capture_output=True,
             check=True,
         )

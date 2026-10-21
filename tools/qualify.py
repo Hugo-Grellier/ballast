@@ -475,6 +475,7 @@ def fake_codex(_: list[str]) -> int:
                 "approvalPolicy": "never",
                 "thread": {"id": "fake-thread"},
                 "sandbox": policy,
+                "instructionSources": [],
             }
             send(id=identifier, result=receipt)
         elif method == "turn/start":
