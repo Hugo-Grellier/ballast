@@ -34,6 +34,10 @@ MAX_RUNTIME = 900
 POLL_SECONDS = 1.0
 QUIET_GAP_SECONDS = 0.2
 INTERRUPT_SECONDS = 30
+QUIET_SECONDS = 30
+# Extra quiet wait after a confirmed interrupt: a sandboxed tool command can
+# outlive it (#242).
+SURVIVOR_SECONDS = 120
 MAX_NAMED = 10
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 PR_SET_PDEATHSIG = 1  # <linux/prctl.h>
@@ -434,15 +438,21 @@ def survivors(cwd: Path) -> list[int]:
     return found
 
 
-def await_quiet(cwd: Path) -> None:
-    """Settle only when nothing still runs in the checkout; else stay unknown."""
-    deadline = time.monotonic() + INTERRUPT_SECONDS
+def await_quiet(cwd: Path, bound: float) -> float | None:
+    """Settle only when nothing still runs in the checkout; else stay unknown.
+
+    Return the seconds spent waiting on survivors, or None if none was seen.
+    """
+    start = time.monotonic()
+    deadline = start + bound
+    seen = None
     # ponytail: two empty scans a short gap apart narrow, but cannot close, a race
     # with a process forking mid-scan; a cgroup per worker would close it.
     empty = 0
     while empty < 2:  # noqa: PLR2004 -- consecutive empty scans
         if found := survivors(cwd):
             empty = 0
+            seen = True
             if time.monotonic() >= deadline:
                 codex.fail(
                     "Processes still run in the checkout; outcome unknown: "
@@ -452,6 +462,15 @@ def await_quiet(cwd: Path) -> None:
         else:
             empty += 1
             time.sleep(QUIET_GAP_SECONDS)
+    return time.monotonic() - start if seen else None
+
+
+def settle_quiet(cwd: Path, directory: Path, outcome: str) -> None:
+    """Wait longer after a confirmed interrupt; its tool command may still run."""
+    interrupted = outcome in {"cancelled", "timeout"}
+    waited = await_quiet(cwd, QUIET_SECONDS + SURVIVOR_SECONDS * interrupted)
+    if interrupted and waited is not None:
+        event(directory, "survivors_exited", seconds=round(waited, 1))
 
 
 def keep_output(
@@ -569,7 +588,7 @@ def execute(
             keep_output(server, directory, result, outcome)
         # Close/reap must succeed before calling the worker settled. Sandboxed
         # tool commands run in their own session and can outlive the client.
-        await_quiet(cwd)
+        settle_quiet(cwd, directory, outcome)
         result.update(
             head_before=head,
             head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),

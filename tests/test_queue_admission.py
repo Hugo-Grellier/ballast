@@ -1260,10 +1260,74 @@ class QueueTests(unittest.TestCase):
         claim = self.prepare(79)
         with (
             patch.object(worker, "survivors", return_value=[4242]),
-            patch.object(worker, "INTERRUPT_SECONDS", 0),
+            patch.object(worker, "QUIET_SECONDS", 0),
             self.assertRaisesRegex(codex.QualificationError, "still run"),
         ):
             self.worker_on(claim)
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def tool_child(self, claim: Path) -> object:
+        """Run a real tool command in the checkout; it exits once a scan sees it."""
+        checkout = Path(json.loads(claim.read_text())["checkout"])
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],
+            cwd=checkout,
+            stdin=subprocess.PIPE,
+        )
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.addCleanup(child.stdin.close)
+        scan = worker.survivors
+
+        def watch(cwd: Path) -> list[int]:
+            child.poll()  # Reap it once it exited, as its real parent would.
+            found = scan(cwd)
+            if child.pid in found:
+                child.stdin.close()  # Outlived the interrupt; now let it end.
+            return found
+
+        return watch
+
+    @unittest.skipUnless(Path("/proc/self/cwd").exists(), "Linux /proc required")
+    def test_interrupted_turn_settles_once_surviving_tool_command_exits(self) -> None:
+        self.queue([95, 96], issues=2)
+        for issue, control, timeout, status in (
+            (95, Mock(return_value=True), 2, "cancelled"),
+            (96, Mock(side_effect=past_deadline()), 1, "timeout"),
+        ):
+            with self.subTest(status=status):
+                claim = self.prepare(issue)
+                with (
+                    patch.object(admission, "cancelled", control),
+                    patch.object(worker, "survivors", self.tool_child(claim)),
+                    patch.object(worker, "QUIET_SECONDS", 0),
+                ):
+                    result = self.worker_on(
+                        claim, lambda m: m[:4] + INTERRUPTED, timeout=timeout
+                    )
+                self.assertEqual(result["status"], status)
+                self.assertFalse(claim.with_suffix(".worker").exists())
+                _, events = self.outcome(claim)
+                self.assertEqual(events[-2]["event"], "survivors_exited")
+                self.assertGreaterEqual(events[-2]["seconds"], 0)
+                self.assertEqual(events[-1]["event"], status)
+
+    def test_survivor_past_the_interrupt_bound_keeps_worker_unknown(self) -> None:
+        self.queue([97])
+        claim = self.prepare(97)
+        scan = Mock(return_value=[4242])
+        with (
+            patch.object(admission, "cancelled", return_value=True),
+            patch.object(worker, "survivors", scan),
+            patch.object(worker, "QUIET_SECONDS", 0),
+            patch.object(worker, "SURVIVOR_SECONDS", 0.1),
+            self.assertRaisesRegex(codex.QualificationError, r"still run.*\b4242\b"),
+        ):
+            self.worker_on(claim, lambda m: m[:4] + INTERRUPTED)
+        self.assertGreater(scan.call_count, 1)  # It kept watching past the bound.
+        result, events = self.outcome(claim)
+        self.assertEqual(result["status"], "unknown")
+        self.assertNotIn("survivors_exited", [e["event"] for e in events])
         self.assertTrue(claim.with_suffix(".worker").exists())
 
     @unittest.skipUnless(Path("/proc/self/cwd").exists(), "Linux /proc required")
@@ -1285,7 +1349,7 @@ class QueueTests(unittest.TestCase):
         self.addCleanup(process.wait)
         self.addCleanup(process.kill)
         with (
-            patch.object(worker, "INTERRUPT_SECONDS", 0),
+            patch.object(worker, "QUIET_SECONDS", 0),
             self.assertRaisesRegex(
                 codex.QualificationError, rf"unknown: .*\b{process.pid} \(sleep\)"
             ),
