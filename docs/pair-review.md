@@ -58,9 +58,11 @@ verdict trusts this record; it does not rerun tests on the base.
 Use `changes_required` for concrete defects or missing required acceptance
 evidence, and `blocked` when missing access or an unresolved decision prevents
 review. With no findings, say so and name what was inspected. Approval covers
-only the reviewed head and scope; it is not a human merge decision. An approval
-that confirms R0 lets the coordinator merge that exact head once required checks
-pass ([ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)).
+only the reviewed head and scope; it is not a human merge decision. The
+approval and the risk it confirms feed the merge verdict, which lets the
+coordinator merge that exact head only on `MERGE`
+([ADR-0027](adr/0027-spec-approval-living-specs-merge-verdict.md)); pass the
+findings that survive to `merge-check --finding` for the `HUMAN` handoff.
 
 Checks you cannot run yourself (the checkout is read-only and has no network;
 temporary files go to your scratch directory) come from the coordinator's check evidence in the task: command,

@@ -1,34 +1,140 @@
-"""R0 merge precondition: each refusal, the printed command and the merge."""
+"""Merge verdict: MERGE, HUMAN and BLOCK, each refusal, the command and the merge."""
 
 from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from tools import admission, merge_check, worktree
+from tools import admission, merge_check, spec_check, worktree
 
-HEAD = "a" * 40
-BODY = "## Risk\n\n- [x] R0\n- [ ] R1\n- [ ] R2 — link explicit human approval\n"
+REPO = "example/fixture"
+ISSUE = 5
+URL = f"https://github.com/{REPO}/issues/{ISSUE}"
+BALLAST = Path(__file__).resolve().parents[1]
+WORKFLOW = "Human-only: tools/gate.py\nCoverage-exempt: docs/**\n"
+SPEC = """# Capability
+
+Covers: tools/a.py
+
+### Requirement: One
+The tool SHALL do one thing.
+
+#### Scenario: First
+- WHEN x happens
+- THEN y follows
+- Test: tests/test_a.py::A::test_first
+"""
+SECOND = """
+#### Scenario: Second
+- WHEN z happens
+- THEN w follows
+- Test: tests/test_a.py::A::test_second
+"""
+DELTA = """
+## Capability: docs/specs/cap.md
+
+### Requirement: One
+
+#### Added Scenario: Second
+- WHEN z happens
+- THEN w follows
+"""
+EMPTY_DELTA = "\n"
 
 
-class MergeCheckTests(unittest.TestCase):
-    """A fake gh stands in for GitHub; no host call leaves the process."""
+def body(risk: str) -> str:
+    """Return a PR body ticking one risk box."""
+    boxes = "".join(
+        f"- [{'x' if r == risk else ' '}] {r}\n" for r in ("R0", "R1", "R2")
+    )
+    return f"Closes #{ISSUE}\n\n## Risk\n\n{boxes}"
+
+
+def git(root: Path, *args: str) -> str:
+    """Run git in the fixture repository."""
+    return subprocess.run(  # noqa: S603 -- fixed git argv
+        ["git", "-C", str(root), *args],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def digest(entries: str) -> str:
+    """Return the canonical hash of a delta document."""
+    return spec_check.delta_hash(spec_check.parse_delta(entries))
+
+
+def comment(number: int, text: str, at: str, updated: str | None = None) -> dict:
+    """Return an issue comment as the REST API lists it."""
+    return {
+        "id": number,
+        "html_url": f"{URL}#issuecomment-{number}",
+        "body": text,
+        "author_association": "OWNER",
+        "created_at": at,
+        "updated_at": updated or at,
+    }
+
+
+def delta(entries: str, updated: str | None = None) -> dict:
+    """Return the posted delta comment, created at T1."""
+    text = f"## Spec delta\nHash: {digest(entries)}\n{entries}"
+    return comment(101, text, "2026-10-21T10:00:00Z", updated)
+
+
+def approval(entries: str, risk: str = "R1", updated: str | None = None) -> dict:
+    """Return a relayed approval of the delta comment, created at T2."""
+    line = f"Spec approved: {digest(entries)} risk {risk} delta {URL}#issuecomment-101"
+    text = f'{line}\n\nRelayed: the operator said "yes" on 2026-10-21.'
+    return comment(102, text, "2026-10-21T11:00:00Z", updated)
+
+
+class MergeVerdictTests(unittest.TestCase):
+    """A fake gh stands in for GitHub; a throwaway Git repository for the PR."""
 
     def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        git(self.root, "init", "-q", "-b", "main")
+        git(self.root, "config", "user.email", "t@example.invalid")
+        git(self.root, "config", "user.name", "t")
+        git(self.root, "config", "commit.gpgsign", "false")
+        self.write(
+            {
+                "project/workflow.md": WORKFLOW,
+                "docs/specs/cap.md": SPEC,
+                "tools/a.py": "",
+                "tools/gate.py": "",
+                "docs/guide.md": "",
+            }
+        )
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "base")
+        self.base = self.tip = git(self.root, "rev-parse", "HEAD")
         self.pr = {
             "number": 7,
             "state": "OPEN",
             "isDraft": False,
-            "headRefOid": HEAD,
             "headRefName": "docs/7-typo",
+            "baseRefName": "main",
             "author": {"login": "someone", "is_bot": False},
-            "body": BODY,
-            "changedFiles": 1,
+            "body": body("R0"),
+            "closingIssuesReferences": [
+                {
+                    "number": ISSUE,
+                    "repository": {"name": "fixture", "owner": {"login": "example"}},
+                }
+            ],
         }
-        self.files: list = [{"filename": "docs/guide.md"}]
-        self.pr["baseRefName"] = "main"
+        self.issue: object = {"body": "Outcome.\n\nRisk: R0\n"}
+        self.comments: list = []
+        self.change({"docs/guide.md": "Fixed a typo.\n"})
         self.rules: object = [
             [
                 {"type": "deletion"},
@@ -52,13 +158,51 @@ class MergeCheckTests(unittest.TestCase):
         self.merge_code = 0
         self.failing: dict[str, int] = {}
         self.calls: list[tuple[str, ...]] = []
-        patcher = patch.object(merge_check, "gh", side_effect=self.fake)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        # Tests may run inside an issue checkout; the refusal has its own test.
-        outside = patch.object(worktree, "inside_checkout", return_value=False)
-        outside.start()
-        self.addCleanup(outside.stop)
+        for target, name, fake in (
+            (merge_check, "gh", self.fake),
+            (merge_check, "fetch", lambda *_: self.tip),
+            # Tests may run inside an issue checkout; the refusal has its own test.
+            (worktree, "inside_checkout", lambda: False),
+        ):
+            patcher = patch.object(target, name, side_effect=fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def write(self, files: dict[str, str | None]) -> None:
+        for path, text in files.items():
+            target = self.root / path
+            if text is None:
+                target.unlink()
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+
+    def change(self, files: dict[str, str | None]) -> str:
+        """Make the PR head one commit on the base changing files."""
+        git(self.root, "checkout", "-q", "-B", "pr", self.base)
+        self.write(files)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "pr")
+        self.head = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "checkout", "-q", "main")
+        self.pr["headRefOid"] = self.head
+        self.files: list = [{"filename": path} for path in files]
+        self.pr["changedFiles"] = len(self.files)
+        return self.head
+
+    def advance_target(self, files: dict[str, str | None]) -> None:
+        """Land a concurrent change on the target branch after the PR forked."""
+        self.write(files)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "concurrent")
+        self.tip = git(self.root, "rev-parse", "HEAD")
+
+    def r1(self, entries: str = DELTA, **approval_fields: str) -> None:
+        """Make an R1 PR adding scenario Second, its delta posted and approved."""
+        self.change({"docs/specs/cap.md": SPEC + SECOND, "tools/a.py": "x = 1\n"})
+        self.pr["body"] = body("R1")
+        self.issue = {"body": "Risk: R1"}
+        self.comments = [delta(entries), approval(entries, **approval_fields)]
 
     def fake(self, *args: str) -> subprocess.CompletedProcess:
         self.calls.append(args)
@@ -69,6 +213,9 @@ class MergeCheckTests(unittest.TestCase):
             output = json.dumps(self.rules)
         elif args[0] == "api" and "/branches/" in args[1]:
             output = json.dumps(self.branch)
+        elif args[0] == "api" and "/issues/" in args[1]:
+            comments = args[1].endswith("/comments?per_page=100")
+            output = json.dumps([self.comments] if comments else self.issue)
         elif args[0] == "api":
             # --paginate --slurp: one array per page of up to 100 files.
             pages = [self.files[i : i + 100] for i in range(0, len(self.files), 100)]
@@ -84,83 +231,253 @@ class MergeCheckTests(unittest.TestCase):
                 code = failure
         return subprocess.CompletedProcess(["gh", *args], code, output, "")
 
-    def check(self, verdict: str = "approved", risk: str = "R0", *exclude: str) -> dict:
-        arguments = ["--repo", "example/fixture", "--pr", "7"]
-        arguments += ["--reviewed-head", HEAD, "--verdict", verdict, "--risk", risk]
-        for pattern in exclude:
-            arguments += ["--exclude", pattern]
-        return merge_check.check(merge_check.parser().parse_args(arguments))
+    def arguments(self, verdict: str, risk: str, *extra: str) -> list[str]:
+        arguments = ["--repo", REPO, "--pr", "7", "--root", str(self.root)]
+        arguments += ["--reviewed-head", self.head, "--verdict", verdict]
+        return [*arguments, "--risk", risk, *extra]
 
-    def refuses(self, reason: str, **arguments: str) -> None:
-        with self.assertRaises(admission.FixedReasonError) as raised:
-            self.check(**arguments)
-        self.assertIn(reason, str(raised.exception))
+    def check(self, verdict: str = "approved", risk: str = "R0", *extra: str) -> dict:
+        args = merge_check.parser().parse_args(self.arguments(verdict, risk, *extra))
+        return merge_check.check(args)
+
+    def verdict(self, expected: str, reason: str, *args: str) -> dict:
+        result = self.check(*args) if args else self.check()
+        self.assertEqual(result["verdict"], expected, result)
+        level = result.get(expected.lower(), [])
+        self.assertTrue(any(reason in item["reason"] for item in level), result)
+        self.assertNotIn("merge", result)
         self.assertFalse([call for call in self.calls if call[:2] == ("pr", "merge")])
+        return result
+
+    def blocks(self, reason: str, *args: str) -> dict:
+        return self.verdict("BLOCK", reason, *args)
+
+    def human(self, reason: str, *args: str) -> dict:
+        return self.verdict("HUMAN", reason, *args)
+
+    def merges(self, *args: str) -> dict:
+        result = self.check(*args) if args else self.check()
+        self.assertEqual(result["verdict"], "MERGE", result)
+        return result
+
+    # MERGE
 
     def test_prints_exact_squash_merge_pinned_to_reviewed_head(self) -> None:
         self.assertEqual(
-            self.check()["merge"],
+            self.merges()["merge"],
             [
                 "gh",
                 "pr",
                 "merge",
                 "7",
                 "--repo",
-                "github.com/example/fixture",
+                f"github.com/{REPO}",
                 "--squash",
                 "--match-head-commit",
-                HEAD,
+                self.head,
             ],
         )
 
-    def test_refuses_unapproved_verdict(self) -> None:
-        self.refuses("did not approve", verdict="changes_required")
+    def test_r1_with_approved_conformant_covered_spec_merges(self) -> None:
+        self.r1()
+        result = self.merges("approved", "R1")
+        self.assertEqual(result["spec"]["hash"], digest(DELTA))
+        self.assertEqual(result["spec"]["approval"], f"{URL}#issuecomment-102")
 
-    def test_refuses_risk_the_reviewer_did_not_confirm_as_r0(self) -> None:
-        self.refuses("did not confirm R0", risk="R1")
+    def test_r0_adding_spec_entries_only_merges(self) -> None:
+        self.change({"docs/specs/cap.md": SPEC + SECOND})
+        self.merges()
+
+    # BLOCK
+
+    def test_refuses_unapproved_verdict(self) -> None:
+        self.blocks("did not approve", "changes_required")
 
     def test_refuses_short_reviewed_head(self) -> None:
-        with self.assertRaises(admission.FixedReasonError):
-            merge_check.check(
-                merge_check.parser().parse_args(
-                    [
-                        "--repo",
-                        "example/fixture",
-                        "--pr",
-                        "7",
-                        "--reviewed-head",
-                        "abc",
-                        "--verdict",
-                        "approved",
-                        "--risk",
-                        "R0",
-                    ]
-                )
-            )
+        self.head = "abc"
+        self.blocks("full commit SHA")
 
     def test_refuses_head_changed_after_review(self) -> None:
         self.pr["headRefOid"] = "b" * 40
-        self.refuses("differs from the reviewed head")
+        self.blocks("review is stale")
 
     def test_refuses_draft(self) -> None:
         self.pr["isDraft"] = True
-        self.refuses("draft")
+        self.blocks("draft")
 
     def test_refuses_closed(self) -> None:
         self.pr["state"] = "MERGED"
-        self.refuses("not open")
+        self.blocks("not open")
 
-    def test_refuses_pr_body_without_only_r0_ticked(self) -> None:
-        for body in ("- [ ] R0\n", BODY + "- [x] R2\n", ""):
-            self.pr["body"] = body
-            self.refuses("tick R0")
+    def test_refuses_pr_body_without_exactly_one_risk_ticked(self) -> None:
+        for text in ("- [ ] R0\n", body("R0") + "- [x] R2\n", ""):
+            self.pr["body"] = text
+            self.blocks("exactly one risk")
+
+    def test_refuses_missing_failing_or_pending_required_checks(self) -> None:
+        # One required check passed, the other never started.
+        self.checks = [{"name": "lint", "bucket": "pass"}]
+        self.blocks("has not reported")
+        for bucket in ("fail", "pending", "skipping", "cancel"):
+            self.checks = [
+                {"name": "lint", "bucket": "pass"},
+                {"name": "test", "bucket": bucket},
+            ]
+            self.blocks("not green")
+        # A rerun that is still pending blocks even if an earlier run passed.
+        self.checks = [
+            {"name": "lint", "bucket": "pass"},
+            {"name": "test", "bucket": "pass"},
+            {"name": "test", "bucket": "pending"},
+        ]
+        self.blocks("not green")
+
+    def test_reads_required_checks_from_rulesets_and_protection(self) -> None:
+        self.branch = {
+            "name": "main",
+            "protection": {"required_status_checks": {"contexts": ["legacy"]}},
+        }
+        self.blocks("has not reported")
+        self.checks.append({"name": "legacy", "bucket": "pass"})
+        self.merges()
+        self.rules, self.branch = [[]], {"name": "main"}
+        self.blocks("No required checks are configured")
+
+    def test_refuses_failed_github_reads_even_with_parseable_output(self) -> None:
+        # A failed paginated rules read printed only its first page: "test" is
+        # missing from the required set, but the exit code refuses it.
+        self.rules = [
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "lint"}]},
+                }
+            ]
+        ]
+        self.checks = [{"name": "lint", "bucket": "pass"}]
+        for marker in ("/rules/branches/", "/branches/main", "/files", "pr view"):
+            self.failing = {marker: 1}
+            self.blocks("GitHub read failed")
+        for marker in ("/issues/5", "/comments"):
+            self.failing = {marker: 1}
+            self.blocks("GitHub read failed")
+        # gh pr checks reports failures and pending checks with 1 and 8.
+        self.failing = {"pr checks": 4}
+        self.blocks("GitHub read failed")
+
+    def test_refuses_unreadable_base_rules(self) -> None:
+        for rules in (
+            {"message": "Not Found"},
+            [[3]],
+            [[{"type": "required_status_checks"}]],
+        ):
+            self.rules = rules
+            self.blocks("unreadable")
+        self.rules = [[]]
+        self.branch = {"message": "Branch not found"}
+        self.blocks("unreadable")
+        self.branch = {"name": "main"}
+        self.pr["baseRefName"] = "../x"
+        self.blocks("base branch is malformed")
+
+    def test_refuses_unreadable_github_response(self) -> None:
+        self.pr["closingIssuesReferences"] = "#5"
+        self.blocks("malformed")
+        self.pr["closingIssuesReferences"] = ["#5"]
+        self.blocks("malformed")
+        self.pr = "not a pr"  # type: ignore[assignment]
+        self.blocks("malformed")
+
+    def test_refuses_malformed_file_entries(self) -> None:
+        for entry in (
+            {},
+            {"filename": None},
+            {"filename": ""},
+            {"filename": 3},
+            {"filename": "docs/x.md", "previous_filename": None},
+            "docs/x.md",
+        ):
+            self.files = [entry]
+            self.blocks("malformed")
+
+    def test_refuses_truncated_file_list(self) -> None:
+        self.pr["changedFiles"] = 101
+        self.blocks("incomplete")
+
+    def test_r1_without_approval_blocks(self) -> None:
+        self.r1()
+        self.comments = [delta(DELTA)]
+        self.blocks("needs an approved spec delta", "approved", "R1")
+
+    def test_r1_changing_no_spec_needs_an_approved_empty_delta(self) -> None:
+        self.r1()
+        self.change({"tools/a.py": "x = 1\n"})
+        self.blocks("Spec hash mismatch", "approved", "R1")
+        self.comments = [delta(EMPTY_DELTA), approval(EMPTY_DELTA)]
+        self.merges("approved", "R1")
+
+    def test_hash_mismatch_blocks(self) -> None:
+        self.r1()
+        self.change(
+            {
+                "docs/specs/cap.md": SPEC + SECOND.replace("w follows", "v follows"),
+                "tools/a.py": "x = 1\n",
+            }
+        )
+        self.blocks("Spec hash mismatch", "approved", "R1")
+
+    def test_edited_approval_or_delta_after_approval_blocks(self) -> None:
+        self.r1(updated="2026-10-21T12:00:00Z")
+        self.blocks("edited after the approval", "approved", "R1")
+        self.r1()
+        self.comments[0] = delta(DELTA, updated="2026-10-21T11:30:00Z")
+        self.blocks("edited after the approval", "approved", "R1")
+        # A delta edited before the approval was approved as it stood.
+        self.comments[0] = delta(DELTA, updated="2026-10-21T10:30:00Z")
+        self.merges("approved", "R1")
+
+    def test_stale_delta_blocks(self) -> None:
+        # The target branch changed the base text of a modified scenario.
+        changed = SPEC.replace("y follows", "y follows quickly")
+        self.change({"docs/specs/cap.md": changed})
+        self.advance_target({"docs/specs/cap.md": SPEC.replace("y follows", "y ends")})
+        self.blocks("delta is stale")
+        # Or already has an entry this PR adds.
+        self.setUp()
+        self.r1()
+        self.advance_target({"docs/specs/cap.md": SPEC + SECOND})
+        self.blocks("delta is stale", "approved", "R1")
+
+    def test_merge_refused_by_github_is_reported(self) -> None:
+        self.merge_code = 1
+        args = merge_check.parser().parse_args(
+            self.arguments("approved", "R0", "--merge")
+        )
+        result = merge_check.run(args)
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertNotIn("merged", result)
+
+    # HUMAN
+
+    def test_r2_needs_a_human(self) -> None:
+        self.pr["body"] = body("R2")
+        self.issue = {"body": "Risk: R2"}
+        self.human("R2 PR needs a human merge", "approved", "R2")
+
+    def test_disputed_risk_needs_a_human(self) -> None:
+        self.r1()
+        self.pr["body"] = body("R0")
+        self.human("risk is disputed", "approved", "R1")
+        self.setUp()
+        self.pr["body"] = body("R1")
+        self.human("risk is disputed", "approved", "R0")
 
     def test_refuses_release_and_dependency_prs(self) -> None:
         self.pr["headRefName"] = "release-please--branches--main"
-        self.refuses("Release and dependency")
+        self.human("Release and dependency")
         self.pr["headRefName"] = "docs/7-typo"
         self.pr["author"] = {"login": "dependabot", "is_bot": True}
-        self.refuses("Release and dependency")
+        self.human("Release and dependency")
 
     def test_refuses_excluded_paths(self) -> None:
         for path in (
@@ -179,152 +496,175 @@ class MergeCheckTests(unittest.TestCase):
         ):
             self.files = [{"filename": "docs/guide.md"}, {"filename": path}]
             self.pr["changedFiles"] = 2
-            self.refuses("workflow, release or dependency")
+            result = self.human("workflow, release, dependency or human-only")
+            self.assertIn(path, result["handoff"]["risky_paths"])
 
     def test_refuses_project_excluded_paths(self) -> None:
-        self.files = [{"filename": "deploy/values.yaml"}]
-        self.assertIn("merge", self.check())
-        with self.assertRaises(admission.FixedReasonError) as raised:
-            self.check("approved", "R0", "deploy/*")
-        self.assertIn("workflow, release or dependency", str(raised.exception))
+        self.files = [{"filename": "docs/deploy/values.yaml"}]
+        self.merges()
+        self.human("human-only", "approved", "R0", "--exclude", "docs/deploy/*")
 
-    def test_refuses_malformed_file_entries(self) -> None:
-        for entry in (
-            {},
-            {"filename": None},
-            {"filename": ""},
-            {"filename": 3},
-            {"filename": "docs/x.md", "previous_filename": None},
-            "docs/x.md",
-        ):
-            self.files = [entry]
-            self.refuses("malformed")
+    def test_human_only_globs_come_from_the_target_branch(self) -> None:
+        self.change({"tools/gate.py": "x = 1\n"})
+        self.human("human-only")
+        # Removing the glob in the PR changes nothing: the base globs judge it.
+        self.change({"project/workflow.md": "", "tools/gate.py": "x = 1\n"})
+        result = self.human("human-only")
+        self.assertIn("tools/gate.py", result["handoff"]["risky_paths"])
 
     def test_refuses_renames_from_excluded_paths(self) -> None:
-        for old in (".github/workflows/ci.yml", "requirements.txt", "deploy/app.yaml"):
+        for old in (".github/workflows/ci.yml", "requirements.txt", "tools/gate.py"):
             self.files = [{"filename": "docs/archived", "previous_filename": old}]
-            with self.assertRaises(admission.FixedReasonError) as raised:
-                self.check("approved", "R0", "deploy/*")
-            self.assertIn("workflow, release or dependency", str(raised.exception))
+            self.human("human-only")
         self.files = [{"filename": "docs/b.md", "previous_filename": "docs/a.md"}]
-        self.assertIn("merge", self.check())
+        self.merges()
 
     def test_reads_every_page_of_files(self) -> None:
         self.files = [{"filename": f"docs/{n}.md"} for n in range(150)]
         self.files.append({"filename": "uv.lock"})
         self.pr["changedFiles"] = 151
-        self.refuses("workflow, release or dependency")
+        self.human("workflow, release, dependency")
 
-    def test_refuses_truncated_file_list(self) -> None:
-        self.pr["changedFiles"] = 101
-        self.refuses("incomplete")
+    def test_closing_issue_and_its_risk_set_the_floor(self) -> None:
+        self.pr["closingIssuesReferences"] = []
+        self.human("closes no issue")
+        self.setUp()
+        self.issue = {"body": "No risk line"}
+        self.human("no single parseable `Risk:` line")
+        self.setUp()
+        self.pr["closingIssuesReferences"][0]["repository"]["name"] = "other"
+        self.human("outside this repository")
+        self.setUp()
+        self.issue = {"body": "Risk: R1"}
+        self.human("below the closing issue's R1")
 
-    def test_refuses_missing_failing_or_pending_required_checks(self) -> None:
-        # One required check passed, the other never started.
-        self.checks = [{"name": "lint", "bucket": "pass"}]
-        self.refuses("has not reported")
-        for bucket in ("fail", "pending", "skipping", "cancel"):
-            self.checks = [
-                {"name": "lint", "bucket": "pass"},
-                {"name": "test", "bucket": bucket},
-            ]
-            self.refuses("not green")
-        # A rerun that is still pending blocks even if an earlier run passed.
-        self.checks = [
-            {"name": "lint", "bucket": "pass"},
-            {"name": "test", "bucket": "pass"},
-            {"name": "test", "bucket": "pending"},
-        ]
-        self.refuses("not green")
+    def test_approved_risk_raises_the_floor(self) -> None:
+        self.r1(risk="R2")
+        self.human("below the closing issue's R2", "approved", "R1")
 
-    def test_reads_required_checks_from_rulesets_and_protection(self) -> None:
-        self.branch = {
-            "name": "main",
-            "protection": {"required_status_checks": {"contexts": ["legacy"]}},
-        }
-        self.refuses("has not reported")
-        self.checks.append({"name": "legacy", "bucket": "pass"})
-        self.assertIn("merge", self.check())
-        self.rules, self.branch = [[]], {"name": "main"}
-        self.refuses("No required checks are configured")
+    def test_uncovered_changed_path_needs_a_human(self) -> None:
+        self.r1()
+        self.change({"docs/specs/cap.md": SPEC + SECOND, "tools/b.py": ""})
+        result = self.human("no spec covers", "approved", "R1")
+        self.assertEqual(result["handoff"]["risky_paths"], ["tools/b.py"])
 
-    def test_refuses_failed_github_reads_even_with_parseable_output(self) -> None:
-        # A failed paginated rules read printed only its first page: "test" is
-        # missing from the required set, but the exit code refuses it.
-        self.rules = [
-            [
-                {
-                    "type": "required_status_checks",
-                    "parameters": {"required_status_checks": [{"context": "lint"}]},
-                }
-            ]
-        ]
-        self.checks = [{"name": "lint", "bucket": "pass"}]
-        for marker in ("/rules/branches/", "/branches/main", "/files", "pr view"):
-            self.failing = {marker: 1}
-            self.refuses("GitHub read failed")
-        # gh pr checks reports failures and pending checks with 1 and 8.
-        self.failing = {"pr checks": 4}
-        self.refuses("GitHub read failed")
+    def test_r0_changing_a_covered_path_needs_a_human(self) -> None:
+        self.change({"tools/a.py": "x = 1\n"})
+        self.human("R0 PR changes paths a spec covers")
 
-    def test_refuses_unreadable_base_rules(self) -> None:
-        for rules in (
-            {"message": "Not Found"},
-            [[3]],
-            [[{"type": "required_status_checks"}]],
-        ):
-            self.rules = rules
-            self.refuses("unreadable")
-        self.rules = [[]]
-        self.branch = {"message": "Branch not found"}
-        self.refuses("unreadable")
-        self.branch = {"name": "main"}
-        self.pr["baseRefName"] = "../x"
-        self.refuses("base branch is malformed")
+    def test_r0_modifying_or_removing_a_spec_entry_needs_a_human(self) -> None:
+        self.change({"docs/specs/cap.md": SPEC.replace("y follows", "y ends")})
+        self.human("R0 PR modifies or removes a spec entry")
+        self.change({"docs/specs/cap.md": SPEC.split("#### Scenario", maxsplit=1)[0]})
+        self.human("R0 PR modifies or removes a spec entry")
 
-    def test_refuses_unreadable_github_response(self) -> None:
-        self.pr = "not a pr"  # type: ignore[assignment]
-        self.refuses("malformed")
+    def test_missing_or_malformed_workflow_on_target_needs_a_human(self) -> None:
+        for text in (None, "- Human-only: tools/gate.py\n", "Human-only:\n"):
+            self.setUp()
+            self.advance_target({"project/workflow.md": text})
+            self.human("missing or malformed")
 
-    def test_merge_only_with_explicit_flag(self) -> None:
-        args = merge_check.parser().parse_args(
-            [
-                "--repo",
-                "example/fixture",
-                "--pr",
-                "7",
-                "--reviewed-head",
-                HEAD,
-                "--verdict",
-                "approved",
-                "--risk",
-                "R0",
-            ]
+    def test_handoff_lists_paths_spec_and_findings(self) -> None:
+        self.r1()
+        self.pr["body"] = body("R2")
+        self.issue = {"body": "Risk: R2"}
+        self.comments = [delta(DELTA), approval(DELTA, risk="R2")]
+        self.change({"docs/specs/cap.md": SPEC + SECOND, "tools/gate.py": "x\n"})
+        result = self.human("R2", "approved", "R2", "--finding", "minor: naming")
+        handoff = result["handoff"]
+        self.assertEqual(handoff["risky_paths"], ["tools/gate.py"])
+        self.assertEqual(handoff["approved_spec"]["hash"], digest(DELTA))
+        self.assertEqual(handoff["approved_spec"]["delta"], f"{URL}#issuecomment-101")
+        self.assertEqual(handoff["review_findings"], ["minor: naming"])
+
+    # Precedence
+
+    def test_block_takes_precedence_over_human_and_human_over_merge(self) -> None:
+        self.pr["body"] = body("R2")
+        self.issue = {"body": "Risk: R2"}
+        result = self.human("R2", "approved", "R2")
+        self.assertNotIn("block", result)
+        self.pr["isDraft"] = True
+        result = self.blocks("draft", "approved", "R2")
+        self.assertTrue(result["human"])
+
+    # Ballast's own project/workflow.md
+
+    def ballast(self) -> None:
+        """Use Ballast's own project/workflow.md on the target branch."""
+        text = (BALLAST / "project/workflow.md").read_text(encoding="utf-8")
+        self.advance_target(
+            {
+                "project/workflow.md": text,
+                "docs/specs/cap.md": SPEC.replace("tools/a.py", "tools/dashboard.py"),
+            }
         )
+        self.base = self.tip
+
+    def test_ballast_gate_surfaces_need_a_human(self) -> None:
+        self.ballast()
+        for path in (
+            "tools/merge_check.py",
+            "tools/spec_check.py",
+            "tools/pr_body.py",
+            "tools/admission.py",
+            "tools/coordinate.py",
+            "tools/worker.py",
+            "tools/worktree.py",
+            "tools/codex.py",
+            "tools/spec_approval.py",
+            "tools/cli.py",
+            "tools/progress.py",
+            "tests/parallel.py",
+            "project/workflow.md",
+            "AGENTS.md",
+            "docs/adr/0027-x.md",
+            "templates/policies/workflow.md",
+            "templates/skills/ballast-test-review/SKILL.md",
+        ):
+            self.change({path: "changed\n"})
+            self.human("human-only")
+
+    def test_covered_ballast_r1_pr_merges(self) -> None:
+        self.ballast()
+        self.change(
+            {
+                "docs/specs/cap.md": SPEC.replace("tools/a.py", "tools/dashboard.py")
+                + SECOND,
+                "tools/dashboard.py": "x = 1\n",
+                "tests/test_dashboard.py": "",
+            }
+        )
+        self.pr["body"] = body("R1")
+        self.issue = {"body": "Risk: R1"}
+        self.comments = [delta(DELTA), approval(DELTA)]
+        self.merges("approved", "R1")
+
+    # Merge
+
+    def test_merge_only_on_merge_and_with_explicit_flag(self) -> None:
+        args = merge_check.parser().parse_args(self.arguments("approved", "R0"))
         self.assertNotIn("merged", merge_check.run(args))
         self.assertFalse([call for call in self.calls if call[:2] == ("pr", "merge")])
         args.merge = True
-        self.assertTrue(merge_check.run(args)["merged"])
-        self.assertEqual(
-            self.calls[-1][:3] + self.calls[-1][-2:],
-            ("pr", "merge", "7", "--match-head-commit", HEAD),
-        )
+        result = merge_check.run(args)
+        self.assertTrue(result["merged"])
+        merge = next(call for call in self.calls if call[:2] == ("pr", "merge"))
+        self.assertEqual(merge[-2:], ("--match-head-commit", self.head))
+        note = self.calls[-1]
+        self.assertEqual(note[:3], ("pr", "comment", "7"))
+        self.assertIn("under ADR-0027", note[-1])
+        self.assertIn("not a human approval", note[-1])
+        self.assertTrue(result["noted"])
+        # A HUMAN verdict never merges, even with --merge.
+        self.calls.clear()
+        self.pr["body"] = body("R2")
+        self.assertEqual(merge_check.run(args)["verdict"], "HUMAN")
+        self.assertFalse([call for call in self.calls if call[:2] == ("pr", "merge")])
 
     def test_refuses_to_run_inside_an_issue_checkout(self) -> None:
         args = merge_check.parser().parse_args(
-            [
-                "--repo",
-                "example/fixture",
-                "--pr",
-                "7",
-                "--reviewed-head",
-                HEAD,
-                "--verdict",
-                "approved",
-                "--risk",
-                "R0",
-                "--merge",
-            ]
+            self.arguments("approved", "R0", "--merge")
         )
         with (
             patch.object(worktree, "inside_checkout", return_value=True),
@@ -332,26 +672,6 @@ class MergeCheckTests(unittest.TestCase):
         ):
             merge_check.run(args)
         self.assertEqual(self.calls, [])
-
-    def test_merge_refused_by_github_is_reported(self) -> None:
-        self.merge_code = 1
-        args = merge_check.parser().parse_args(
-            [
-                "--repo",
-                "example/fixture",
-                "--pr",
-                "7",
-                "--reviewed-head",
-                HEAD,
-                "--verdict",
-                "approved",
-                "--risk",
-                "R0",
-                "--merge",
-            ]
-        )
-        with self.assertRaises(admission.FixedReasonError):
-            merge_check.run(args)
 
 
 if __name__ == "__main__":
