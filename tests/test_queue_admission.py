@@ -1317,11 +1317,18 @@ class QueueTests(unittest.TestCase):
 
     @unittest.skipUnless(Path("/proc/self/comm").exists(), "Linux /proc required")
     def test_non_utf8_process_name_is_still_named(self) -> None:
-        code = "import time; open('/proc/self/comm', 'wb').write(b'\\xffbad')"
-        process = subprocess.Popen([sys.executable, "-c", f"{code}; time.sleep(30)"])  # noqa: S603
+        # The child reports its rename on a pipe: no sleep races a loaded host.
+        code = (
+            "import sys, time; open('/proc/self/comm', 'wb').write(b'\\xffbad'); "
+            "print('renamed', flush=True); time.sleep(30)"
+        )
+        process = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-c", code], stdout=subprocess.PIPE, text=True
+        )
+        self.addCleanup(process.stdout.close)
         self.addCleanup(process.wait)
         self.addCleanup(process.kill)
-        time.sleep(0.3)
+        self.assertEqual(process.stdout.readline(), "renamed\n")
         self.assertRegex(worker.describe([process.pid]), rf"^{process.pid} \(.bad\)$")
 
     def test_survivor_names_are_bounded(self) -> None:
