@@ -217,8 +217,8 @@ The reviewer may inspect and run checks but does not edit the author's branch.
 An earlier plan review does not replace this review of the implemented change.
 
 Fix actionable findings, rerun affected checks, and request review of the updated
-head. For a disputed finding, record the evidence and request pair reassessment;
-the author cannot dismiss a blocker alone. Escalate product disagreements to the
+head. For a disputed finding, record the evidence, with a `file:line` citation in the
+diff, and request pair reassessment; the author cannot dismiss a blocker alone. Escalate product disagreements to the
 human. Repair-round scope, nonblocking findings and the round limit are in
 [pair-review.md](pair-review.md#repair-rounds). Missing check evidence is
 fixed by the coordinator running the check, not by a code change
@@ -238,7 +238,12 @@ head in the PR body, with a link to detailed findings when available. Before
 creating or editing the PR, run the PR body check on the body file
 (`python3 -I -S .github/scripts/pr_body.py --body-file FILE` in an adopting
 project, `tools/pr_body.py` in Ballast) and publish nothing while it fails; an R2
-body without its approval comment link fails it.
+body without its approval comment link fails it. An R1 or R2 body needs a
+`## Spec` section with `Spec hash:` (the `spec_check.py --diff-hash` of the PR,
+which is the approved hash; a PR changing no spec states its approved empty
+delta's) and the link to the `Spec approved:` comment; a reviewer cannot waive
+it. CI compares that hash with the PR's `docs/specs/` diff as early feedback;
+the merge verdict recomputes it from the reviewed head.
 
 Check required CI and merge status after publication. Resolve failures introduced
 by this change. If the branch changes to resolve conflicts, rerun affected checks

@@ -37,6 +37,11 @@ DELTA_ENTRY = re.compile(
 )
 BASE_MARK = re.compile(r"^Base:[ \t]*$")
 RESULT_MARK = re.compile(r"^Result:[ \t]*$")
+SPEC_SECTION = re.compile(
+    r"^##[ \t]+Spec[ \t]*$(.*?)(?=^##[ \t]|\Z)", re.MULTILINE | re.DOTALL
+)
+SPEC_HASH = re.compile(r"^[ \t]*Spec hash:[ \t]*([0-9a-f]{64})\b", re.MULTILINE)
+COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 class SpecError(Exception):
@@ -513,8 +518,57 @@ def delta_hash(entries: list[dict]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def stated_hashes(body: str) -> list[str]:
+    """Return the `Spec hash:` values of a PR body's `## Spec` section."""
+    body = COMMENT.sub("", body.replace("\r\n", "\n").replace("\r", "\n"))
+    return [h for s in SPEC_SECTION.findall(body) for h in SPEC_HASH.findall(s)]
+
+
+def conformance(root: Path, base: str, head: str, body: str) -> list[str]:
+    """Return why the three-dot docs/specs/ diff drifts from the stated hash.
+
+    Early feedback only: the PR body is untrusted, and the merge verdict
+    recomputes the hash from the reviewed head (#269). A body stating no hash
+    passes here; `pr_body.py` requires one for R1 and R2.
+    """
+    stated = set(stated_hashes(body))
+    if not stated:
+        sys.stderr.write(
+            "notice: the PR body states no spec hash, nothing to compare\n"
+        )
+        return []
+    if len(stated) > 1:
+        return [f"the Spec section states more than one hash: {sorted(stated)}"]
+    expected = stated.pop()
+    entries = git_delta(root, base, head)
+    computed = delta_hash(entries)
+    if computed == expected:
+        return []
+    found = [f"spec drift: the docs/specs/ diff hashes {computed}, approved {expected}"]
+    if not entries:
+        found.append(
+            "the PR changes no spec: an R1/R2 PR needs an approved empty delta"
+            f" ({computed}); a reviewer cannot waive it"
+        )
+    return found
+
+
+def pull_request_body(event: Path) -> str:
+    """Return the PR body of a GitHub pull_request event payload."""
+    payload = json.loads(event.read_text(encoding="utf-8"))
+    pull_request = payload.get("pull_request") if isinstance(payload, dict) else None
+    if not isinstance(pull_request, dict):
+        message = "event payload has no pull_request"
+        raise SpecError(message)
+    body = pull_request.get("body") or ""
+    if not isinstance(body, str):
+        message = "event payload has a malformed pull_request body"
+        raise SpecError(message)
+    return body
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Check the specs, or print a delta hash."""
+    """Check the specs, print a delta hash, or compare a PR with its spec hash."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path())
     mode = parser.add_mutually_exclusive_group()
@@ -531,9 +585,30 @@ def main(argv: list[str] | None = None) -> int:
         metavar="BASE",
         help="hash the docs/specs/ change from merge-base(BASE, --head) to --head",
     )
+    mode.add_argument(
+        "--conformance",
+        metavar="BASE",
+        help="compare the --diff-hash of BASE with the PR body's `Spec hash:`",
+    )
     parser.add_argument("--head", default="HEAD")
+    body = parser.add_mutually_exclusive_group()
+    body.add_argument("--body-file", type=Path, help="PR body, for --conformance")
+    body.add_argument(
+        "--event-file", type=Path, help="pull_request event, for --conformance"
+    )
     args = parser.parse_args(argv)
+    if bool(args.conformance) != bool(args.body_file or args.event_file):
+        parser.error("--conformance needs exactly one of --body-file, --event-file")
     try:
+        if args.conformance:
+            if args.body_file:
+                text = args.body_file.read_text(encoding="utf-8")
+            else:
+                text = pull_request_body(args.event_file)
+            found = conformance(args.root, args.conformance, args.head, text)
+            for line in found:
+                sys.stderr.write(line + "\n")
+            return 1 if found else 0
         if args.delta_hash:
             text = args.delta_hash.read_text(encoding="utf-8")
             sys.stdout.write(delta_hash(parse_delta(text)) + "\n")
@@ -543,7 +618,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(delta_hash(entries) + "\n")
             return 0
         return check(args.root, args.changed_from)
-    except (SpecError, OSError) as error:
+    except (SpecError, OSError, ValueError) as error:
         sys.stderr.write(f"{error}\n")
         return 2
 

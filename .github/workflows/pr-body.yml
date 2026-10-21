@@ -17,6 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0  # the spec check diffs from merge-base(base, head)
       # The body is read from the event payload file, never interpolated into a command.
       - name: Require the PR template sections, an issue link and one risk box
         run: python3 -I -S tools/pr_body.py --event-file "$GITHUB_EVENT_PATH"
+      # Early feedback only: merge_check.py recomputes the hash from the reviewed head.
+      - name: Compare the PR's docs/specs/ diff hash with the Spec section's hash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python3 -I -S tools/spec_check.py --conformance "$BASE_SHA"
+          --head "$HEAD_SHA" --event-file "$GITHUB_EVENT_PATH"
