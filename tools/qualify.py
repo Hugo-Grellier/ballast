@@ -79,7 +79,8 @@ def git(cwd: Path, *args: str) -> str:
 
 def worker_summary(result: dict) -> dict:
     """Path-free worker evidence."""
-    keys = ("status", "role", "sandbox", "requested", "observed", "client_version")
+    keys = ("status", "role", "sandbox", "checkout_access", "requested", "observed")
+    keys += ("client_version",)
     return {key: result.get(key) for key in (*keys, "head_before", "head_after")}
 
 
@@ -443,7 +444,7 @@ def fake_codex(_: list[str]) -> int:
             "nextCursor": None,
         },
     }
-    sandbox = ""
+    writes = False
     # Tests select a faulty worker to prove the coordinator checks catch it.
     fault = os.environ.get("BALLAST_FAKE_FAULT", "")
     marker = "wrong\n" if fault == "wrong-output" else "qualified\n"
@@ -460,11 +461,12 @@ def fake_codex(_: list[str]) -> int:
         if method in fixed:
             send(id=identifier, result=fixed[method])
         elif method == "thread/start":
-            sandbox = (
-                "readOnly" if params["sandbox"] == "read-only" else "workspaceWrite"
-            )
-            policy = {"type": sandbox, "networkAccess": False, "writableRoots": []}
-            policy |= {"excludeTmpdirEnvVar": True, "excludeSlashTmp": True}
+            # Only an implement thread has an extra root; review works in scratch.
+            roots = params["config"]["sandbox_workspace_write"]["writable_roots"]
+            writes = bool(roots)
+            policy = {"type": "workspaceWrite", "networkAccess": False}
+            policy |= {"writableRoots": roots, "excludeTmpdirEnvVar": True}
+            policy |= {"excludeSlashTmp": True}
             receipt = {
                 "model": params["model"],
                 "reasoningEffort": params["config"]["model_reasoning_effort"],
@@ -473,11 +475,12 @@ def fake_codex(_: list[str]) -> int:
                 "approvalPolicy": "never",
                 "thread": {"id": "fake-thread"},
                 "sandbox": policy,
+                "instructionSources": [],
             }
             send(id=identifier, result=receipt)
         elif method == "turn/start":
             text = f"No findings.\nVerdict: {verdict}"
-            if sandbox == "workspaceWrite":
+            if writes:
                 cwd = Path(params["cwd"])
                 (cwd / ARTIFACT).write_text(marker)
                 unrelated(cwd, fault)
