@@ -9,6 +9,12 @@ example; the rules hold for any agent with a subagent mechanism.
   Do not rely on the agent's built-in worktree isolation: it can refuse git
   commands that a user-level command-rewriting or output-filtering hook has
   altered, which stops every worker at once.
+- **No clone-wide Git state in an issue checkout.** All worktrees of a clone
+  share the stash list, the worktree list and branch refs, so `git stash`,
+  `git worktree` and branch switches in one checkout can lose or swap another
+  agent's work. Tell workers to compare with `git diff BASE` (or an exported
+  copy such as `git archive HEAD`); only the coordinator creates worktrees, with
+  `tools/worktree.py`. `worker.py` puts the same rule in every task handoff.
 - **Embed the issue; do not ask the worker to fetch it.** Output-filtering hooks
   can swallow `gh issue view` and `gh pr view`, and a worker then implements
   from your notes alone. Write the issue body, comments and acceptance criteria
