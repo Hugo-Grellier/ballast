@@ -167,7 +167,11 @@ and record its clean head before review.
 
 Start a separate worker with `--role review` and an explicit route chosen for
 review difficulty. Its task names the exact head, base, issue acceptance and
-review criteria. The helper checks a clean committed head before review and the
+review criteria, and the coordinator's check evidence for that head: each
+command, its result and the revision it ran on. The review worker stays
+read-only with no writable temporary directory, so it cannot run tests that
+create files (Ballast's own do); it may run read-only checks and reports any
+check it could not run under `Verification gaps`. The helper checks a clean committed head before review and the
 same clean head afterward. Read the review's findings and verdict. A completed
 turn is not an approval. Follow [pair review](pair-review.md), repair actionable
 findings within the round limit, and repeat affected checks and independent

@@ -50,6 +50,14 @@ evidence, and `blocked` when missing access or an unresolved decision prevents
 review. With no findings, say so and name what was inspected. Approval covers
 only the reviewed head and scope; it is not a human merge decision.
 
+Checks you cannot run yourself (a read-only reviewer cannot run tests that write
+temporary files) come from the coordinator's check evidence in the task: command,
+result and revision. Use it only when its revision equals the reviewed head;
+otherwise treat the check as missing. Name coordinator-reported checks as such
+under `Verification gaps`; their absence is not a reason for `blocked` when the
+code can otherwise be reviewed. A check that must run before approval and that
+nobody ran is missing evidence: `changes_required`.
+
 Report CI as observed on the exact reviewed SHA; a local gate does not stand in
 for it. `fail` blocks approval. `pending` (no PR yet, or still running) does not
 block approval but is stated under `Verification gaps`. The coordinator confirms
