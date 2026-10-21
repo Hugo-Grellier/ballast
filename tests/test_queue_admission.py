@@ -1028,6 +1028,71 @@ class QueueTests(unittest.TestCase):
         admission.close(self.state, "cancelled run")
         self.assertFalse((self.state / "queue.json").exists())
 
+    def test_another_coordinator_closes_only_a_finished_settled_queue(self) -> None:
+        first = self.queue([55, 56], issues=2)
+        claim = self.prepare(55)
+        path = self.state / "queue.json"
+        successor = patch.dict(os.environ, {"BALLAST_COORDINATOR": "successor"})
+
+        def refused(pattern: str) -> None:
+            before = path.read_text()
+            with successor, self.assertRaisesRegex(admission.AdmissionError, pattern):
+                admission.close(self.state, "ended coordinator")
+            self.assertEqual(path.read_text(), before)
+
+        # Budget left: refused however old the claims are; never reset by close.
+        refused("queue's coordinator reference")
+        policy = json.loads(path.read_text())
+        (self.state / "queue.json").write_text(
+            json.dumps({**policy, "deadline": time.time() - 1})
+        )
+        # A new session's claim and selection name the stale queue and `close`.
+        stale = rf"{first['id']}.*'lead'.*close --reason"
+        with successor:
+            with self.assertRaisesRegex(admission.AdmissionError, stale):
+                self.prepare(56)
+            self.assertRegex(coordinate.select(self.repo)["halted"], stale)
+        self.assertFalse((self.state / "issue-56.json").exists())
+        for activity in ("active", "unknown", "pr_wait"):
+            record = json.loads(claim.read_text())
+            claim.write_text(json.dumps({**record, "activity": activity}))
+            refused("awaiting merge")
+        record = json.loads(claim.read_text())
+        claim.write_text(json.dumps({**record, "activity": "stopped"}))
+        lock = self.state / "issue-99.worker"
+        lock.write_text("unknown")
+        refused("worker lock")
+        lock.unlink()
+        # An unset or empty caller never closes, even a finished queue.
+        for caller in ("", None):
+            with patch.dict(os.environ, {"BALLAST_COORDINATOR": caller or ""}):
+                if caller is None:
+                    del os.environ["BALLAST_COORDINATOR"]
+                with self.assertRaisesRegex(admission.AdmissionError, "reference"):
+                    admission.close(self.state, "ended coordinator")
+        with successor:
+            closed = admission.close(self.state, "ended coordinator")
+        self.assertEqual(
+            closed["history"][-1],
+            {
+                **closed["history"][-1],
+                "event": "closed",
+                "closed_by": "successor",
+                "previous_coordinator": "lead",
+            },
+        )
+        archive = json.loads((self.state / f"queue-{first['id']}.json").read_text())
+        self.assertEqual(archive["coordinator"], "lead")
+        self.assertFalse(path.exists())
+
+    def test_cancelled_queue_selection_names_close(self) -> None:
+        self.queue([57])
+        admission.control(self.state, "cancelled", "operator stop")
+        self.assertIn("close --reason", coordinate.select(self.repo)["halted"])
+        closed = admission.close(self.state, "cancelled run")
+        self.assertNotIn("previous_coordinator", closed["history"][-1])
+        self.assertEqual(closed["history"][-1]["closed_by"], "lead")
+
     def test_pre_queue_claim_needs_no_coordinator(self) -> None:
         claim = self.prepare(48)
         claim.with_suffix(".worker").write_text("fixture-worker")
