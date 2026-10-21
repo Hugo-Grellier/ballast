@@ -78,6 +78,9 @@ class LiveModeTests(unittest.TestCase):
         def recorder(argv: list[str], _: Path) -> str:
             self.calls.append(argv)
             if argv[:3] == ["gh", "repo", "view"] and argv[-1] == "id":
+                if "id" in self.failing:
+                    message = "fictional lost response"
+                    raise qualify.QualificationError(message)
                 return json.dumps({"id": "R_fictional1"})
             if argv[:3] == ["gh", "repo", "view"] and not self.exists:
                 message = "fictional missing repository"
@@ -156,6 +159,22 @@ class LiveModeTests(unittest.TestCase):
                 f"gh issue close 7 --repo {repo}",
             ],
         )
+        self.assertEqual(self.deletes(), [])
+
+    def test_existing_ledger_is_never_overwritten(self) -> None:
+        self.ledger.write_text('{"repository": "earlier run"}\n')
+        with self.assertRaisesRegex(qualify.QualificationError, "already exists"):
+            qualify.live(self.args("owner/ballast-qualification-x"))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ledger.read_text(), '{"repository": "earlier run"}\n')
+
+    def test_creation_is_recorded_before_the_id_lookup(self) -> None:
+        self.exists = False
+        self.failing = {"id"}  # The id lookup fails after creation.
+        with self.assertRaises(qualify.QualificationError):
+            qualify.live(self.args("owner/ballast-qualification-x"))
+        ledger = json.loads(self.ledger.read_text())
+        self.assertEqual((ledger["created"], ledger["id"]), (True, None))
         self.assertEqual(self.deletes(), [])
 
     def test_failed_run_deletes_nothing_and_keeps_its_ledger(self) -> None:

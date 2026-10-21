@@ -3,7 +3,8 @@
 `local` runs every helper as a subprocess against a fake Codex app-server and a
 fake `gh` in a throwaway clone: no network, model, account or approval. `live`
 runs the same path against the installed Codex and GitHub on an operator-named
-disposable repository and cleans up only what its ledger records it created.
+disposable repository. It deletes nothing: its ledger records what it created
+and it prints the commands that would remove it, for the operator to run.
 """
 
 from __future__ import annotations
@@ -238,21 +239,27 @@ def repository_id(repo: str, cwd: Path) -> str:
 
 
 def ensure_repository(repo: str, ledger: Path, cwd: Path) -> dict:
-    """Reuse an existing disposable repository or create and record a new one."""
-    created = False
-    try:
-        run(["gh", "repo", "view", repo, "--json", "name"], cwd)
-    except QualificationError:
-        run(["gh", "repo", "create", repo, "--private", "--add-readme"], cwd)
-        created = True
-    # The id lets the operator confirm a later deletion targets this repository.
+    """Reuse an existing disposable repository or create and record a new one.
+
+    The ledger is written before each external effect, so a failure after
+    `gh repo create` still records the attempt; `id` stays null until GitHub
+    identifies the repository.
+    """
     record = {
         "repository": repo,
-        "id": repository_id(repo, cwd),
-        "created": created,
+        "id": None,
+        "created": False,
         "issues": [],
         "branches": [],
     }
+    try:
+        run(["gh", "repo", "view", repo, "--json", "name"], cwd)
+    except QualificationError:
+        record["created"] = True
+        save(ledger, record)
+        run(["gh", "repo", "create", repo, "--private", "--add-readme"], cwd)
+    # The id lets the operator confirm a later deletion targets this repository.
+    record["id"] = repository_id(repo, cwd)
     save(ledger, record)
     return record
 
@@ -278,6 +285,10 @@ def leftovers(record: dict) -> list[str]:
 def live(args: argparse.Namespace) -> dict:
     """Qualify against real Codex and GitHub on a disposable repository."""
     repo = disposable(args.repo, confirmed=args.confirm_disposable)
+    if args.ledger.exists():
+        # An earlier run's ledger is the operator's cleanup record: never reuse it.
+        message = "ledger already exists; pass a new file for each run"
+        raise QualificationError(message)
     workdir = Path(tempfile.mkdtemp(prefix=PREFIX))
     ledger = args.ledger
     record = ensure_repository(repo, ledger, workdir)
