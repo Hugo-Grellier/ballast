@@ -914,8 +914,7 @@ class QueueTests(unittest.TestCase):
             claim.write_text(json.dumps({**record, "activity": activity}))
             with self.assertRaisesRegex(admission.AdmissionError, "awaiting merge"):
                 admission.close(self.state, "run finished")
-        record = json.loads(claim.read_text())
-        claim.write_text(json.dumps({**record, "activity": "stopped"}))
+        admission.settle(claim, "stopped", "operator stop")
         lock = self.state / "issue-99.worker"
         lock.write_text("unknown")
         with self.assertRaisesRegex(admission.AdmissionError, "worker lock"):
