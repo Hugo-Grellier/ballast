@@ -239,6 +239,18 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse(self.claim.with_suffix(".worker").exists())
         self.assertEqual((directory / "output.txt").read_text(), "Fictional result")
 
+    def test_handoff_forbids_clone_wide_git_state(self) -> None:
+        # Worktrees of one clone share the stash and branch refs (#235).
+        request = worker.WorkerServer.request
+        with patch.object(
+            worker.WorkerServer, "request", autospec=True, side_effect=request
+        ) as sent:
+            self.assertEqual(self.run_worker(self.script())["status"], "completed")
+        (turn,) = [c.args[2] for c in sent.call_args_list if c.args[1] == "turn/start"]
+        text = turn["input"][0]["text"]
+        for rule in ("git stash", "git worktree", "switching branches", "git diff"):
+            self.assertIn(rule, text)
+
     def test_invalid_routes_and_access_never_dispatch(self) -> None:
         for changes in (
             {"account": "apiKey"},

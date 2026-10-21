@@ -289,6 +289,8 @@ def run_turn(
         "Work only on the assigned task in this checkout. "
         "Do not invoke ballast, spawn agents, change model/provider, access "
         "credentials, publish, merge, or release. "
+        "Do not use clone-wide Git state (git stash, git worktree, switching "
+        "branches): other checkouts share it. Compare with git diff BASE. "
         "Report consequential ambiguity as blocked. "
     )
     turn = server.request(
