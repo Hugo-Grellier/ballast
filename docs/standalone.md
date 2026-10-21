@@ -281,13 +281,20 @@ and any worker lock; settle, release or reconcile them first.
   current order.
 - `retarget --claim CLAIM --evidence TEXT`, after the parent merges: requires
   GitHub to report the parent's recorded PR merged, the parent's base pushed and
-  fetched, the parent's merged head in the child, and no worker lock on the
-  child. It rebases the child `--onto` the base from the parent's merged head
-  (squash merges included; a conflict aborts and changes nothing), records the
-  new base, drops `parent`, moves later stack members up one position, records a
-  `retargeted` milestone with both heads, and moves an existing child PR to the
-  base. It does not push. The new head has no review or check evidence: push it,
-  run a fresh review, then `publish` again; CI runs on the push.
+  fetched, the parent's merged head in the child, and no worker lock or open
+  coordinator execution on the child or any later stack member. It rebases the
+  child `--onto` the base from the parent's merged head (squash merges
+  included), then restacks each later member from its parent's old head onto
+  the parent's new head and records that head as the member's `base_sha`; a
+  conflict anywhere aborts, restores every checkout and changes no record. It
+  records the new base, drops `parent`, moves later members up one position, and
+  records `retargeted` (and `restacked` on later members) milestones with both
+  heads. An existing child PR is marked `retarget_pending` until GitHub reports
+  it on the new base: retarget reads the PR's base and edits it only when it
+  differs, so after a failed or uncertain edit, run `retarget` again; it only
+  reconciles the PR. It does not push. The new heads have no review or check
+  evidence: push them, run fresh reviews, then `publish` again; CI runs on the
+  push.
 - `settle --claim CLAIM ACTIVITY --evidence TEXT` records positive coordinator
   evidence. Allowed moves: `active` to `pr_wait`, `stopped` or `unknown`;
   `unknown` to `stopped` or `active`; `pr_wait` to `active`, `stopped` or

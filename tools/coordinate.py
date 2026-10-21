@@ -719,30 +719,58 @@ def settle(claim: Path, activity: str, evidence: str) -> dict:
 def rebased(
     claim: Path, record: dict, merged_head: str, target: tuple, evidence: str
 ) -> dict:
-    """Rebase the child onto ``target`` under the lock and record the new base."""
+    """Rebase the child onto ``target`` and restack its descendants, under the lock.
+
+    Each descendant moves from its parent's old head onto the parent's new one
+    and records that head as its base revision, so every claim stays valid.
+    """
     base, base_sha = target
-    cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
     with admission.locked(claim.parent):
-        # One writer: the coordinator rewrites the checkout only without a worker.
-        if claim.with_suffix(".worker").exists():
-            worktree.fail("Release or reconcile the recorded worker before retargeting")
         current = admission.read(claim)
         if current.get("attempt") != record["attempt"]:
             worktree.fail("Claim changed during retargeting")
-        before = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
-        try:
-            worktree.git(
-                cwd, "rebase", "--onto", base_sha, merged_head, git_dir=git_dir
-            )
-        except RuntimeError:
-            with contextlib.suppress(RuntimeError):
-                worktree.git(cwd, "rebase", "--abort", git_dir=git_dir)
-            worktree.fail("Rebase stopped on a conflict; the checkout is unchanged")
-        after = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
-        descendants = stack(claim.parent, current)
-        descendants = descendants[descendants.index(current["issue"]) + 1 :]
+        order = stack(claim.parent, current)
+        paths = [claim] + [
+            claim.parent / f"issue-{issue}.json"
+            for issue in order[order.index(current["issue"]) + 1 :]
+        ]
+        items = [admission.read(path) for path in paths]
+        # One writer: rewrite a checkout only without a worker or an execution.
+        for path, item in zip(paths, items, strict=True):
+            if path.with_suffix(".worker").exists() or admission.open_executions(item):
+                worktree.fail(
+                    "Release or reconcile the recorded worker or execution "
+                    "before retargeting"
+                )
+        git_dirs = [Path(worktree.validate(path)["git_dir"]) for path in paths]
+        heads, onto, upstream = [], base_sha, merged_head
+        for item, git_dir in zip(items, git_dirs, strict=True):
+            cwd = Path(item["checkout"])
+            before = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+            try:
+                worktree.git(cwd, "rebase", "--onto", onto, upstream, git_dir=git_dir)
+            except RuntimeError:
+                with contextlib.suppress(RuntimeError):
+                    worktree.git(cwd, "rebase", "--abort", git_dir=git_dir)
+                # Restore the checkouts already rebased; they were clean.
+                for done, done_dir, (old, _) in zip(
+                    items, git_dirs, heads, strict=False
+                ):
+                    worktree.git(
+                        Path(done["checkout"]), "reset", "--hard", old, git_dir=done_dir
+                    )
+                worktree.fail(
+                    "Rebase stopped on a conflict; the checkouts are unchanged"
+                )
+            after = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+            heads.append((before, after))
+            onto, upstream = after, before
         current.update(base=base, base_sha=base_sha)
         del current["parent"], current["stack_position"]
+        if isinstance(current.get("pr"), dict):
+            # Cleared only once GitHub reports the PR on the new base.
+            current["retarget_pending"] = True
+        before, after = heads[0]
         admission.milestone(
             current,
             "retargeted",
@@ -752,11 +780,54 @@ def rebased(
             evidence=evidence,
         )
         admission.write(claim, current)
-        for issue in descendants:
-            path = claim.parent / f"issue-{issue}.json"
-            child = admission.read(path)
+        for path, child, parent_head, (before, after) in zip(
+            paths[1:],
+            items[1:],
+            [head for _, head in heads[:-1]],
+            heads[1:],
+            strict=True,
+        ):
             child["stack_position"] -= 1
+            child["base_sha"] = parent_head
+            admission.milestone(
+                child, "restacked", head_before=before, head_after=after
+            )
             admission.write(path, child)
+    return current
+
+
+def moved(claim: Path, record: dict) -> dict:
+    """Move the child PR to its new base; a retry re-reads GitHub after a failure."""
+    cwd, number = Path(record["checkout"]), record["pr"]["number"]
+    data = gh(
+        cwd,
+        "api",
+        "--hostname",
+        "github.com",
+        f"repos/{record['repository']}/pulls/{number}",
+    )
+    if not isinstance(data, dict):
+        worktree.fail("Pull request response is malformed")
+    if (data.get("base") or {}).get("ref") != record["base"]:
+        worktree.command(
+            [
+                "gh",
+                "pr",
+                "edit",
+                str(number),
+                "--repo",
+                record["repository"],
+                "--base",
+                record["base"],
+            ],
+            cwd,
+        )
+    with admission.locked(claim.parent):
+        current = admission.read(claim)
+        if current.get("attempt") != record["attempt"]:
+            worktree.fail("Claim changed during retargeting")
+        del current["retarget_pending"]
+        admission.write(claim, current)
     return current
 
 
@@ -764,12 +835,22 @@ def retarget(claim: Path, evidence: str) -> dict:
     """Move a stacked child onto its parent's base once GitHub reports the merge.
 
     The rebased head carries no review or check evidence: publish needs a fresh
-    completed review of it, and CI runs on the coordinator's push.
+    completed review of it, and CI runs on the coordinator's push. A retry after
+    a failed or uncertain PR-base edit only reconciles the PR.
     """
     admission.require_coordinator(admission.policy(claim.parent))
     if not admission.bounded(evidence, admission.MAX_REASON):
         worktree.fail("Retarget requires bounded evidence")
     record = worktree.validate(claim)
+    if not record.get("retarget_pending"):
+        record = restacked(claim, record, evidence)
+    if record.get("retarget_pending"):
+        record = moved(claim, record)
+    return record
+
+
+def restacked(claim: Path, record: dict, evidence: str) -> dict:
+    """Check the parent's merge on GitHub, then rebase the child onto its base."""
     if not record.get("parent"):
         worktree.fail("Claim is not stacked on a parent")
     cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
@@ -795,22 +876,7 @@ def retarget(claim: Path, evidence: str) -> dict:
         )
     except RuntimeError:
         worktree.fail("Child lacks the parent's merged head; rebase it by hand first")
-    current = rebased(claim, record, merged_head, (base, base_sha), evidence)
-    if isinstance(current.get("pr"), dict):
-        worktree.command(
-            [
-                "gh",
-                "pr",
-                "edit",
-                str(current["pr"]["number"]),
-                "--repo",
-                current["repository"],
-                "--base",
-                base,
-            ],
-            cwd,
-        )
-    return current
+    return rebased(claim, record, merged_head, (base, base_sha), evidence)
 
 
 def seconds(start: str, end: str) -> float:

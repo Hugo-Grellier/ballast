@@ -41,14 +41,23 @@ its body with `gh pr edit --body-file` so every PR carries the current order.
 
 1. Requires the coordinator, a valid child claim, its parent claim, the parent's
    recorded PR and GitHub reporting that PR merged (no local record decides).
-2. Requires the parent's base pushed and fetched, the parent's merged head
-   contained in the child, and no worker lock on the child.
+2. Requires the parent's base pushed and fetched and the parent's merged head
+   contained in the child. Under the shared lock, the child and every later
+   stack member must have no worker lock and no open coordinator execution
+   (one writer per checkout).
 3. Rebases `--onto` the parent's base revision from the parent's merged head
-   (works for squash merges); a conflict aborts the rebase and refuses.
+   (works for squash merges), then restacks each later member from its parent's
+   old head onto its parent's new head. A conflict aborts that rebase, resets
+   the checkouts already rebased and refuses with no record changed.
 4. Records the new base and base revision, drops `parent`, decrements
-   descendants' `stack_position`, and adds a `retargeted` milestone with the
-   heads before and after.
-5. Edits the child PR base on GitHub when the child already has one.
+   descendants' `stack_position`, sets each descendant's `base_sha` to its
+   parent's new head (so `validate` keeps accepting it and the next retarget
+   finds the parent's merged head in it), and adds `retargeted` / `restacked`
+   milestones with the heads before and after. A child with a PR also gets
+   `retarget_pending`.
+5. While `retarget_pending` is set, reads the child PR's base on GitHub, edits
+   it only when it differs, then clears the flag. A retry after a failed or
+   lost edit skips steps 1-4 and only does this.
 
 The new head invalidates review and checks: `publish` already requires a
 completed review of the exact head, and CI runs on the new push. The coordinator
@@ -65,5 +74,8 @@ Stacked preparation and its record; refusals for a missing, foreign
 (other branch), settled or already-stacked parent; publication base and stack
 section on create and reuse; refusal on a merged or advanced parent; retarget
 after GitHub reports the merge, including the invalidated review; refusals while
-the parent is unmerged, while a worker lock exists, and on conflict; overlap
+the parent is unmerged, while a worker lock or coordinator execution holds the
+child or a descendant, and on conflict (child or descendant, every checkout
+restored); a failed and a lost PR-base edit each followed by a retry; a
+three-PR stack through successive squash merges; overlap
 suggestions and malformed planned input.
