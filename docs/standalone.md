@@ -311,8 +311,8 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
   compares) is missing from the local object store, rebase first when the
   parent's pushed branch still contains the child's recorded base revision,
   push the parent first when a retarget restacked it locally, and otherwise a
-  fixed refusal (below): the parent's pushed branch was rewritten. For any claim in a stack, the PR body
-  gets a `## Stack` section with the merge order, root first, and re-publishing
+  fixed refusal (below): the parent's pushed branch was rewritten. For any
+  claim in a stack, the PR body gets a `## Stack` section with the merge order, root first, and re-publishing
   an existing PR rewrites its body with `gh pr edit` so each PR carries the
   current order.
 - `retarget --claim CLAIM --evidence TEXT`, after the parent merges: requires
@@ -361,8 +361,12 @@ queue stays open, `worktree.py` and `select` name it, its coordinator and the
   claim whose recorded PR GitHub does not report closed (a recorded PR
   consumes backlog until merged; a closed one no longer awaits review). A new
   attempt of the same issue in the same queue keeps the retired attempts' spent
-  worker attempts. Nothing is deleted: the checkout and branch stay, and
-  `status` lists retired records under `retired` with their history.
+  worker attempts. Like `close`, it checks the current queue, not the claim's
+  own: with a queue only its coordinator retires, and claims of a closed queue
+  can be retired. Nothing is deleted: the checkout and branch stay, `status`
+  lists retired records under `retired` with their history and keeps counting
+  their published and merged PRs, and the dashboard shows a retired attempt's
+  last activity until a new attempt of the issue replaces it.
 - `release --claim CLAIM --worker ID --evidence TEXT` frees an `unknown` worker
   lock after the coordinator has positive stop evidence (for example the backend
   thread's terminal state) and marks that worker's result `released`. Nothing

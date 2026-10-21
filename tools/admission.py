@@ -649,13 +649,15 @@ def retired(state: Path) -> list[dict]:
     return [read(path) for path in sorted(state.glob("retired-issue-*.json"))]
 
 
-def retire(claim: Path, evidence: str, pr: object) -> dict:
+def retire(claim: Path, evidence: str, checked: dict) -> dict:
     """Retire a settled attempt so the issue can be prepared again.
 
     Only a `stopped` or `merged` claim, without a worker lock or an open
-    execution, and only with the recorded PR the caller checked on GitHub
-    (``pr``). The record moves aside with a `retired` milestone, so `status`
-    keeps its history; nothing is deleted.
+    execution, and only while its activity and PR are still those the caller
+    checked on GitHub (``checked``). The record moves aside with a `retired`
+    milestone, so `status` keeps its history; nothing is deleted. Like
+    `close`, it reads the current policy, not the claim's own queue: with a
+    queue only its coordinator retires, and a closed queue's claims can retire.
     """
     if not bounded(evidence, MAX_REASON):
         fail("Retirement requires bounded evidence")
@@ -676,7 +678,10 @@ def retire(claim: Path, evidence: str, pr: object) -> dict:
             fail("Only a stopped or merged claim can be retired; settle it first")
         if claim.with_suffix(".worker").exists() or open_executions(record):
             fail("Release or reconcile the recorded worker or execution first")
-        if record.get("pr") != pr:
+        if (record.get("activity"), record.get("pr")) != (
+            checked.get("activity"),
+            checked.get("pr"),
+        ):
             fail("Claim changed during retirement")
         link = {"issue": issue, "attempt": attempt}
         if any(item.get("parent") == link for item in records(state)):

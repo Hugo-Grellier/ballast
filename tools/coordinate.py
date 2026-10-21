@@ -869,7 +869,8 @@ def retire(claim: Path, evidence: str) -> dict:
         )
         if not isinstance(data, dict) or data.get("state") != "closed":
             worktree.fail("Close the stopped attempt's PR before retiring it")
-    return admission.retire(claim, evidence, pr)
+    checked = {"activity": record.get("activity"), "pr": pr}
+    return admission.retire(claim, evidence, checked)
 
 
 def rebased(
@@ -1185,9 +1186,10 @@ def observe(state: Path) -> dict:
     hours = seconds(history[0]["at"], now) / 3600 if history else 0.0
     # Counts share the elapsed time's scope: claims of a closed queue stay listed
     # but do not count toward the current queue's throughput.
+    # A retired attempt keeps counting: its PR was published, perhaps merged.
     issues = [
         item
-        for item in view["issues"]
+        for item in view["issues"] + view["retired"]
         if not queue or item.get("queue") == queue.get("id")
     ]
     published = sum(item.get("pr") is not None for item in issues)

@@ -2013,16 +2013,72 @@ class QueueTests(unittest.TestCase):
         claim.write_text(saved)
         return saved
 
-    def test_retire_moves_a_settled_claim_aside_and_refuses_otherwise(self) -> None:
-        parent, child = self.stacked_pair()
-        branch = json.loads(parent.read_text())["branch"]
+    def retire_refused_on_identity_or_race(self, claim: Path) -> None:
+        """Check refusals that leave a stopped claim in place."""
         with self.assertRaises(FileNotFoundError):
             coordinate.retire(self.state / "issue-99.json", "fictional")
         renamed = self.state / "issue-98.json"
-        renamed.write_text(child.read_text())
+        renamed.write_text(claim.read_text())
         with self.assertRaisesRegex(RuntimeError, "identity is malformed"):
             coordinate.retire(renamed, "fictional")
         renamed.unlink()
+        saved = claim.read_text()
+        record = json.loads(saved)
+        refusals = {
+            "empty evidence": ("", "bounded evidence"),
+            "long evidence": ("x" * (admission.MAX_REASON + 1), "bounded evidence"),
+        }
+        for name, (evidence, reason) in refusals.items():
+            with self.subTest(name), self.assertRaisesRegex(RuntimeError, reason):
+                coordinate.retire(claim, evidence)
+        with (
+            patch.dict(os.environ, {"BALLAST_COORDINATOR": "another"}),
+            self.assertRaisesRegex(RuntimeError, "queue's coordinator"),
+        ):
+            coordinate.retire(claim, "fictional")
+        # The archive name comes from the record: no traversal out of the state.
+        claim.write_text(json.dumps(record | {"attempt": "../../escaped"}))
+        with self.assertRaisesRegex(RuntimeError, "identity is malformed"):
+            coordinate.retire(claim, "fictional")
+        claim.write_text(saved)
+        archive = self.state / f"retired-issue-61-{record['attempt']}.json"
+        archive.write_text("{}")
+        with self.assertRaisesRegex(RuntimeError, "already retired"):
+            coordinate.retire(claim, "fictional")
+        archive.unlink()
+        # Activity or PR changed between the GitHub check and the lock.
+        checked = {"activity": "stopped", "pr": record["pr"]}
+        with self.assertRaisesRegex(RuntimeError, "changed during retirement"):
+            admission.retire(claim, "fictional", {**checked, "pr": None})
+        claim.write_text(json.dumps(record | {"activity": "merged"}))
+        with self.assertRaisesRegex(RuntimeError, "changed during retirement"):
+            admission.retire(claim, "fictional", checked)
+        claim.write_text(saved)
+        self.assertEqual(claim.read_text(), saved)
+        self.assertEqual(list(self.state.glob("retired-*")), [])
+
+    def test_new_attempt_keeps_this_queues_spent_attempts(self) -> None:
+        value = self.queue([61])
+        archives = {
+            "a" * 32: (value["id"], {"review": 3}),
+            "b" * 32: (value["id"], {"implement": 2, "review": 1}),
+            "c" * 32: ("another-queue", {"implement": 9, "review": 9}),
+        }
+        for attempt, (queue, spent) in archives.items():
+            record = {"issue": 61, "attempt": attempt, "queue": queue}
+            admission.write(
+                self.state / f"retired-issue-61-{attempt}.json",
+                record | {"activity": "stopped", "worker_attempts": spent},
+            )
+        claim = self.prepare(61)
+        self.assertEqual(
+            json.loads(claim.read_text())["worker_attempts"],
+            {"implement": 2, "review": 3},
+        )
+
+    def test_retire_moves_a_settled_claim_aside_and_refuses_otherwise(self) -> None:
+        parent, child = self.stacked_pair()
+        branch = json.loads(parent.read_text())["branch"]
         self.review(child)
         body = self.root / "body.md"
         body.write_text("Fictional PR body")
@@ -2044,6 +2100,7 @@ class QueueTests(unittest.TestCase):
         saved = self.retire_refused_while_held(child)
         with self.assertRaisesRegex(RuntimeError, "already claimed"):
             worktree.prepare(self.repo, REPO, 61, branch, parent=60)
+        self.retire_refused_on_identity_or_race(child)
         old = json.loads(saved)
         result = coordinate.retire(child, "parent rewritten; PR #50 closed")
         self.assertFalse(child.exists())
@@ -2068,7 +2125,12 @@ class QueueTests(unittest.TestCase):
             coordinate.retire(parent, "fictional")
         again.unlink()
         coordinate.retire(parent, "merged")
-        self.assertEqual(len(coordinate.observe(self.state)["retired"]), 2)
+        view = coordinate.observe(self.state)
+        self.assertEqual(len(view["retired"]), 2)
+        # Retired records keep their derived timing and still count.
+        self.assertTrue(all("phases" in item for item in view["retired"]))
+        self.assertEqual(view["summary"]["merged"], 1)
+        self.assertEqual(view["summary"]["throughput"]["published"], 2)
 
     def test_overlap_report_suggests_parallel_serialize_or_stack(self) -> None:
         self.queue([1, 2, 3, 4], issues=2)
