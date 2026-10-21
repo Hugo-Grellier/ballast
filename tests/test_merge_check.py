@@ -204,6 +204,12 @@ class MergeVerdictTests(unittest.TestCase):
         self.issue = {"body": "Risk: R1"}
         self.comments = [delta(entries), approval(entries, **approval_fields)]
 
+    def issued(self) -> object:
+        """Return the issue, open and by a trusted author unless set otherwise."""
+        if not isinstance(self.issue, dict):
+            return self.issue
+        return {"state": "open", "author_association": "OWNER", **self.issue}
+
     def fake(self, *args: str) -> subprocess.CompletedProcess:
         self.calls.append(args)
         output, code = "", 0
@@ -215,7 +221,7 @@ class MergeVerdictTests(unittest.TestCase):
             output = json.dumps(self.branch)
         elif args[0] == "api" and "/issues/" in args[1]:
             comments = args[1].endswith("/comments?per_page=100")
-            output = json.dumps([self.comments] if comments else self.issue)
+            output = json.dumps([self.comments] if comments else self.issued())
         elif args[0] == "api":
             # --paginate --slurp: one array per page of up to 100 files.
             pages = [self.files[i : i + 100] for i in range(0, len(self.files), 100)]
@@ -537,6 +543,35 @@ class MergeVerdictTests(unittest.TestCase):
         self.setUp()
         self.issue = {"body": "Risk: R1"}
         self.human("below the closing issue's R1")
+
+    def test_closed_or_untrusted_closing_issue_needs_a_human(self) -> None:
+        # A later PR cannot replay the approval of an issue already closed.
+        self.r1()
+        self.merges("approved", "R1")
+        self.issue = {"body": "Risk: R1", "state": "closed"}
+        self.human("is not open", "approved", "R1")
+        # A `Risk:` line counts only in a body a trusted author wrote.
+        self.issue = {"body": "Risk: R1", "author_association": "NONE"}
+        self.human("no single parseable `Risk:` line", "approved", "R1")
+
+    def test_coverage_comes_from_the_target_branch(self) -> None:
+        self.r1()
+        covered = SPEC.replace(
+            "Covers: tools/a.py", "Covers: tools/a.py\nCovers: tools/b.py"
+        )
+        self.change({"docs/specs/cap.md": covered + SECOND, "tools/b.py": "x = 1\n"})
+        result = self.human("no spec covers", "approved", "R1")
+        self.assertEqual(result["handoff"]["risky_paths"], ["tools/b.py"])
+
+    def test_target_moved_before_merge_blocks(self) -> None:
+        args = merge_check.parser().parse_args(
+            self.arguments("approved", "R0", "--merge")
+        )
+        with patch.object(merge_check, "fetch", side_effect=[self.tip, "c" * 40]):
+            result = merge_check.run(args)
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertIn("moved since the verdict", result["block"][0]["reason"])
+        self.assertFalse([call for call in self.calls if call[:2] == ("pr", "merge")])
 
     def test_approved_risk_raises_the_floor(self) -> None:
         self.r1(risk="R2")

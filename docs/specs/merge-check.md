@@ -153,10 +153,11 @@ The check SHALL return `HUMAN` for an R2 PR, a disputed risk, a release or
 dependency PR, a changed path that is excluded (the ADR-0026 list, `--exclude`,
 or a `Human-only:` glob of `project/workflow.md` read from the target branch,
 never the PR head), a missing, unreadable or malformed `project/workflow.md`
-on the target branch, no closing issue, a closing issue outside the repository
-or without one parseable `Risk:` line, a confirmed risk below the highest
-closing-issue `Risk:` line and approved risk, a changed path no `Covers:` glob
-or `Coverage-exempt:` glob of the target branch matches, and an R0 PR changing
+on the target branch, no closing issue, a closing issue that is closed, outside
+the repository, or without one parseable `Risk:` line in a body by a trusted
+author, a confirmed risk below the highest closing-issue `Risk:` line and
+approved risk, a changed path no `Covers:` glob or `Coverage-exempt:` glob of
+the target branch matches (never the PR head's), and an R0 PR changing
 a covered path or modifying or removing a spec entry.
 
 #### Scenario: R2
@@ -198,10 +199,20 @@ a covered path or modifying or removing a spec entry.
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_closing_issue_and_its_risk_set_the_floor
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_approved_risk_raises_the_floor
 
+#### Scenario: Closed or untrusted closing issue
+- WHEN the closing issue is closed, or its body's author is not an owner, member or collaborator
+- THEN the verdict is `HUMAN`, so an approval cannot be replayed by a later PR and an untrusted `Risk:` line sets no floor
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_closed_or_untrusted_closing_issue_needs_a_human
+
 #### Scenario: Uncovered path
 - WHEN a changed path matches no `Covers:` and no coverage-exempt glob
 - THEN the verdict is `HUMAN` and the path is listed
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_uncovered_changed_path_needs_a_human
+
+#### Scenario: Coverage from the target branch
+- WHEN a PR adds the `Covers:` line for the new path it changes
+- THEN the path is still uncovered and the verdict is `HUMAN`
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_coverage_comes_from_the_target_branch
 
 #### Scenario: R0 touching specified behavior
 - WHEN an R0 PR changes a covered path, or modifies or removes a spec entry
@@ -216,7 +227,8 @@ a covered path or modifying or removing a spec entry.
 
 ### Requirement: Merge command
 The check SHALL merge only on `MERGE` and only with `--merge`, squash and
-pinned with `--match-head-commit` to the reviewed head, SHALL then comment that
+pinned with `--match-head-commit` to the reviewed head, after fetching the
+target branch again and finding the tip the verdict used, SHALL then comment that
 it merged under ADR-0027 and that this is not a human approval, SHALL report a
 merge GitHub refuses as `BLOCK`, and SHALL refuse to run inside an issue
 checkout.
@@ -225,6 +237,11 @@ checkout.
 - WHEN `--merge` is absent, or the verdict is `HUMAN`
 - THEN no merge call is made; with it on `MERGE`, the pinned merge runs and the merge comment names ADR-0027
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_merge_only_on_merge_and_with_explicit_flag
+
+#### Scenario: Target moved before the merge
+- WHEN the target branch tip changed between the verdict and the merge
+- THEN the verdict is `BLOCK` and no merge call is made
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_target_moved_before_merge_blocks
 
 #### Scenario: GitHub refuses the merge
 - WHEN the merge call fails

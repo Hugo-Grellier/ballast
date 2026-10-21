@@ -26,7 +26,7 @@ The merge follows a computed verdict on the PR's current head (`ballast merge-ch
 - `HUMAN`: R2; a disputed risk or one below that floor; no closing issue or no parseable risk; a release or dependency PR; a change to `.github/`, release files, dependency manifests and lockfiles, or the human-only globs of the project file; an uncovered changed path; an R0 PR touching specified behavior; or a missing or malformed project file on the target branch.
 - `BLOCK`: a missing or stale review, a failing or missing required check, a draft, a moved head, a spec hash mismatch, a stale delta, a delta or approval edited after the approval, an R1 PR without an approved delta (an approved empty delta when it changes no spec), and any state not listed above.
 
-The project file declares `Human-only: GLOB` and `Coverage-exempt: GLOB` lines, one glob per line at the start of the line; the verdict reads them from the target branch, never the PR head. List the code and text that define the gate as human-only. A project keeps a human merge for every PR with `Human-only: **`.
+The project file declares `Human-only: GLOB` and `Coverage-exempt: GLOB` lines, one glob per line at the start of the line; the verdict reads them from the target branch, never the PR head. List the code and text that define the gate as human-only. A project keeps a human merge for every PR with `Human-only: **`. Require branches to be up to date before merging in the branch rules, so the target branch cannot move between the verdict, which the helper rechecks just before merging, and the merge.
 
 ## Model routing
 

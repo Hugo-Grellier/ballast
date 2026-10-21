@@ -329,8 +329,8 @@ def project_workflow(root: Path, tip: str, found: Findings) -> dict | None:
     return globs
 
 
-def issue(repo: str, number: int) -> tuple[str, list[dict]]:
-    """Return an issue's body and every comment, or refuse a malformed one."""
+def issue(repo: str, number: int) -> tuple[dict, list[dict]]:
+    """Return an issue and every comment, or refuse a malformed one."""
     data = read("api", f"repos/{repo}/issues/{number}")
     pages = read(
         "api",
@@ -338,7 +338,9 @@ def issue(repo: str, number: int) -> tuple[str, list[dict]]:
         "--paginate",
         "--slurp",
     )
-    body = (data.get("body") if isinstance(data, dict) else None) or ""
+    if not isinstance(data, dict):
+        worktree.fail("Issue response is malformed")
+    body = data.get("body") or ""
     if not isinstance(pages, list) or not all(isinstance(p, list) for p in pages):
         worktree.fail("Issue comments response is malformed")
     comments = [c for page in pages for c in page]
@@ -346,15 +348,38 @@ def issue(repo: str, number: int) -> tuple[str, list[dict]]:
         isinstance(c, dict) and isinstance(c.get("body"), str) for c in comments
     ):
         worktree.fail("Issue response is malformed")
-    return body, comments
+    return {**data, "body": body}, comments
+
+
+def issue_risks(number: int, data: dict, found: Findings) -> list[str]:
+    """Return the issue's trusted `Risk:` values; HUMAN for a closed issue."""
+    if data.get("state") != "open":
+        found.add(
+            "HUMAN",
+            f"Issue #{number} is not open; its approval does not carry over",
+            f"close an open issue, or reopen #{number}",
+        )
+    risks = spec_approval.RISK.findall(data["body"].replace("\r\n", "\n"))
+    if data.get("author_association") not in spec_approval.TRUSTED:
+        # Only the author or a writer can edit the body, so a trusted
+        # author leaves no untrusted edit.
+        risks = []
+    if len(risks) != 1:
+        found.add(
+            "HUMAN",
+            f"Issue #{number} has no single parseable `Risk:` line by a trusted author",
+            f"state `Risk: R0|R1|R2` once in issue #{number}",
+        )
+    return risks
 
 
 def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str, list]:
     """Return the risk floor and each closing issue's (approval, comments).
 
     The floor is the highest `Risk:` line and approved risk of the closing
-    issues. No closing issue, one in another repository or one without a
-    single parseable `Risk:` line gives HUMAN.
+    issues. No closing issue, one in another repository, a closed one (its
+    approval cannot be replayed by a later PR), or one without a single
+    parseable `Risk:` line in a body a trusted author wrote gives HUMAN.
     """
     references = pr.get("closingIssuesReferences")
     if not isinstance(references, list):
@@ -380,14 +405,8 @@ def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str, list]:
                 "close only issues of this repository",
             )
             continue
-        body, comments = issue(repo, number)
-        risks = spec_approval.RISK.findall(body.replace("\r\n", "\n"))
-        if len(risks) != 1:
-            found.add(
-                "HUMAN",
-                f"Issue #{number} has no single parseable `Risk:` line",
-                f"state `Risk: R0|R1|R2` once in issue #{number}",
-            )
+        data, comments = issue(repo, number)
+        risks = issue_risks(number, data, found)
         try:
             approval = spec_approval.approval(repo, number, comments)
         except admission.FixedReasonError:
@@ -469,7 +488,9 @@ def specs(args: argparse.Namespace, tip: str, paths: list, found: Findings) -> d
             "rebase, then post and approve a new delta",
         )
     head_covers, tip_covers = covers_at(root, head), covers_at(root, tip)
-    uncovered = [p for p in paths if not spec_check.matches(p, head_covers + exempt)]
+    # Coverage comes from the target branch: a PR cannot cover its own new
+    # path with a `Covers:` line, which is not part of the approved delta.
+    uncovered = [p for p in paths if not spec_check.matches(p, tip_covers + exempt)]
     if uncovered:
         found.add(
             "HUMAN",
@@ -569,6 +590,7 @@ def evaluate(args: argparse.Namespace, found: Findings) -> dict:
     return {
         "risk": risk,
         "floor": floor,
+        "target": {"branch": base, "tip": tip},
         "spec": {**spec, **(approval or {})},
     }
 
@@ -636,6 +658,17 @@ def run(args: argparse.Namespace) -> dict:
         worktree.fail("Run merge checks from the project checkout, not an issue")
     result = check(args)
     if args.merge and result["verdict"] == "MERGE":
+        target = result["target"]
+        tip = fetch(args.root, args.repo, target["branch"], args.reviewed_head)
+        if tip != target["tip"]:
+            result["verdict"] = "BLOCK"
+            result["block"] = [
+                {
+                    "reason": "The target branch moved since the verdict",
+                    "to_raise": "run the check again",
+                }
+            ]
+            return result
         # --match-head-commit makes GitHub refuse a head that moved since the check.
         if gh(*result["merge"][1:]).returncode:
             result["verdict"] = "BLOCK"
