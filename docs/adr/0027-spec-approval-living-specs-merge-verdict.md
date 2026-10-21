@@ -42,8 +42,8 @@ exact head, CI on that head); it lacks the spec half.
 - Every behavior-bearing PR (R1, R2) updates the affected spec in the same PR.
   Git keeps the history: no change folders and no archive step.
 - A deterministic stdlib checker (`tools/spec_check.py`, run by the fast gate
-  and CI) validates the format, that every cited test exists, and that no two
-  files cover the same path.
+  and CI) validates the format, that every cited test exists, and that no tracked
+  file (`git ls-files`) is matched by the `Covers:` globs of two spec files.
 - A changed path is *covered* when a `Covers:` glob of some spec matches it.
   Documentation, tests and `docs/specs/` itself need no coverage. Existing
   behavior is described once, without code changes; until then, an R1 PR that
@@ -62,8 +62,9 @@ on the issue and from a Git diff of `docs/specs/` the same way, so both sides
 compare equal exactly when they describe the same behavior change.
 
 If the base text of a modified or removed entry no longer matches the target
-branch (a concurrent PR changed it), the delta is stale: the verdict is `HUMAN`
-until a new delta is approved.
+branch (a concurrent PR changed it), the delta is stale: the verdict is `BLOCK`
+until a new delta is posted and approved. A stale delta is never handed to the
+human to merge as is.
 
 ### The human approves the spec delta
 
@@ -71,7 +72,9 @@ until a new delta is approved.
   issue together with open questions, the proposed risk and the hash. R0 work
   and investigations skip it.
 - The human approves by a direct issue comment that quotes the hash and the
-  risk. The approved risk is a floor: a PR or reviewer classification below it
+  risk. Because agents share the operator's identity (see the trust boundary
+  below), "direct" means deterministically "not marked as a relay"; it is not
+  authentication. The approved risk is a floor: a PR or reviewer classification below it
   gives `HUMAN`.
 - A relayed approval (the coordinator quoting the human) stays valid for plans,
   as today, but never yields `MERGE`: an R1 PR whose spec approval is relayed
@@ -118,18 +121,24 @@ reasons and what would raise it:
   nothing changed after review, no excluded path), and the PR is R0, or R1 with a
   direct spec approval, green conformance and every changed path covered.
 - `HUMAN`: R2; an excluded path; a risk below the approved floor, disputed or
-  raised; a relayed spec approval; a stale delta; an uncovered changed path. The
+  raised; a relayed spec approval; an uncovered changed path. The
   output is the handoff: approved spec, risky paths, surviving review findings.
   The human reviews that, not the full diff.
 - `BLOCK`: missing or stale review, a failing or missing required check, a
-  draft, a head that moved, or a hash mismatch.
+  draft, a head that moved, a hash mismatch, or a stale delta.
 
 Excluded paths are the ADR-0026 list plus the project's human-only globs in
-`project/workflow.md`. Ballast declares its own R2 surfaces there: at least
-`tools/merge_check.py`, `tools/spec_check.py`, `tools/pr_body.py`,
+`project/workflow.md`. `merge_check.py` reads that file from the target branch,
+never from the PR head, so a PR cannot remove its own exclusion. Ballast
+declares its own R2 surfaces there, the helpers and the text that defines the
+gate: at least `tools/merge_check.py`, `tools/spec_check.py`, `tools/pr_body.py`,
 `tools/admission.py`, `tools/coordinate.py`, `tools/worker.py`,
-`tools/worktree.py`, `tools/codex.py` and `.github/`. A PR changing the gate
-that would merge it therefore never merges itself.
+`tools/worktree.py`, `tools/codex.py`, `tools/progress.py`, `.github/`,
+`project/workflow.md`, `AGENTS.md`, `CLAUDE.md`, `docs/issue-workflow.md`,
+`docs/pair-review.md`, `docs/adr/`, `templates/policies/` and
+`templates/skills/ballast-*`. Documentation needs no `Covers:` entry, but these
+paths are excluded whatever the stated risk, so a PR changing the gate that
+would merge it, in code or in prose, never merges itself.
 
 The coordinator merges only on `MERGE`, with `--squash --match-head-commit`. The
 merge is reported as merged under this ADR, never as a human approval.
