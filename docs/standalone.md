@@ -243,7 +243,12 @@ and any worker lock; settle, release or reconcile them first.
 - `worktree.py` admits a claim and `worker.py` reserves a worker under the same
   lock. Claims and worker locks from before the queue, or with unknown outcome,
   consume capacity. A fresh turn needs a permit that rechecks controls and spends
-  one attempt; qualification failures before it spend none. A claim bound to a
+  one attempt; qualification failures before it spend none. The attempt stays
+  spent when the worker settles `completed`, `timeout`, `quota` or `unknown`
+  (a failed turn or lost evidence after dispatch is `unknown`). It is refunded,
+  once, with an `attempt_refunded` milestone naming the worker, only when the
+  worker settles `cancelled`: a backend-confirmed interrupt caused by a queue
+  cancel or SIGTERM/SIGINT. A claim bound to a
   queue fails closed if that queue's policy is missing or replaced.
 - `control paused|running|cancelled --reason TEXT` records a control. Pause
   blocks new admissions and turns. Cancel makes live workers send

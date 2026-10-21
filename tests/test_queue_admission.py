@@ -488,6 +488,61 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.outcome(claim)[0]["status"], "unknown")
         self.assertTrue(claim.with_suffix(".worker").exists())
 
+    def test_operator_cancelled_attempts_are_refunded(self) -> None:
+        self.queue([96])
+        claim = self.prepare(96)
+        self.quiet_signals()
+
+        def stop(_: Path) -> bool:
+            os.kill(os.getpid(), signal.SIGTERM)
+            return False
+
+        for _ in range(3):
+            with (
+                worker.stop_on_signals(),
+                patch.object(admission, "cancelled", side_effect=stop),
+            ):
+                result = self.worker_on(claim, lambda m: m[:4] + INTERRUPTED)
+            self.assertEqual(result["status"], "cancelled")
+        record = json.loads(claim.read_text())
+        self.assertEqual(record["worker_attempts"], {"implement": 0})
+        refunds = [h for h in record["history"] if h["event"] == "attempt_refunded"]
+        self.assertEqual(len(refunds), 3)
+        self.assertEqual(refunds[-1]["worker"], result["worker"])
+        self.assertEqual(self.worker_on(claim)["status"], "completed")
+        # A repeated settlement of the same worker never refunds twice.
+        admission.release_worker(claim, result["worker"], "implement")
+        record = json.loads(claim.read_text())
+        self.assertEqual(record["worker_attempts"], {"implement": 1})
+        self.assertEqual(
+            [h["event"] for h in record["history"]].count("attempt_refunded"), 3
+        )
+
+    def test_timeout_and_unknown_attempts_keep_counting(self) -> None:
+        self.queue([97, 98], issues=2)
+        claim = self.prepare(97)
+        for _ in range(3):
+            with patch.object(admission, "cancelled", side_effect=past_deadline()):
+                result = self.worker_on(claim, lambda m: m[:4] + INTERRUPTED, timeout=1)
+            self.assertEqual(result["status"], "timeout")
+        with self.assertRaisesRegex(admission.AdmissionError, "attempt limit"):
+            self.worker_on(claim)
+        self.assertEqual(
+            json.loads(claim.read_text())["worker_attempts"], {"implement": 3}
+        )
+        # An interrupt without terminal evidence stays unknown and keeps its attempt.
+        claim = self.prepare(98)
+        with (
+            patch.object(admission, "cancelled", return_value=True),
+            self.assertRaises(codex.QualificationError),
+        ):
+            self.worker_on(claim, lambda m: m[:4] + INTERRUPTED[:2])
+        held = claim.with_suffix(".worker").read_text()
+        admission.release(claim, held, "backend thread shows the turn stopped")
+        record = json.loads(claim.read_text())
+        self.assertEqual(record["worker_attempts"], {"implement": 1})
+        self.assertNotIn("attempt_refunded", [h["event"] for h in record["history"]])
+
     def client_on(self, claim: Path) -> dict:
         """Run the worker against a real client process that confirms an interrupt."""
         self.cwd = Path(json.loads(claim.read_text())["checkout"])

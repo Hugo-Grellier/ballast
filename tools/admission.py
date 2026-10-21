@@ -335,9 +335,32 @@ def permit_turn(claim: Path, identifier: str, role: str) -> None:
             write(claim, record)
 
 
-def release_worker(claim: Path, identifier: str) -> None:
-    """Release only this settled reservation; never delete a replacement lock."""
+def refund_attempt(claim: Path, identifier: str, role: str) -> None:
+    """Return the attempt a backend-confirmed cancelled turn spent, once."""
+    record = read(claim)
+    history = record.get("history") or []
+    mine = {(h["event"], h.get("worker")) for h in history}
+    attempts = record.get("worker_attempts", {})
+    if (
+        ("turn_permitted", identifier) in mine
+        and ("attempt_refunded", identifier) not in mine
+        and attempts.get(role, 0) > 0
+    ):
+        attempts[role] -= 1
+        milestone(record, "attempt_refunded", worker=identifier, role=role)
+        write(claim, record)
+
+
+def release_worker(claim: Path, identifier: str, refund: str | None = None) -> None:
+    """Release only this settled reservation; never delete a replacement lock.
+
+    `refund` names the role of a worker settled `cancelled`: only a
+    backend-confirmed interrupt from a cancel or an operator signal gives its
+    attempt back. Every other settlement, `unknown` included, keeps counting.
+    """
     with locked(claim.parent):
+        if refund:
+            refund_attempt(claim, identifier, refund)
         lock = claim.with_suffix(".worker")
         if lock.exists() and lock.read_text() == identifier:
             lock.unlink()
