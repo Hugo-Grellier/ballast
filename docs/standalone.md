@@ -122,9 +122,36 @@ own sessions can still outlive it; nothing settles that worker, which stays
 
 The same executing session must establish authorized subscription access, catalog
 support and matching resolved model/effort, provider, working directory, sandbox,
-no additional write roots/networking and approval policy before task input.
-Implementation uses workspace write access; review uses read-only access. Both
-exclude writable temporary directories. No caller conversation is supplied.
+write roots, no networking and approval policy before task input. No caller
+conversation is supplied.
+
+Each worker gets one private scratch directory,
+`<state>/scratch/<role>-<worker>/` next to its claim (`<worker>` is the worker
+reference, so a kept directory never collides with a later worker). The helper
+creates it with mode 0700 when it reserves the worker, before `thread/start`,
+and it is the only write root outside the checkout. `/tmp` and the caller's
+`TMPDIR` stay excluded. Tool commands get `TMPDIR` set to it, `UV_CACHE_DIR` to
+its `uv/` and `XDG_CACHE_HOME` to its `cache/`, through the client's
+`shell_environment_policy`; the unsandboxed client keeps its own temporary
+directory, so nothing a worker writes there is trusted by the client. Both roles
+use the client's workspace-write sandbox:
+
+- Implementation works in the checkout; its receipt must show exactly the scratch
+  directory as the one extra writable root.
+- Review works in the scratch directory itself, with no extra root, so the
+  checkout stays read-only: the receipt must show the scratch directory as its
+  working directory and no writable root. The task tells it where the checkout
+  is. A project's agent instructions in the checkout are not loaded
+  automatically; the review task should name what to read.
+
+Any other root, working directory or temporary-directory setting fails the
+launch before task input. When the worker settles, as `completed`, `cancelled`,
+`timeout`, `quota` or `not_started`, the helper removes the scratch directory
+(`scratch_left` in `events.jsonl` records one it could not remove). An `unknown`
+worker keeps it, as evidence, with its lock; remove it once the attempt is
+reconciled. A `uv run` uses the scratch cache; a project environment (`.venv`)
+still goes where the project puts it, and the sandbox has no network to fill an
+empty cache.
 
 Local `workers/ID/events.jsonl` records created, route verified, task dispatched,
 accepted and final milestones with timestamps. `result.json` associates attempt,
@@ -150,9 +177,9 @@ SIGTERM/SIGINT take the queue cancellation path: the worker sends
 `turn/interrupt` and waits at most 30 seconds for the matching terminal turn.
 A backend-confirmed interrupted turn in a quiet checkout settles as `timeout`
 (deadline) or `cancelled` (signal) and releases the worker lock. A tool command
-can outlive the interrupt, so after one the worker watches the checkout up to
-150 seconds (a completed turn: 30) and settles once two consecutive scans find
-it quiet, recording `survivors_exited` with the seconds it waited in
+can outlive the interrupt, so after one the worker watches the checkout and its
+scratch directory up to 150 seconds (a completed turn: 30) and settles once two
+consecutive scans find both quiet, recording `survivors_exited` with the seconds it waited in
 `events.jsonl`. A process still running at that bound keeps the worker `unknown`
 with its lock; nothing is inferred from a process's age or PID. Uncertain
 delivery, a rejected interrupt or missing terminal evidence, malformed
@@ -174,11 +201,11 @@ and record its clean head before review.
 Start a separate worker with `--role review` and an explicit route chosen for
 review difficulty. Its task names the exact head, base, issue acceptance and
 review criteria, and the coordinator's check evidence for that head: each
-command, its result and the revision it ran on. The review worker stays
-read-only with no writable temporary directory, so it cannot run tests that
-create files (Ballast's own do); it may run read-only checks and reports any
-check it could not run under `Verification gaps`. The helper checks a clean
-committed head before review and the same clean head afterward.
+command, its result and the revision it ran on. The review worker cannot write
+the checkout, but it can run checks that create temporary files in its
+[scratch directory](#execute-and-observe); it reports any check it could not run
+under `Verification gaps`. The helper checks a clean committed head before
+review and the same clean head afterward.
 Read the review's findings and verdict. A completed turn is not an approval.
 Follow [pair review](pair-review.md), repair actionable findings within the
 round limit, and repeat affected checks and independent

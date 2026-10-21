@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,6 +22,8 @@ from tests.test_codex_routing import MemoryProcess, response
 from tools import admission, codex, coordinate, worker, worktree
 
 ROOT = Path(__file__).resolve().parents[1]
+# The worker's scratch path holds its fresh identifier; run_worker fills it in.
+SCRATCH = "/fixture-scratch"
 
 
 def setUpModule() -> None:
@@ -88,18 +91,22 @@ class ExecutionTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
-    def script(self, *, account: str = "chatgpt", **overrides: object) -> list[dict]:
+    def script(
+        self, *, account: str = "chatgpt", role: str = "implement", **overrides: object
+    ) -> list[dict]:
+        review = role == "review"
         receipt = {
             "model": "fixture-model",
             "reasoningEffort": "low",
             "modelProvider": "openai",
-            "cwd": str(self.cwd),
+            # A review thread works in its scratch; the checkout is in no root.
+            "cwd": SCRATCH if review else str(self.cwd),
             "approvalPolicy": "never",
             "thread": {"id": "fixture-thread"},
             "sandbox": {
                 "type": "workspaceWrite",
                 "networkAccess": False,
-                "writableRoots": [],
+                "writableRoots": [] if review else [SCRATCH],
                 "excludeTmpdirEnvVar": True,
                 "excludeSlashTmp": True,
             },
@@ -142,9 +149,18 @@ class ExecutionTests(unittest.TestCase):
             response(5, {"turn": {"id": "fixture-turn"}}),
         ]
 
+    def bind_scratch(self, messages: list[dict], role: str) -> tuple[list, object]:
+        """Fill the next worker's scratch path in; return a patch fixing its id."""
+        identifier = uuid.uuid4().hex
+        scratch = self.claim.parent / "scratch" / f"{role}-{identifier}"
+        bound = json.loads(json.dumps(messages).replace(SCRATCH, str(scratch)))
+        fixed = SimpleNamespace(hex=identifier)
+        return bound, patch.object(worker.uuid, "uuid4", return_value=fixed)
+
     def run_worker(
         self, messages: list[dict], *, role: str = "implement", timeout: float = 2
     ) -> dict:
+        messages, identity = self.bind_scratch(messages, role)
         process = MemoryProcess(messages)
         process.stdin = self.enterContext(tempfile.TemporaryFile(mode="w+b"))
         native_popen = subprocess.Popen
@@ -155,6 +171,7 @@ class ExecutionTests(unittest.TestCase):
             return native_popen(argv, **kwargs)
 
         with (
+            identity,
             patch.object(codex.subprocess, "Popen", side_effect=launch),
             patch.object(worker.shutil, "which", return_value="/fictional/codex"),
         ):
@@ -288,12 +305,144 @@ class ExecutionTests(unittest.TestCase):
         for record in (self.claim.parent / "workers").glob("*/events.jsonl"):
             self.assertNotIn("task_dispatched", record.read_text())
 
+    def scratches(self) -> list[Path]:
+        return list((self.claim.parent / "scratch").glob("*"))
+
+    def threads(self, messages: list[dict], role: str, turn=None) -> dict:  # noqa: ANN001
+        """Run one worker; return what it asked thread/start for, and its result."""
+        request = worker.WorkerServer.request
+        sent = {}
+
+        def record(server: worker.WorkerServer, method: str, params: dict) -> dict:
+            sent[method] = params
+            if method == "turn/start" and turn:
+                turn(sent["thread/start"])
+            return request(server, method, params)
+
+        with patch.object(worker.WorkerServer, "request", autospec=True) as wrapped:
+            wrapped.side_effect = record
+            sent["result"] = self.run_worker(messages, role=role)
+        return sent
+
+    def test_each_role_writes_only_its_private_scratch(self) -> None:
+        for role in ("implement", "review"):
+            with self.subTest(role=role):
+                sent = self.threads(self.script(role=role), role)
+                result, thread = sent["result"], sent["thread/start"]
+                scratch = self.claim.parent / "scratch" / f"{role}-{result['worker']}"
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(thread["sandbox"], "workspace-write")
+                writes = thread["config"]["sandbox_workspace_write"]
+                excluded = (
+                    writes["exclude_tmpdir_env_var"],
+                    writes["exclude_slash_tmp"],
+                )
+                self.assertEqual(excluded, (True, True))
+                if role == "review":  # The checkout is in no write root.
+                    self.assertEqual(thread["cwd"], str(scratch))
+                    self.assertEqual(writes["writable_roots"], [])
+                    self.assertEqual(result["checkout_access"], "read-only")
+                else:
+                    self.assertEqual(thread["cwd"], str(self.cwd))
+                    self.assertEqual(writes["writable_roots"], [str(scratch)])
+                self.assertEqual(sent["turn/start"]["cwd"], thread["cwd"])
+                self.assertIn(str(self.cwd), sent["turn/start"]["input"][0]["text"])
+                environment = thread["config"]["shell_environment_policy"]["set"]
+                self.assertEqual(environment, worker.scratch_env(scratch))
+                for value in environment.values():
+                    self.assertTrue(Path(value).is_relative_to(scratch))
+                self.assertEqual(self.scratches(), [])  # Removed once settled.
+
+    def test_receipt_must_show_exactly_the_scratch_root(self) -> None:
+        roots = (
+            ("implement", {"writableRoots": []}),
+            ("implement", {"writableRoots": [SCRATCH, "/elsewhere"]}),
+            ("implement", {"writableRoots": ["/elsewhere"]}),
+            ("review", {"writableRoots": [SCRATCH]}),
+            ("review", {"writableRoots": [str(self.cwd)]}),
+            ("implement", {"excludeTmpdirEnvVar": False}),
+            ("review", {"excludeSlashTmp": False}),
+            ("review", {"type": "readOnly"}),
+        )
+        for role, change in roots:
+            receipt = self.script(role=role)[3]["result"]
+            sandbox = {**receipt["sandbox"], **change}
+            with (
+                self.subTest(role=role, change=change),
+                self.assertRaisesRegex(codex.QualificationError, "differs"),
+            ):
+                self.run_worker(self.script(role=role, sandbox=sandbox), role=role)
+            self.assertFalse(self.claim.with_suffix(".worker").exists())
+            self.assertEqual(self.scratches(), [])
+        # A review thread that works in the checkout could write it.
+        with self.assertRaisesRegex(codex.QualificationError, "differs"):
+            self.run_worker(
+                self.script(role="review", cwd=str(self.cwd)), role="review"
+            )
+        for record in (self.claim.parent / "workers").glob("*/events.jsonl"):
+            self.assertNotIn("task_dispatched", record.read_text())
+
+    def test_review_test_with_temp_files_leaves_checkout_clean(self) -> None:
+        created = []
+
+        def focused_test(thread: dict) -> None:
+            # A tool command as the client runs it: thread cwd and environment.
+            code = (
+                "import tempfile; print(tempfile.NamedTemporaryFile(delete=False).name)"
+            )
+            ran = subprocess.run(  # noqa: S603 -- this interpreter, fixed code
+                [sys.executable, "-I", "-c", code],
+                cwd=thread["cwd"],
+                env={
+                    **os.environ,
+                    **thread["config"]["shell_environment_policy"]["set"],
+                },
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            created.append(Path(ran.stdout.strip()))
+
+        sent = self.threads(self.script(role="review"), "review", focused_test)
+        self.assertEqual(sent["result"]["status"], "completed")
+        (path,) = created
+        self.assertTrue(path.is_relative_to(self.claim.parent / "scratch"))
+        self.assertFalse(path.exists())
+        self.assertEqual(
+            worktree.git(self.cwd, "status", "--porcelain", "--ignored"), ""
+        )
+
+    @unittest.skipUnless(shutil.which("uv"), "uv required")
+    def test_uv_run_with_scratch_environment_leaves_checkout_untouched(self) -> None:
+        scratch = self.root / "scratch"
+        scratch.mkdir()
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("UV_", "VIRTUAL_ENV", "XDG_CACHE"))
+        }
+        subprocess.run(  # noqa: S603 -- resolved uv, fixed argv
+            [
+                *(shutil.which("uv"), "run", "--no-project", "--offline"),
+                *("python", "-c", "import tempfile; tempfile.mkstemp()"),
+            ],
+            cwd=self.cwd,
+            env={**environment, **worker.scratch_env(scratch)},
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(
+            worktree.git(self.cwd, "status", "--porcelain", "--ignored"), ""
+        )
+        self.assertTrue((scratch / "uv").is_dir())
+
     def test_unconfirmed_completion_retains_lock(self) -> None:
         messages = self.script()
         messages[5]["params"]["turn"]["status"] = "failed"
         with self.assertRaises(codex.QualificationError):
             self.run_worker(messages)
         self.assertTrue(self.claim.with_suffix(".worker").exists())
+        self.assertEqual(len(self.scratches()), 1)  # Kept as `unknown` evidence.
         with self.assertRaisesRegex(
             admission.AdmissionError, "Another worker holds this issue"
         ):

@@ -86,6 +86,7 @@ class QueueTests(unittest.TestCase):
     # Reuse the scripted backend without re-running the standalone suite here.
     script = standalone.ExecutionTests.script
     run_worker = standalone.ExecutionTests.run_worker
+    bind_scratch = standalone.ExecutionTests.bind_scratch
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -570,8 +571,9 @@ class QueueTests(unittest.TestCase):
 
     def client_on(self, claim: Path) -> dict:
         """Run the worker against a real client process that confirms an interrupt."""
-        self.cwd = Path(json.loads(claim.read_text())["checkout"])
-        lines = "".join(json.dumps(m) + "\n" for m in self.script()[:4] + INTERRUPTED)
+        self.claim, self.cwd = claim, Path(json.loads(claim.read_text())["checkout"])
+        messages, identity = self.bind_scratch(self.script()[:4], "implement")
+        lines = "".join(json.dumps(m) + "\n" for m in messages + INTERRUPTED)
         native = subprocess.Popen
 
         def launch(argv: list[str], **kwargs: object) -> object:
@@ -580,6 +582,7 @@ class QueueTests(unittest.TestCase):
             return native(argv, **kwargs)
 
         with (
+            identity,
             patch.object(codex.subprocess, "Popen", side_effect=launch),
             patch.object(worker.shutil, "which", return_value="/fictional/codex"),
         ):
@@ -751,7 +754,7 @@ class QueueTests(unittest.TestCase):
         record = json.loads(claim.read_text())
         self.heads[record["branch"]] = self.base
         self.claim, self.cwd = claim, Path(record["checkout"])
-        messages = self.script(sandbox={"type": "readOnly", "networkAccess": False})
+        messages = self.script(role="review")
         self.review = self.run_worker(messages, role="review")
         body = self.root / "body.md"
         body.write_text("Fictional PR body")
@@ -1664,7 +1667,7 @@ class QueueTests(unittest.TestCase):
         head = worktree.git(self.cwd, "rev-parse", "HEAD")
         self.push(record["branch"], head)
         self.run_worker(
-            self.script(sandbox={"type": "readOnly", "networkAccess": False}),
+            self.script(role="review"),
             role="review",
         )
         return head

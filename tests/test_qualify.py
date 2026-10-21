@@ -41,7 +41,8 @@ class LocalModeTests(unittest.TestCase):
         self.assertEqual(evidence["implement"]["status"], "completed")
         self.assertEqual(evidence["implement"]["sandbox"], "workspaceWrite")
         self.assertEqual(evidence["review"]["status"], "completed")
-        self.assertEqual(evidence["review"]["sandbox"], "readOnly")
+        self.assertEqual(evidence["review"]["sandbox"], "workspaceWrite")
+        self.assertEqual(evidence["review"]["checkout_access"], "read-only")
         head = evidence["head"]
         self.assertNotEqual(head, evidence["base"])
         self.assertEqual(evidence["review"]["head_before"], head)

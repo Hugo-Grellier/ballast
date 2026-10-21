@@ -29,6 +29,7 @@ class CoordinatorExecutionTests(unittest.TestCase):
     worker_on = queue_tests.QueueTests.worker_on
     script = queue_tests.QueueTests.script
     run_worker = queue_tests.QueueTests.run_worker
+    bind_scratch = queue_tests.QueueTests.bind_scratch
     publish_ready = queue_tests.QueueTests.publish_ready
     pr_command = queue_tests.QueueTests.pr_command
 

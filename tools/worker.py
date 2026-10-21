@@ -60,6 +60,7 @@ class WorkerServer(codex.AppServer):
         if os.name != "posix":
             codex.fail("This worker requires POSIX bounded pipe writes")
         self.thread_id = ""
+        self.workdir = cwd
         self.interrupted = False
         self.finished: dict | None = None
         self.output = ""
@@ -208,10 +209,32 @@ def event(directory: Path, kind: str, **values: object) -> None:
         )
 
 
+def scratch_env(scratch: Path) -> dict[str, str]:
+    """Point temp files and tool caches into the worker's scratch directory."""
+    return {
+        "TMPDIR": str(scratch),
+        "UV_CACHE_DIR": str(scratch / "uv"),
+        "XDG_CACHE_HOME": str(scratch / "cache"),
+    }
+
+
+def sandbox_roots(role: str, cwd: Path, scratch: Path) -> tuple[Path, list[str]]:
+    """Return the thread's working directory and its exact extra write roots.
+
+    Both roles write only the scratch directory outside the checkout. A review
+    thread works in the scratch directory itself, so the checkout stays outside
+    every write root: the client folds a root equal to its cwd away.
+    """
+    if role == "review":
+        return scratch, []
+    return cwd, [str(scratch)]
+
+
 def establish(
-    server: WorkerServer, cwd: Path, model: str, effort: str, role: str
+    server: WorkerServer, cwd: Path, scratch: Path, route: tuple[str, str], role: str
 ) -> dict:
     """Validate subscription access and executing thread before task input."""
+    model, effort = route
     initialized = server.request(
         "initialize", {"clientInfo": {"name": "ballast_v2_worker", "version": "0.1.0"}}
     )
@@ -220,46 +243,42 @@ def establish(
     if not isinstance(account, dict) or account.get("type") != "chatgpt":
         codex.fail("Authorized subscription access could not be established")
     codex.check_capability(server, model, effort)
-    sandbox = "read-only" if role == "review" else "workspace-write"
+    workdir, roots = sandbox_roots(role, cwd, scratch)
     receipt = server.request(
         "thread/start",
         {
             "model": model,
             "modelProvider": "openai",
-            "cwd": str(cwd),
-            "sandbox": sandbox,
+            "cwd": str(workdir),
+            "sandbox": "workspace-write",
             "approvalPolicy": "never",
             "ephemeral": True,
             "config": {
                 "model_reasoning_effort": effort,
                 "sandbox_workspace_write": {
+                    "writable_roots": roots,
                     "exclude_tmpdir_env_var": True,
                     "exclude_slash_tmp": True,
                     "network_access": False,
                 },
+                # Tool commands only: the unsandboxed client keeps its own temp.
+                "shell_environment_policy": {"set": scratch_env(scratch)},
             },
         },
     )
     policy = receipt.get("sandbox", {})
-    expected = "readOnly" if role == "review" else "workspaceWrite"
     if (
         not isinstance(policy, dict)
         or receipt.get("model") != model
         or receipt.get("reasoningEffort") != effort
         or receipt.get("modelProvider") != "openai"
         or receipt.get("approvalPolicy") != "never"
-        or receipt.get("cwd") != str(cwd)
-        or policy.get("type") != expected
+        or receipt.get("cwd") != str(workdir)
+        or policy.get("type") != "workspaceWrite"
         or policy.get("networkAccess") is not False
-        or policy.get("writableRoots", [])
-        or (
-            expected == "workspaceWrite"
-            and (
-                policy.get("writableRoots") != []
-                or policy.get("excludeTmpdirEnvVar") is not True
-                or policy.get("excludeSlashTmp") is not True
-            )
-        )
+        or policy.get("writableRoots") != roots
+        or policy.get("excludeTmpdirEnvVar") is not True
+        or policy.get("excludeSlashTmp") is not True
     ):
         codex.fail(
             "Executing session configuration differs from the authorized request"
@@ -271,6 +290,7 @@ def establish(
     if not isinstance(thread, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", thread):
         codex.fail("Executing session identity is unavailable")
     server.thread_id = thread
+    server.workdir = workdir
     version = re.search(r"/(\d+\.\d+\.\d+)", str(initialized.get("userAgent", "")))
     route = {"provider": "openai", "model": model, "effort": effort}
     return {
@@ -280,7 +300,8 @@ def establish(
         "client_version": version[1] if version else "unknown",
         "session": thread,
         "role": role,
-        "sandbox": expected,
+        "sandbox": "workspaceWrite",
+        "checkout_access": "read-only" if role == "review" else "writable",
         "task_started": False,
     }
 
@@ -289,8 +310,16 @@ def run_turn(
     server: WorkerServer, cwd: Path, text: str, directory: Path, result: dict
 ) -> tuple[str, str | None]:
     """Wait for a correlated terminal turn; observe cancellation meanwhile."""
+    workdir = server.workdir
     boundary = (
-        "Work only on the assigned task in this checkout. "
+        f"Work only on the assigned task in the checkout {cwd}. "
+        + (
+            "It is read-only and your working directory is a private scratch "
+            "directory: cd into the checkout or use git -C to inspect it. "
+            if workdir != cwd
+            else ""
+        )
+        + "Temporary files and caches belong in $TMPDIR, never the checkout. "
         "Do not invoke ballast, spawn agents, change model/provider, access "
         "credentials, publish, merge, or release. "
         "Do not use clone-wide Git state (git stash, git worktree, switching "
@@ -303,7 +332,7 @@ def run_turn(
             "threadId": server.thread_id,
             "model": result["requested"]["model"],
             "effort": result["requested"]["effort"],
-            "cwd": str(cwd),
+            "cwd": str(workdir),
             "approvalPolicy": "never",
             "input": [{"type": "text", "text": boundary + text}],
         },
@@ -438,8 +467,8 @@ def survivors(cwd: Path) -> list[int]:
     return found
 
 
-def await_quiet(cwd: Path, bound: float) -> float | None:
-    """Settle only when nothing still runs in the checkout; else stay unknown.
+def await_quiet(roots: tuple[Path, ...], bound: float) -> float | None:
+    """Settle only when nothing runs in the checkout or scratch; else unknown.
 
     Return the seconds spent waiting on survivors, or None if none was seen.
     """
@@ -450,7 +479,7 @@ def await_quiet(cwd: Path, bound: float) -> float | None:
     # with a process forking mid-scan; a cgroup per worker would close it.
     empty = 0
     while empty < 2:  # noqa: PLR2004 -- consecutive empty scans
-        if found := survivors(cwd):
+        if found := sorted({pid for root in roots for pid in survivors(root)}):
             empty = 0
             seen = True
             if time.monotonic() >= deadline:
@@ -465,12 +494,23 @@ def await_quiet(cwd: Path, bound: float) -> float | None:
     return time.monotonic() - start if seen else None
 
 
-def settle_quiet(cwd: Path, directory: Path, outcome: str) -> None:
+def settle_quiet(roots: tuple[Path, ...], directory: Path, outcome: str) -> None:
     """Wait longer after a confirmed interrupt; its tool command may still run."""
     interrupted = outcome in {"cancelled", "timeout"}
-    waited = await_quiet(cwd, QUIET_SECONDS + SURVIVOR_SECONDS * interrupted)
+    waited = await_quiet(roots, QUIET_SECONDS + SURVIVOR_SECONDS * interrupted)
     if interrupted and waited is not None:
         event(directory, "survivors_exited", seconds=round(waited, 1))
+
+
+def remove_scratch(scratch: Path, directory: Path) -> None:
+    """Remove a settled worker's scratch; an `unknown` one stays as evidence.
+
+    A leftover is recorded, never fatal: each worker has its own directory.
+    """
+    try:
+        shutil.rmtree(scratch)  # Symlink-safe on Linux: never leaves the tree.
+    except OSError:
+        event(directory, "scratch_left")
 
 
 def keep_output(
@@ -526,17 +566,22 @@ def permit(claim: Path, identifier: str, role: str) -> None:
     admission.permit_turn(claim, identifier, role)
 
 
-def reserve(claim: Path, identifier: str, role: str) -> Path:
-    """Reserve capacity and the private worker directory, or neither."""
+def reserve(claim: Path, identifier: str, role: str) -> tuple[Path, Path]:
+    """Reserve capacity, the private worker directory and its scratch, or none.
+
+    One scratch per worker, so an `unknown` worker's kept scratch never collides.
+    """
     check_stop()  # A stop before reservation never starts a client.
     admission.reserve_worker(claim, identifier, role)
     directory = claim.parent / "workers" / identifier
+    scratch = claim.parent / "scratch" / f"{role}-{identifier}"
     try:
         directory.mkdir(parents=True, mode=0o700)
+        scratch.mkdir(parents=True, mode=0o700)
     except OSError:
         admission.release_worker(claim, identifier)  # Nothing was started.
         raise
-    return directory
+    return directory, scratch
 
 
 def execute(
@@ -553,9 +598,8 @@ def execute(
     if executable is None:
         codex.fail("Codex is not installed on PATH")
     identifier = uuid.uuid4().hex
-    directory = reserve(claim, identifier, role)
-    dispatched = False
-    settled = False
+    directory, scratch = reserve(claim, identifier, role)
+    dispatched = settled = False
     result = {
         "worker": identifier,
         "attempt": record["attempt"],
@@ -573,7 +617,7 @@ def execute(
         with contextlib.closing(
             WorkerServer(str(Path(executable).resolve()), cwd, timeout)
         ) as server:
-            receipt = establish(server, cwd, model, effort, role)
+            receipt = establish(server, cwd, scratch, route, role)
             result.update(receipt)
             admission.write(directory / "result.json", result)
             event(directory, "route_verified", **receipt)
@@ -588,7 +632,7 @@ def execute(
             keep_output(server, directory, result, outcome)
         # Close/reap must succeed before calling the worker settled. Sandboxed
         # tool commands run in their own session and can outlive the client.
-        settle_quiet(cwd, directory, outcome)
+        settle_quiet((cwd, scratch), directory, outcome)
         result.update(
             head_before=head,
             head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),
@@ -608,7 +652,8 @@ def execute(
             result["status"] = "unknown" if dispatched else "not_started"
         admission.write(directory / "result.json", result)
         event(directory, result["status"])
-        if settled or not dispatched:
+        if settled or not dispatched:  # Not `unknown`: nothing keeps the scratch.
+            remove_scratch(scratch, directory)
             refund = role if settled and result["status"] == "cancelled" else None
             admission.release_worker(claim, identifier, refund)
     return result

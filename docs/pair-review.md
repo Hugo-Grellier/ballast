@@ -53,8 +53,8 @@ only the reviewed head and scope; it is not a human merge decision. An approval
 that confirms R0 lets the coordinator merge that exact head once required checks
 pass ([ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)).
 
-Checks you cannot run yourself (a read-only reviewer cannot run tests that write
-temporary files) come from the coordinator's check evidence in the task: command,
+Checks you cannot run yourself (the checkout is read-only and has no network;
+temporary files go to your scratch directory) come from the coordinator's check evidence in the task: command,
 result and revision. Use it only when its revision equals the reviewed head;
 otherwise treat the check as missing. Name coordinator-reported checks as such
 under `Verification gaps`; their absence is not a reason for `blocked` when the

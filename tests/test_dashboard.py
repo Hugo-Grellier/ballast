@@ -34,6 +34,7 @@ class DashboardTests(unittest.TestCase):
     worker_on = queue_tests.QueueTests.worker_on
     script = queue_tests.QueueTests.script
     run_worker = queue_tests.QueueTests.run_worker
+    bind_scratch = queue_tests.QueueTests.bind_scratch
 
     def start(self) -> None:
         """Start the actual foreground server in a joined fixture thread."""
