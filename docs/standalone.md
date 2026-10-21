@@ -177,10 +177,11 @@ review criteria, and the coordinator's check evidence for that head: each
 command, its result and the revision it ran on. The review worker stays
 read-only with no writable temporary directory, so it cannot run tests that
 create files (Ballast's own do); it may run read-only checks and reports any
-check it could not run under `Verification gaps`. The helper checks a clean committed head before review and the
-same clean head afterward. Read the review's findings and verdict. A completed
-turn is not an approval. Follow [pair review](pair-review.md), repair actionable
-findings within the round limit, and repeat affected checks and independent
+check it could not run under `Verification gaps`. The helper checks a clean
+committed head before review and the same clean head afterward.
+Read the review's findings and verdict. A completed turn is not an approval.
+Follow [pair review](pair-review.md), repair actionable findings within the
+round limit, and repeat affected checks and independent
 review. Any subsequent code/base change invalidates affected evidence.
 
 ## Publish and decide readiness

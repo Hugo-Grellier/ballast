@@ -61,6 +61,11 @@ under `Verification gaps`; their absence is not a reason for `blocked` when the
 code can otherwise be reviewed. A check that must run before approval and that
 nobody ran is missing evidence: `changes_required`.
 
+The author does not fix missing check evidence with a code change. The
+coordinator runs the check on the exact head, records its command, result and
+revision, and requests review again; the reviewer then uses that evidence under
+the rule above.
+
 Report CI as observed on the exact reviewed SHA; a local gate does not stand in
 for it. `fail` blocks approval. `pending` (no PR yet, or still running) does not
 block approval but is stated under `Verification gaps`. The coordinator confirms

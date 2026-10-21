@@ -166,7 +166,9 @@ Fix actionable findings, rerun affected checks, and request review of the update
 head. For a disputed finding, record the evidence and request pair reassessment;
 the author cannot dismiss a blocker alone. Escalate product disagreements to the
 human. Repair-round scope, nonblocking findings and the round limit are in
-[pair-review.md](pair-review.md#repair-rounds). If an independent reviewer is unavailable, do not
+[pair-review.md](pair-review.md#repair-rounds). Missing check evidence is
+fixed by the coordinator running the check, not by a code change
+([pair review](pair-review.md#result)). If an independent reviewer is unavailable, do not
 publish; report the missing review to the human. The standalone `publish` helper
 refuses a head without a completed review, and a recorded coordinator review
 never counts as one. Reference a coordinator review in the PR's execution
