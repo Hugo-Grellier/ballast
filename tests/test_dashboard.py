@@ -567,8 +567,9 @@ class DashboardTests(unittest.TestCase):
     def test_timed_out_worker_is_projected_settled(self) -> None:
         self.policy = self.queue([15])
         claim = self.prepare(15)
-        # One survivor, then quiet: the worker records survivors_exited.
-        scan = Mock(side_effect=[[4242], [], []])
+        # One survivor, then quiet: the worker records survivors_exited. Each
+        # scan covers the checkout, then the scratch directory.
+        scan = Mock(side_effect=[[4242], [], [], [], [], []])
         with (
             patch.object(
                 admission, "cancelled", side_effect=queue_tests.past_deadline()
