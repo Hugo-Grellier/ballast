@@ -149,6 +149,12 @@ class SpecFormatTests(unittest.TestCase):
         text = SPEC.replace("Scenario: Full queue", "Scenario: Free slot")
         self.assert_defect(text, "duplicate scenario: Free slot")
 
+    def test_heading_inside_a_code_fence_is_body_text(self) -> None:
+        fence = "- THEN the issue waits\n```\n### Notes\n#### x\n```\n"
+        self.assertEqual(
+            self.defects(SPEC.replace("- THEN the issue waits\n", fence)), []
+        )
+
     def test_missing_or_late_covers(self) -> None:
         self.assert_defect(SPEC.replace("Covers: tools/queue.py\n", ""), "no `Covers:")
         self.assert_defect(SPEC + "\nCovers: y\n", "Covers: lines must open")
@@ -215,6 +221,24 @@ class SpecCheckCommandTests(unittest.TestCase):
         code, out, _ = self.repo.main("--changed-from", "base")
         self.assertEqual(out.splitlines(), ["uncovered: tools/other.py"])
 
+    def test_stray_files_under_specs_are_refused(self) -> None:
+        self.repo.write("docs/specs/queue.md", SPEC)
+        self.repo.commit()
+        run_git(self.repo.root, "branch", "target")
+        for stray in ("docs/specs/sub/nested.md", "docs/specs/notes.txt"):
+            with self.subTest(path=stray):
+                self.repo.write(stray, SPEC)
+                code, _, err = self.repo.main()
+                self.assertEqual(code, 1)
+                self.assertIn(f"{stray}: docs/specs/ holds only flat *.md", err)
+                # A diff hash never silently drops a stray spec edit.
+                self.repo.commit()
+                code, _, err = self.repo.main("--diff-hash", "target")
+                self.assertEqual(code, 2)
+                self.assertIn(stray, err)
+                (self.repo.root / stray).unlink()
+                self.repo.commit()
+
     def test_glob_semantics(self) -> None:
         self.assertTrue(spec_check.matches("tools/a.py", ["tools/*.py"]))
         self.assertFalse(spec_check.matches("tools/x/a.py", ["tools/*.py"]))
@@ -280,6 +304,38 @@ class DeltaHashTests(unittest.TestCase):
 
     def test_modified_scenario_hashes_equal(self) -> None:
         self.assertEqual(self.diff_hash(SPEC, MODIFIED), self.doc_hash(DELTA_MODIFIED))
+
+    def test_base_text_is_part_of_the_hash(self) -> None:
+        # A delta whose Base: is not the real base text never matches the diff.
+        wrong = DELTA_MODIFIED.replace(
+            "Base:\n- WHEN no slot is free\n- THEN the issue waits\n",
+            "Base:\n- WHEN no slot is free\n- THEN the issue is refused\n",
+        )
+        self.assertNotEqual(wrong, DELTA_MODIFIED)
+        self.assertNotEqual(self.diff_hash(SPEC, MODIFIED), self.doc_hash(wrong))
+
+    def test_delta_with_duplicate_key_or_empty_name_is_refused(self) -> None:
+        duplicate = (
+            DELTA_ADDED + "\n#### Added Scenario: Free slot\n- WHEN a\n- THEN b\n"
+        )
+        for label, text in (
+            ("duplicate entry", duplicate),
+            (
+                "empty requirement",
+                DELTA_ADDED.replace("Requirement: Admission", "Requirement:"),
+            ),
+            ("empty scenario", DELTA_ADDED.replace("Scenario: Free slot", "Scenario:")),
+        ):
+            with self.subTest(case=label), self.assertRaises(spec_check.SpecError):
+                spec_check.parse_delta(text)
+
+    def test_heading_inside_a_code_fence_in_a_delta(self) -> None:
+        fenced = DELTA_ADDED.replace(
+            "- THEN the issue waits\n", "- THEN the issue waits\n```\n## Risk\n```\n"
+        )
+        entries = spec_check.parse_delta(fenced)
+        self.assertEqual(len(entries), 3)
+        self.assertIn("## Risk", entries[-1]["text"])
 
     def test_three_dot_diff_ignores_target_branch_progress(self) -> None:
         expected = self.doc_hash(DELTA_MODIFIED)
@@ -363,8 +419,8 @@ class DeltaHashTests(unittest.TestCase):
         ):
             with self.subTest(rule=label):
                 self.assertEqual(spec_check.diff_entries("f", None, text), plain)
-        joined = spec_check.normalize(["a", "b  ", "", "- c", "- d"])
-        self.assertEqual(joined, "a b\n\n- c\n- d")
+        joined = spec_check.normalize(["a", "b  ", "", "- c", "- d", " \t", "e"])
+        self.assertEqual(joined, "a b\n\n- c\n- d\n\ne")
 
     def test_modified_entry_without_base_is_refused(self) -> None:
         text = DELTA_MODIFIED.replace("Base:\n", "")

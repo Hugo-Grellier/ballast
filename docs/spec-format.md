@@ -35,7 +35,10 @@ The queue SHALL admit an issue while a slot is free.
   line and a `THEN` line, and one or more `Test: path::Class::method`
   references. Names are unique within the requirement.
 - Any other `###` or `####` heading is a defect. `#` and `##` headings are free
-  prose sections and end the current requirement.
+  prose sections and end the current requirement. A `#` line inside a fenced
+  code block is text, not a heading.
+- `docs/specs/` holds only flat `*.md` spec files: a subdirectory or another
+  file type there is refused, by the check and by `--diff-hash`.
 - A `Test:` reference names a repository-relative file and a test method
   defined directly in a top-level class of it.
 
@@ -57,7 +60,11 @@ A repository without `docs/specs/` passes with a notice.
 `--changed-from REF` also prints `uncovered: PATH` for each path changed since
 `merge-base(REF, HEAD)` that no `Covers:` glob matches. It is a report, not a
 refusal. `docs/specs/` is always exempt; other exemptions come only from
-`Coverage-exempt: GLOB` lines in `project/workflow.md`.
+`Coverage-exempt: GLOB` lines in `project/workflow.md`. This report reads that
+file from the working tree; the merge verdict
+([#269](https://github.com/Hugo-Grellier/ballast/issues/269)) must read it from
+the target branch, never the PR head, and owns its syntax, which this form
+anticipates.
 
 ## The canonical delta
 
@@ -107,3 +114,5 @@ Result:
   the requirement its scenarios belong to.
 - An added entry's body is its text, a removed entry's body is its base text,
   and a modified entry's body is a `Base:` block then a `Result:` block.
+- A heading without a name, or an entry key (file, requirement, scenario) that
+  appears twice, is refused.

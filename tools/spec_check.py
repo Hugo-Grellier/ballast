@@ -87,11 +87,14 @@ def body_text(lines: list[str]) -> str:
 def sections(text: str) -> list[tuple[int, int, str, list[str]]]:
     """Split text at headings into (line number, level, title, body lines).
 
-    The first block is the preamble before any heading, with level 0.
+    The first block is the preamble before any heading, with level 0. A `#`
+    line inside a fenced code block is body text, not a heading.
     """
     out: list[tuple[int, int, str, list[str]]] = [(0, 0, "", [])]
+    fenced = False
     for number, line in enumerate(split_lines(text), 1):
-        heading = HEADING.match(line)
+        fenced ^= line.lstrip().startswith(("```", "~~~"))
+        heading = None if fenced else HEADING.match(line)
         if heading:
             out.append((number, len(heading.group(1)), heading.group(2), []))
         else:
@@ -305,9 +308,12 @@ def check(root: Path, changed_from: str | None) -> int:
     defects: list[str] = []
     covers: dict[str, list[str]] = {}
     cache: dict = {}
-    for path in sorted(specs.glob("*.md")):
-        name = path.relative_to(root).as_posix()
-        text = path.read_text(encoding="utf-8")
+    names = sorted(p.relative_to(root).as_posix() for p in specs.rglob("*"))
+    files = [name for name in names if (root / name).is_file()]
+    stray = stray_specs(files)
+    defects += [f"{name}: {SPECS}/ holds only flat *.md spec files" for name in stray]
+    for name in (name for name in files if name not in stray):
+        text = (root / name).read_text(encoding="utf-8")
         covers[name] = parse_spec(text, name)[0]
         defects += check_spec(text, name, root, cache)
     defects += overlap_defects(covers, tracked(root))
@@ -361,14 +367,21 @@ def diff_entries(file: str, base: str | None, head: str | None) -> list[dict]:
     return entries
 
 
+def stray_specs(names: list[str]) -> list[str]:
+    """Return the paths under docs/specs/ that are not flat *.md spec files."""
+    prefix = len(SPECS) + 1
+    return [n for n in names if not n.endswith(".md") or "/" in n[prefix:]]
+
+
 def specs_at(root: Path, revision: str) -> dict[str, str]:
-    """Return {path: text} of every spec file at a revision."""
-    names = git(root, "ls-tree", "-r", "-z", "--name-only", revision, f"{SPECS}/")
-    return {
-        name: git(root, "show", f"{revision}:{name}")
-        for name in names.split("\0")
-        if name.endswith(".md") and "/" not in name[len(SPECS) + 1 :]
-    }
+    """Return {path: text} of every spec file at a revision; refuse stray files."""
+    listing = git(root, "ls-tree", "-r", "-z", "--name-only", revision, f"{SPECS}/")
+    names = [name for name in listing.split("\0") if name]
+    stray = stray_specs(names)
+    if stray:
+        message = f"{SPECS}/ holds only flat *.md spec files at {revision}: {stray}"
+        raise SpecError(message)
+    return {name: git(root, "show", f"{revision}:{name}") for name in names}
 
 
 def git_delta(root: Path, base: str, head: str) -> list[dict]:
@@ -404,6 +417,18 @@ def delta_entry(key: tuple, change: str, body: list[str]) -> dict:
     return entry(key, change, text, base)
 
 
+def check_key(key: tuple, title: str, seen: set, *, is_entry: bool) -> None:
+    """Refuse an empty name, and an entry key the document already holds."""
+    if not (key[1] if key[2] is None else key[2]):
+        message = f"heading without a name: {title}"
+        raise SpecError(message)
+    if is_entry and key in seen:
+        message = f"duplicate delta entry: {title} in {key[0]}"
+        raise SpecError(message)
+    if is_entry:
+        seen.add(key)
+
+
 def parse_delta(text: str) -> list[dict]:
     """Read a delta document into canonical entries.
 
@@ -416,6 +441,7 @@ def parse_delta(text: str) -> list[dict]:
     entries: list[dict] = []
     file = requirement = None
     kinds = {REQUIREMENT_LEVEL: "Requirement", SCENARIO_LEVEL: "Scenario"}
+    seen: set[tuple] = set()
     for _, level, title, body in sections(text)[1:]:
         if level < REQUIREMENT_LEVEL:
             capability = DELTA_FILE.match(title)
@@ -436,10 +462,10 @@ def parse_delta(text: str) -> list[dict]:
             raise SpecError(message)
         else:
             scenario = name
+        key = (file, requirement, scenario)
+        check_key(key, title, seen, is_entry=bool(change))
         if change:
-            entries.append(
-                delta_entry((file, requirement, scenario), change.lower(), body)
-            )
+            entries.append(delta_entry(key, change.lower(), body))
     return entries
 
 
