@@ -43,6 +43,15 @@ verify the assigned repository, checkout, and branch before writing. Parent/chil
 task relationships do not imply stacked Git branches. Use stacking only when
 explicitly chosen and record its merge order.
 
+When eligible leaf issues plan to touch the same file or function, choose per
+pair: run in parallel when nothing is shared; stack when both can start now
+(the child branches from the parent's pushed issue branch and its PR targets
+it); serialize when one cannot start now, waiting for the other's merge. Stacks
+stay linear. Merge order: root first; after GitHub reports the parent merged,
+retarget the next child onto the integration branch, rebase it, and treat its
+new head as unreviewed and unchecked before merging it. Never merge a child
+whose base is still a parent branch.
+
 Use one implementation writer per checkout. Review a recorded head while edits
 are paused, or use a separate review checkout. Serialize mutating checks against
 the same checkout. Worktrees do not isolate ports, databases, external effects,
