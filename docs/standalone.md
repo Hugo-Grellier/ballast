@@ -218,7 +218,11 @@ python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" se
 Defaults are one active issue, two workers (review and helpers included), two
 PRs awaiting humans, three attempts per worker role and one hour; override each
 with `--issues`, `--workers`, `--backlog`, `--attempts` and `--seconds`. A queue
-cannot be recreated to reset its budget.
+cannot be recreated to reset its budget. Once it is finished, `close --reason
+TEXT` archives it as `queue-ID.json` (still shown by `status` under `closed`) so the
+clone can create the next queue. Close refuses a queue that is neither cancelled
+nor past its deadline, any of its claims still `active`, `unknown` or `pr_wait`,
+and any worker lock; settle, release or reconcile them first.
 
 - `select` reports eligible issues within the remaining budgets, issues waiting
   for capacity, existing claims, and blocked issues with their reasons: native
