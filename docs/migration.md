@@ -49,7 +49,9 @@ GitHub.com, and a supported Codex CLI for workers (see [standalone](standalone.m
    - Check commands from `ballast.toml` `[checks]` go to the Commands section.
    - Invariants from `.specify/memory/constitution.md` go to the Invariants section.
    - `[autonomous]` authorizations have no 2.0 equivalent. Every merge is a human
-     decision.
+     decision, except an R0 PR that meets [ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)
+     (approved and green on its exact head, no release, workflow or dependency
+     file); a project can keep human merge for every PR.
 5. **Remove v1 files** in the same reviewed commit:
    - `ballast.toml`, `.ballast/` and `.specify/`;
    - the installed `speckit-*` skills;

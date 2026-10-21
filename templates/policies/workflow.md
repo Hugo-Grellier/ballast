@@ -14,11 +14,19 @@ Classify the change in its issue/PR before implementation. Raise risk if the act
 
 | Level | Typical changes | Gate |
 | --- | --- | --- |
-| R0 | Typo, docs, test-only cleanup, naming, formatting | Deterministic checks; review optional |
+| R0 | Typo, docs, test-only cleanup, naming, formatting | Deterministic checks; independent review that confirms R0 before an agent merge |
 | R1 | Normal UI/API feature, search/index, background job, provider behind an existing boundary, non-destructive schema extension, read-only integration | Checks, correctness and test reviews; specialists by trigger |
 | R2 | Authentication/authorization/access rules, resource identity semantics, deletion or destructive migration, secrets, writes to external authoritative systems, agent write authority, cryptography, CI/deployment permissions, backup/restore, breaking public data format | Explicit human approval of the risky change and of the merge. Checks and specialist reviews |
 
-"Agent write authority" means an agent or MCP tool gaining authority to write authoritative sources or external systems, secrets, protected branches, CI or deployment permissions, or anything outside its sandbox. A development agent editing source, tests and docs in its own worktree under the native CLI sandbox is normal R1-capable implementation. Every feature PR, at every risk level, needs human merge approval. An agent never merges, releases or deploys on its own, and an agent decision is never presented as human approval.
+"Agent write authority" means an agent or MCP tool gaining authority to write authoritative sources or external systems, secrets, protected branches, CI or deployment permissions, or anything outside its sandbox. A development agent editing source, tests and docs in its own worktree under the native CLI sandbox is normal R1-capable implementation. R1 and R2 PRs need human merge approval. An agent never releases or deploys on its own, and an agent decision is never presented as human approval.
+
+An R0 PR may be squash-merged by the coordinating agent without a separate human approval only when all of these hold on the PR's current head:
+
+- an independent review approved that exact head and confirmed R0; the risk classification is part of the reviewed evidence, and a reviewer who would raise it does not approve the PR as R0;
+- every required check passed on that head, and at least one check is required;
+- the PR is open, not a draft, ticks R0 and no other risk, and its head equals the reviewed head.
+
+Release PRs, dependency PRs and any change to `.github/` (workflows, permissions), release files or dependency manifests and lockfiles always need a human merge, as does a PR whose risk is disputed. The Ballast `tools/merge_check.py` helper checks these conditions, refuses an incomplete or malformed changed-file list, and merges only on explicit request, pinned to the reviewed head; pass the project's other dependency manifests or deployment paths with `--exclude GLOB`. A project can keep human merge for every PR in its project file.
 
 ## Model routing
 

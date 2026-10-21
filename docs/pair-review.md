@@ -39,6 +39,7 @@ Return:
 Reviewed head: <full commit SHA; or plan link for a plan review>
 Verdict: approved | changes_required | blocked
 CI on reviewed head: pass | fail | pending
+Risk: <R0 | R1 | R2 confirmed for this diff; raise it when the diff crosses a stronger boundary>
 Coverage: <criteria, affected paths, boundaries and checks inspected>
 Findings:
 - <severity; file:line; requirement or invariant; trigger and consequence; fix>
@@ -48,7 +49,9 @@ Verification gaps: <none, or missing evidence>
 Use `changes_required` for concrete defects or missing required acceptance
 evidence, and `blocked` when missing access or an unresolved decision prevents
 review. With no findings, say so and name what was inspected. Approval covers
-only the reviewed head and scope; it is not a human merge decision.
+only the reviewed head and scope; it is not a human merge decision. An approval
+that confirms R0 lets the coordinator merge that exact head once required checks
+pass ([ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)).
 
 Checks you cannot run yourself (a read-only reviewer cannot run tests that write
 temporary files) come from the coordinator's check evidence in the task: command,
