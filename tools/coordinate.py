@@ -395,8 +395,8 @@ def fallback_review(claim: Path, record: dict, head: str) -> dict | None:
     (``start_execution`` marks it) on exactly that route.
     """
     value = admission.governing(claim.parent, record)
-    route = (value or {}).get("review_fallback")
-    if route is None or not any(
+    policy = (value or {}).get("review_fallback")
+    if policy is None or not any(
         entry.get("event") == "quota_paused" for entry in value.get("history") or []
     ):
         return None
@@ -404,7 +404,20 @@ def fallback_review(claim: Path, record: dict, head: str) -> dict | None:
         admission.read(path)
         for path in (claim.parent / "workers").glob("*/result.json")
     ]
-    return next(
+
+    def route(result: dict) -> tuple:
+        requested = result.get("requested") or {}
+        return requested.get("provider"), requested.get("model")
+
+    # Independence: the fallback route must not have implemented this attempt.
+    if any(
+        result.get("attempt") == record["attempt"]
+        and result.get("role") == "implement"
+        and route(result) == (policy["provider"], policy["model"])
+        for result in results
+    ):
+        return None
+    found = next(
         (
             result
             for result in results
@@ -417,14 +430,12 @@ def fallback_review(claim: Path, record: dict, head: str) -> dict | None:
             == result.get("head_after")
             == result.get("reviewed_head")
             == head
-            and {
-                key: (result.get("requested") or {}).get(key)
-                for key in ("provider", "model")
-            }
-            == route
+            and route(result) == (policy["provider"], policy["model"])
         ),
         None,
     )
+    # A local copy names the policy for the PR body; nothing is written.
+    return None if found is None else found | {"policy": policy}
 
 
 def review_evidence(claim: Path, record: dict, head: str) -> dict | None:
@@ -445,8 +456,12 @@ def fallback_body(text: str, result: dict) -> str:
         "operator's quota fallback route, provider "
         f"`{requested['provider']}` and model `{requested['model']}` (requested "
         f"effort `{requested['effort']}`), after a recorded Codex `quota` outcome "
-        "paused worker dispatch. This route is unverified: the model is "
-        "coordinator-reported and the effort is not verifiable.\n"
+        "paused worker dispatch. Operator approval of the fallback policy: "
+        f"{result['policy']['approval']}\n\nThis route is unverified: the model is "
+        "coordinator-reported and the effort is not verifiable. The review's "
+        "occurrence and its independence from the implementation are "
+        "coordinator-attested, not verified. The policy is coordinator-written "
+        "and its approval reference is not attested locally.\n"
     )
 
 
@@ -1176,6 +1191,7 @@ def parser() -> argparse.ArgumentParser:
     for key in admission.DEFAULTS:
         create.add_argument(f"--{key}", type=int)
     create.add_argument("--review-fallback", metavar="PROVIDER:MODEL")
+    create.add_argument("--review-fallback-approval", metavar="URL")
     execution = commands.add_parser("execution")
     execution.add_argument("action", choices=("start", "finish"))
     execution.add_argument("--claim", type=Path, required=True)
@@ -1242,11 +1258,17 @@ def run(args: argparse.Namespace) -> dict:
     if args.command == "create":
         worktree.repository(cwd, args.repo)
         fallback = None
+        if (args.review_fallback is None) != (args.review_fallback_approval is None):
+            worktree.fail("A review fallback needs the operator's approval URL")
         if args.review_fallback is not None:
             provider, _, model = args.review_fallback.partition(":")
-            fallback = {"provider": provider, "model": model}
-            if not all(ROUTE.fullmatch(part) for part in fallback.values()):
+            if not (ROUTE.fullmatch(provider) and ROUTE.fullmatch(model)):
                 worktree.fail("Review fallback must be PROVIDER:MODEL")
+            fallback = {
+                "provider": provider,
+                "model": model,
+                "approval": args.review_fallback_approval,
+            }
         spec = admission.QueueSpec(
             args.repo,
             args.issue,

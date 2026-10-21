@@ -229,7 +229,7 @@ python3 -I -S "$BALLAST_SOURCE/tools/coordinate.py" --cwd "$PROJECT_CHECKOUT" se
 Defaults are one active issue, two workers (review and helpers included), two
 PRs awaiting humans, three attempts per worker role and one hour; override each
 with `--issues`, `--workers`, `--backlog`, `--attempts` and `--seconds`.
-`--review-fallback PROVIDER:MODEL` records the operator's
+`--review-fallback PROVIDER:MODEL --review-fallback-approval URL` records the
 [quota review fallback](#quota-review-fallback) policy; omit it unless the
 operator approved that route. A queue cannot be recreated to reset its budget. Once it is finished, `close --reason
 TEXT` archives it as `queue-ID.json` (still shown by `status` under `closed`) so the
@@ -426,9 +426,16 @@ review takes them.
 When the worker backend's quota is exhausted, independent review may continue
 as a coordinator execution on another provider, only under an explicit operator
 policy recorded in the queue configuration:
-`create ... --review-fallback PROVIDER:MODEL`. The operator approves that route
-before the queue is created; it cannot be added to an existing queue, and the
-worker's own provider (`openai`) is refused. Without it nothing changes.
+`create ... --review-fallback PROVIDER:MODEL --review-fallback-approval URL`.
+`URL` is the operator's approval of that route, a GitHub issue or issue comment
+link on the queue's repository; a policy without it is refused. The policy
+cannot be added to an existing queue, and the worker's own provider (`openai`)
+is refused. Without it nothing changes.
+
+The coordinator writes this policy, and only the approval link's shape is
+checked: the reference is not attested locally. Like the coordinator identity,
+it is a trusted local record, so the guarantee holds only for an approval the
+operator actually gave. Hand-editing `queue.json` is outside the guarantee.
 
 - It applies only after a recorded `quota` outcome: while the queue is running
   and dispatch is blocked by a quota pause alone, `execution start --role
@@ -441,11 +448,17 @@ worker's own provider (`openai`) is refused. Without it nothing changes.
 - `publish` accepts, in place of a worker review, a completed fallback execution
   of the claim's attempt whose recorded head before, after and reviewed all equal
   the checkout head, on the policy's route, in a queue whose history records the
-  quota pause. Its verdict is not read. A review of another head, without the
-  policy or without the quota outcome is refused before any GitHub call.
+  quota pause. Its verdict is not read. A review of another head or attempt,
+  without the policy, without the quota outcome, or started outside the quota
+  pause (for example after an operator `running` resume) is refused before any
+  GitHub call. For independence, it is also refused when a recorded `implement`
+  execution of the same attempt used the same provider and model.
 - The PR body gets a `## Review route` section naming the fallback provider,
-  model and requested effort, and stating that the route is unverified: the
-  model is coordinator-reported and the effort is not verifiable. `publish`
+  model and requested effort, quoting the approval link, and stating that the
+  route is unverified (the model is coordinator-reported and the effort is not
+  verifiable), that the review's occurrence and independence are
+  coordinator-attested, and that the approval reference is not attested
+  locally. `publish`
   records the PR in the claim as usual, so `settle merged` later sees it.
 
 ## Qualification

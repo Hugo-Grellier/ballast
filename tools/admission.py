@@ -6,6 +6,7 @@ import contextlib
 import json
 import math
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -50,7 +51,8 @@ class QueueSpec:
     limits: dict[str, int]
     coordinator: str
     revision: str
-    # Operator policy: {"provider", "model"} reviewing after a recorded quota.
+    # Operator policy: {"provider", "model", "approval"} reviewing after a
+    # recorded quota; "approval" is the operator's GitHub issue or comment URL.
     review_fallback: dict | None = None
 
 
@@ -121,13 +123,23 @@ def valid_quota(quota: object) -> bool:
     return retry is None or (type(retry) in (int, float) and math.isfinite(retry))
 
 
-def valid_fallback(route: object) -> bool:
-    """Accept a review fallback naming another provider and a model only."""
+def valid_fallback(route: object, repository: object) -> bool:
+    """Accept another provider, a model and an approval link on this repository.
+
+    Only the link's shape is checked: the approval is a trusted local reference.
+    """
     return (
         isinstance(route, dict)
-        and set(route) == {"provider", "model"}
-        and all(bounded(item) for item in route.values())
+        and set(route) == {"provider", "model", "approval"}
+        and all(bounded(item, MAX_REASON) for item in route.values())
         and route["provider"].lower() != WORKER_PROVIDER
+        and isinstance(repository, str)
+        and re.fullmatch(
+            rf"https://github\.com/{re.escape(repository)}/issues/[1-9]\d*"
+            r"(?:#issuecomment-[1-9]\d*)?",
+            route["approval"],
+        )
+        is not None
     )
 
 
@@ -154,7 +166,10 @@ def policy(state: Path) -> dict | None:
         or not bounded(value.get("id"))
         or not bounded(value.get("repository"))
         or (quota is not None and not valid_quota(quota))
-        or ("review_fallback" in value and not valid_fallback(value["review_fallback"]))
+        or (
+            "review_fallback" in value
+            and not valid_fallback(value["review_fallback"], value.get("repository"))
+        )
     ):
         fail("Queue policy is malformed")
     return value
@@ -200,8 +215,8 @@ def quota_fallback(value: dict | None, role: str, route: tuple) -> bool:
         return False
     if finished(value) or value["mode"] != "running" or not value.get("quota"):
         return False
-    provider, model, _ = route
-    return value["review_fallback"] == {"provider": provider, "model": model}
+    fallback = value["review_fallback"]
+    return (fallback["provider"], fallback["model"]) == tuple(route[:2])
 
 
 def records(state: Path) -> list[dict]:
@@ -256,8 +271,13 @@ def create(state: Path, spec: QueueSpec) -> dict:
         bounded(item) for item in (spec.repository, spec.coordinator, spec.revision)
     ):
         fail("Repository, coordinator and revision must be bounded references")
-    if spec.review_fallback is not None and not valid_fallback(spec.review_fallback):
-        fail("A review fallback names a provider other than the worker's and a model")
+    if spec.review_fallback is not None and not valid_fallback(
+        spec.review_fallback, spec.repository
+    ):
+        fail(
+            "A review fallback names a provider other than the worker's, a model "
+            "and the operator's approval issue or comment URL on this repository"
+        )
     with locked(state):
         if (state / "queue.json").exists():
             fail("Queue already exists; recover it instead of resetting its budget")

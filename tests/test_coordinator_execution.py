@@ -14,7 +14,8 @@ from tools import admission, coordinate, dashboard, worktree
 
 REPO = queue_tests.REPO
 ROUTE = ("anthropic", "fixture-model", "high")
-FALLBACK = {"provider": "anthropic", "model": "fixture-model"}
+APPROVAL = f"https://github.com/{REPO}/issues/13#issuecomment-1"
+FALLBACK = {"provider": "anthropic", "model": "fixture-model", "approval": APPROVAL}
 
 
 class CoordinatorExecutionTests(unittest.TestCase):
@@ -390,6 +391,11 @@ class CoordinatorExecutionTests(unittest.TestCase):
 
     def test_quota_fallback_review_publishes_under_the_operator_policy(self) -> None:
         claim = self.fallback_claim(13)
+        # Another route implemented this attempt: the fallback stays independent.
+        other = coordinate.start_execution(
+            claim, "implement", ("anthropic", "other-model", "high")
+        )
+        coordinate.finish_execution(claim, other["worker"], "completed")
         admission.quota(self.state, "usageLimitExceeded", None)
         # Only the named route, and only a review, runs during the quota pause.
         for role, route in (
@@ -420,6 +426,9 @@ class CoordinatorExecutionTests(unittest.TestCase):
             "`fixture-model`",
             "unverified",
             "effort is not verifiable",
+            f"Operator approval of the fallback policy: {APPROVAL}",
+            "independence from the implementation are coordinator-attested",
+            "approval reference is not attested locally",
         ):
             self.assertIn(text, pr["body"])
         self.assertEqual((self.root / "body.md").read_text(), "Fictional PR body")
@@ -448,6 +457,36 @@ class CoordinatorExecutionTests(unittest.TestCase):
             coordinate.publish(claim, "Fictional", self.root / "body.md")
         self.assertEqual(self.prs, [])
 
+    def test_normal_review_after_an_operator_resume_is_refused(self) -> None:
+        claim = self.fallback_claim(19)
+        admission.quota(self.state, "usageLimitExceeded", None)
+        admission.control(self.state, "running", "operator resumed")
+        done = self.approve(claim)
+        self.assertNotIn("fallback", done)
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(self.prs, [])
+
+    def test_fallback_refused_when_its_route_implemented_the_attempt(self) -> None:
+        claim = self.fallback_claim(20)
+        implement = coordinate.start_execution(claim, "implement", ROUTE)
+        coordinate.finish_execution(claim, implement["worker"], "completed")
+        admission.quota(self.state, "usageLimitExceeded", None)
+        self.assertEqual(self.approve(claim)["fallback"], "quota")
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(self.prs, [])
+
+    def test_fallback_refused_from_another_attempt_on_the_same_head(self) -> None:
+        claim = self.fallback_claim(21)
+        admission.quota(self.state, "usageLimitExceeded", None)
+        done = self.approve(claim)
+        path = self.state / "workers" / done["worker"] / "result.json"
+        admission.write(path, done | {"attempt": "0" * 32})
+        with self.assertRaisesRegex(RuntimeError, "completed independent"):
+            coordinate.publish(claim, "Fictional", self.root / "body.md")
+        self.assertEqual(self.prs, [])
+
     def test_fallback_refused_for_a_review_of_another_head(self) -> None:
         claim = self.fallback_claim(16)
         admission.quota(self.state, "usageLimitExceeded", None)
@@ -466,10 +505,15 @@ class CoordinatorExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Queue is paused"):
             coordinate.start_execution(claim, "review", ROUTE)
         for name, fallback in {
-            "worker provider": {"provider": "OpenAI", "model": "m"},
-            "missing model": {"provider": "anthropic"},
+            "worker provider": FALLBACK | {"provider": "OpenAI"},
+            "missing model": {"provider": "anthropic", "approval": APPROVAL},
+            "missing approval": {"provider": "anthropic", "model": "m"},
+            "foreign approval": FALLBACK
+            | {"approval": "https://github.com/other/repo/issues/1"},
+            "pull approval": FALLBACK
+            | {"approval": f"https://github.com/{REPO}/pull/1"},
             "extra key": FALLBACK | {"effort": "high"},
-            "empty": {"provider": "", "model": "m"},
+            "empty": FALLBACK | {"provider": ""},
         }.items():
             spec = admission.QueueSpec(
                 REPO, [18], dict(admission.DEFAULTS), "lead", "rev-1", fallback
@@ -488,12 +532,14 @@ class CoordinatorExecutionTests(unittest.TestCase):
                 admission.policy(self.state)
         arguments = ["--cwd", str(self.repo), "create", "--repo", REPO]
         arguments += ["--issue", "18", "--coordinator", "lead", "--revision", "r"]
-        with self.assertRaisesRegex(RuntimeError, "PROVIDER:MODEL"):
-            coordinate.run(
-                coordinate.parser().parse_args(
-                    [*arguments, "--review-fallback", "anthropic"]
-                )
-            )
+        approval = ["--review-fallback-approval", APPROVAL]
+        for argv, reason in (
+            (["--review-fallback", "anthropic", *approval], "PROVIDER:MODEL"),
+            (["--review-fallback", "anthropic:m"], "approval URL"),
+            (approval, "approval URL"),
+        ):
+            with self.subTest(argv), self.assertRaisesRegex(RuntimeError, reason):
+                coordinate.run(coordinate.parser().parse_args([*arguments, *argv]))
 
 
 if __name__ == "__main__":
