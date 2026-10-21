@@ -22,6 +22,8 @@ dev = ["ruff==0.17.0"]
 # The gate never installs the package; only `uvx --from` builds it.
 package = false
 
+# The wheel's top-level import name is `tools`, as in the checkout. That is safe
+# in uvx's isolated environment; do not install it into a shared environment.
 [tool.uv.build-backend]
 module-name = "tools"
 module-root = ""

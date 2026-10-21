@@ -67,6 +67,25 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("usage: worktree.py", result.stdout)
 
+    def test_helper_process_has_isolated_and_no_site_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            # A copied dispatcher runs the stub helper next to it.
+            shutil.copy(CLI, Path(directory) / "cli.py")
+            (Path(directory) / "worktree.py").write_text(
+                "import sys\n"
+                "print(sys.flags.isolated, sys.flags.no_site, "
+                "'site' in sys.modules, sys.argv[1:])\n"
+            )
+            result = subprocess.run(  # noqa: S603 -- fixed interpreter and script
+                [sys.executable, str(Path(directory) / "cli.py"), "worktree", "-x"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "1 1 False ['-x']")
+
 
 class AdopterLinkTests(unittest.TestCase):
     """Every link in the template AGENTS.md resolves in the adopted layout."""

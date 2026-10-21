@@ -210,5 +210,5 @@ Update the issue progress note with PR links, verification, review status, and
 remaining dependencies. Keep issues open until their outcome merges and is complete.
 Report PR links and any blocked children to the user. Stop at human merge,
 except for an R0 PR that meets the [workflow policy's](../templates/policies/workflow.md#risk)
-R0 merge rule: check it with `tools/merge_check.py` and merge only through it
+R0 merge rule: check it with `ballast merge-check` and merge only through it
 ([ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)).
