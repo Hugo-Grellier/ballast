@@ -55,6 +55,7 @@ only the issue it concerns.
 - THEN nothing is eligible and the report names why, including `close --reason` for a finished queue
 - Test: tests/test_queue_admission.py::QueueTests::test_selection_isolates_unreadable_and_written_prerequisites
 - Test: tests/test_queue_admission.py::QueueTests::test_cancelled_queue_selection_names_close
+- Test: tests/test_queue_admission.py::QueueTests::test_another_coordinator_closes_only_a_finished_settled_queue
 
 #### Scenario: Batched reads
 - WHEN selection reads queue issues and prerequisites
@@ -153,13 +154,19 @@ merged, leaving no review valid for the new head.
 A coordinator execution SHALL record work the coordinator itself does with a
 role and an explicit provider, model and effort, take neither worker capacity
 nor the writer lock but exclude workers and other executions, never count as
-a verified route, and finish once: a completed review with a verdict and a
+a verified route, refuse an implementation of an R1 or R2 leaf without an
+approved spec delta ([spec approval](spec-approval.md)), and finish once: a completed review with a verdict and a
 round 1 to 3 on an unchanged clean head, anything else without them.
 
 #### Scenario: Lifecycle
 - WHEN an implementation execution starts and finishes
 - THEN it is recorded `running` then `completed`, unverified, with no worker capacity or attempt used, and the issue is free afterwards
 - Test: tests/test_coordinator_execution.py::CoordinatorExecutionTests::test_implementation_lifecycle_takes_no_worker_capacity_or_lock
+
+#### Scenario: Unapproved implementation
+- WHEN an implementation execution starts on an R2 leaf without an approved spec delta
+- THEN it refuses before recording anything, while a review execution is not gated
+- Test: tests/test_coordinator_execution.py::CoordinatorExecutionTests::test_unapproved_r2_implementation_is_refused_before_recording
 
 #### Scenario: Review verdict
 - WHEN a review execution finishes

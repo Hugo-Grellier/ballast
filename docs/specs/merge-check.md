@@ -28,7 +28,7 @@ reviewer confirmed R0, and the reviewed head is a full commit SHA.
 
 ### Requirement: Pull request state
 The check SHALL refuse a PR that is not open, is a draft, has a head other than
-the reviewed head, comes from a release or dependency branch or a bot author,
+the reviewed head, comes from a Release Please branch or a bot author,
 or whose body does not tick R0 and only R0.
 
 #### Scenario: Head changed after review
@@ -48,7 +48,7 @@ or whose body does not tick R0 and only R0.
 - Test: tests/test_merge_check.py::MergeCheckTests::test_refuses_pr_body_without_only_r0_ticked
 
 #### Scenario: Release and dependency PRs
-- WHEN the head branch is a Release Please, Dependabot or Renovate branch, or the author is a bot
+- WHEN the head branch is a Release Please branch, or the author is a bot
 - THEN the check refuses: a human merges it
 - Test: tests/test_merge_check.py::MergeCheckTests::test_refuses_release_and_dependency_prs
 

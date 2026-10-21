@@ -11,9 +11,11 @@ settled only on backend-confirmed terminal evidence; anything else stays
 
 ### Requirement: Launch preconditions
 The worker and the probe SHALL refuse before creating any client process in
-CI, inside an issue checkout, on invalid probe arguments, on a malformed claim,
-for a review of a dirty checkout, without a Linux parent-death binding, or
-after a stop signal.
+CI; the probe SHALL also refuse invalid arguments; the worker SHALL also refuse
+inside an issue checkout, on a malformed claim, for a review of a dirty
+checkout, without a Linux parent-death binding, after a stop signal, and for an
+implementation of an R1 or R2 leaf without an approved spec delta
+([spec approval](spec-approval.md)).
 
 #### Scenario: CI
 - WHEN a CI marker variable is set
@@ -22,7 +24,7 @@ after a stop signal.
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_dirty_review_and_ci_block_without_process
 
 #### Scenario: Inside an issue checkout
-- WHEN the worker starts from inside an issue checkout
+- WHEN the worker (not the probe) starts from inside an issue checkout
 - THEN it refuses: start the worker outside issue checkouts
 - Test: tests/test_queue_admission.py::QueueTests::test_helpers_refuse_to_start_inside_an_issue_checkout
 
@@ -41,6 +43,11 @@ after a stop signal.
 - WHEN the parent-death signal cannot be set up
 - THEN no client starts and the worker settles `not_started`, releasing its lock
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_unbound_client_lifetime_never_starts_client
+
+#### Scenario: Unapproved implementation
+- WHEN an implementation worker targets an R1 or R2 leaf without an approved spec delta
+- THEN it refuses before reserving the lock or starting a client
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_unapproved_r1_implement_never_reserves_or_launches
 
 #### Scenario: Stop signal before reservation
 - WHEN SIGTERM arrives before the reservation
@@ -112,14 +119,20 @@ removed while an `unknown` one's is kept.
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_process_left_in_scratch_keeps_worker_unknown
 
 ### Requirement: Task boundary
-The task text SHALL be prefixed with a boundary forbidding ballast, agents,
-route changes, credentials, publication, merge, release and clone-wide Git
-state, and asking for a comparison with `git diff BASE`.
+The task text SHALL be prefixed with a boundary that forbids clone-wide Git
+state (`git stash`, `git worktree`, switching branches) and asks for a
+comparison with `git diff BASE`, names the checkout, and tells a review to
+read the checkout's `AGENTS.md`.
 
 #### Scenario: Clone-wide Git state
 - WHEN a turn starts
 - THEN its input names `git stash`, `git worktree`, switching branches and `git diff`
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_handoff_forbids_clone_wide_git_state
+
+#### Scenario: Checkout and review instructions
+- WHEN an implementation or review turn starts
+- THEN its input names the checkout, and only a review's input asks to read the checkout's `AGENTS.md`
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_each_role_writes_only_its_private_scratch
 
 ### Requirement: Confirmed settlement
 A worker SHALL settle `completed`, `cancelled`, `timeout` or `quota` only from

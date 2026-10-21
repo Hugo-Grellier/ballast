@@ -4,11 +4,14 @@ Covers: tools/qualify.py
 
 `tools/qualify.py` runs the queue, claim, worker, review and publish path end
 to end: `local` against fakes, `live` against Codex and GitHub on an
-operator-named disposable repository. It deletes nothing.
+operator-named disposable repository. It deletes nothing. `local --entry CMD`
+substitutes an installed `ballast` command for the default; that option is not
+yet tested ([#297](https://github.com/Hugo-Grellier/ballast/issues/297)), so no
+scenario describes it.
 
 ### Requirement: Local end-to-end run
-Local mode SHALL drive every helper as a subprocess against a fake app-server
-and a fake `gh`, and SHALL print path-free evidence of a selected issue, a
+Local mode SHALL drive every helper through the `ballast` command, by default
+this checkout's `tools/cli.py`, against a fake app-server and a fake `gh`, and SHALL print path-free evidence of a selected issue, a
 completed implementation and read-only review on an unchanged head, and a
 published PR awaiting review.
 
