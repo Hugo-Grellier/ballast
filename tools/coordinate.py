@@ -386,6 +386,24 @@ def reviewed(claim: Path, attempt: str, head: str) -> bool:
     )
 
 
+# Rebasing the child onto a rewritten parent would drop its recorded base_sha
+# from its history and leave a claim nothing can validate again.
+REWRITTEN = (
+    "Stacked parent branch was rewritten; a stacked parent must never be "
+    "rewritten. Settle the child stopped and prepare a new child on the "
+    "parent's current head; do not rebase this child"
+)
+
+
+def ancestor(cwd: Path, git_dir: Path, old: str, new: str) -> bool:
+    """Whether ``old`` is an ancestor of ``new`` in the pinned checkout."""
+    try:
+        worktree.git(cwd, "merge-base", "--is-ancestor", old, new, git_dir=git_dir)
+    except RuntimeError:
+        return False
+    return True
+
+
 def parent_claim(claim: Path, record: dict) -> dict:
     """Read the recorded stack parent; a missing or replaced one blocks."""
     link = record["parent"]
@@ -506,11 +524,20 @@ def publish(claim: Path, title: str, body: Path) -> dict:
         pushed = worktree.integration_revision(
             cwd, record["repository"], record["base"]
         )
-        try:
-            worktree.git(
-                cwd, "merge-base", "--is-ancestor", pushed, head, git_dir=git_dir
+        if not ancestor(cwd, git_dir, pushed, head):
+            above = worktree.validate(claim.parent / f"issue-{parent['issue']}.json")
+            local = worktree.git(
+                Path(above["checkout"]),
+                "rev-parse",
+                "HEAD",
+                git_dir=Path(above["git_dir"]),
             )
-        except RuntimeError:
+            if local == record["base_sha"]:
+                # A retarget restacked the parent and recorded its new head here.
+                worktree.fail("Push the parent's restacked head before the child")
+            if not ancestor(cwd, git_dir, record["base_sha"], pushed):
+                worktree.fail(REWRITTEN)
+            # The child's base stays in its history: rebasing here is safe.
             worktree.fail("Parent branch moved; rebase the child onto its pushed head")
     remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
     if remote != head:
@@ -830,7 +857,7 @@ def moved(claim: Path, record: dict) -> dict:
         current = admission.read(claim)
         if current.get("attempt") != record["attempt"]:
             worktree.fail("Claim changed during retargeting")
-        del current["retarget_pending"]
+        current.pop("retarget_pending", None)
         admission.write(claim, current)
     return current
 
@@ -874,11 +901,9 @@ def restacked(claim: Path, record: dict, evidence: str) -> dict:
     )
     if local != base_sha:
         worktree.fail("Integration base is stale; fetch and reconsider before dispatch")
-    try:
-        worktree.git(
-            cwd, "merge-base", "--is-ancestor", merged_head, "HEAD", git_dir=git_dir
-        )
-    except RuntimeError:
+    if not ancestor(cwd, git_dir, merged_head, "HEAD"):
+        if not ancestor(cwd, git_dir, record["base_sha"], merged_head):
+            worktree.fail(REWRITTEN)
         worktree.fail("Child lacks the parent's merged head; rebase it by hand first")
     return rebased(claim, record, merged_head, (base, base_sha), evidence)
 

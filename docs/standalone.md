@@ -275,7 +275,10 @@ and any worker lock; settle, release or reconcile them first.
   foreign or stale PRs block. A stacked claim targets its parent branch;
   `publish` refuses when its parent claim is missing or replaced, when GitHub
   reports the parent PR merged (retarget first), or when the parent's pushed
-  head is not in the child (rebase first). For any claim in a stack, the PR body
+  head is not in the child: rebase first when the parent only gained commits,
+  push the parent first when a retarget restacked it locally, and a fixed
+  refusal (below) when the parent's pushed branch no longer contains the
+  child's recorded base revision. For any claim in a stack, the PR body
   gets a `## Stack` section with the merge order, root first, and re-publishing
   an existing PR rewrites its body with `gh pr edit` so each PR carries the
   current order.
@@ -295,6 +298,15 @@ and any worker lock; settle, release or reconcile them first.
   reconciles the PR. It does not push. The new heads have no review or check
   evidence: push them, run fresh reviews, then `publish` again; CI runs on the
   push.
+- Never rewrite a stacked parent's pushed branch (amend, rebase onto a moved
+  base, force-push) while it has a child: rebasing the child onto it would drop
+  the child's recorded base revision and leave a claim nothing validates again.
+  `publish` and `retarget` refuse the child with a fixed reason instead of
+  advising a rebase. If it happens anyway, `settle` the child `stopped`,
+  reconcile its claim like any stopped attempt, and prepare a new child attempt
+  on the parent's current head. The helpers rewrite a parent only inside
+  `retarget`, which restacks every later member and records its new base
+  revision in the same step.
 - `settle --claim CLAIM ACTIVITY --evidence TEXT` records positive coordinator
   evidence. Allowed moves: `active` to `pr_wait`, `stopped` or `unknown`;
   `unknown` to `stopped` or `active`; `pr_wait` to `active`, `stopped` or

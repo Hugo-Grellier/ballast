@@ -1653,6 +1653,11 @@ class QueueTests(unittest.TestCase):
             main = self.commit(self.repo, f"{number + 10}.txt", f"{number + 10}\n")
             self.push("main", main)
             coordinate.retarget(child, f"GitHub reports #{number} merged")
+            if child == b:
+                # The grandchild now records b's unpushed restacked head.
+                self.review(c)
+                with self.assertRaisesRegex(RuntimeError, "Push the parent's"):
+                    coordinate.publish(c, "#62", body)
             record = json.loads(child.read_text())
             head = worktree.git(Path(record["checkout"]), "rev-parse", "HEAD")
             self.assertEqual(worktree.git(self.repo, "rev-parse", f"{head}^"), main)
@@ -1713,6 +1718,36 @@ class QueueTests(unittest.TestCase):
             cwd = Path(item["checkout"])
             self.assertEqual(worktree.git(cwd, "rev-parse", "HEAD"), head)
             self.assertEqual(worktree.git(cwd, "status", "--porcelain"), "")
+
+    def test_rewritten_parent_refuses_the_child_and_keeps_its_claim(self) -> None:
+        parent, child = self.stacked_pair()
+        above = json.loads(parent.read_text())
+        checkout = Path(json.loads(child.read_text())["checkout"])
+        self.commit(checkout, "child.txt", "child\n")
+        body = self.root / "body.md"
+        body.write_text("Fictional PR body")
+        self.review(child)
+        # The parent amends its pushed commit and pushes the rewrite.
+        upper = Path(above["checkout"])
+        (upper / "parent.txt").write_text("amended\n")
+        worktree.git(upper, "commit", "-q", "--amend", "-a", "--no-edit")
+        self.push(above["branch"], worktree.git(upper, "rev-parse", "HEAD"))
+        reason = "parent branch was rewritten.*Settle the child stopped.*do not rebase"
+        with self.assertRaisesRegex(RuntimeError, reason):
+            coordinate.publish(child, "Child", body)
+        self.assertEqual(self.prs, [])
+        self.assertTrue(worktree.validate(child))
+        # Retarget after the rewritten parent merges refuses the same way.
+        self.review(parent)
+        coordinate.publish(parent, "Parent", body)
+        self.merged.add(50)
+        self.push("main", self.commit(self.repo, "parent.txt", "amended\n"))
+        before = worktree.git(checkout, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(RuntimeError, reason):
+            coordinate.retarget(child, "fictional")
+        self.assertEqual(worktree.git(checkout, "rev-parse", "HEAD"), before)
+        self.assertTrue(worktree.validate(child))
+        coordinate.settle(child, "stopped", "parent rewritten")
 
     def test_retarget_refuses_missing_foreign_and_conflicting_parents(self) -> None:
         parent, child = self.stacked_pair()

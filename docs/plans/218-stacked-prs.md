@@ -29,7 +29,11 @@ equals `origin/BRANCH`) applies unchanged. The claim records
 For a claim with a parent, `publish` first rechecks the parent claim (missing or
 foreign refuses), refuses when GitHub reports the parent PR merged (retarget
 first), and refuses when the parent's pushed head is not an ancestor of the
-child head (stale child: rebase first). The PR base is the claim's `base`, so a
+child head: when the parent's checkout is still at the child's `base_sha`
+(restacked by a retarget, not pushed yet), push the parent first; when the
+child's `base_sha` is not an ancestor of the parent's pushed head, the parent
+was rewritten (fixed refusal below); otherwise the parent only gained commits
+(stale child: rebase first, which keeps `base_sha` in its history). The PR base is the claim's `base`, so a
 child PR targets the parent branch. When the claim is part of a stack (parent
 links over local claims, root first), `publish` appends a `## Stack` section
 listing the merge order to the body, and on reuse of the existing PR rewrites
@@ -63,6 +67,24 @@ The new head invalidates review and checks: `publish` already requires a
 completed review of the exact head, and CI runs on the new push. The coordinator
 pushes the rebased head, reviews it, and publishes again.
 
+## Never rewrite a stacked parent
+
+A stacked parent's pushed branch must not be rewritten (amend, rebase onto a
+moved base, force-push) while a child is stacked on it: rebasing the child onto
+the rewritten branch drops the child's recorded `base_sha` from its history,
+after which `validate`, `worker`, `publish` and `retarget` all refuse the claim
+with no recovery. So when the child's `base_sha` is not an ancestor of the
+parent's pushed head (`publish`) or of the parent's merged head (`retarget`),
+both refuse with one fixed reason: the stacked parent branch was rewritten,
+stacked parents must never be rewritten, settle the child `stopped` and prepare
+a new child on the parent's current head. It never advises rebasing the child
+in place, and the child claim stays valid because nothing rewrote it. The only
+helper path that rewrites a parent is `retarget`, which restacks every later
+member and records each new `base_sha` under the same lock, so no helper needs
+a parent-side refusal. Restacking a child onto a rewritten unmerged parent
+(replaying from its recorded `base_sha`, as `retarget` does for descendants) is
+a possible follow-up.
+
 ## Merge order rule
 
 Merge the stack root first, then retarget the next child, re-review, re-check,
@@ -72,8 +94,9 @@ and merge it; never merge a child whose base is still a parent branch.
 
 Stacked preparation and its record; refusals for a missing, foreign
 (other branch), settled or already-stacked parent; publication base and stack
-section on create and reuse; refusal on a merged or advanced parent; retarget
-after GitHub reports the merge, including the invalidated review; refusals while
+section on create and reuse; refusal on a merged, advanced, rewritten or
+restacked-but-unpushed parent (the rewritten case also on retarget, with the
+child claim still valid); retarget after GitHub reports the merge, including the invalidated review; refusals while
 the parent is unmerged, while a worker lock or coordinator execution holds the
 child or a descendant, and on conflict (child or descendant, every checkout
 restored); a failed and a lost PR-base edit each followed by a retry; a
