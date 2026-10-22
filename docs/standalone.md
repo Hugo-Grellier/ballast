@@ -148,15 +148,105 @@ Each worker gets one private scratch directory,
 `<state>/scratch/<role>-<worker>/` next to its claim (`<worker>` is the worker
 reference, so a kept directory never collides with a later worker). The helper
 creates it with mode 0700 when it reserves the worker, before `thread/start`,
-and it is the only write root outside the checkout. `/tmp` and the caller's
-`TMPDIR` stay excluded. Tool commands get `TMPDIR` set to it, `UV_CACHE_DIR` to
-its `uv/` and `XDG_CACHE_HOME` to its `cache/`, through the client's
+and it is the only write root outside the checkout besides an implement
+worker's Git roots below. `/tmp` and the caller's `TMPDIR` stay excluded.
+Tool commands get `TMPDIR` set to it, `UV_CACHE_DIR` to its `uv/` and `XDG_CACHE_HOME` to its `cache/`, through the client's
 `shell_environment_policy`; the unsandboxed client keeps its own temporary
 directory, so nothing a worker writes there is trusted by the client. Both roles
 use the client's workspace-write sandbox:
 
-- Implementation works in the checkout; its receipt must show exactly the scratch
-  directory as the one extra writable root.
+- Implementation works in the checkout. Its receipt must show exactly these
+  writable roots, in this order, so the worker can commit its own diff on the
+  issue branch (in a linked worktree, Git writes outside the checkout, under the
+  common directory `<common>`):
+
+  | Root | Why `git commit` needs it |
+  | --- | --- |
+  | the scratch directory | temporary files and caches |
+  | `<common>/objects` | new blobs, trees and the commit object |
+  | `<common>/refs/heads` | the branch update: `<branch>.lock`, then a rename onto `<branch>` |
+  | `<common>/logs/refs/heads` | the branch reflog |
+  | `<common>/worktrees/<checkout>` | this checkout's index, `HEAD`, `COMMIT_EDITMSG` and `HEAD` reflog |
+
+  The helper derives `<common>` and the admin directory from the claim, never
+  from the worker-writable `.git` gitfile; a repository without
+  `logs/refs/heads` fails the launch. Nothing else in `<common>` is writable:
+  not `config`, `hooks`, `packed-refs`, tags, remotes or `refs/stash`, so
+  `git stash` and `git tag` fail in the sandbox. Git may print that it cannot
+  create `packed-refs.lock` while committing (it clears absent pseudo-refs);
+  the commit still succeeds.
+
+  **This widens the implement worker's authority.** The boundary is
+  directories, not one branch: a ref update creates `<branch>.lock` and renames
+  it onto the ref, which needs write access to the directory, so granting only
+  the branch ref and reflog files cannot commit (a test shows this). Within
+  these roots the worker can also create, move or delete other local branches
+  and their reflogs, write, delete or corrupt objects in the clone's shared
+  object store (or add `objects/info/alternates`), and rewrite its admin
+  directory (`HEAD`, `gitdir`, `commondir`, `config.worktree`). The turn text
+  forbids touching other branches or tags. Compensating checks:
+
+  - Before the turn the helper walks every Git write root without following
+    links (an unreadable directory fails the walk), recording each entry: the
+    roots and every directory by mode, loose objects and packs by mode, inode,
+    size and change time, every other file (refs, reflogs, `objects/info/*`,
+    admin files) by mode and SHA-256, and links, other special files and
+    oversized files as such. After the turn
+    the only differences allowed are new loose objects whose inflated header
+    and content hash to their file name (in the repository's object format),
+    existing loose objects Git freshened (same mode, rechecked the same way), new fan-out
+    directories; the loose ref, `.lock` and reflog of the claimed branch (and
+    of the clone's other claim branches, whose workers commit concurrently, so
+    a worker moving another claim's branch is caught only by that claim's
+    ancestry checks); and the admin directory's `index`, `index.lock`, `HEAD`,
+    `ORIG_HEAD`, `COMMIT_EDITMSG` and `logs/HEAD`. `git commit` writes loose
+    objects only, so any new or touched pack fails: a pack could map an
+    existing object id to other bytes. `HEAD` must read exactly
+    `ref: refs/heads/<claimed branch>`, every loose branch ref must hold an
+    object id (no `ref:`), and the branch must name an existing commit. Any
+    other created, removed or changed entry, or any link or special file,
+    leaves the worker `unknown` with its lock held. This covers moved or
+    aliased branches, symrefs, a repointed `gitdir` or `commondir`,
+    `config.worktree`, alternates, grafts, forged, replaced or removed objects
+    and changed modes of the roots, directories, objects and files without a
+    check for each. A change made and undone
+    within one turn is not seen. A coordinator that commits, moves a local
+    branch or runs `git gc` in the clone during a turn, or a worker whose new
+    content matches an already packed object (Git then freshens the pack),
+    also leaves the worker `unknown`, as does another worker's transient
+    `objects/xx/tmp_obj_*` file present when the comparison runs.
+  - Host-side bounds keep a worker from exhausting the helper: a branch ref or
+    a small admin file over 64 KiB, or any other hashed file over 256 MiB, is
+    refused unread (a sparse file counts by its size), and a loose object that
+    inflates beyond 64 MiB is refused. A legitimate blob over 64 MiB therefore
+    leaves the worker `unknown`; walking and hashing a large clone still costs
+    time.
+  - The comparison binds only processes the settlement scan can see: it waits
+    until nothing runs with its working directory in the checkout, the scratch
+    or a Git write root. A sandboxed process that outlives the turn with its
+    working directory elsewhere can still change the Git roots after the
+    comparison; killing the worker's whole process tree (cgroup or session) is
+    follow-up #301.
+  - Every helper Git call in an issue checkout pins `--git-dir` and
+    `GIT_COMMON_DIR` from the claim, so a rewritten `commondir` cannot point
+    helper Git at a foreign config whose filters would run on the host, and
+    the helpers' `gh` calls for a claim (publication, retarget) run from the
+    claim's state directory, never the checkout.
+  - Claims and publication check `refs/remotes/origin/<base>` against GitHub;
+    remotes, tags, `packed-refs` and `config` are not writable.
+
+  Residual risk: packs and existing objects that kept their mode, inode, size
+  and change time are not re-read, so an in-place overwrite that also restores
+  the change time (which needs privileges a worker lacks) would pass. The
+  object hash check uses `hashlib`, without SHA-1 collision detection: in a
+  SHA-1 repository a chosen-prefix collision could replace an object with
+  other content that passes the recheck. Run
+  `git fsck` on the clone after implement turns when its cost is acceptable
+  (it grows with the clone), and recover from GitHub; keep unpushed work out
+  of a clone that runs implement workers.
+
+  Whether the client's own `.git` protection lets a commit through under these
+  roots is shown only by a live qualification run, not by the local tests.
 - Review works in the scratch directory itself, with no extra root, so the
   checkout stays read-only: the receipt must show the scratch directory as its
   working directory and no writable root. The task tells it where the checkout

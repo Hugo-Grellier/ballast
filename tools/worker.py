@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import ctypes
+import hashlib
 import json
 import math
 import os
@@ -13,11 +14,13 @@ import re
 import select
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
 import time
 import uuid
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -218,16 +221,196 @@ def scratch_env(scratch: Path) -> dict[str, str]:
     }
 
 
-def sandbox_roots(role: str, cwd: Path, scratch: Path) -> tuple[Path, list[str]]:
+def sandbox_roots(
+    role: str, cwd: Path, scratch: Path, git_dir: Path
+) -> tuple[Path, list[str]]:
     """Return the thread's working directory and its exact extra write roots.
 
-    Both roles write only the scratch directory outside the checkout. A review
+    Both roles write the scratch directory outside the checkout. A review
     thread works in the scratch directory itself, so the checkout stays outside
     every write root: the client folds a root equal to its cwd away.
+
+    An implement thread also gets what `git commit` writes in a linked worktree
+    (#255): new objects, its branch ref and reflog (lock-and-rename needs the
+    whole `refs/heads` and `logs/refs/heads` directories), and its own admin
+    directory (index, HEAD, HEAD reflog). Nothing else in the common directory:
+    not `config`, `hooks`, `packed-refs`, `refs/stash`, tags or remotes. Paths
+    come from the claim-pinned admin directory, never the worker-written gitfile.
     """
     if role == "review":
         return scratch, []
-    return cwd, [str(scratch)]
+    return cwd, [str(scratch), *map(str, commit_roots(git_dir))]
+
+
+def commit_roots(git_dir: Path) -> list[Path]:
+    """List what `git commit` writes outside a linked worktree's checkout."""
+    common = git_dir.parent.parent  # `validate` pins <common>/worktrees/<name>.
+    return [
+        common / "objects",
+        common / "refs" / "heads",
+        common / "logs" / "refs" / "heads",
+        git_dir,
+    ]
+
+
+# Loose objects and packs are recorded by inode, size and change time, every
+# other file under the commit roots by content and mode (#255).
+LOOSE = re.compile(r"objects/[0-9a-f]{2}/(?:[0-9a-f]{38}|[0-9a-f]{62})")
+PACK = re.compile(
+    r"objects/pack/pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\.(?:pack|idx|rev|mtimes|bitmap)"
+)
+FANOUT = re.compile(r"objects/[0-9a-f]{2}")
+OID = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\n")
+ADMIN_WRITES = ("index", "index.lock", "HEAD", "ORIG_HEAD", "COMMIT_EDITMSG", "logs")
+CHANGED = "Worker changed Git state outside its branch; inspect the clone"
+
+
+def raise_error(error: OSError) -> None:
+    """Fail the walk on an unreadable directory instead of skipping it."""
+    raise error
+
+
+# Host-side bounds, so a worker cannot exhaust the helper's memory or time:
+# refs and small admin files beyond SMALL_CAP and other files beyond FILE_CAP
+# are refused unread; a loose object inflating beyond INFLATE_CAP is refused.
+SMALL_CAP = 64 * 1024
+FILE_CAP = 256 * 1024 * 1024
+INFLATE_CAP = 64 * 1024 * 1024
+
+
+def git_state(git_dir: Path) -> dict[str, str]:
+    """Record every entry under the commit roots without following a link.
+
+    The roots and directories by mode, objects and packs by mode, inode, size
+    and change time, any other regular file by mode and SHA-256, anything else
+    (a symlink, a FIFO) or an oversized file as `special`. An unreadable
+    directory raises.
+    """
+    common = git_dir.parent.parent
+    state = {}
+    for root in commit_roots(git_dir):
+        state[root.relative_to(common).as_posix()] = (
+            f"directory:{root.lstat().st_mode:o}"
+        )
+        # Never descends a link; raise_error never skips an unreadable directory.
+        for directory, names, files in os.walk(root, onerror=raise_error):
+            for name in [*names, *files]:
+                path = Path(directory, name)
+                info = path.lstat()
+                relative = path.relative_to(common).as_posix()
+                small = relative.startswith("refs/heads/") or (
+                    path.parent == git_dir and name not in {"index", "index.lock"}
+                )
+                if stat.S_ISDIR(info.st_mode):
+                    state[relative] = f"directory:{info.st_mode:o}"
+                elif not stat.S_ISREG(info.st_mode) or info.st_size > (
+                    SMALL_CAP if small else FILE_CAP
+                ):
+                    state[relative] = "special"
+                elif LOOSE.fullmatch(relative) or PACK.fullmatch(relative):
+                    state[relative] = (
+                        f"object:{info.st_mode:o}:{info.st_ino}:{info.st_size}"
+                        f":{info.st_ctime_ns}"
+                    )
+                else:
+                    with path.open("rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    state[relative] = f"file:{info.st_mode:o}:{digest}"
+    return state
+
+
+def loose_object_valid(path: Path, algorithm: str) -> bool:
+    """Whether a loose object's inflated header and content hash to its name.
+
+    Inflation stops past INFLATE_CAP; trailing bytes after the stream fail.
+    """
+    digest, inflater, total = hashlib.new(algorithm), zlib.decompressobj(), 0
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(65536):
+                while chunk:
+                    out = inflater.decompress(chunk, 1 << 20)
+                    total += len(out)
+                    if total > INFLATE_CAP:
+                        return False
+                    digest.update(out)
+                    chunk = inflater.unconsumed_tail
+        digest.update(inflater.flush())
+    except (OSError, zlib.error):
+        return False
+    complete = inflater.eof and not inflater.unused_data
+    return complete and digest.hexdigest() == path.parent.name + path.name
+
+
+def after_turn(claim: Path, record: dict, before: dict[str, str]) -> str:
+    """Fail closed unless the turn changed only what its own commit writes.
+
+    The implement roots are directories (#255), so every entry under them is
+    compared. Allowed: new loose objects whose content hashes to their name
+    (and existing ones Git freshened, rechecked the same way); the claimed
+    branch's loose ref, its lock and reflog; the admin directory's index,
+    HEAD, HEAD reflog and commit message. Branches of the clone's other claims
+    are allowed too: their workers commit concurrently, and each claim's
+    checks guard its own. Anything else that appeared, vanished or changed (a
+    new or touched pack included), an unreadable directory, or any link or
+    special file, fails. A change undone within the turn is not seen.
+    """
+    cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
+    common = git_dir.parent.parent
+    admin = git_dir.relative_to(common).as_posix()
+    try:
+        after = git_state(git_dir)
+    except OSError:
+        codex.fail(CHANGED)
+    branches = {item.get("branch") for item in admission.records(claim.parent)}
+    allowed = {
+        f"{prefix}refs/heads/{branch}{suffix}"
+        for branch in branches
+        for prefix, suffix in (("", ""), ("", ".lock"), ("logs/", ""))
+    } | {f"{admin}/{name}" for name in (*ADMIN_WRITES, "logs/HEAD")}
+    changed = [p for p in before.keys() | after.keys() if before.get(p) != after.get(p)]
+    if (
+        "special" in after.values()
+        or (git_dir / "HEAD").read_text() != f"ref: refs/heads/{record['branch']}\n"
+    ):
+        codex.fail(CHANGED)
+    # Only now: Git may refuse a repointed admin directory.
+    algorithm = worktree.git(cwd, "rev-parse", "--show-object-format", git_dir=git_dir)
+    if algorithm not in {"sha1", "sha256"}:
+        codex.fail(CHANGED)
+
+    def permitted(path: str) -> bool:
+        new = after.get(path, "")
+        if path in allowed:
+            return True
+        old = before.get(path, "")
+        if new.startswith("object:") and LOOSE.fullmatch(path):
+            # New, or an existing one Git freshened (same mode): content matches.
+            same_mode = not old or old.split(":")[1] == new.split(":")[1]
+            return same_mode and loose_object_valid(common / path, algorithm)
+        return (
+            path not in before
+            and new.startswith("directory:")
+            and FANOUT.fullmatch(path) is not None
+        )
+
+    refs = [
+        common / path
+        for path, kind in after.items()
+        if path.startswith("refs/heads/")
+        and not kind.startswith("directory:")
+        and not path.endswith(".lock")
+    ]
+    if not all(map(permitted, changed)) or not all(
+        OID.fullmatch(ref.read_bytes()) for ref in refs
+    ):
+        codex.fail(CHANGED)
+    try:  # The branch must still name an existing commit.
+        return worktree.git(
+            cwd, "rev-parse", "--verify", "HEAD^{commit}", git_dir=git_dir
+        )
+    except RuntimeError:
+        codex.fail(CHANGED)
 
 
 def walked_up(receipt: dict, scratch: Path) -> bool:
@@ -246,7 +429,11 @@ def walked_up(receipt: dict, scratch: Path) -> bool:
 
 
 def establish(
-    server: WorkerServer, cwd: Path, scratch: Path, route: tuple[str, str], role: str
+    server: WorkerServer,
+    scratch: Path,
+    route: tuple[str, str],
+    role: str,
+    sandbox: tuple[Path, list[str]],
 ) -> dict:
     """Validate subscription access and executing thread before task input."""
     model, effort = route
@@ -258,7 +445,7 @@ def establish(
     if not isinstance(account, dict) or account.get("type") != "chatgpt":
         codex.fail("Authorized subscription access could not be established")
     codex.check_capability(server, model, effort)
-    workdir, roots = sandbox_roots(role, cwd, scratch)
+    workdir, roots = sandbox
     receipt = server.request(
         "thread/start",
         {
@@ -345,6 +532,8 @@ def run_turn(
         "credentials, publish, merge, or release. "
         "Do not use clone-wide Git state (git stash, git worktree, switching "
         "branches): other checkouts share it. Compare with git diff BASE. "
+        "Commit only to the checked-out branch; never create, move or delete "
+        "other branches or tags. "
         "Report consequential ambiguity as blocked. "
     )
     turn = server.request(
@@ -633,7 +822,10 @@ def execute(
     }
     try:
         event(directory, "created", role=role, model=model, effort=effort)
-        head = worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir)
+        head, state = (
+            worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),
+            git_state(git_dir),
+        )
         if role == "review" and worktree.git(
             cwd, "status", "--porcelain", git_dir=git_dir
         ):
@@ -641,7 +833,9 @@ def execute(
         with contextlib.closing(
             WorkerServer(str(Path(executable).resolve()), cwd, timeout)
         ) as server:
-            receipt = establish(server, cwd, scratch, route, role)
+            receipt = establish(
+                server, scratch, route, role, sandbox_roots(role, cwd, scratch, git_dir)
+            )
             result.update(receipt)
             admission.write(directory / "result.json", result)
             event(directory, "route_verified", **receipt)
@@ -656,10 +850,11 @@ def execute(
             keep_output(server, directory, result, outcome)
         # Close/reap must succeed before calling the worker settled. Sandboxed
         # tool commands run in their own session and can outlive the client.
-        settle_quiet((cwd, scratch), directory, outcome)
+        # Git roots too: a survivor working there could change them later.
+        settle_quiet((cwd, scratch, *commit_roots(git_dir)), directory, outcome)
         result.update(
             head_before=head,
-            head_after=worktree.git(cwd, "rev-parse", "HEAD", git_dir=git_dir),
+            head_after=after_turn(claim, record, state),
         )
         record_outcome(server, claim, result, (outcome, kind))
         if role == "review" and (

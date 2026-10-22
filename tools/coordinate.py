@@ -614,10 +614,10 @@ def publish(claim: Path, title: str, body: Path) -> dict:
     fallback = review_evidence(claim, record, head)
     if record.get("parent"):
         parent = parent_claim(claim, record)
-        if parent_merged(cwd, parent):
+        if parent_merged(claim.parent, parent):
             worktree.fail("Parent PR merged; retarget the child before publication")
         pushed = worktree.integration_revision(
-            cwd, record["repository"], record["base"]
+            claim.parent, record["repository"], record["base"]
         )
         if not ancestor(cwd, git_dir, pushed, head):
             above = worktree.validate(claim.parent / f"issue-{parent['issue']}.json")
@@ -636,7 +636,10 @@ def publish(claim: Path, title: str, body: Path) -> dict:
                 # A retarget restacked the parent and recorded its new head here.
                 worktree.fail("Push the parent's restacked head before the child")
             worktree.fail(REWRITTEN)
-    remote = worktree.integration_revision(cwd, record["repository"], record["branch"])
+    # gh runs from the state directory, never the worker-writable checkout.
+    remote = worktree.integration_revision(
+        claim.parent, record["repository"], record["branch"]
+    )
     if remote != head:
         worktree.fail("Push the reviewed head before publication")
     text = stacked_body(claim.parent, record, body)
@@ -646,7 +649,8 @@ def publish(claim: Path, title: str, body: Path) -> dict:
     with tempfile.NamedTemporaryFile("w", dir=claim.parent, suffix=".md") as copy:
         copy.write(text)
         copy.flush()
-        found = pull_request(cwd, record, head, title, Path(copy.name))
+        # From the state directory: gh never reads the worker-writable gitfile.
+        found = pull_request(claim.parent, record, head, title, Path(copy.name))
         if text != body.read_text():
             # Re-publishing refreshes the order once later stack members exist.
             worktree.command(
@@ -660,7 +664,7 @@ def publish(claim: Path, title: str, body: Path) -> dict:
                     "--body-file",
                     copy.name,
                 ],
-                cwd,
+                claim.parent,
             )
     pr = {"number": found["number"], "url": found["html_url"], "head": head}
     return admission.record_pr(claim, pr)
@@ -961,7 +965,8 @@ def rebased(
 
 def moved(claim: Path, record: dict) -> dict:
     """Move the child PR to its new base; a retry re-reads GitHub after a failure."""
-    cwd, number = Path(record["checkout"]), record["pr"]["number"]
+    # From the state directory: gh never reads the worker-writable gitfile.
+    cwd, number = claim.parent, record["pr"]["number"]
     data = gh(
         cwd,
         "api",
@@ -1018,7 +1023,7 @@ def restacked(claim: Path, record: dict, evidence: str) -> dict:
         worktree.fail("Claim is not stacked on a parent")
     cwd, git_dir = Path(record["checkout"]), Path(record["git_dir"])
     parent = parent_claim(claim, record)
-    data = parent_merged(cwd, parent)
+    data = parent_merged(claim.parent, parent)  # gh: never the checkout
     if data is None:
         worktree.fail("GitHub does not report the parent PR merged")
     merged_head = (data.get("head") or {}).get("sha")
@@ -1027,9 +1032,13 @@ def restacked(claim: Path, record: dict, evidence: str) -> dict:
     ):
         worktree.fail("Pull request response is malformed")
     base = parent["base"]
-    base_sha = worktree.integration_revision(cwd, record["repository"], base)
+    base_sha = worktree.integration_revision(claim.parent, record["repository"], base)
     local = worktree.git(
-        cwd, "rev-parse", "--verify", f"refs/remotes/origin/{base}^{{commit}}"
+        cwd,
+        "rev-parse",
+        "--verify",
+        f"refs/remotes/origin/{base}^{{commit}}",
+        git_dir=git_dir,
     )
     if local != base_sha:
         worktree.fail("Integration base is stale; fetch and reconsider before dispatch")

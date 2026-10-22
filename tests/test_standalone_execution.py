@@ -14,6 +14,7 @@ import tempfile
 import time
 import unittest
 import uuid
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -36,6 +37,43 @@ def setUpModule() -> None:
     directory = tempfile.TemporaryDirectory()
     unittest.addModuleCleanup(directory.cleanup)
     unittest.enterModuleContext(contextlib.chdir(directory.name))
+
+
+def commit_roots(claim: Path, cwd: Path) -> list[str]:
+    """List what `git commit` writes outside a linked worktree checkout (#255)."""
+    common = claim.resolve().parent.parent
+    return [
+        str(common / "objects"),
+        str(common / "refs" / "heads"),
+        str(common / "logs" / "refs" / "heads"),
+        str(common / "worktrees" / cwd.name),
+    ]
+
+
+def loose_object(common: Path) -> Path:
+    """Return one existing loose object of the clone."""
+    return next(p for p in (common / "objects").glob("??/*") if p.parent.name != "info")
+
+
+def forge(path: Path) -> None:
+    """Put valid zlib at ``path`` whose content does not hash to its name."""
+    path.parent.mkdir(exist_ok=True)
+    forged = path.with_name("forged")
+    forged.write_bytes(zlib.compress(b"blob 6\0forged"))
+    forged.replace(path)
+
+
+def chmod(top: Path, writable: list[Path], *, lock: bool) -> None:
+    """Make ``top`` read-only outside ``writable`` (lock), or writable again."""
+    for directory, names, files in os.walk(top):
+        here = Path(directory)
+        if lock and any(here == w or w in here.parents for w in writable):
+            names[:] = []
+            continue
+        here.chmod(0o555 if lock else 0o755)
+        for name in files:
+            if not (lock and here / name in writable):
+                (here / name).chmod(0o444 if lock else 0o644)
 
 
 class ExecutionTests(unittest.TestCase):
@@ -65,9 +103,9 @@ class ExecutionTests(unittest.TestCase):
         self.host_calls: list[list[str]] = []
         native = worktree.command
 
-        def hosting(argv: list[str], cwd: Path) -> str:
+        def hosting(argv: list[str], cwd: Path, pinned: object = None) -> str:
             if argv[0] != "gh":
-                return native(argv, cwd)
+                return native(argv, cwd, pinned)
             self.host_calls.append(argv)
             if "/issues/" in argv[-1]:
                 return json.dumps(
@@ -85,6 +123,10 @@ class ExecutionTests(unittest.TestCase):
         self.claim = worktree.prepare(self.repo, "example/fixture", 7, "main")
         self.record = json.loads(self.claim.read_text())
         self.cwd = Path(self.record["checkout"])
+        # What `git commit` writes in a linked worktree (#255), outside the checkout.
+        self.common = self.claim.resolve().parent.parent
+        self.admin = self.common / "worktrees" / self.cwd.name
+        self.git_roots = commit_roots(self.claim, self.cwd)
         self.task = self.root / "task.txt"
         self.task.write_text("Inspect the fictional fixture and report.")
         self.environment = patch.dict(os.environ, dict.fromkeys(codex.CI_MARKERS, ""))
@@ -108,7 +150,9 @@ class ExecutionTests(unittest.TestCase):
             "sandbox": {
                 "type": "workspaceWrite",
                 "networkAccess": False,
-                "writableRoots": [] if review else [SCRATCH],
+                "writableRoots": []
+                if review
+                else [SCRATCH, *commit_roots(self.claim, self.cwd)],
                 "excludeTmpdirEnvVar": True,
                 "excludeSlashTmp": True,
             },
@@ -232,6 +276,265 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual(result["head_after"], self.base)
 
+    def test_worker_written_commondir_cannot_run_host_commands(self) -> None:
+        # An implement worker writes its admin dir, `commondir` included (#255).
+        evil = self.root / "evil.git"
+        shutil.copytree(self.common, evil, ignore=shutil.ignore_patterns("ballast-v2"))
+        marker = self.root / "executed"
+        with (evil / "config").open("a") as stream:
+            stream.write(f'[filter "fixture"]\n\tclean = touch {marker}; cat\n')
+        (self.cwd / ".gitattributes").write_text("* filter=fixture\n")
+        # Same size, older index stat: status must hash it through the filter.
+        os.utime(self.cwd / "example.txt", (0, 0))
+        worktree.git(self.cwd, "update-index", "--refresh", git_dir=self.admin)
+        (self.cwd / "example.txt").write_text("fictioner\n")
+        (self.admin / "commondir").write_text(f"{evil}\n")
+        # Control: without the pinned common dir, Git follows the rewrite.
+        argv = ["git", "--git-dir", str(self.admin), "--work-tree", str(self.cwd)]
+        worktree.command([*argv, "status", "--porcelain"], self.cwd)
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        worktree.git(self.cwd, "status", "--porcelain", git_dir=self.admin)
+        self.assertFalse(marker.exists())
+
+    def test_git_commit_works_under_exactly_the_implement_roots(self) -> None:
+        # Simulate the sandbox with permissions: only the write roots stay writable.
+        if os.geteuid() == 0:
+            self.skipTest("root ignores permission bits")
+        scratch = self.claim.parent / "scratch" / "implement-fixture"
+        scratch.mkdir(parents=True)
+        workdir, roots = worker.sandbox_roots(
+            "implement", self.cwd, scratch, self.admin
+        )
+        self.assertEqual(roots, [str(scratch), *self.git_roots])
+
+        def run(*args: str) -> int:
+            # As the worker runs Git: through its gitfile, no helper pinning.
+            identity = ["-c", "user.name=Fictional", "-c", "user.email=f@x.invalid"]
+            try:
+                worktree.command(["git", *identity, *args], workdir)
+            except RuntimeError:
+                return 1
+            return 0
+
+        self.addCleanup(chmod, self.common, [], lock=False)
+        allowed = [workdir, *map(Path, roots)]
+        branch = Path("refs", "heads", self.record["branch"])
+        cases = [(None, allowed)]
+        cases += [(m, [w for w in allowed if str(w) != m]) for m in self.git_roots]
+        # Narrower than the directories: only the branch ref and reflog files.
+        # Lock-and-rename needs the directory, so this cannot commit (#255).
+        cases.append(
+            (
+                "branch files only",
+                [w for w in allowed if str(w) not in self.git_roots[1:3]]
+                + [self.common / branch, self.common / "logs" / branch],
+            )
+        )
+        for counter, (missing, writable) in enumerate(cases):
+            with self.subTest(missing=missing):
+                (self.cwd / "example.txt").write_text(f"change {counter}\n")
+                chmod(self.common, writable, lock=True)
+                try:
+                    committed = run("commit", "-qam", f"change {counter}")
+                    if missing is None:
+                        # Clone-wide state stays out of reach (#235).
+                        self.assertNotEqual(run("tag", "fixture-tag"), 0)
+                        (self.cwd / "example.txt").write_text("unsaved\n")
+                        self.assertNotEqual(run("stash"), 0)
+                        (self.cwd / "example.txt").write_text(f"change {counter}\n")
+                finally:
+                    chmod(self.common, [], lock=False)
+                self.assertEqual(committed != 0, missing is not None)
+                if missing is None:
+                    head = worktree.git(
+                        self.cwd, "rev-parse", "HEAD", git_dir=self.admin
+                    )
+                    self.assertNotEqual(head, self.base)
+                    self.assertEqual(
+                        worktree.git(self.repo, "rev-parse", "main"), self.base
+                    )
+
+    def test_turn_that_changes_git_state_beyond_its_branch_stays_unknown(
+        self,
+    ) -> None:
+        def git(*args: str) -> None:
+            worktree.git(self.cwd, *args, git_dir=self.admin)
+
+        def commit() -> None:
+            (self.cwd / "example.txt").write_text("worker change\n")
+            git("commit", "-qam", "worker change")
+
+        def write(name: str, text: str) -> None:
+            (self.admin / name).write_text(text)
+
+        def put(path: str, text: str) -> None:
+            (self.common / path).write_text(text)
+
+        def alias() -> None:
+            # The branch file becomes a symlink to a file holding the same commit.
+            target = self.root / "aliased"
+            target.write_text(self.base + "\n")
+            (self.common / self.own).unlink()
+            (self.common / self.own).symlink_to(target)
+
+        cases = {
+            "commits on its branch": (commit, True),
+            # Another claim's worker commits concurrently on its own branch.
+            "other claim moves": (lambda: git("update-ref", self.other, "HEAD"), True),
+            "moves a bystander": (
+                lambda: (commit(), git("branch", "-f", "bystander")),
+                False,
+            ),
+            "creates a branch": (lambda: git("branch", "created"), False),
+            "deletes a branch": (lambda: git("branch", "-D", "bystander"), False),
+            "moves HEAD": (lambda: write("HEAD", "ref: refs/heads/main\n"), False),
+            "repoints commondir": (lambda: write("commondir", "/elsewhere\n"), False),
+            "repoints gitdir": (lambda: write("gitdir", "/elsewhere\n"), False),
+            "adds config.worktree": (lambda: write("config.worktree", ""), False),
+            # Aliases the value comparison cannot see: same commit, other ref.
+            "makes its branch a symref": (
+                lambda: git("symbolic-ref", self.own, "refs/heads/bystander"),
+                False,
+            ),
+            "symlinks its branch": (alias, False),
+            "adds alternates": (
+                lambda: (self.common / "objects/info/alternates").write_text(
+                    f"{self.root}\n"
+                ),
+                False,
+            ),
+            # One generic comparison covers what no per-feature check names.
+            "dangles its branch": (lambda: put(self.own, "0" * 40 + "\n"), False),
+            "rewrites a bystander file": (
+                lambda: put("refs/heads/bystander", "1" * 40 + "\n"),
+                False,
+            ),
+            "adds grafts": (lambda: put("objects/info/grafts", "\n"), False),
+            "symlinks in objects/info": (
+                lambda: (self.common / "objects/info/link").symlink_to(self.root),
+                False,
+            ),
+            "removes an object": (lambda: loose_object(self.common).unlink(), False),
+            "adds a stray objects file": (lambda: put("objects/ab", ""), False),
+            "adds an admin file": (lambda: write("MERGE_HEAD", self.base), False),
+            # Objects: a pack could remap an existing id, a loose one could lie.
+            "freshens an object": (lambda: os.utime(loose_object(self.common)), True),
+            "adds a pack": (
+                lambda: put(f"objects/pack/pack-{'a' * 40}.pack", ""),
+                False,
+            ),
+            "adds a forged object": (
+                lambda: forge(self.common / "objects" / "ab" / ("c" * 38)),
+                False,
+            ),
+            "replaces an object": (lambda: forge(loose_object(self.common)), False),
+            "hides objects/info": (
+                lambda: self.relax(self.common / "objects" / "info", 0o300),
+                False,
+            ),
+            "changes a directory mode": (
+                lambda: self.relax(self.common / "objects" / "info", 0o700),
+                False,
+            ),
+            "chmods a root": (
+                lambda: self.relax(self.common / "objects", 0o700),
+                False,
+            ),
+            "chmods a fan-out dir": (
+                lambda: self.relax(loose_object(self.common).parent, 0o700),
+                False,
+            ),
+            "chmods an object": (lambda: loose_object(self.common).chmod(0o666), False),
+            "chmods a ref": (
+                lambda: (self.common / "refs/heads/bystander").chmod(0o600),
+                False,
+            ),
+            # Sparse and huge: refused by size, never read (reading would hang).
+            "inflates its branch ref": (
+                lambda: os.truncate(self.common / self.own, 1 << 40),
+                False,
+            ),
+            "inflates an admin file": (
+                lambda: (
+                    write("ORIG_HEAD", ""),
+                    os.truncate(self.admin / "ORIG_HEAD", 1 << 40),
+                ),
+                False,
+            ),
+        }
+        for name, (change, accepted) in cases.items():
+            with self.subTest(name=name):
+                self.doCleanups()  # A fresh clone and claim for every case.
+                self.setUp()
+                worktree.git(self.repo, "branch", "bystander")
+                other = worktree.prepare(self.repo, "example/fixture", 8, "main")
+                self.other = "refs/heads/" + json.loads(other.read_text())["branch"]
+                self.own = "refs/heads/" + self.record["branch"]
+                with contextlib.ExitStack() as stack:
+                    if not accepted:
+                        stack.enter_context(
+                            self.assertRaisesRegex(
+                                codex.QualificationError, "outside its branch"
+                            )
+                        )
+                    sent = self.threads(
+                        self.script(), "implement", lambda _, c=change: c()
+                    )
+                if accepted:
+                    self.assertEqual(sent["result"]["status"], "completed")
+                    continue
+                self.assertTrue(self.claim.with_suffix(".worker").exists())
+                (result,) = (self.claim.parent / "workers").glob("*/result.json")
+                self.assertEqual(json.loads(result.read_text())["status"], "unknown")
+
+    def test_special_file_present_before_the_turn_stays_unknown(self) -> None:
+        (self.common / "objects" / "info" / "link").symlink_to(self.root)
+        with self.assertRaisesRegex(codex.QualificationError, "outside its branch"):
+            self.run_worker(self.script())
+        self.assertTrue(self.claim.with_suffix(".worker").exists())
+
+    def relax(self, directory: Path, mode: int) -> None:
+        """Change a directory's mode until the test ends."""
+        self.addCleanup(directory.chmod, directory.stat().st_mode & 0o7777)
+        directory.chmod(mode)
+
+    def test_unreadable_directory_before_the_turn_never_dispatches(self) -> None:
+        info = self.common / "objects" / "info"
+        self.addCleanup(info.chmod, 0o755)
+        info.chmod(0o300)
+        with self.assertRaises(OSError):
+            self.run_worker(self.script())
+        (result,) = (self.claim.parent / "workers").glob("*/result.json")
+        self.assertEqual(json.loads(result.read_text())["status"], "not_started")
+
+    def test_loose_object_check_bounds_inflation_and_trailing_bytes(self) -> None:
+        (self.root / "blob").write_bytes(b"x" * 4096)
+        name = worktree.git(self.repo, "hash-object", "-w", str(self.root / "blob"))
+        path = self.common / "objects" / name[:2] / name[2:]
+        self.assertTrue(worker.loose_object_valid(path, "sha1"))
+        with patch.object(worker, "INFLATE_CAP", 1024):  # A zlib bomb, scaled down.
+            self.assertFalse(worker.loose_object_valid(path, "sha1"))
+        path.chmod(0o644)
+        with path.open("ab") as stream:
+            stream.write(b"trailing")
+        self.assertFalse(worker.loose_object_valid(path, "sha1"))
+
+    def test_process_left_in_a_git_root_keeps_worker_unknown(self) -> None:
+        # A survivor working in the shared object store could change it later.
+        objects = self.common / "objects"
+
+        def scan(root: Path) -> list[int]:
+            return [4242] if root == objects else []
+
+        with (
+            patch.object(worker, "survivors", side_effect=scan),
+            patch.object(worker, "QUIET_SECONDS", 0),
+            self.assertRaisesRegex(codex.QualificationError, r"still run.*\b4242\b"),
+        ):
+            self.run_worker(self.script())
+        self.assertTrue(self.claim.with_suffix(".worker").exists())
+
     def test_stale_base_and_setup_failure_preserve_state(self) -> None:
         self.base = "different"
         with self.assertRaisesRegex(RuntimeError, "stale"):
@@ -285,7 +588,8 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual(self.run_worker(self.script())["status"], "completed")
         (turn,) = [c.args[2] for c in sent.call_args_list if c.args[1] == "turn/start"]
         text = turn["input"][0]["text"]
-        for rule in ("git stash", "git worktree", "switching branches", "git diff"):
+        rules = ("git stash", "git worktree", "switching branches", "git diff")
+        for rule in (*rules, "other branches or tags"):
             self.assertIn(rule, text)
 
     def test_invalid_routes_and_access_never_dispatch(self) -> None:
@@ -356,7 +660,9 @@ class ExecutionTests(unittest.TestCase):
                     self.assertEqual(thread["config"]["project_root_markers"], [])
                 else:
                     self.assertEqual(thread["cwd"], str(self.cwd))
-                    self.assertEqual(writes["writable_roots"], [str(scratch)])
+                    self.assertEqual(
+                        writes["writable_roots"], [str(scratch), *self.git_roots]
+                    )
                     self.assertNotIn("project_root_markers", thread["config"])
                 self.assertEqual(sent["turn/start"]["cwd"], thread["cwd"])
                 text = sent["turn/start"]["input"][0]["text"]
@@ -376,12 +682,22 @@ class ExecutionTests(unittest.TestCase):
                 self.assertEqual(self.scratches(), [])  # Removed once settled.
 
     def test_receipt_must_show_exactly_the_scratch_root(self) -> None:
+        git = self.git_roots
         roots = (
             ("implement", {"writableRoots": []}),
-            ("implement", {"writableRoots": [SCRATCH, "/elsewhere"]}),
+            ("implement", {"writableRoots": [SCRATCH]}),
+            ("implement", {"writableRoots": [SCRATCH, *git, "/elsewhere"]}),
+            ("implement", {"writableRoots": [SCRATCH, *git, str(self.common)]}),
+            ("implement", {"writableRoots": [SCRATCH, str(self.common)]}),
             ("implement", {"writableRoots": ["/elsewhere"]}),
+            # Each missing commit root fails the launch too.
+            *(
+                ("implement", {"writableRoots": [SCRATCH, *git[:i], *git[i + 1 :]]})
+                for i in range(len(git))
+            ),
             ("review", {"writableRoots": [SCRATCH]}),
             ("review", {"writableRoots": [str(self.cwd)]}),
+            ("review", {"writableRoots": git}),
             ("implement", {"excludeTmpdirEnvVar": False}),
             ("review", {"excludeSlashTmp": False}),
             ("review", {"type": "readOnly"}),
@@ -556,9 +872,9 @@ class ExecutionTests(unittest.TestCase):
     def test_unapproved_r1_implement_never_reserves_or_launches(self) -> None:
         hosted = worktree.command
 
-        def unapproved(argv: list[str], cwd: Path) -> str:
+        def unapproved(argv: list[str], cwd: Path, pinned: object = None) -> str:
             if argv[0] != "gh":
-                return hosted(argv, cwd)
+                return hosted(argv, cwd, pinned)
             self.host_calls.append(argv)
             if argv[-1].endswith("/comments"):
                 return ""

@@ -98,7 +98,8 @@ child's stack position.
 Before a helper acts on a claim it SHALL check that the record is well
 formed and ready, that the checkout belongs to this clone, branch and base,
 and SHALL derive Git metadata from the claim, never from the worker-writable
-checkout gitfile or inherited `GIT_*` variables.
+checkout gitfile, the worker-writable admin `commondir` file or inherited
+`GIT_*` variables.
 
 #### Scenario: Malformed claim
 - WHEN the claim record is not a well-formed object
@@ -126,6 +127,11 @@ checkout gitfile or inherited `GIT_*` variables.
 - THEN helper Git uses the pinned admin directory and runs nothing from it
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_worker_written_gitfile_cannot_run_host_commands
 - Test: tests/test_queue_admission.py::QueueTests::test_publish_ignores_worker_written_gitfile
+
+#### Scenario: Worker-written commondir
+- WHEN a worker points its admin directory's `commondir` at another repository
+- THEN helper Git pins the claim's common directory and runs nothing from it
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_worker_written_commondir_cannot_run_host_commands
 
 ### Requirement: Fixed diagnostics
 The command SHALL print a local-only claim handle on success and, on

@@ -89,16 +89,20 @@ before dispatch, and a mismatch SHALL release the lock without dispatching.
 - Test: tests/test_codex_routing.py::QualificationTests::test_protocol_errors_eof_and_malformed_json_are_not_receipts
 
 ### Requirement: Sandbox roots and scratch directory
-Each worker SHALL get a private `0700` scratch directory as its only extra
-write root, with `TMPDIR`, the uv cache and the XDG cache pointed into it and
-the system temp roots excluded; a review thread SHALL work in its scratch,
-with the checkout in no write root and no project-root search above it. The
-receipt SHALL show exactly those roots, and a settled worker's scratch SHALL be
-removed while an `unknown` one's is kept.
+Each worker SHALL get a private `0700` scratch directory as a write root, with
+`TMPDIR`, the uv cache and the XDG cache pointed into it and the system temp
+roots excluded; a review thread SHALL work in its scratch, with the checkout
+and every Git directory in no write root and no project-root search above it.
+An implementation worker SHALL also get exactly the roots `git commit` needs
+in a linked worktree, derived from the claim: `<common>/objects`,
+`<common>/refs/heads`, `<common>/logs/refs/heads` and its admin directory,
+after the scratch and in that order. The receipt SHALL show exactly those
+roots, and a settled worker's scratch SHALL be removed while an `unknown`
+one's is kept.
 
 #### Scenario: Roles and roots
 - WHEN an implementation or review worker starts
-- THEN the implementer works in the checkout with the scratch as write root, and the reviewer works in its scratch with no write root, is told to read the checkout's `AGENTS.md`, and loads no project root markers
+- THEN the implementer works in the checkout with the scratch and the four Git commit roots as write roots, and the reviewer works in its scratch with no write root, is told to read the checkout's `AGENTS.md`, and loads no project root markers
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_each_role_writes_only_its_private_scratch
 
 #### Scenario: Receipt roots differ
@@ -106,6 +110,11 @@ removed while an `unknown` one's is kept.
 - THEN the worker refuses before dispatch and removes the scratch
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_receipt_must_show_exactly_the_scratch_root
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_missing_write_roots_blocks_before_dispatch
+
+#### Scenario: A commit needs exactly the Git roots
+- WHEN the clone is writable only in the checkout, the scratch and the four Git commit roots
+- THEN `git commit` in the linked worktree succeeds and moves only the issue branch, `git tag` and `git stash` fail, and dropping any one root, or keeping only the branch ref and reflog files, makes the commit fail
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_git_commit_works_under_exactly_the_implement_roots
 
 #### Scenario: Temporary files in a review
 - WHEN a review's tool command creates temporary files
@@ -118,15 +127,59 @@ removed while an `unknown` one's is kept.
 - THEN the worker stays `unknown`, keeps its lock and its scratch
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_process_left_in_scratch_keeps_worker_unknown
 
+### Requirement: Git state bound to the claimed branch
+Before an implementation or review turn the worker SHALL record every entry
+under the Git commit roots without following links; after it the worker SHALL
+stay `unknown`, keeping its lock, unless the only differences are new loose
+objects whose content hashes to their name (or existing ones Git freshened,
+rechecked the same way), new fan-out directories, the loose ref, lock and
+reflog of a claim branch of this clone, and the admin directory's index,
+`HEAD`, `ORIG_HEAD`, commit message and `HEAD` reflog; `HEAD` SHALL name the
+claimed branch, every loose branch ref SHALL hold an object id, and the branch
+SHALL name an existing commit. A link or special file, an unreadable
+directory, a new or changed pack, or any other created, removed or changed
+entry, a mode change on a root, directory, object or file, a branch ref or
+small admin file over 64 KiB or another file over 256 MiB (refused unread),
+or a loose object inflating past 64 MiB or with bytes after its stream SHALL
+leave it `unknown`. An unreadable directory before the turn SHALL stop the
+worker before dispatch. A survivor working in a Git commit root SHALL keep it
+`unknown` like one in the checkout.
+
+#### Scenario: Changes beyond the branch
+- WHEN a turn commits on its branch, or another claim's branch moves, or Git freshens an object
+- THEN the worker settles; and WHEN it moves, creates, deletes, rewrites, aliases or dangles a branch, repoints `HEAD`, `gitdir` or `commondir`, adds an admin file, `config.worktree`, alternates, grafts, a pack, a forged or replacing object or a link, removes an object, hides or chmods a root, directory, object or ref, or inflates a ref or admin file
+- THEN the worker stays `unknown` with its lock
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_turn_that_changes_git_state_beyond_its_branch_stays_unknown
+
+#### Scenario: Special file before the turn
+- WHEN a link already exists under a Git commit root before the turn
+- THEN the worker stays `unknown`
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_special_file_present_before_the_turn_stays_unknown
+
+#### Scenario: Unreadable directory before the turn
+- WHEN a Git commit root holds an unreadable directory before the turn
+- THEN the worker fails before dispatch and settles `not_started`
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_unreadable_directory_before_the_turn_never_dispatches
+
+#### Scenario: Bounded object check
+- WHEN a loose object inflates past the bound or has bytes after its zlib stream
+- THEN it is refused, while a well-formed object is accepted
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_loose_object_check_bounds_inflation_and_trailing_bytes
+
+#### Scenario: Survivor in a Git root
+- WHEN a process still works in a Git commit root after the turn
+- THEN the worker stays `unknown` and names it
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_process_left_in_a_git_root_keeps_worker_unknown
+
 ### Requirement: Task boundary
 The task text SHALL be prefixed with a boundary that forbids clone-wide Git
-state (`git stash`, `git worktree`, switching branches) and asks for a
-comparison with `git diff BASE`, names the checkout, and tells a review to
-read the checkout's `AGENTS.md`.
+state (`git stash`, `git worktree`, switching branches) and touching other
+branches or tags, and asks for a comparison with `git diff BASE`, names the
+checkout, and tells a review to read the checkout's `AGENTS.md`.
 
 #### Scenario: Clone-wide Git state
 - WHEN a turn starts
-- THEN its input names `git stash`, `git worktree`, switching branches and `git diff`
+- THEN its input names `git stash`, `git worktree`, switching branches, other branches or tags, and `git diff`
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_handoff_forbids_clone_wide_git_state
 
 #### Scenario: Checkout and review instructions
