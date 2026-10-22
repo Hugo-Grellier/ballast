@@ -78,14 +78,17 @@ for `uvx`, an authenticated `gh` for GitHub.com, and a supported Codex CLI for w
 ## The spec gate and merge verdict
 
 Ballast reads one policy file from a fixed place: `project/workflow.md` at the
-repository root, taken from the target branch, never the PR head. The other
+repository root. `ballast merge-check` takes it from the target branch, never the PR
+head; `spec_check.py` reads the checkout's copy for its informational uncovered list. The other
 policies keep reading `docs/policies/project/<name>.md`.
 
 - **Verdict.** `ballast merge-check` returns `MERGE`, `HUMAN` or `BLOCK` for a PR's
   current head. The coordinator merges only on `MERGE`; the human reviews the
   handoff on `HUMAN`; `BLOCK` waits for its fix. The human approval moves to the
-  spec: for an R1 or R2 issue a `Spec approved:` comment on the issue approves the
-  requirements and scenarios before implementation. R2, release, deployment and
+  spec: for an R1 or R2 issue a comment on the issue whose first line is
+  `Spec approved: <hash> risk <Rn> delta <delta comment URL>` approves the
+  requirements and scenarios before implementation (see the
+  [issue workflow](issue-workflow.md)). R2, release, deployment and
   destructive actions still need a human.
 - **`project/workflow.md`.** Copy `templates/project/workflow.md`. List your own R2
   surfaces and the code and text that define the gate as `Human-only: GLOB`: a PR
@@ -103,8 +106,9 @@ policies keep reading `docs/policies/project/<name>.md`.
   `spec-check.yml` workflow runs it in CI.
 - **Before the bootstrap is complete.** A path no `Covers:` glob matches and no
   `Coverage-exempt:` line exempts is uncovered, and an R1 PR changing one gets
-  `HUMAN`. R1 stays `HUMAN` until the touched capability has a spec; R0 PRs
-  that touch no covered path can still `MERGE`.
+  `HUMAN`, and so does any other PR changing an uncovered path, R0 included. R1
+  stays `HUMAN` until the touched capability has a spec; an R0 PR can `MERGE` only
+  when every changed path is coverage-exempt and no `Covers:` glob matches it.
 
 ## Workflow copies
 

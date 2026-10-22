@@ -1,12 +1,13 @@
 # Project workflow
 
-Ballast's merge verdict (`ballast merge-check`) and `spec_check.py` read this
-file from the target branch, never from the PR head, so a PR cannot remove its
-own exclusion. Copy it to `project/workflow.md` at the repository root (not
+Ballast's merge verdict (`ballast merge-check`) reads this file from the target
+branch, never from the PR head, so a PR cannot remove its own exclusion;
+`spec_check.py` reads the checkout's copy for its informational uncovered list.
+Copy it to `project/workflow.md` at the repository root (not
 `docs/policies/project/`). Each key line stands alone at the start of a line,
 `Key: GLOB` with one glob; a key line of any other form, or a file without any
-key line, is malformed, which gives `HUMAN` for every PR. Key lines inside code
-fences are ignored. Without this file every PR, R0 included, gets `HUMAN`.
+key line, is malformed, which gives `HUMAN` for every PR. For `merge-check`, key
+lines inside code fences are ignored. Without this file every PR, R0 included, gets `HUMAN`.
 
 ## Human-only paths
 
@@ -22,6 +23,9 @@ Human-only: AGENTS.md
 Human-only: CLAUDE.md
 Human-only: project/workflow.md
 Human-only: docs/policies/**
+Replace or delete the next line: left as is, the file is malformed and every PR
+gets `HUMAN`.
+
 Human-only: [YOUR R2 SURFACE GLOB]
 
 ## Coverage-exempt paths

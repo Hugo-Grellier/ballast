@@ -43,7 +43,7 @@ Classify R0 (docs/cleanup), R1 (normal feature, non-destructive extension) or R2
 | Public behavior, config, API, ADR | [Documentation policy](docs/policies/documentation.md) and [documentation review](.agents/skills/ballast-documentation-review/SKILL.md) |
 | Jobs, retries, provider failures | [Observability policy](docs/policies/observability.md) |
 
-Each policy also reads `docs/policies/project/<name>.md` when it exists. The exception is the merge verdict: `ballast merge-check` and the spec check read `project/workflow.md` at the repository root, from the target branch (copy `templates/project/workflow.md`); without it every PR gets `HUMAN`. Living specs live in `docs/specs/` (format: `docs/policies/spec-format.md`).
+Each policy also reads `docs/policies/project/<name>.md` when it exists. The exception is the merge verdict: `ballast merge-check` reads `project/workflow.md` at the repository root, from the target branch (the spec check reads the checkout's copy; copy `templates/project/workflow.md`); without it every PR gets `HUMAN`. Living specs live in `docs/specs/` (format: `docs/policies/spec-format.md`).
 
 Never silently weaken a failing test, validation, authorization, lint/type rule or error result; change source authority; add a second source of truth; or mix unrelated refactors into the work. Resolve a genuine conflict explicitly.
 
