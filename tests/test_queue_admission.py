@@ -2216,21 +2216,26 @@ class QueueTests(unittest.TestCase):
     def test_release_adopt_and_settle_refuse_unbounded_evidence(self) -> None:
         self.queue([1])
         claim = self.prepare(1)
-        claim.with_suffix(".worker").write_text("held")
         before = claim.read_text()
-        for evidence in ("", "x" * 257):
-            for name, call in {
-                "release": lambda e: admission.release(claim, "held", e),
-                "adopt": lambda e: admission.adopt(claim, e),
-                "settle": lambda e: admission.settle(claim, "stopped", e),
-            }.items():
+        # Recovery is tried without a worker lock, so only its evidence check refuses.
+        recovery = ("Recovery requires bounded", lambda e: admission.adopt(claim, e))
+        release = (
+            "Release requires bounded",
+            lambda e: admission.release(claim, "h", e),
+        )
+        settle = (
+            "Settlement requires",
+            lambda e: admission.settle(claim, "stopped", e),
+        )
+        for message, call in (recovery, release, settle):
+            for evidence in ("", "x" * 257):
                 with (
-                    self.subTest(name, evidence=len(evidence)),
-                    self.assertRaises(admission.AdmissionError),
+                    self.subTest(message, evidence=len(evidence)),
+                    self.assertRaisesRegex(admission.AdmissionError, message),
                 ):
                     call(evidence)
         self.assertEqual(claim.read_text(), before)
-        self.assertTrue(claim.with_suffix(".worker").exists())
+        self.assertFalse(claim.with_suffix(".worker").exists())
 
     def test_adopt_refuses_merged_work_and_an_active_foreign_transfer(self) -> None:
         self.queue([1])
@@ -2277,7 +2282,9 @@ class QueueTests(unittest.TestCase):
         blocked = coordinate.select(self.repo)["blocked"]
         reason = "prerequisites could not be evaluated"
         self.assertIn(reason, blocked["1"])
-        self.assertNotIn(reason, blocked.get("2", []))
+        # Exactly 50 are evaluated: each unmet prerequisite is reported.
+        self.assertEqual(len(blocked["2"]), 50)
+        self.assertTrue(all("no merged change" in item for item in blocked["2"]))
 
 
 def response_account(kind: str) -> dict:
