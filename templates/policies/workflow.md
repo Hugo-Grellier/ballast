@@ -1,6 +1,6 @@
 # Agent-first development workflow
 
-This is the operational profile: risk classification, review triggers and deterministic gates. Agents use this file, `AGENTS.md`, the Ballast [issue workflow](https://github.com/Hugo-Grellier/ballast/blob/main/docs/issue-workflow.md) and conditional policies for daily work. Project-specific risk boundaries, gate commands and review triggers live in [`project/workflow.md`](project/workflow.md) when the project provides one; they extend this policy and win on conflict.
+This is the operational profile: risk classification, review triggers and deterministic gates. Agents use this file, `AGENTS.md`, the Ballast [issue workflow](https://github.com/Hugo-Grellier/ballast/blob/main/docs/issue-workflow.md) and conditional policies for daily work. Project-specific risk boundaries, gate commands and review triggers live in [`project/workflow.md`](../../project/workflow.md) when the project provides one; they extend this policy and win on conflict.
 
 ## Work and artifacts
 

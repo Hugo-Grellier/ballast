@@ -125,6 +125,7 @@ Links between the copies resolve as they are. Point the others at the tag
 or at your own copies:
 
 - `../templates/policies/workflow.md` → `workflow.md`, your policy copy;
+- `../templates/skills/NAME/SKILL.md` → `../../.agents/skills/NAME/SKILL.md`, your skill copy;
 - `standalone.md`, `execution.md`, `subagent-workers.md` and `adr/...` →
   `https://github.com/Hugo-Grellier/ballast/blob/vX.Y.Z/docs/...` with your tag.
 
