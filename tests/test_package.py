@@ -127,16 +127,26 @@ class AdopterLinkTests(unittest.TestCase):
             root = Path(directory)
             self.adopt(root)
             migration = (ROOT / "docs" / "migration.md").read_text()
-            rewrites = [
-                (old.split("NAME")[0], new.split("NAME")[0])
-                for old, new in REWRITE.findall(migration)
-            ]
-            self.assertIn(("../templates/skills/", "../../.agents/skills/"), rewrites)
+            rewrites = REWRITE.findall(migration)
+            self.assertIn(
+                (
+                    "../templates/skills/NAME/SKILL.md",
+                    "../../.agents/skills/NAME/SKILL.md",
+                ),
+                rewrites,
+            )
             for name in WORKFLOW_COPIES:
                 copy = root / "docs" / "policies" / name
                 text = copy.read_text()
                 for old, new in rewrites:
-                    text = text.replace(old, new)
+                    pattern = re.escape(old).replace("NAME", "([^/]+)")
+                    text = re.sub(
+                        pattern,
+                        lambda m, n=new: n.replace(
+                            "NAME", m.group(1) if m.groups() else ""
+                        ),
+                        text,
+                    )
                 for link in LINK.findall(text):
                     path = link.split("#")[0]
                     if "://" in link or not path or path.startswith(TAG_ONLY):
