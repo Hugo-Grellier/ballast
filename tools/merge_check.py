@@ -1,4 +1,9 @@
-"""Check the ADR-0026 R0 merge precondition; merge only with --merge."""
+"""Compute a PR's merge verdict (ADR-0026, ADR-0027): MERGE, HUMAN or BLOCK.
+
+Prints the verdict with its reasons and what would raise it; merges only on
+MERGE and only with --merge, squash, pinned to the reviewed head. Exit 0 on
+MERGE, 3 on HUMAN, 1 on BLOCK.
+"""
 
 from __future__ import annotations
 
@@ -12,16 +17,19 @@ from pathlib import Path
 
 # Direct isolated invocation loads only this operator-selected source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import admission, worktree
+from tools import admission, spec_approval, spec_check, worktree
 
 SHA = re.compile(r"[0-9a-f]{40}")
+REPO = re.compile(r"[\w.-]+/[\w.-]+")
+RISKS = ("R0", "R1", "R2")
 FIELDS = (
-    "number,state,isDraft,headRefOid,headRefName,baseRefName,author,body,changedFiles"
+    "number,state,isDraft,headRefOid,headRefName,baseRefName,author,body,"
+    "changedFiles,closingIssuesReferences"
 )
 BRANCH = re.compile(r"[\w.-]+(?:/[\w.-]+)*")
 # File names whose change always needs a human merge (ADR-0026): release files,
 # dependency manifests and lockfiles of common ecosystems. A project adds its own
-# with --exclude.
+# with `Human-only:` lines in project/workflow.md, or --exclude.
 EXCLUDED_PREFIXES = (".github/",)
 EXCLUDED_NAMES = (
     "CHANGELOG.md",
@@ -59,8 +67,19 @@ EXCLUDED_NAMES = (
     ".pre-commit-config.yaml",
     ".tool-versions",
 )
+CLAIM_BRANCH = re.compile(r"issue-(\d+)-")
 EXCLUDED_BRANCHES = ("release-please--", "dependabot/", "renovate/")
 TICKED = re.compile(r"(?im)^[ \t]*[-*][ \t]*\[[xX]\][ \t]*(R[012])\b")
+# Any line that looks like a workflow key; only the strict form counts, so a
+# misspelled or list-item key is malformed rather than silently ignored.
+WORKFLOW_KEY = re.compile(
+    r"[ \t]*(?:[-*+][ \t]+)?(?:human-only|coverage-exempt)[ \t]*:.*", re.IGNORECASE
+)
+WORKFLOW_LINE = re.compile(r"^(Human-only|Coverage-exempt):[ \t]+(\S+)[ \t]*$")
+MERGED_NOTE = (
+    "Merged by `tools/merge_check.py` under ADR-0027: verdict MERGE on reviewed"
+    " head {head}, confirmed risk {risk}. This is not a human approval."
+)
 
 
 def gh(*args: str) -> subprocess.CompletedProcess:
@@ -72,6 +91,24 @@ def gh(*args: str) -> subprocess.CompletedProcess:
         timeout=60,
         check=False,
     )
+
+
+def fetch(root: Path, repo: str, base: str, head: str) -> str:
+    """Fetch the target branch tip and the reviewed head; return the tip SHA."""
+    url = f"https://github.com/{repo}.git"
+    tip = ""
+    for ref in (f"refs/heads/{base}", head):
+        result = subprocess.run(  # noqa: S603 -- fixed git argv, no shell
+            ["git", "-C", str(root), "fetch", "--quiet", "--no-tags", url, ref],  # noqa: S607 -- git from PATH
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if result.returncode:
+            worktree.fail("Fetching the target branch or the reviewed head failed")
+        tip = tip or spec_check.git(root, "rev-parse", "FETCH_HEAD").strip()
+    return tip
 
 
 def read(*args: str, codes: frozenset[int] = frozenset({0})) -> object:
@@ -98,21 +135,73 @@ def excluded(path: str, extra: tuple[str, ...] = ()) -> bool:
     )
 
 
-def pull_request(pr: object, number: int, head: str) -> None:
-    """Refuse a PR that is not an open, ready, R0-ticked PR at the reviewed head."""
+class Findings:
+    """BLOCK and HUMAN reasons, each with what would raise the verdict."""
+
+    def __init__(self) -> None:
+        """Start with no reason: the verdict is MERGE until one is added."""
+        self.block: list[dict] = []
+        self.human: list[dict] = []
+        self.paths: set[str] = set()
+
+    def add(
+        self, level: str, reason: str, action: str, paths: list | None = None
+    ) -> None:
+        """Record a reason at level BLOCK or HUMAN, and the paths behind it."""
+        target = self.block if level == "BLOCK" else self.human
+        target.append({"reason": reason, "to_raise": action})
+        self.paths.update(paths or [])
+
+    def verdict(self) -> str:
+        """BLOCK takes precedence over HUMAN, and HUMAN over MERGE."""
+        return "BLOCK" if self.block else "HUMAN" if self.human else "MERGE"
+
+
+def pull_request(
+    pr: object, number: int, head: str, risk: str, found: Findings
+) -> None:
+    """Judge the PR's state, origin and ticked risk against the reviewed head."""
     if not isinstance(pr, dict) or pr.get("number") != number:
         worktree.fail("Pull request response is malformed")
     if pr.get("state") != "OPEN":
-        worktree.fail("The PR is not open")
+        found.add("BLOCK", "The PR is not open", "reopen the PR")
     if pr.get("isDraft") is not False:
-        worktree.fail("The PR is a draft")
+        found.add("BLOCK", "The PR is a draft", "mark the PR ready for review")
     if pr.get("headRefOid") != head:
-        worktree.fail("The PR head differs from the reviewed head")
+        found.add(
+            "BLOCK",
+            "The PR head differs from the reviewed head: the review is stale",
+            "review the current head again",
+        )
     branch, author = pr.get("headRefName") or "", pr.get("author") or {}
     if branch.startswith(EXCLUDED_BRANCHES) or author.get("is_bot") is not False:
-        worktree.fail("Release and dependency PRs need a human merge")
-    if TICKED.findall(pr.get("body") or "") != ["R0"]:
-        worktree.fail("The PR body must tick R0 and no other risk")
+        found.add(
+            "HUMAN", "Release and dependency PRs need a human merge", "a human merges"
+        )
+    ticked = TICKED.findall(pr.get("body") or "")
+    if len(ticked) != 1:
+        found.add(
+            "BLOCK",
+            "The PR body must tick exactly one risk",
+            "tick one risk box in the PR body",
+        )
+    elif ticked[0] != risk:
+        found.add(
+            "HUMAN",
+            f"The risk is disputed: the PR ticks {ticked[0]}, the reviewer"
+            f" confirmed {risk}",
+            "a human settles the risk",
+        )
+    if risk == "R2":
+        found.add("HUMAN", "An R2 PR needs a human merge", "a human merges")
+
+
+def base_branch(pr: dict) -> str:
+    """Return the PR's base branch name, or refuse a malformed one."""
+    base = pr.get("baseRefName")
+    if not isinstance(base, str) or not BRANCH.fullmatch(base) or ".." in base:
+        worktree.fail("The PR base branch is malformed")
+    return base
 
 
 def changed_paths(pages: object, count: object) -> list[str]:
@@ -139,14 +228,12 @@ def changed_paths(pages: object, count: object) -> list[str]:
     return paths
 
 
-def required_contexts(repo: str, base: object) -> set[str]:
+def required_contexts(repo: str, base: str) -> set[str]:
     """Every status check the base branch requires, from rulesets and protection.
 
     `gh pr checks --required` lists only required checks that reported, so a
     required check that never started would go unnoticed without this set.
     """
-    if not isinstance(base, str) or not BRANCH.fullmatch(base) or ".." in base:
-        worktree.fail("The PR base branch is malformed")
     pages = read("api", f"repos/{repo}/rules/branches/{base}", "--paginate", "--slurp")
     branch = read("api", f"repos/{repo}/branches/{base}")
     if (
@@ -178,30 +265,15 @@ def required_contexts(repo: str, base: object) -> set[str]:
     return set(contexts)
 
 
-def check(args: argparse.Namespace) -> dict:
-    """Refuse unless every R0 merge precondition holds on the reviewed head."""
-    number, head = args.pr, args.reviewed_head
-    if args.verdict != "approved":
-        worktree.fail("The independent review did not approve this head")
-    if args.risk != "R0":
-        worktree.fail("The reviewer did not confirm R0; a human merges this PR")
-    if not SHA.fullmatch(head):
-        worktree.fail("The reviewed head is not a full commit SHA")
-    target = f"github.com/{args.repo}"
-    pr = read("pr", "view", str(number), "--repo", target, "--json", FIELDS)
-    pull_request(pr, number, head)
-    pages = read(
-        "api",
-        f"repos/{args.repo}/pulls/{number}/files?per_page=100",
-        "--paginate",
-        "--slurp",
-    )
-    paths = changed_paths(pages, pr.get("changedFiles"))
-    if any(excluded(path, tuple(args.exclude)) for path in paths):
-        worktree.fail("The PR changes a workflow, release or dependency path")
-    required = required_contexts(args.repo, pr.get("baseRefName"))
+def required_checks(repo: str, number: int, base: str, found: Findings) -> None:
+    """Require every required check of the base branch green on the PR head."""
+    required = required_contexts(repo, base)
     if not required:
-        worktree.fail("No required checks are configured for the base branch")
+        found.add(
+            "BLOCK",
+            "No required checks are configured for the base branch",
+            "require at least one status check on the base branch",
+        )
     # gh pr checks exits 1 for a failing and 8 for a pending check, still
     # printing the list; each bucket is checked below.
     checks = read(
@@ -209,7 +281,7 @@ def check(args: argparse.Namespace) -> dict:
         "checks",
         str(number),
         "--repo",
-        target,
+        f"github.com/{repo}",
         "--json",
         "name,bucket",
         codes=frozenset({0, 1, 8}),
@@ -219,11 +291,404 @@ def check(args: argparse.Namespace) -> dict:
     for name in sorted(required):
         buckets = [item.get("bucket") for item in checks if item.get("name") == name]
         if not buckets:
-            worktree.fail("A required check has not reported on the PR head")
-        if any(bucket != "pass" for bucket in buckets):
-            worktree.fail("A required check is not green on the PR head")
-    command = ["gh", "pr", "merge", str(number), "--repo", target, "--squash"]
-    return {"merge": [*command, "--match-head-commit", head]}
+            found.add(
+                "BLOCK",
+                f"Required check {name} has not reported on the PR head",
+                "wait for it",
+            )
+        elif any(bucket != "pass" for bucket in buckets):
+            found.add(
+                "BLOCK",
+                f"Required check {name} is not green on the PR head",
+                "fix or rerun it",
+            )
+
+
+def project_workflow(root: Path, tip: str, found: Findings) -> dict | None:
+    """Read the human-only and coverage-exempt globs from the target branch.
+
+    Never from the PR head, so a PR cannot remove its own exclusion. A missing
+    or unreadable file, one without a key line or with an unclosed code fence,
+    or a key line not of the form `Key: GLOB` gives HUMAN.
+    """
+    try:
+        text = spec_check.git(root, "show", f"{tip}:{spec_check.WORKFLOW}")
+    except spec_check.SpecError:
+        text = None
+    # Key lines inside a code fence are examples, not keys; a fence left open
+    # would hide every key after it.
+    fenced_lines, unclosed = spec_check.fenced_lines(text or "")
+    lines = [
+        line
+        for _, line, fenced in fenced_lines
+        if not fenced and WORKFLOW_KEY.fullmatch(line)
+    ]
+    parsed = [WORKFLOW_LINE.match(line) for line in lines]
+    if unclosed or not parsed or not all(parsed):
+        found.add(
+            "HUMAN",
+            f"{spec_check.WORKFLOW} is missing or malformed on the target branch",
+            f"add `Human-only: GLOB` and `Coverage-exempt: GLOB` lines to"
+            f" {spec_check.WORKFLOW} on the target branch",
+        )
+        return None
+    globs: dict = {"Human-only": [], "Coverage-exempt": []}
+    for match in parsed:
+        globs[match.group(1)].append(match.group(2))
+    return globs
+
+
+def issue(repo: str, number: int) -> tuple[dict, list[dict]]:
+    """Return an issue and every comment, or refuse a malformed one."""
+    data = read("api", f"repos/{repo}/issues/{number}")
+    pages = read(
+        "api",
+        f"repos/{repo}/issues/{number}/comments?per_page=100",
+        "--paginate",
+        "--slurp",
+    )
+    if not isinstance(data, dict):
+        worktree.fail("Issue response is malformed")
+    body = data.get("body") or ""
+    if not isinstance(pages, list) or not all(isinstance(p, list) for p in pages):
+        worktree.fail("Issue comments response is malformed")
+    comments = [c for page in pages for c in page]
+    if not isinstance(body, str) or not all(
+        isinstance(c, dict) and isinstance(c.get("body"), str) for c in comments
+    ):
+        worktree.fail("Issue response is malformed")
+    return {**data, "body": body}, comments
+
+
+def issue_risks(number: int, data: dict, found: Findings) -> list[str]:
+    """Return the issue's trusted `Risk:` values; HUMAN for a closed issue."""
+    if data.get("state") != "open":
+        found.add(
+            "HUMAN",
+            f"Issue #{number} is not open; its approval does not carry over",
+            f"close an open issue, or reopen #{number}",
+        )
+    risks = spec_approval.RISK.findall(data["body"].replace("\r\n", "\n"))
+    if data.get("author_association") not in spec_approval.TRUSTED:
+        # Only the author or a writer can edit the body, so a trusted
+        # author leaves no untrusted edit.
+        risks = []
+    if len(risks) != 1:
+        found.add(
+            "HUMAN",
+            f"Issue #{number} has no single parseable `Risk:` line by a trusted author",
+            f"state `Risk: R0|R1|R2` once in issue #{number}",
+        )
+    return risks
+
+
+def closing_issues(repo: str, pr: dict, found: Findings) -> tuple[str | None, list]:
+    """Return the risk floor and each closing issue's (approval, comments).
+
+    The floor is the highest `Risk:` line and approved risk of the closing
+    issues, None when unknown. No closing issue, one in another repository, a
+    closed one (its approval cannot be replayed by a later PR), or one without
+    a single parseable `Risk:` line in a body a trusted author wrote gives
+    HUMAN.
+    """
+    references = pr.get("closingIssuesReferences")
+    if not isinstance(references, list):
+        worktree.fail("Pull request response is malformed")
+    if not references:
+        found.add(
+            "HUMAN",
+            "The PR closes no issue, so its risk floor is unknown",
+            "link the issue with `Closes #N`",
+        )
+    floor, approvals, known = "R0", [], bool(references)
+    for reference in references:
+        if not isinstance(reference, dict):
+            worktree.fail("Pull request response is malformed")
+        repository = reference.get("repository") or {}
+        owner = (repository.get("owner") or {}).get("login")
+        number = reference.get("number")
+        where = f"{owner}/{repository.get('name')}"
+        if not isinstance(number, int) or where.lower() != repo.lower():
+            found.add(
+                "HUMAN",
+                "The PR closes an issue outside this repository",
+                "close only issues of this repository",
+            )
+            known = False
+            continue
+        data, comments = issue(repo, number)
+        risks = issue_risks(number, data, found)
+        known = known and len(risks) == 1
+        try:
+            approval = spec_approval.approval(repo, number, comments)
+        except admission.FixedReasonError:
+            approval = None
+        floor = max([floor, *risks, *([approval["approved_risk"]] if approval else [])])
+        if approval:
+            approvals.append((approval, comments))
+    return (floor if known else None), approvals
+
+
+def edited(approval: dict, comments: list[dict]) -> bool:
+    """Whether the approval, or its delta after the approval, was edited."""
+    by_url = {c.get("html_url"): c for c in comments}
+    delta_id = approval["delta"].rsplit("-", 1)[-1]
+    delta = next(c for c in comments if str(c.get("id")) == delta_id)
+    approved = by_url[approval["approval"]]
+    stamps = [approved.get(k) for k in ("created_at", "updated_at")]
+    stamps.append(delta.get("updated_at"))
+    if not all(isinstance(stamp, str) and stamp for stamp in stamps):
+        worktree.fail("Issue comments response is malformed")
+    created, updated, delta_updated = stamps
+    return updated != created or delta_updated > created
+
+
+def stale(root: Path, tip: str, entries: list[dict]) -> bool:
+    """Whether a delta entry's base no longer matches the target branch tip.
+
+    A modified or removed entry needs its base text there; an added entry's key
+    must not exist there yet.
+    """
+    target = {
+        name: spec_check.spec_texts(text)
+        for name, text in spec_check.specs_at(root, tip).items()
+    }
+    for item in entries:
+        texts = target.get(item["file"], {})
+        key = (item["requirement"], item["scenario"])
+        if item["change"] == "added" and key in texts:
+            return True
+        if item["change"] != "added" and texts.get(key) != item["base"]:
+            return True
+    return False
+
+
+def covers_at(root: Path, revision: str) -> dict[str, list[str]]:
+    """Return {spec file: sorted `Covers:` globs} of the specs at a revision."""
+    return {
+        name: sorted(spec_check.parse_covers(text, name)[0])
+        for name, text in spec_check.specs_at(root, revision).items()
+    }
+
+
+def specs(args: argparse.Namespace, tip: str, paths: list, found: Findings) -> dict:
+    """Judge coverage, the spec delta and its approval; return the handoff spec."""
+    root, head, risk = args.root, args.reviewed_head, args.risk
+    workflow = project_workflow(root, tip, found)
+    human_only = workflow["Human-only"] if workflow else []
+    exempt = [*(workflow["Coverage-exempt"] if workflow else []), "docs/specs/**"]
+    risky = [
+        p
+        for p in paths
+        if excluded(p, tuple(args.exclude))
+        or spec_check.matches(p.lower(), [g.lower() for g in human_only])
+    ]
+    if risky:
+        found.add(
+            "HUMAN",
+            "The PR changes a workflow, release, dependency or human-only path",
+            "a human merges",
+            risky,
+        )
+    entries = spec_check.git_delta(root, tip, head)
+    digest = spec_check.delta_hash(entries)
+    if stale(root, tip, entries):
+        found.add(
+            "BLOCK",
+            "The spec delta is stale: the target branch changed its base text"
+            " or already has an added entry",
+            "rebase, then post and approve a new delta",
+        )
+    head_map, tip_map = covers_at(root, head), covers_at(root, tip)
+    head_covers = [glob for globs in head_map.values() for glob in globs]
+    tip_covers = [glob for globs in tip_map.values() for glob in globs]
+    if head_map != tip_map:
+        # `Covers:` lines decide coverage but are outside the approved delta,
+        # so changing them is an authority change a human reviews.
+        changed = sorted(
+            name
+            for name in head_map.keys() | tip_map.keys()
+            if head_map.get(name) != tip_map.get(name)
+        )
+        found.add(
+            "HUMAN",
+            "The PR changes `Covers:` lines, which decide coverage outside the"
+            " approved delta",
+            "a human reviews the coverage change",
+            changed,
+        )
+    # Coverage comes from the target branch: a PR cannot cover its own new
+    # path with a `Covers:` line, which is not part of the approved delta.
+    uncovered = [p for p in paths if not spec_check.matches(p, tip_covers + exempt)]
+    if uncovered:
+        found.add(
+            "HUMAN",
+            "Changed paths no spec covers",
+            "add them to a spec's `Covers:` lines, or list them `Coverage-exempt:`",
+            uncovered,
+        )
+    if risk == "R0":
+        covered = [p for p in paths if spec_check.matches(p, head_covers + tip_covers)]
+        if covered:
+            found.add(
+                "HUMAN",
+                "An R0 PR changes paths a spec covers",
+                "classify it R1 with an approved spec delta",
+                covered,
+            )
+        if any(item["change"] != "added" for item in entries):
+            found.add(
+                "HUMAN",
+                "An R0 PR modifies or removes a spec entry",
+                "classify it R1 with an approved spec delta",
+            )
+    return {"hash": digest, "entries": len(entries)}
+
+
+def approved_spec(
+    risk: str, digest: str, approvals: list, found: Findings
+) -> dict | None:
+    """Require, for R1, an unedited approval on a closing issue quoting digest."""
+    matching = [(a, c) for a, c in approvals if a["hash"] == digest]
+    if matching:
+        approval, comments = matching[0]
+        if edited(approval, comments):
+            found.add(
+                "BLOCK",
+                "The spec delta or its approval was edited after the approval",
+                "post a new delta and get it approved",
+            )
+        return approval
+    if risk == "R0":
+        return None
+    if approvals:
+        found.add(
+            "BLOCK",
+            f"Spec hash mismatch: the reviewed head's docs/specs/ delta hashes"
+            f" {digest}, the approval quotes {approvals[0][0]['hash']}",
+            "make the spec change match the approved delta, or approve the new one",
+        )
+    elif risk == "R1":
+        found.add(
+            "BLOCK",
+            f"An R1 PR needs an approved spec delta on its closing issue (a PR"
+            f" changing no spec needs an approved empty delta); this head's"
+            f" delta hashes {digest}",
+            "post the delta and get it approved",
+        )
+    return None
+
+
+def issue_match(pr: dict, risk: str, found: Findings) -> None:
+    """Tie the PR to one issue: the one its claim branch names.
+
+    An R1 or R2 PR comes from a claim branch `issue-N-...` and closes exactly
+    #N, so an approval of one issue cannot carry another; any claim branch
+    must close the issue it names.
+    """
+    numbers = [r.get("number") for r in pr["closingIssuesReferences"]]
+    if risk != "R0" and len(numbers) > 1:
+        found.add(
+            "HUMAN",
+            "An R1 or R2 PR closes more than one issue",
+            "close exactly one issue, or split the PR",
+        )
+    claim = CLAIM_BRANCH.match(pr.get("headRefName") or "")
+    if risk != "R0" and not claim:
+        found.add(
+            "HUMAN",
+            "An R1 or R2 PR needs a claim branch `issue-N-...`",
+            "publish from the issue's claim branch",
+        )
+    if claim and int(claim.group(1)) not in numbers:
+        found.add(
+            "HUMAN",
+            f"The claim branch names issue #{claim.group(1)}, which the PR does"
+            " not close",
+            f"close #{claim.group(1)} from this branch",
+        )
+
+
+def evaluate(args: argparse.Namespace, found: Findings) -> dict:
+    """Collect every BLOCK and HUMAN reason for the reviewed head."""
+    number, head, risk = args.pr, args.reviewed_head, args.risk
+    if args.verdict != "approved":
+        found.add(
+            "BLOCK",
+            "The independent review did not approve this head",
+            "get an approving independent review of the exact head",
+        )
+    if risk not in RISKS:
+        worktree.fail("The confirmed risk is not R0, R1 or R2")
+    if not SHA.fullmatch(head):
+        worktree.fail("The reviewed head is not a full commit SHA")
+    if not REPO.fullmatch(args.repo):
+        worktree.fail("The repository is not OWNER/NAME")
+    target = f"github.com/{args.repo}"
+    pr = read("pr", "view", str(number), "--repo", target, "--json", FIELDS)
+    pull_request(pr, number, head, risk, found)
+    base = base_branch(pr)
+    pages = read(
+        "api",
+        f"repos/{args.repo}/pulls/{number}/files?per_page=100",
+        "--paginate",
+        "--slurp",
+    )
+    paths = changed_paths(pages, pr.get("changedFiles"))
+    floor, approvals = closing_issues(args.repo, pr, found)
+    issue_match(pr, risk, found)
+    if floor and floor > risk:
+        found.add(
+            "HUMAN",
+            f"The confirmed risk {risk} is below the closing issue's {floor}",
+            "a human accepts the lower risk",
+        )
+    tip = fetch(args.root, args.repo, base, head)
+    spec = specs(args, tip, paths, found)
+    approval = approved_spec(risk, spec["hash"], approvals, found)
+    required_checks(args.repo, number, base, found)
+    return {
+        "risk": risk,
+        "floor": floor or "unknown",
+        "target": {"branch": base, "tip": tip},
+        "spec": {**spec, **(approval or {})},
+    }
+
+
+def check(args: argparse.Namespace) -> dict:
+    """Return the verdict, its reasons and, on MERGE, the pinned merge command.
+
+    Any state not listed under MERGE or HUMAN, including an unreadable
+    response, is BLOCK.
+    """
+    found = Findings()
+    facts: dict = {}
+    try:
+        facts = evaluate(args, found)
+    except (admission.FixedReasonError, spec_check.SpecError) as error:
+        found.add("BLOCK", str(error), "fix the cause and run the check again")
+    except (KeyError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+        found.add(
+            "BLOCK",
+            f"Unexpected {type(error).__name__}",
+            "fix the cause and run the check again",
+        )
+    result: dict = {"verdict": found.verdict(), **facts}
+    if found.block:
+        result["block"] = found.block
+    if found.human:
+        result["human"] = found.human
+    if result["verdict"] == "HUMAN":
+        result["handoff"] = {
+            "risky_paths": sorted(found.paths),
+            "approved_spec": facts.get("spec"),
+            "review_findings": args.finding,
+        }
+    if result["verdict"] == "MERGE":
+        command = ["gh", "pr", "merge", str(args.pr), "--repo"]
+        command += [f"github.com/{args.repo}", "--squash"]
+        result["merge"] = [*command, "--match-head-commit", args.reviewed_head]
+    return result
 
 
 def parser() -> argparse.ArgumentParser:
@@ -235,40 +700,85 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--verdict", required=True)
     root.add_argument("--risk", required=True, help="risk the reviewer confirmed")
     root.add_argument(
+        "--finding",
+        action="append",
+        default=[],
+        help="a surviving review finding, listed in the HUMAN handoff",
+    )
+    root.add_argument(
         "--exclude",
         action="append",
         default=[],
         help="extra glob (file name or path) that always needs a human merge",
     )
-    root.add_argument("--merge", action="store_true", help="perform the merge")
+    root.add_argument(
+        "--root", type=Path, default=Path(), help="the project checkout (Git)"
+    )
+    root.add_argument("--merge", action="store_true", help="merge on MERGE")
     return root
 
 
 def run(args: argparse.Namespace) -> dict:
-    """Check, then merge only on explicit request."""
+    """Compute the verdict, then merge only on MERGE and explicit request."""
     if worktree.inside_checkout():
         worktree.fail("Run merge checks from the project checkout, not an issue")
     result = check(args)
-    if args.merge:
+    if args.merge and result["verdict"] == "MERGE":
+        target = result["target"]
+        tip = fetch(args.root, args.repo, target["branch"], args.reviewed_head)
+        if tip != target["tip"]:
+            result["verdict"] = "BLOCK"
+            result["block"] = [
+                {
+                    "reason": "The target branch moved since the verdict",
+                    "to_raise": "run the check again",
+                }
+            ]
+            return result
         # --match-head-commit makes GitHub refuse a head that moved since the check.
         if gh(*result["merge"][1:]).returncode:
-            worktree.fail("GitHub refused the merge; nothing else was attempted")
-        result["merged"] = True
+            result["verdict"] = "BLOCK"
+            result["block"] = [
+                {
+                    "reason": "GitHub refused the merge; nothing else was attempted",
+                    "to_raise": "check the PR on GitHub and run the check again",
+                }
+            ]
+            return result
+        # A merge queue accepts the command without merging yet: report merged
+        # only when GitHub says so.
+        target = result["merge"][5]
+        try:
+            state = read(
+                "pr", "view", str(args.pr), "--repo", target, "--json", "state"
+            )
+        except admission.FixedReasonError:
+            state = None
+        merged = isinstance(state, dict) and state.get("state") == "MERGED"
+        result["merged"] = merged
+        result["state"] = (
+            "merged" if merged else "queued" if isinstance(state, dict) else "unknown"
+        )
+        if merged:
+            note = MERGED_NOTE.format(head=args.reviewed_head, risk=args.risk)
+            comment = ("pr", "comment", str(args.pr), "--repo", target)
+            result["noted"] = gh(*comment, "--body", note).returncode == 0
     return result
 
 
+EXIT = {"MERGE": 0, "BLOCK": 1, "HUMAN": 3}
+
+
 def main() -> int:
-    """Print the merge command, or the fixed reason the merge is refused."""
+    """Print the verdict as JSON; the exit code follows the verdict."""
     try:
         result = run(parser().parse_args())
-    except admission.FixedReasonError as error:
-        sys.stderr.write(f"Merge refused: {error}\n")
-        return 1
+    except (admission.FixedReasonError, spec_check.SpecError) as error:
+        result = {"verdict": "BLOCK", "block": [{"reason": str(error)}]}
     except (OSError, subprocess.SubprocessError, AttributeError, TypeError) as error:
-        sys.stderr.write(f"Merge refused: {type(error).__name__}\n")
-        return 1
+        result = {"verdict": "BLOCK", "block": [{"reason": type(error).__name__}]}
     sys.stdout.write(json.dumps(result, indent=2) + "\n")
-    return 0
+    return EXIT[result["verdict"]]
 
 
 if __name__ == "__main__":

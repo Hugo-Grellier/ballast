@@ -253,7 +253,7 @@ similarly named green check from another workflow is insufficient. Record requir
 advisory, and justified skipped checks separately. Keep acceptance requirements
 binding even when a hosting platform's branch rules are weaker.
 
-Mark ready for human merge only when:
+Mark ready for the merge verdict only when:
 
 - Every in-scope acceptance criterion has evidence in the PR.
 - Required local checks and CI pass at the current head.
@@ -267,7 +267,14 @@ successful publication alone does not mean ready.
 
 Update the issue progress note with PR links, verification, review status, and
 remaining dependencies. Keep issues open until their outcome merges and is complete.
-Report PR links and any blocked children to the user. Stop at human merge,
-except for an R0 PR that meets the [workflow policy's](../templates/policies/workflow.md#risk)
-R0 merge rule: check it with `ballast merge-check` and merge only through it
-([ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)).
+Report PR links and any blocked children to the user. Stop at the merge
+verdict of the [workflow policy](../templates/policies/workflow.md#risk): run
+`ballast merge-check` on the reviewed head, merge only through it on `MERGE`,
+hand the `HUMAN` handoff to a human, and fix what `BLOCK` names
+([ADR-0027](adr/0027-spec-approval-living-specs-merge-verdict.md)). Report a
+merge as merged under ADR-0027, never as a human approval. The verdict takes
+the review evidence (`--verdict`, `--risk`, `--reviewed-head`) on trust from the
+coordinator, as under ADR-0026: pass exactly what the independent review of
+that head recorded
+([#302](https://github.com/Hugo-Grellier/ballast/issues/302) binds it to the
+recorded review).

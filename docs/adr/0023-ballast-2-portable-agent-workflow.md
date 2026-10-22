@@ -30,7 +30,7 @@ that v1 must not be used to build 2.0.
   review rounds, waiting and instruction revisions. Use existing backend lifecycle
   facilities where available and a minimal local record for standalone recovery.
 - Bound concurrent workers, retries, escalation, quota waits and ready-PR backlog.
-  Respect native permissions. Preserve human merge/release approval. New paid
+  Respect native permissions. Preserve human merge/release approval (merge amended by ADR-0026 and ADR-0027: merges follow the computed verdict). New paid
   services, recurring automation and destructive actions require authorization.
 
 ## V1 boundaries and migration

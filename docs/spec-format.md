@@ -64,10 +64,10 @@ A repository without `docs/specs/` passes with a notice.
 `merge-base(REF, HEAD)` that no `Covers:` glob matches. It is a report, not a
 refusal. `docs/specs/` is always exempt; other exemptions come only from
 `Coverage-exempt: GLOB` lines in `project/workflow.md`. This report reads that
-file from the working tree; the merge verdict
-([#269](https://github.com/Hugo-Grellier/ballast/issues/269)) must read it from
-the target branch, never the PR head, and owns its syntax, which this form
-anticipates.
+file from the working tree; the merge verdict (`tools/merge_check.py`) reads it
+from the target branch, never the PR head, together with its `Human-only: GLOB`
+lines. A key line not of the form `Key: GLOB` makes the file malformed for the
+verdict.
 
 ## The canonical delta
 

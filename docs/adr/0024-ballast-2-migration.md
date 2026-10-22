@@ -50,7 +50,7 @@ the generic policies and review skills as copy-once content.
 | Nothing executes from a writable checkout before trust; trust baselines and refresh (BL-INV-002, ADR-0003/0005/0015/0021) | Removed. The coordinator and the helpers run with the caller's authority from the operator's checkout |
 | Protected inputs and tamper markers fail a step closed (BL-INV-003) | Removed. Workers are confined by the native CLI sandbox. Coordinator records are cooperative and can be edited by the operator or a peer with the same access |
 | Postcondition-checked phases, artifact validators, run ledger and acceptance packet (BL-INV-005, ADR-0006/0017/0018) | Replaced by phase records on the issue, PR acceptance evidence, independent review and settlement on backend terminal evidence. Missing evidence is reported as unknown |
-| Human-gated, Chat and Autonomous runs; agent-provisional decisions and relays (BL-INV-006, ADR-0004/0009/0010/0016/0019/0020/0021) | Replaced by one coordinator session with independent review. Human merge stays the approval, and no agent merges or marks a decision as human |
+| Human-gated, Chat and Autonomous runs; agent-provisional decisions and relays (BL-INV-006, ADR-0004/0009/0010/0016/0019/0020/0021) | Replaced by one coordinator session with independent review. Human merge stays the approval, and no agent merges or marks a decision as human (amended by ADR-0026 and ADR-0027: the coordinator merges on a `MERGE` verdict, never reported as a human approval) |
 | Demo capture, local zero-cost fallback, check commands run like CI (ADR-0013/0014/0021) | Removed. CI runs the project's deterministic checks |
 
 ## Consequences

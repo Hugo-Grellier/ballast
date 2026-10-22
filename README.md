@@ -34,9 +34,9 @@ under `python3 -I -S`, as it does from a checkout:
 - [`tools/coordinate.py`](tools/coordinate.py) runs a finite issue queue: admission,
   limits, pause/cancel/quota, recovery, idempotent draft publication and timing
   status.
-- [`tools/merge_check.py`](tools/merge_check.py) checks that an R0 PR may merge without a
-  human approval ([ADR-0026](docs/adr/0026-r0-merge-on-reviewed-green-head.md)) and prints,
-  or with `--merge` runs, the squash merge pinned to the reviewed head.
+- [`tools/merge_check.py`](tools/merge_check.py) computes a PR's merge verdict, `MERGE`,
+  `HUMAN` or `BLOCK` ([ADR-0027](docs/adr/0027-spec-approval-living-specs-merge-verdict.md)),
+  and on `MERGE` prints, or with `--merge` runs, the squash merge pinned to the reviewed head.
 
 Live evidence for each slice is in [`docs/evidence/`](docs/evidence/). The supported
 host is a POSIX machine with Python 3.11+, Git, an authenticated `gh` for GitHub.com
