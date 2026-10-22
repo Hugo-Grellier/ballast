@@ -108,6 +108,45 @@ class ProgressValidationTests(unittest.TestCase):
             ):
                 progress.validate({**check, "revision": revision}, REPO)
 
+    def test_questions_and_decisions_need_an_issue_reference(self) -> None:
+        base = "https://github.com/" + REPO
+        for kind in ("question", "decision"):
+            declaration = {"kind": kind, "state": "pending", "summary": "Open point"}
+            for reference in (None, f"{base}/pull/5", f"{base}/actions/runs/5"):
+                value = {
+                    **declaration,
+                    **({"reference": reference} if reference else {}),
+                }
+                with (
+                    self.subTest(kind=kind, reference=reference),
+                    self.assertRaises(admission.AdmissionError),
+                ):
+                    progress.validate(value, REPO)
+            for reference in (f"{base}/issues/5", f"{base}/issues/5#issuecomment-7"):
+                with self.subTest(kind=kind, accepted=reference):
+                    value = {**declaration, "reference": reference}
+                    self.assertEqual(progress.validate(value, REPO), value)
+
+    def test_review_round_is_one_to_three_and_only_on_review(self) -> None:
+        review = {
+            "kind": "review",
+            "state": "pending",
+            "summary": "Review",
+            "revision": "a" * 40,
+        }
+        for number in (1, 2, 3):
+            with self.subTest(accepted=number):
+                progress.validate({**review, "round": number}, REPO)
+        for number in (0, 4, True, "1", 1.0):
+            with (
+                self.subTest(rejected=number),
+                self.assertRaises(admission.AdmissionError),
+            ):
+                progress.validate({**review, "round": number}, REPO)
+        check = {**review, "kind": "check", "state": "passed", "round": 1}
+        with self.assertRaises(admission.AdmissionError):
+            progress.validate(check, REPO)
+
 
 if __name__ == "__main__":
     unittest.main()

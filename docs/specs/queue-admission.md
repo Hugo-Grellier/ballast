@@ -24,6 +24,11 @@ SHALL fail closed.
 - THEN admission refuses: queue policy is malformed
 - Test: tests/test_queue_admission.py::QueueTests::test_corrupt_policy_fails_closed
 
+#### Scenario: Malformed creation input
+- WHEN creation is given no issues, a duplicate, non-positive or more than 100 issues, a missing, non-positive or extra limit, or an unbounded repository, coordinator or revision
+- THEN creation refuses and no queue is written
+- Test: tests/test_queue_admission.py::QueueTests::test_create_refuses_malformed_selection_limits_and_references
+
 #### Scenario: Invalid review fallback
 - WHEN the fallback names the worker's provider, lacks a model or approval, has an extra key, or links a PR or another repository
 - THEN creation refuses and a policy carrying it is malformed
@@ -182,6 +187,11 @@ coordinator, while no writer lock exists.
 - Test: tests/test_queue_admission.py::QueueTests::test_active_transfer_needs_stop_evidence
 - Test: tests/test_queue_admission.py::QueueTests::test_queue_coordinator_stops_a_stranded_foreign_claim
 
+#### Scenario: Unbounded evidence
+- WHEN settlement, release or recovery is given empty or over-long evidence
+- THEN it refuses and changes no record
+- Test: tests/test_queue_admission.py::QueueTests::test_release_adopt_and_settle_refuse_unbounded_evidence
+
 ### Requirement: Queue controls
 Pause, resume and cancel SHALL be recorded without inferring that active
 workers stopped; a cancelled queue SHALL not be resumed or paused, a resume
@@ -198,6 +208,11 @@ refuse a replaced queue.
 - THEN the control refuses
 - Test: tests/test_dashboard.py::DashboardTests::test_durable_projection_without_http
 - Test: tests/test_dashboard.py::DashboardTests::test_replacement_is_checked_inside_control_lock
+
+#### Scenario: Refused controls
+- WHEN a control names an unsupported action, an empty or over-long reason, or no queue exists
+- THEN the control refuses and records nothing
+- Test: tests/test_queue_admission.py::QueueTests::test_control_refuses_unsupported_action_unbounded_reason_and_no_queue
 
 ### Requirement: Quota pause
 A structured quota error SHALL pause dispatch until the backend's reset time,
