@@ -713,8 +713,11 @@ class ExecutionTests(unittest.TestCase):
                 self.assertIn(shown, text)
                 self.assertNotIn("private", text)
 
-    def assert_never_launches(self, **overrides: object) -> None:
-        """Run the worker and check it refused with nothing reserved or started."""
+    def assert_never_launches(self, reason: str, **overrides: object) -> None:
+        """Run the worker and check it refused with nothing reserved or started.
+
+        Codex is present, so only the named validation can be the refusal.
+        """
         arguments = {
             "route": ("fixture-model", "low"),
             "role": "implement",
@@ -722,7 +725,8 @@ class ExecutionTests(unittest.TestCase):
         } | overrides
         with (
             patch.object(worker, "WorkerServer") as process,
-            self.assertRaises(codex.QualificationError),
+            patch.object(worker.shutil, "which", return_value="/fictional/codex"),
+            self.assertRaisesRegex(codex.QualificationError, reason),
         ):
             worker.execute(self.claim, self.task, **arguments)
         process.assert_not_called()
@@ -730,28 +734,28 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse((self.claim.parent / "workers").exists())
 
     def test_task_input_outside_the_bounds_never_launches(self) -> None:
-        for content in (b"", b"x" * (worker.MAX_TEXT + 1)):
+        for content in (b"", b"x" * 65537):
             with self.subTest(size=len(content)):
                 self.task.write_bytes(content)
                 with self.assertRaisesRegex(
                     codex.QualificationError, "between one and 65536"
                 ):
                     worker.read_task(self.task)
-                self.assert_never_launches()
-        self.task.write_bytes(b"x" * worker.MAX_TEXT)
-        self.assertEqual(len(worker.read_task(self.task)), worker.MAX_TEXT)
+                self.assert_never_launches("between one and 65536")
+        self.task.write_bytes(b"x" * 65536)
+        self.assertEqual(len(worker.read_task(self.task)), 65536)
 
     def test_timeout_outside_the_bounds_never_launches(self) -> None:
         for timeout in (float("nan"), float("inf"), 0, -1, 900.5):
             with self.subTest(timeout=timeout):
-                self.assert_never_launches(timeout=timeout)
+                self.assert_never_launches("timeout must be finite", timeout=timeout)
         worker.check_launch("fixture-model", "low", 900)
 
     def test_non_identifier_model_or_effort_never_launches(self) -> None:
         for bad in ("", "-x", "a b", "a/b", "a" * 129):
             for route in ((bad, "low"), ("fixture-model", bad)):
                 with self.subTest(route=route):
-                    self.assert_never_launches(route=route)
+                    self.assert_never_launches("explicit identifiers", route=route)
         for good in ("a" * 128, "m.1_x-2"):
             worker.check_launch(good, good, 2)
 
@@ -801,19 +805,22 @@ class ExecutionTests(unittest.TestCase):
 
     def test_final_output_over_the_cap_leaves_worker_unknown(self) -> None:
         messages = self.script()
-        # 32769 characters but 65538 bytes: the cap counts bytes.
-        messages[4]["params"]["item"]["text"] = "é" * (worker.MAX_TEXT // 2 + 1)
+        # 32769 characters but 65537 bytes: the cap counts bytes.
+        messages[4]["params"]["item"]["text"] = "é" * 32768 + "x"
         with self.assertRaisesRegex(codex.QualificationError, "too large"):
             self.run_worker(messages)
         self.assert_left_unknown()
 
     def test_final_output_at_the_cap_is_kept(self) -> None:
-        messages = self.script()
-        messages[4]["params"]["item"]["text"] = "x" * worker.MAX_TEXT
-        result = self.run_worker(messages)
-        self.assertEqual(result["status"], "completed")
-        output = self.claim.parent / "workers" / result["worker"] / "output.txt"
-        self.assertEqual(len(output.read_text()), worker.MAX_TEXT)
+        # 65536 bytes either way; the second is only 32768 characters.
+        for text in ("x" * 65536, "é" * 32768):
+            messages = self.script()
+            messages[4]["params"]["item"]["text"] = text
+            with self.subTest(characters=len(text)):
+                result = self.run_worker(messages)
+                self.assertEqual(result["status"], "completed")
+                output = self.claim.parent / "workers" / result["worker"]
+                self.assertEqual(len((output / "output.txt").read_bytes()), 65536)
 
     def stray_during_turn(self, stray: dict) -> None:
         """Deliver a message the worker never asked for before the turn ends."""
