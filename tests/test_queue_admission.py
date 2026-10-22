@@ -2166,6 +2166,119 @@ class QueueTests(unittest.TestCase):
             with self.subTest(bad), self.assertRaisesRegex(RuntimeError, "Planned"):
                 coordinate.select(self.repo, planned)
 
+    def test_create_refuses_malformed_selection_limits_and_references(self) -> None:
+        limits = dict(admission.DEFAULTS)
+        spec = {
+            "repository": REPO,
+            "issues": [1],
+            "limits": limits,
+            "coordinator": "lead",
+            "revision": "rev-1",
+        }
+        refused = (
+            {"issues": []},
+            {"issues": [1, 1]},
+            {"issues": [0]},
+            {"issues": [-1]},
+            {"issues": list(range(1, 102))},
+            {"limits": {k: v for k, v in limits.items() if k != "workers"}},
+            {"limits": {**limits, "workers": 0}},
+            {"limits": {**limits, "workers": -1}},
+            {"limits": {**limits, "extra": 1}},
+            {"limits": {**limits, "workers": "2"}},
+            *({key: ""} for key in ("repository", "coordinator", "revision")),
+            *({key: "x" * 129} for key in ("repository", "coordinator", "revision")),
+        )
+        for change in refused:
+            with (
+                self.subTest(change=list(change)),
+                self.assertRaises(admission.AdmissionError),
+            ):
+                admission.create(self.state, admission.QueueSpec(**{**spec, **change}))
+            self.assertFalse((self.state / "queue.json").exists())
+
+    def test_control_refuses_unsupported_action_unbounded_reason_and_no_queue(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(admission.AdmissionError, "No queue"):
+            admission.control(self.state, "paused", "operator pause")
+        self.queue([1])
+        for action, reason in (("bogus", "r"), ("paused", ""), ("paused", "x" * 257)):
+            with (
+                self.subTest(action=action, reason=len(reason)),
+                self.assertRaises(admission.AdmissionError),
+            ):
+                admission.control(self.state, action, reason)
+        value = json.loads((self.state / "queue.json").read_text())
+        self.assertEqual(value["mode"], "running")
+        self.assertEqual([h["event"] for h in value["history"]], ["configured"])
+
+    def test_release_adopt_and_settle_refuse_unbounded_evidence(self) -> None:
+        self.queue([1])
+        claim = self.prepare(1)
+        claim.with_suffix(".worker").write_text("held")
+        before = claim.read_text()
+        for evidence in ("", "x" * 257):
+            for name, call in {
+                "release": lambda e: admission.release(claim, "held", e),
+                "adopt": lambda e: admission.adopt(claim, e),
+                "settle": lambda e: admission.settle(claim, "stopped", e),
+            }.items():
+                with (
+                    self.subTest(name, evidence=len(evidence)),
+                    self.assertRaises(admission.AdmissionError),
+                ):
+                    call(evidence)
+        self.assertEqual(claim.read_text(), before)
+        self.assertTrue(claim.with_suffix(".worker").exists())
+
+    def test_adopt_refuses_merged_work_and_an_active_foreign_transfer(self) -> None:
+        self.queue([1])
+        claim = self.prepare(1)
+        original = json.loads(claim.read_text())
+        for change, message in (
+            ({"activity": "merged"}, "Merged work is complete"),
+            ({"coordinator": "previous", "activity": "active"}, "stop evidence"),
+            ({"coordinator": "previous", "activity": "unknown"}, "stop evidence"),
+        ):
+            claim.write_text(json.dumps({**original, **change}))
+            before = claim.read_text()
+            with (
+                self.subTest(change),
+                self.assertRaisesRegex(admission.AdmissionError, message),
+            ):
+                admission.adopt(claim, "checkout inspected")
+            self.assertEqual(claim.read_text(), before)
+
+    def test_record_refuses_a_claim_outside_the_queue_and_a_missing_queue(
+        self,
+    ) -> None:
+        declaration = {"kind": "plan", "state": "accepted", "summary": "ok"}
+        claim = self.prepare(4)
+        with self.assertRaisesRegex(admission.AdmissionError, "selected queue"):
+            progress.record(claim, declaration)
+        self.queue([5], issues=2)
+        claim = self.prepare(5)
+        record = json.loads(claim.read_text())
+        claim.write_text(json.dumps({**record, "issue": 99}))
+        before = claim.read_text()
+        with self.assertRaisesRegex(admission.AdmissionError, "outside coordinator"):
+            progress.record(claim, declaration)
+        self.assertEqual(claim.read_text(), before)
+        self.assertNotIn("progress", before)
+
+    def test_selection_refuses_more_than_fifty_prerequisites(self) -> None:
+        def body(count: int) -> dict:
+            refs = ", ".join(f"#{n}" for n in range(2000, 2000 + count))
+            return {"body": f"Blocked by {refs}"}
+
+        self.issues = {1: body(51), 2: body(50)}
+        self.queue([1, 2], issues=2)
+        blocked = coordinate.select(self.repo)["blocked"]
+        reason = "prerequisites could not be evaluated"
+        self.assertIn(reason, blocked["1"])
+        self.assertNotIn(reason, blocked.get("2", []))
+
 
 def response_account(kind: str) -> dict:
     """Account receipt in the scripted transcript's second position."""

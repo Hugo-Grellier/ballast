@@ -50,6 +50,11 @@ only the issue it concerns.
 - Test: tests/test_queue_admission.py::QueueTests::test_pull_request_numbered_prerequisite_stays_batched
 - Test: tests/test_queue_admission.py::QueueTests::test_malformed_node_isolates_only_that_issue
 
+#### Scenario: Too many prerequisites
+- WHEN an issue lists more than 50 prerequisites
+- THEN only that issue is blocked as not evaluable, while exactly 50 are evaluated
+- Test: tests/test_queue_admission.py::QueueTests::test_selection_refuses_more_than_fifty_prerequisites
+
 #### Scenario: Halted queue
 - WHEN the queue is paused, cancelled or expired
 - THEN nothing is eligible and the report names why, including `close --reason` for a finished queue
@@ -235,6 +240,11 @@ stopped claim SHALL require its PR to be closed.
 - Test: tests/test_queue_admission.py::QueueTests::test_recovery_and_cli_refuse_untrusted_git_inputs
 - Test: tests/test_queue_admission.py::QueueTests::test_interrupted_preparation_and_legacy_claim_are_recovered
 
+#### Scenario: Merged or foreign active work
+- WHEN recovery targets merged work, or an active claim recorded under another coordinator without stop evidence
+- THEN recovery refuses and the claim is unchanged
+- Test: tests/test_queue_admission.py::QueueTests::test_adopt_refuses_merged_work_and_an_active_foreign_transfer
+
 #### Scenario: Merge confirmation
 - WHEN `settle merged` runs before GitHub reports the PR merged
 - THEN it refuses and the backlog slot stays used
@@ -294,3 +304,18 @@ revision where one is given or required, for the queue's coordinator.
 - WHEN a declaration has an unknown field, a foreign reference, no revision for a check, or the caller is not the coordinator
 - THEN `record` refuses
 - Test: tests/test_dashboard.py::DashboardTests::test_progress_validation_unknown_worker_and_dependency_budget
+
+#### Scenario: Question and decision references
+- WHEN a question or decision carries no reference or one that is not an issue
+- THEN the declaration is refused
+- Test: tests/test_progress.py::ProgressValidationTests::test_questions_and_decisions_need_an_issue_reference
+
+#### Scenario: Review round
+- WHEN a round is outside 1 to 3, not an integer, or given on any kind but review
+- THEN the declaration is refused
+- Test: tests/test_progress.py::ProgressValidationTests::test_review_round_is_one_to_three_and_only_on_review
+
+#### Scenario: Claim outside the queue
+- WHEN a declaration is recorded for a claim whose issue is outside the selected queue, or when no queue exists
+- THEN `record` refuses and appends nothing
+- Test: tests/test_queue_admission.py::QueueTests::test_record_refuses_a_claim_outside_the_queue_and_a_missing_queue
