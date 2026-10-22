@@ -135,3 +135,29 @@ refusal, exit 1 with a fixed reason that carries no backend payload.
 - WHEN preparation is refused with a fixed reason
 - THEN the command exits 1 and prints that reason
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_main_reports_fixed_reasons_and_stays_generic_otherwise
+
+### Requirement: Open leaf target and explicit input
+Preparation SHALL accept only an open GitHub issue that is not a pull request and has no sub-issues, SHALL refuse a non-positive issue number or an invalid base branch name before any host call, and SHALL refuse a malformed issue response or child summary.
+
+#### Scenario: Target is not an open leaf issue
+- WHEN the target issue is closed, is a pull request, has sub-issues, or the response names another number
+- THEN preparation refuses: target is not an open leaf issue, and writes no claim
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_prepare_refuses_targets_that_are_not_open_leaves
+
+#### Scenario: Non-positive issue or invalid base branch
+- WHEN the issue number is below 1 or the base branch name is empty, starts with a symbol, contains a space or shell character, or exceeds 128 characters
+- THEN preparation refuses: issue and integration branch must be explicit, before any host call
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_prepare_refuses_bad_issue_number_and_base_name
+
+#### Scenario: Malformed issue response
+- WHEN GitHub's issue response is not an object, or its child summary is not an object
+- THEN preparation refuses: the issue response or child summary is malformed
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_prepare_refuses_malformed_issue_response_and_summary
+
+### Requirement: Prepared checkout identity
+After creating the worktree, preparation SHALL verify that the checkout's HEAD is the claim's base revision and its branch is the claim's branch, and SHALL refuse otherwise.
+
+#### Scenario: Checkout differs from its claim
+- WHEN the new checkout's HEAD or branch differs from the claim
+- THEN preparation refuses: prepared checkout identity differs from its claim, and the claim stays with status `setup_failed`
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_prepared_checkout_identity_must_match_claim

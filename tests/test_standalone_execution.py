@@ -262,6 +262,87 @@ class ExecutionTests(unittest.TestCase):
             ):
                 worktree.integration_revision(self.repo, "example/fixture", "main")
 
+    def issue_response(self, payload: object) -> patch:
+        """Answer the issue lookup with `payload`; Git and the rest run as set up."""
+        previous = worktree.command
+
+        def answer(argv: list[str], cwd: Path) -> str:
+            return json.dumps(payload) if argv[0] == "gh" else previous(argv, cwd)
+
+        return patch.object(worktree, "command", side_effect=answer)
+
+    def test_prepare_refuses_targets_that_are_not_open_leaves(self) -> None:
+        refused = {"number": 8, "state": "open"}
+        for name, payload in {
+            "closed": {**refused, "state": "closed"},
+            "pull request": {**refused, "pull_request": {}},
+            "sub-issues": {**refused, "sub_issues_summary": {"total": 2}},
+            "other number": {**refused, "number": 9},
+        }.items():
+            with (
+                self.subTest(name),
+                self.issue_response(payload),
+                self.assertRaisesRegex(RuntimeError, "open leaf"),
+            ):
+                worktree.prepare(self.repo, "example/fixture", 8, "main")
+            self.assertFalse((self.claim.parent / "issue-8.json").exists())
+
+    def test_prepare_refuses_bad_issue_number_and_base_name(self) -> None:
+        calls = len(self.host_calls)
+        for issue, base in (
+            (0, "main"),
+            (-1, "main"),
+            (8, ""),
+            (8, "-x"),
+            (8, "a b"),
+            (8, "a;b"),
+            (8, "x" * 129),
+        ):
+            with (
+                self.subTest(issue=issue, base=base),
+                self.assertRaisesRegex(RuntimeError, "must be explicit"),
+            ):
+                worktree.prepare(self.repo, "example/fixture", issue, base)
+        self.assertEqual(len(self.host_calls), calls)
+
+    def test_prepare_refuses_malformed_issue_response_and_summary(self) -> None:
+        for payload in ([], None, "x"):
+            with (
+                self.subTest(payload=payload),
+                self.issue_response(payload),
+                self.assertRaisesRegex(RuntimeError, "Issue response is malformed"),
+            ):
+                worktree.prepare(self.repo, "example/fixture", 8, "main")
+        for summary in (None, [], "s", 1):
+            body = {"number": 8, "state": "open", "sub_issues_summary": summary}
+            with (
+                self.subTest(summary=summary),
+                self.issue_response(body),
+                self.assertRaisesRegex(RuntimeError, "child summary is malformed"),
+            ):
+                worktree.prepare(self.repo, "example/fixture", 8, "main")
+
+    def test_prepared_checkout_identity_must_match_claim(self) -> None:
+        native = worktree.git
+        for name, lie in (
+            ("head", {("rev-parse", "HEAD"): "0" * 40}),
+            ("branch", {("branch", "--show-current"): "other"}),
+        ):
+
+            def lying(cwd: Path, *argv: str, lie: dict = lie, **keywords: Path) -> str:
+                result = native(cwd, *argv, **keywords)
+                return lie.get(argv, result)
+
+            with (
+                self.subTest(name),
+                patch.object(worktree, "git", side_effect=lying),
+                self.assertRaisesRegex(RuntimeError, "identity differs"),
+            ):
+                worktree.prepare(self.repo, "example/fixture", 8, "main")
+            claim = self.claim.parent / "issue-8.json"
+            self.assertEqual(json.loads(claim.read_text())["status"], "setup_failed")
+            claim.unlink()
+
     def test_completed_worker_records_receipt_before_dispatch(self) -> None:
         result = self.run_worker(self.script())
         self.assertEqual(result["status"], "completed")
