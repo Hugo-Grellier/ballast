@@ -246,3 +246,62 @@ payload.
 - THEN it prints the fixed reason, such as a held lock or a claim not ready, or a generic one
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_main_reports_fixed_reasons_and_stays_generic_otherwise
 - Test: tests/test_standalone_execution.py::ExecutionTests::test_worker_main_reports_claim_and_lock_reasons
+
+### Requirement: Launch input bounds
+The worker SHALL refuse, before it reserves a lock or starts a client, task input that is empty or over 65536 bytes, a timeout that is not finite or not above zero and at most 900 seconds, a model or effort that is not an explicit identifier, and a missing `codex` on PATH; the probe SHALL also refuse a missing `codex` and a `--cwd` that is not a directory, before it starts a client.
+
+#### Scenario: Task input bounds
+- WHEN the task file is empty, or holds more than 65536 bytes
+- THEN the worker refuses before reserving a lock or starting a client, and exactly 65536 bytes are accepted
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_task_input_outside_the_bounds_never_launches
+
+#### Scenario: Timeout bounds
+- WHEN the worker timeout is not finite, is zero or negative, or is over 900 seconds
+- THEN the worker refuses before reserving a lock or starting a client, and exactly 900 seconds are accepted
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_timeout_outside_the_bounds_never_launches
+
+#### Scenario: Non-identifier route
+- WHEN the model or the effort is empty, starts with a separator, holds a character outside letters, digits, dot, underscore and hyphen, or is longer than 128 characters
+- THEN the worker refuses before reserving a lock or starting a client
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_non_identifier_model_or_effort_never_launches
+
+#### Scenario: Codex missing
+- WHEN `codex` is not on PATH
+- THEN the worker and the probe refuse without starting a client, and the worker reserves nothing
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_missing_codex_never_reserves_or_launches
+- Test: tests/test_codex_routing.py::QualificationTests::test_probe_refuses_a_missing_codex
+
+#### Scenario: Probe working directory
+- WHEN the probe `--cwd` is a file
+- THEN the probe refuses without starting a client
+- Test: tests/test_codex_routing.py::QualificationTests::test_probe_refuses_a_cwd_that_is_not_a_directory
+
+### Requirement: Review evidence and turn integrity
+A review worker SHALL be refused, and left `unknown` with its lock held, when the checkout head moved or its status became dirty during the turn; a worker SHALL stay `unknown` with its lock held on a final output over 65536 bytes or on a response or approval request it did not expect during a turn; a scratch directory that cannot be removed SHALL be recorded as `scratch_left` and SHALL NOT fail a settled worker.
+
+#### Scenario: Head moved during a review
+- WHEN the checkout head differs after a review turn
+- THEN the worker is refused with "Reviewed checkout changed", stays `unknown` and keeps its lock
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_review_that_moves_the_head_is_refused
+
+#### Scenario: Checkout dirtied during a review
+- WHEN the checkout has uncommitted or untracked changes after a review turn
+- THEN the worker is refused with "Reviewed checkout changed", stays `unknown` and keeps its lock
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_review_that_dirties_the_checkout_is_refused
+
+#### Scenario: Oversized final output
+- WHEN the final message is over 65536 bytes, counted in bytes and not characters
+- THEN the worker stays `unknown` and keeps its lock; a message of exactly 65536 bytes is kept
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_final_output_over_the_cap_leaves_worker_unknown
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_final_output_at_the_cap_is_kept
+
+#### Scenario: Unexpected message during a turn
+- WHEN the backend sends a response or an approval request the worker did not ask for while a turn runs
+- THEN the worker stays `unknown`, keeps its lock and settles nothing
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_unexpected_response_during_a_turn_leaves_worker_unknown
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_approval_request_during_a_turn_leaves_worker_unknown
+
+#### Scenario: Scratch removal fails
+- WHEN removing a settled worker's scratch directory fails
+- THEN the worker still settles `completed`, releases its lock and records `scratch_left`
+- Test: tests/test_standalone_execution.py::ExecutionTests::test_failed_scratch_removal_is_recorded_and_not_fatal

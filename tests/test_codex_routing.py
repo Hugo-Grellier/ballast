@@ -271,6 +271,37 @@ class QualificationTests(unittest.TestCase):
                 start.assert_not_called()
                 self.assertFalse(json.loads(output.getvalue())["task_started"])
 
+    def probe(self, which: str | None, *extra: str) -> dict:
+        """Run the probe with a fictional `codex` lookup; it must never launch."""
+        with (
+            patch.dict(routing.os.environ, {}, clear=True),
+            patch.object(routing.shutil, "which", return_value=which),
+            patch.object(routing, "AppServer") as start,
+            patch.object(
+                routing.sys,
+                "argv",
+                ["qualify", "--model", "m", "--effort", "low", *extra],
+            ),
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+        ):
+            self.assertEqual(routing.main(), 1)
+        start.assert_not_called()
+        receipt = json.loads(output.getvalue())
+        self.assertFalse(receipt["task_started"])
+        return receipt
+
+    def test_probe_refuses_a_missing_codex(self) -> None:
+        receipt = self.probe(None)
+        self.assertEqual(receipt["reason"], "Codex is not installed on PATH")
+
+    def test_probe_refuses_a_cwd_that_is_not_a_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "file"
+            file.write_text("fictional")
+            receipt = self.probe("/fictional/codex", "--cwd", str(file))
+            self.assertEqual(receipt["reason"], "Working directory must be a directory")
+            self.probe("/fictional/codex", "--cwd", str(Path(directory) / "missing"))
+
     def test_nonzero_process_exit_is_not_qualified(self) -> None:
         process = MemoryProcess()
         server = self.open_server(process)
