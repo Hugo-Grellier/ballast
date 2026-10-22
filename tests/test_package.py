@@ -17,7 +17,16 @@ from tools import cli
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "tools" / "cli.py"
 LINK = re.compile(r"\]\(([^)\s]+)\)")
-WORKFLOW_COPIES = ("issue-workflow.md", "pair-review.md", "model-routing.md")
+WORKFLOW_COPIES = (
+    "issue-workflow.md",
+    "pair-review.md",
+    "model-routing.md",
+    "spec-format.md",
+)
+# Rewrites docs/migration.md prescribes for the copies, read from that list
+# ("- `../old` → `new`"; NAME stands for a path segment); the rest point at the tag.
+REWRITE = re.compile(r"^- `(\.\./[^`]+)` → `([^`]+)`", re.MULTILINE)
+TAG_ONLY = ("standalone.md", "execution.md", "subagent-workers.md", "adr/")
 
 
 def ballast(*args: str, **env: str) -> subprocess.CompletedProcess:
@@ -112,6 +121,53 @@ class AdopterLinkTests(unittest.TestCase):
                     target = (root / link.split("#")[0]).resolve()
                     self.assertTrue(target.is_relative_to(root.resolve()), link)
                     self.assertTrue(target.exists(), link)
+
+    def test_copied_workflow_documents_have_no_broken_relative_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.adopt(root)
+            migration = (ROOT / "docs" / "migration.md").read_text()
+            rewrites = REWRITE.findall(migration)
+            self.assertIn(
+                (
+                    "../templates/skills/NAME/SKILL.md",
+                    "../../.agents/skills/NAME/SKILL.md",
+                ),
+                rewrites,
+            )
+            for name in WORKFLOW_COPIES:
+                copy = root / "docs" / "policies" / name
+                text = copy.read_text()
+                for old, new in rewrites:
+                    pattern = re.escape(old).replace("NAME", "([^/]+)")
+                    text = re.sub(
+                        pattern,
+                        lambda m, n=new: n.replace(
+                            "NAME", m.group(1) if m.groups() else ""
+                        ),
+                        text,
+                    )
+                for link in LINK.findall(text):
+                    path = link.split("#")[0]
+                    if "://" in link or not path or path.startswith(TAG_ONLY):
+                        continue
+                    with self.subTest(copy=name, link=link):
+                        self.assertTrue((copy.parent / path).exists(), link)
+
+    def test_policy_copies_link_the_root_project_workflow_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.adopt(root)
+            shutil.copytree(ROOT / "templates" / "project", root / "project")
+            policy = root / "docs" / "policies" / "workflow.md"
+            targets = [
+                (policy.parent / link.split("#")[0]).resolve()
+                for link in LINK.findall(policy.read_text())
+                if "workflow.md" in link and "://" not in link
+            ]
+            self.assertIn((root / "project" / "workflow.md").resolve(), targets)
+            for target in targets:
+                self.assertTrue(target.exists(), target)
 
     def test_template_has_no_absolute_links(self) -> None:
         text = (ROOT / "templates" / "AGENTS.md").read_text()
