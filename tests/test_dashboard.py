@@ -670,7 +670,7 @@ class DashboardTests(unittest.TestCase):
                 ],
             ),
             patch.dict(os.environ, {"BALLAST_COORDINATOR": coordinator}),
-            patch.object(dashboard.Server, "serve_forever") as serve,
+            patch.object(dashboard.Server, "serve_forever", autospec=True) as serve,
             contextlib.redirect_stdout(out),
             contextlib.redirect_stderr(err),
         ):
@@ -716,6 +716,12 @@ class DashboardTests(unittest.TestCase):
             (created["repository"], created["coordinator"]), (REPO, "lead")
         )
         self.assertEqual(created["instruction_revision"], "rev-1")
+        binding = serve.call_args.args[0].binding
+        self.assertEqual(binding.expected["id"], created["id"])
+        snapshot = binding.snapshot()
+        self.assertEqual(
+            (snapshot["queue"], snapshot["repository"]), (created["id"], REPO)
+        )
 
     def test_binding_refuses_checkout_and_mismatched_context(self) -> None:
         self.policy = self.queue([1])
