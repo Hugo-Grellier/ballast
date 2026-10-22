@@ -72,8 +72,11 @@ class LocalModeTests(unittest.TestCase):
             result = self.local("", "--entry", entry)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["selected"], [1])
-            called = set(log.read_text().split())
-        self.assertGreaterEqual(called, {"coordinate", "worker"})
+            called = log.read_text().split()
+        # Every helper step goes through the named command, none around it.
+        expected = ["coordinate", "coordinate", "worktree", "worker", "worker"]
+        expected += ["coordinate"] * 3
+        self.assertEqual(called, expected)
 
     def test_worker_written_gitfile_cannot_run_host_commands(self) -> None:
         # The implement worker points `.git` at a copy whose fsmonitor would run.
