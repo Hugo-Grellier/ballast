@@ -379,7 +379,10 @@ class DeltaHashTests(unittest.TestCase):
             "--delta-hash", str(self.repo.root / "delta.md")
         )
         self.assertEqual((code, out), (2, ""))
-        self.assertNotEqual(err, "")
+        self.assertIn(
+            "duplicate delta entry: Added Scenario: Free slot in docs/specs/queue.md",
+            err,
+        )
 
     def test_heading_inside_a_code_fence_in_a_delta(self) -> None:
         fenced = DELTA_ADDED.replace(

@@ -13,6 +13,8 @@ TEMPLATE = ROOT / "templates/github/workflows/pr-title.yml"
 
 ACCEPTED = (
     "feat: x",
+    "feat!: x",
+    "fix!: x",
     "fix(scope): x",
     "refactor(a_b.c/d-e)!: x",
     "revert: x",
