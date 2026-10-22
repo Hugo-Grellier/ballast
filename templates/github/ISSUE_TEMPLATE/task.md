@@ -11,6 +11,16 @@ What should change, for whom, and why?
 
 - [ ] Observable result
 
+## Behavior change
+
+For R1 and R2: the change as requirements (`SHALL` statements) and scenarios
+(`WHEN`/`THEN`), the part a human approves before implementation. See the
+[spec format](https://github.com/Hugo-Grellier/ballast/blob/main/docs/spec-format.md).
+Write "none" for R0.
+
+- Requirement: The system SHALL ...
+  - Scenario: WHEN ... THEN ...
+
 ## Risk
 
 Risk: R1

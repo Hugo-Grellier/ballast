@@ -13,7 +13,9 @@ installed, and `ballast.toml` is no longer read.
 - No launcher refuses a tampered checkout, and no protected input fails a step.
 - The helpers run with your authority from the Ballast tag you pin.
 - There are no gates or run ledger. The issue, the PR and the review hold the evidence,
-  and human merge stays the approval.
+  and the human approves the behavior spec before implementation; a computed merge
+  verdict replaces the blanket human merge
+  ([ADR-0027](adr/0027-spec-approval-living-specs-merge-verdict.md)).
 
 ## Staying on v1
 
@@ -42,22 +44,24 @@ for `uvx`, an authenticated `gh` for GitHub.com, and a supported Codex CLI for w
    - `templates/AGENTS.md` → `AGENTS.md`. Merge it with your existing file, keep
      `CLAUDE.md` linked to it, and replace `[ADOPTED TAG]` with your tag.
    - `templates/policies/*.md` → `docs/policies/`.
-   - `docs/issue-workflow.md`, `docs/pair-review.md` and `docs/model-routing.md` →
-     `docs/policies/`, as described in [workflow copies](#workflow-copies).
+   - `docs/issue-workflow.md`, `docs/pair-review.md`, `docs/model-routing.md` and
+     `docs/spec-format.md` → `docs/policies/`, as described in
+     [workflow copies](#workflow-copies).
+   - `templates/project/workflow.md` → `project/workflow.md` at the repository
+     root, see [the spec gate](#the-spec-gate-and-merge-verdict).
    - `templates/skills/ballast-*` → `.agents/skills/`. Link `.claude/skills/` to
      them when you use Claude Code.
    - `templates/github/` → `.github/`: PR template, issue template, Dependabot and
-     PR-title workflow.
+     PR-title and spec-check workflows.
 
    These files were ignored and reinstalled in v1. In 2.0 the project commits them.
    Keep `docs/policies/project/`: the policies still read it.
 4. **Move project rules into `AGENTS.md`.**
    - Check commands from `ballast.toml` `[checks]` go to the Commands section.
    - Invariants from `.specify/memory/constitution.md` go to the Invariants section.
-   - `[autonomous]` authorizations have no 2.0 equivalent. Every merge is a human
-     decision, except an R0 PR that meets [ADR-0026](adr/0026-r0-merge-on-reviewed-green-head.md)
-     (approved and green on its exact head, no release, workflow or dependency
-     file); a project can keep human merge for every PR.
+   - `[autonomous]` authorizations have no 2.0 equivalent. The human approves the
+     spec of an R1 or R2 change, and the merge follows the verdict of
+     `ballast merge-check`; see [the spec gate](#the-spec-gate-and-merge-verdict).
 5. **Remove v1 files** in the same reviewed commit:
    - `ballast.toml`, `.ballast/` and `.specify/`;
    - the installed `speckit-*` skills;
@@ -71,9 +75,44 @@ for `uvx`, an authenticated `gh` for GitHub.com, and a supported Codex CLI for w
    whether those variables are set first. This cleanup cannot be undone except by
    reinstalling v1.
 
+## The spec gate and merge verdict
+
+Ballast reads one policy file from a fixed place: `project/workflow.md` at the
+repository root. `ballast merge-check` takes it from the target branch, never the PR
+head; `spec_check.py` reads the checkout's copy for its informational uncovered list. The other
+policies keep reading `docs/policies/project/<name>.md`.
+
+- **Verdict.** `ballast merge-check` returns `MERGE`, `HUMAN` or `BLOCK` for a PR's
+  current head. The coordinator merges only on `MERGE`; the human reviews the
+  handoff on `HUMAN`; `BLOCK` waits for its fix. The human approval moves to the
+  spec: for an R1 or R2 issue a comment on the issue whose first line is
+  `Spec approved: <hash> risk <Rn> delta <delta comment URL>` approves the
+  requirements and scenarios before implementation (see the
+  [issue workflow](issue-workflow.md)). R2, release, deployment and
+  destructive actions still need a human.
+- **`project/workflow.md`.** Copy `templates/project/workflow.md`. List your own R2
+  surfaces and the code and text that define the gate as `Human-only: GLOB`: a PR
+  changing one always gets `HUMAN`. Without this file every PR, R0 included, gets
+  `HUMAN`, as it does when the file is malformed.
+- **Opt-out.** To keep a human merge for every PR, put `Human-only: **` in
+  `project/workflow.md`; `merge-check` then returns `HUMAN`.
+- **Bootstrap living specs without code changes.** Describe current behavior in
+  `docs/specs/`, one file per capability, in the [spec format](spec-format.md), with a
+  `Covers:` glob for its source paths and a `Test:` reference to an existing test
+  per scenario. Start with the capabilities you change most; no source file is
+  touched. List paths that need no spec (tests, docs) as `Coverage-exempt: GLOB`.
+  `tools/spec_check.py` from your pinned tag validates the result
+  (`python3 -I -S PATH/tools/spec_check.py` from your repository root), and the
+  `spec-check.yml` workflow runs it in CI.
+- **Before the bootstrap is complete.** A path no `Covers:` glob matches and no
+  `Coverage-exempt:` line exempts is uncovered, and an R1 PR changing one gets
+  `HUMAN`, and so does any other PR changing an uncovered path, R0 included. R1
+  stays `HUMAN` until the touched capability has a spec; an R0 PR can `MERGE` only
+  when every changed path is coverage-exempt and no `Covers:` glob matches it.
+
 ## Workflow copies
 
-`AGENTS.md` cites the issue workflow, pair review and model routing, so the project
+`AGENTS.md` cites the issue workflow, pair review, model routing and spec format, so the project
 keeps copies of them in `docs/policies/` rather than pointing outside the repository.
 Copy each from the tag you pin and start it with one header line naming that tag and
 its commit (`git rev-list -n 1 vX.Y.Z`):
@@ -82,7 +121,7 @@ its commit (`git rev-list -n 1 vX.Y.Z`):
 <!-- Copied from Hugo-Grellier/ballast vX.Y.Z (COMMIT) docs/issue-workflow.md; update per its docs/migration.md. -->
 ```
 
-Links between the three copies resolve as they are. Point the others at the tag
+Links between the copies resolve as they are. Point the others at the tag
 or at your own copies:
 
 - `../templates/policies/workflow.md` → `workflow.md`, your policy copy;
@@ -131,9 +170,9 @@ Templates are copy-once: Ballast never overwrites your copies, so they drift unl
 compare them. Between your adopted tag `vA` and the new tag `vB`:
 
 - Use the compare view `https://github.com/Hugo-Grellier/ballast/compare/vA...vB` with
-  your tags, and look at the files under `templates/` and the three workflow documents.
+  your tags, and look at the files under `templates/` and the four workflow documents.
   From a Ballast checkout, `git diff vA..vB -- templates/ docs/issue-workflow.md
-  docs/pair-review.md docs/model-routing.md` shows the same.
+  docs/pair-review.md docs/model-routing.md docs/spec-format.md` shows the same.
 - Re-apply the changes that matter to your project and keep your project-specific edits.
   Skip a change when you removed or rewrote that rule on purpose.
 - Template links assume the layout in [Adopting 2.0](#adopting-20): policies and workflow

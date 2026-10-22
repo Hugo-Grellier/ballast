@@ -63,7 +63,10 @@ follow [adopting Ballast](docs/migration.md#adopting-20):
   security, documentation, dependencies and database migrations;
 - [`github/`](templates/github/): PR and issue templates, Dependabot and a
   Conventional Commit PR-title check, plus an optional PR-body check
-  (`workflows/pr-body.yml` with its `scripts/pr_body.py`, copied to `.github/scripts/`).
+  (`workflows/pr-body.yml` with its `scripts/pr_body.py`, copied to `.github/scripts/`)
+  and `workflows/spec-check.yml`, which checks the living specs' format;
+- [`project/`](templates/project/): the `workflow.md` slot for human-only and
+  coverage-exempt globs, copied to `project/workflow.md` at the repository root.
 
 ## Decisions and history
 

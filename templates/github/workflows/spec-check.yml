@@ -1,0 +1,29 @@
+name: Spec check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # The Ballast tag you adopted; the checker is a plain stdlib script, no agent runs here.
+  BALLAST_TAG: vX.Y.Z
+
+jobs:
+  spec-check:
+    name: Spec check
+    runs-on: ubuntu-latest
+    steps:
+      # Format only: the merge verdict recomputes the spec hash itself.
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the checker from the pinned Ballast tag
+        run: >-
+          git clone --quiet --depth 1 --branch "$BALLAST_TAG"
+          https://github.com/Hugo-Grellier/ballast "$RUNNER_TEMP/ballast"
+      - name: Validate docs/specs/ against the spec format
+        run: python3 -I -S "$RUNNER_TEMP/ballast/tools/spec_check.py"
