@@ -23,11 +23,9 @@ WORKFLOW_COPIES = (
     "model-routing.md",
     "spec-format.md",
 )
-# Rewrites docs/migration.md prescribes for the copies; the rest point at the tag.
-COPY_REWRITES = (
-    ("../templates/policies/workflow.md", "workflow.md"),
-    ("../templates/skills/", "../../.agents/skills/"),
-)
+# Rewrites docs/migration.md prescribes for the copies, read from that list
+# ("- `../old` → `new`"; NAME stands for a path segment); the rest point at the tag.
+REWRITE = re.compile(r"^- `(\.\./[^`]+)` → `([^`]+)`", re.MULTILINE)
 TAG_ONLY = ("standalone.md", "execution.md", "subagent-workers.md", "adr/")
 
 
@@ -128,10 +126,16 @@ class AdopterLinkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.adopt(root)
+            migration = (ROOT / "docs" / "migration.md").read_text()
+            rewrites = [
+                (old.split("NAME")[0], new.split("NAME")[0])
+                for old, new in REWRITE.findall(migration)
+            ]
+            self.assertIn(("../templates/skills/", "../../.agents/skills/"), rewrites)
             for name in WORKFLOW_COPIES:
                 copy = root / "docs" / "policies" / name
                 text = copy.read_text()
-                for old, new in COPY_REWRITES:
+                for old, new in rewrites:
                     text = text.replace(old, new)
                 for link in LINK.findall(text):
                     path = link.split("#")[0]
