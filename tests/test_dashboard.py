@@ -717,8 +717,14 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertEqual(created["instruction_revision"], "rev-1")
         binding = serve.call_args.args[0].binding
-        self.assertEqual(binding.expected["id"], created["id"])
-        snapshot = binding.snapshot()
+        self.assertEqual(
+            (binding.expected["id"], binding.expected["coordinator"]),
+            (created["id"], "lead"),
+        )
+        binding.next_refresh = float("inf")  # never reach the selection process
+        with patch.object(dashboard, "selection", side_effect=AssertionError) as run:
+            snapshot = binding.snapshot()
+        run.assert_not_called()
         self.assertEqual(
             (snapshot["queue"], snapshot["repository"]), (created["id"], REPO)
         )
