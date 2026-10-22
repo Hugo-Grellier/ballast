@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -20,11 +21,13 @@ SCRIPT = Path(qualify.__file__)
 class LocalModeTests(unittest.TestCase):
     """Every helper runs as a subprocess against the fake app-server and `gh`."""
 
-    def local(self, fault: str = "", **extra: str) -> subprocess.CompletedProcess:
+    def local(
+        self, fault: str = "", *args: str, **extra: str
+    ) -> subprocess.CompletedProcess:
         environment = {**os.environ, **dict.fromkeys(codex.CI_MARKERS, "")}
         with tempfile.TemporaryDirectory() as cwd:
             return subprocess.run(  # noqa: S603 -- fixed argv
-                [sys.executable, "-I", "-S", str(SCRIPT), "local"],
+                [sys.executable, "-I", "-S", str(SCRIPT), "local", *args],
                 cwd=cwd,
                 env={**environment, "BALLAST_FAKE_FAULT": fault, **extra},
                 capture_output=True,
@@ -53,6 +56,24 @@ class LocalModeTests(unittest.TestCase):
         self.assertNotIn("No findings", result.stdout)
         # Evidence is meant for docs/evidence/: no local paths.
         self.assertNotIn(tempfile.gettempdir(), result.stdout)
+
+    def test_entry_option_drives_helpers_through_the_named_command(self) -> None:
+        cli = Path(qualify.__file__).with_name("cli.py")
+        with tempfile.TemporaryDirectory() as tools:
+            log = Path(tools) / "calls"
+            wrapper = Path(tools) / "wrapper.py"
+            wrapper.write_text(
+                "import os, sys\n"
+                f"open({str(log)!r}, 'a').write(sys.argv[1] + '\\n')\n"
+                f"os.execv(sys.executable, [sys.executable, '-I', '-S', {str(cli)!r},"
+                " *sys.argv[1:]])\n"
+            )
+            entry = shlex.join([sys.executable, "-I", "-S", str(wrapper)])
+            result = self.local("", "--entry", entry)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["selected"], [1])
+            called = set(log.read_text().split())
+        self.assertGreaterEqual(called, {"coordinate", "worker"})
 
     def test_worker_written_gitfile_cannot_run_host_commands(self) -> None:
         # The implement worker points `.git` at a copy whose fsmonitor would run.
