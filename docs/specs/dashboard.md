@@ -37,6 +37,24 @@ restrictive headers on every response.
 - THEN each session is independent, malformed cookies are refused, the oldest of more than eight is dropped, and cookies are named per port
 - Test: tests/test_dashboard.py::DashboardTests::test_independent_bounded_sessions_and_malformed_cookies
 
+### Requirement: Explicit entry
+The dashboard SHALL start only under the explicitly named coordinator, SHALL require either an explicit queue to observe or `--create` with issues and a revision, and SHALL bind the queue it created.
+
+#### Scenario: Foreign coordinator
+- WHEN `BALLAST_COORDINATOR` differs from `--coordinator`
+- THEN it exits 1 without creating a queue or serving
+- Test: tests/test_dashboard.py::DashboardTests::test_main_refuses_foreign_coordinator
+
+#### Scenario: Argument combinations
+- WHEN `--create` is given with `--queue`, without an issue or without a revision, or no `--create` is given without a queue or with an issue or revision
+- THEN the arguments are refused with exit 2 and nothing is served
+- Test: tests/test_dashboard.py::DashboardTests::test_main_enforces_create_and_queue_arguments
+
+#### Scenario: Create and bind
+- WHEN `--create` is given with issues and a revision
+- THEN a queue for those issues is created and the dashboard binds and serves it
+- Test: tests/test_dashboard.py::DashboardTests::test_main_create_makes_and_binds_a_queue
+
 ### Requirement: Bound context
 Every snapshot and control SHALL revalidate the bound repository, queue and
 coordinator and SHALL answer 409 when the queue was replaced, is unreadable,
@@ -57,6 +75,11 @@ or the control is not allowed, such as resuming a cancelled queue.
 - WHEN the server runs under another coordinator reference
 - THEN controls answer 409
 - Test: tests/test_dashboard.py::DashboardTests::test_progress_validation_unknown_worker_and_dependency_budget
+
+#### Scenario: Binding refusals
+- WHEN binding from a `ballast-v2` checkout, or with a repository, queue id or coordinator that does not match the queue
+- THEN binding is refused
+- Test: tests/test_dashboard.py::DashboardTests::test_binding_refuses_checkout_and_mismatched_context
 
 ### Requirement: Public projection
 The snapshot SHALL project only claims of the bound queue, joined workers and
@@ -94,6 +117,11 @@ issue replaces it.
 - THEN it stays projected until a new claim of the issue replaces it
 - Test: tests/test_dashboard.py::DashboardTests::test_retired_attempt_stays_in_projection_until_replaced
 
+#### Scenario: Quota projection
+- WHEN the queue has no quota pause, a pause with an unknown or future retry time, or a pause whose retry time has passed
+- THEN the quota state is `unknown`, `paused` or `window_elapsed`, with the retry time or null
+- Test: tests/test_dashboard.py::DashboardTests::test_quota_projection
+
 ### Requirement: Bounded dependency refresh
 Dependency state SHALL come from the selection helper, run at most once a
 minute in its own process group, killed with its descendants after two
@@ -109,6 +137,11 @@ seconds, projecting only known reason shapes and `unknown` on any failure.
 - WHEN selection returns reasons of unknown shape or for unselected issues
 - THEN only the known reasons of selected issues are projected
 - Test: tests/test_dashboard.py::DashboardTests::test_projection_isolation_and_unknown_without_http
+
+#### Scenario: Dependency states
+- WHEN selection reports an issue as waiting for capacity, eligible or claimed, or as unclaimed while admission is halted
+- THEN it is projected as `capacity_wait`, `eligible`, `claimed` or `admission_wait`
+- Test: tests/test_dashboard.py::DashboardTests::test_dependency_states_in_projection
 
 ### Requirement: Browser UI
 The UI SHALL render all text as text, never HTML, enable controls only on a

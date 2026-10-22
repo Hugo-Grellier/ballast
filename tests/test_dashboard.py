@@ -5,13 +5,16 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import http.client
+import io
 import json
 import os
 import select
 import shutil
 import signal
 import subprocess
+import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -647,6 +650,143 @@ class DashboardTests(unittest.TestCase):
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=2)
+
+    def enter(self, *argv: str, coordinator: str = "lead") -> tuple:
+        """Run main() with serving stubbed; return (code, stdout, stderr, serve)."""
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "dashboard",
+                    "--cwd",
+                    str(self.repo),
+                    "--repo",
+                    REPO,
+                    "--coordinator",
+                    "lead",
+                    *argv,
+                ],
+            ),
+            patch.dict(os.environ, {"BALLAST_COORDINATOR": coordinator}),
+            patch.object(dashboard.Server, "serve_forever", autospec=True) as serve,
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            code = dashboard.main()
+        return code, out.getvalue(), err.getvalue(), serve
+
+    def test_main_refuses_foreign_coordinator(self) -> None:
+        code, out, err, serve = self.enter(
+            "--create", "--issue", "5", "--revision", "rev-1", coordinator="other"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Dashboard blocked", err)
+        self.assertEqual(out, "")
+        serve.assert_not_called()
+        self.assertIsNone(admission.policy(self.state))
+
+    def test_main_enforces_create_and_queue_arguments(self) -> None:
+        refused = (
+            ("--create", "--queue", "q", "--issue", "1", "--revision", "r"),
+            ("--create", "--revision", "r"),
+            ("--create", "--issue", "1"),
+            (),
+            ("--queue", "q", "--issue", "1"),
+            ("--queue", "q", "--revision", "r"),
+        )
+        for argv in refused:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    self.enter(*argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIsNone(admission.policy(self.state))
+
+    def test_main_create_makes_and_binds_a_queue(self) -> None:
+        code, out, err, serve = self.enter(
+            "--create", "--issue", "5", "--issue", "6", "--revision", "rev-1"
+        )
+        self.assertEqual((code, err), (0, ""))
+        self.assertRegex(out, r"\Ahttp://127\.0\.0\.1:[0-9]+/#[^\s]+\n\Z")
+        serve.assert_called_once()
+        created = admission.policy(self.state)
+        self.assertEqual(created["issues"], [5, 6])
+        self.assertEqual(
+            (created["repository"], created["coordinator"]), (REPO, "lead")
+        )
+        self.assertEqual(created["instruction_revision"], "rev-1")
+        binding = serve.call_args.args[0].binding
+        self.assertEqual(
+            (binding.expected["id"], binding.expected["coordinator"]),
+            (created["id"], "lead"),
+        )
+        binding.next_refresh = float("inf")  # never reach the selection process
+        with patch.object(dashboard, "selection", side_effect=AssertionError) as run:
+            snapshot = binding.snapshot()
+        run.assert_not_called()
+        self.assertEqual(
+            (snapshot["queue"], snapshot["repository"]), (created["id"], REPO)
+        )
+
+    def test_binding_refuses_checkout_and_mismatched_context(self) -> None:
+        self.policy = self.queue([1])
+        queue_id = self.policy["id"]
+        dashboard.Binding(self.repo, REPO, queue_id, "lead")
+        with self.assertRaisesRegex(admission.AdmissionError, "project checkout"):
+            dashboard.Binding(self.root / "ballast-v2" / "x", REPO, queue_id, "lead")
+        for queue, coordinator in (("other-id", "lead"), (queue_id, "other")):
+            with (
+                self.subTest(queue=queue, coordinator=coordinator),
+                self.assertRaisesRegex(
+                    admission.AdmissionError, "does not match queue"
+                ),
+            ):
+                dashboard.Binding(self.repo, REPO, queue, coordinator)
+        # The checkout's origin check fires first, so edit the queue's repository.
+        admission.write(
+            self.state / "queue.json", {**self.policy, "repository": "owner/other"}
+        )
+        with self.assertRaisesRegex(admission.AdmissionError, "does not match queue"):
+            dashboard.Binding(self.repo, REPO, queue_id, "lead")
+
+    def test_quota_projection(self) -> None:
+        self.policy = self.queue([1])
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        binding.next_refresh = float("inf")
+        self.assertEqual(
+            binding.snapshot()["quota"], {"state": "unknown", "retry_at": None}
+        )
+        future, past = time.time() + 3600, time.time() - 60
+        for retry, state in (
+            (future, "paused"),
+            (None, "paused"),
+            (past, "window_elapsed"),
+        ):
+            admission.quota(self.state, "fixture", retry)
+            self.assertEqual(
+                binding.snapshot()["quota"], {"state": state, "retry_at": retry}
+            )
+
+    def test_dependency_states_in_projection(self) -> None:
+        self.policy = self.queue([2, 3, 4])
+        binding = dashboard.Binding(self.repo, REPO, self.policy["id"], "lead")
+        for halted, waiting, expected in (
+            (False, [2], {"2": "capacity_wait", "3": "eligible", "4": "claimed"}),
+            (True, [], {"2": "admission_wait", "3": "admission_wait", "4": "claimed"}),
+        ):
+            binding.next_refresh = 0.0
+            observed = {
+                "blocked": {},
+                "claimed": [4],
+                "waiting_for_capacity": waiting,
+                "eligible": [] if halted else [3],
+                "halted": halted,
+            }
+            with patch.object(dashboard, "selection", return_value=observed):
+                projected = binding.snapshot()["dependencies"]
+            self.assertEqual(projected["status"], "observed")
+            self.assertEqual(projected["issues"], expected)
 
     def test_native_ui_contract(self) -> None:
         node = shutil.which("node")
