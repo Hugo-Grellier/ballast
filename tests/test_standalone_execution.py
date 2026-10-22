@@ -713,6 +713,140 @@ class ExecutionTests(unittest.TestCase):
                 self.assertIn(shown, text)
                 self.assertNotIn("private", text)
 
+    def assert_never_launches(self, **overrides: object) -> None:
+        """Run the worker and check it refused with nothing reserved or started."""
+        arguments = {
+            "route": ("fixture-model", "low"),
+            "role": "implement",
+            "timeout": 2,
+        } | overrides
+        with (
+            patch.object(worker, "WorkerServer") as process,
+            self.assertRaises(codex.QualificationError),
+        ):
+            worker.execute(self.claim, self.task, **arguments)
+        process.assert_not_called()
+        self.assertFalse(self.claim.with_suffix(".worker").exists())
+        self.assertFalse((self.claim.parent / "workers").exists())
+
+    def test_task_input_outside_the_bounds_never_launches(self) -> None:
+        for content in (b"", b"x" * (worker.MAX_TEXT + 1)):
+            with self.subTest(size=len(content)):
+                self.task.write_bytes(content)
+                with self.assertRaisesRegex(
+                    codex.QualificationError, "between one and 65536"
+                ):
+                    worker.read_task(self.task)
+                self.assert_never_launches()
+        self.task.write_bytes(b"x" * worker.MAX_TEXT)
+        self.assertEqual(len(worker.read_task(self.task)), worker.MAX_TEXT)
+
+    def test_timeout_outside_the_bounds_never_launches(self) -> None:
+        for timeout in (float("nan"), float("inf"), 0, -1, 900.5):
+            with self.subTest(timeout=timeout):
+                self.assert_never_launches(timeout=timeout)
+        worker.check_launch("fixture-model", "low", 900)
+
+    def test_non_identifier_model_or_effort_never_launches(self) -> None:
+        for bad in ("", "-x", "a b", "a/b", "a" * 129):
+            for route in ((bad, "low"), ("fixture-model", bad)):
+                with self.subTest(route=route):
+                    self.assert_never_launches(route=route)
+        for good in ("a" * 128, "m.1_x-2"):
+            worker.check_launch(good, good, 2)
+
+    def test_missing_codex_never_reserves_or_launches(self) -> None:
+        with (
+            patch.object(worker, "WorkerServer") as process,
+            patch.object(worker.shutil, "which", return_value=None),
+            self.assertRaisesRegex(codex.QualificationError, "not installed"),
+        ):
+            worker.execute(
+                self.claim,
+                self.task,
+                route=("fixture-model", "low"),
+                role="implement",
+                timeout=2,
+            )
+        process.assert_not_called()
+        self.assertFalse(self.claim.with_suffix(".worker").exists())
+        self.assertFalse((self.claim.parent / "workers").exists())
+
+    def results(self) -> list[dict]:
+        found = (self.claim.parent / "workers").glob("*/result.json")
+        return [json.loads(path.read_text()) for path in found]
+
+    def assert_left_unknown(self) -> None:
+        """Check the refused worker kept its lock and scratch as evidence."""
+        self.assertTrue(self.claim.with_suffix(".worker").exists())
+        self.assertEqual(len(self.scratches()), 1)
+        (result,) = self.results()
+        self.assertEqual(result["status"], "unknown")
+
+    def test_review_that_moves_the_head_is_refused(self) -> None:
+        def move(_thread: dict) -> None:
+            worktree.git(self.cwd, "commit", "--allow-empty", "-m", "moved")
+
+        with self.assertRaisesRegex(codex.QualificationError, "Reviewed checkout"):
+            self.threads(self.script(role="review"), "review", move)
+        self.assert_left_unknown()
+
+    def test_review_that_dirties_the_checkout_is_refused(self) -> None:
+        def dirty(_thread: dict) -> None:
+            (self.cwd / "dirty.txt").write_text("untracked\n")
+
+        with self.assertRaisesRegex(codex.QualificationError, "Reviewed checkout"):
+            self.threads(self.script(role="review"), "review", dirty)
+        self.assert_left_unknown()
+
+    def test_final_output_over_the_cap_leaves_worker_unknown(self) -> None:
+        messages = self.script()
+        # 32769 characters but 65538 bytes: the cap counts bytes.
+        messages[4]["params"]["item"]["text"] = "é" * (worker.MAX_TEXT // 2 + 1)
+        with self.assertRaisesRegex(codex.QualificationError, "too large"):
+            self.run_worker(messages)
+        self.assert_left_unknown()
+
+    def test_final_output_at_the_cap_is_kept(self) -> None:
+        messages = self.script()
+        messages[4]["params"]["item"]["text"] = "x" * worker.MAX_TEXT
+        result = self.run_worker(messages)
+        self.assertEqual(result["status"], "completed")
+        output = self.claim.parent / "workers" / result["worker"] / "output.txt"
+        self.assertEqual(len(output.read_text()), worker.MAX_TEXT)
+
+    def stray_during_turn(self, stray: dict) -> None:
+        """Deliver a message the worker never asked for before the turn ends."""
+        messages = self.script()
+        messages.insert(4, messages.pop(6))  # The turn/start response comes first.
+        messages.insert(5, stray)
+        with self.assertRaisesRegex(
+            codex.QualificationError, "Unexpected worker response or approval"
+        ):
+            self.run_worker(messages)
+        self.assert_left_unknown()
+
+    def test_unexpected_response_during_a_turn_leaves_worker_unknown(self) -> None:
+        self.stray_during_turn({"id": "stray-1", "result": {}})
+
+    def test_approval_request_during_a_turn_leaves_worker_unknown(self) -> None:
+        self.stray_during_turn(
+            {
+                "id": "approval-1",
+                "method": "item/commandExecution/requestApproval",
+                "params": {},
+            }
+        )
+
+    def test_failed_scratch_removal_is_recorded_and_not_fatal(self) -> None:
+        with patch.object(worker.shutil, "rmtree", side_effect=OSError):
+            result = self.run_worker(self.script())
+        self.assertEqual(result["status"], "completed")
+        self.assertFalse(self.claim.with_suffix(".worker").exists())
+        directory = self.claim.parent / "workers" / result["worker"]
+        self.assertIn("scratch_left", (directory / "events.jsonl").read_text())
+        self.assertEqual(len(self.scratches()), 1)
+
 
 def worktree_error(reason: str) -> Exception:
     """Capture the exception worktree.fail raises."""
