@@ -506,6 +506,19 @@ class MergeVerdictTests(unittest.TestCase):
         self.pr["author"] = {"login": "dependabot", "is_bot": True}
         self.human("Release and dependency")
 
+    def test_dependency_branch_from_a_human_author_needs_a_human(self) -> None:
+        self.pr["author"] = {"login": "someone", "is_bot": False}
+        for branch in ("dependabot/pip/x", "renovate/x"):
+            with self.subTest(branch=branch):
+                self.pr["headRefName"] = branch
+                self.human("Release and dependency")
+
+    def test_author_without_is_bot_needs_a_human(self) -> None:
+        for author in ({"login": "someone"}, {"login": "someone", "is_bot": None}):
+            with self.subTest(author=author):
+                self.pr["author"] = author
+                self.human("Release and dependency")
+
     def test_refuses_excluded_paths(self) -> None:
         for path in (
             ".github/workflows/ci.yml",
@@ -862,6 +875,38 @@ class MergeVerdictTests(unittest.TestCase):
         ):
             self.assertEqual(merge_check.main(), 1)
         self.assertEqual(json.loads(out.getvalue())["verdict"], "BLOCK")
+
+    def run_main(self, error: BaseException) -> tuple[int, dict, str]:
+        argv = ["merge_check", *self.arguments("approved", "R0")]
+        out = io.StringIO()
+        with (
+            patch.object(merge_check, "run", side_effect=error),
+            patch.object(sys, "argv", argv),
+            contextlib.redirect_stdout(out),
+        ):
+            code = merge_check.main()
+        return code, json.loads(out.getvalue()), out.getvalue()
+
+    def test_main_prints_a_fixed_reason(self) -> None:
+        code, result, _ = self.run_main(admission.FixedReasonError("fixed text"))
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            result, {"verdict": "BLOCK", "block": [{"reason": "fixed text"}]}
+        )
+
+    def test_main_prints_only_the_exception_type(self) -> None:
+        for error in (
+            OSError("/secret/path"),
+            AttributeError("/secret/path"),
+            TypeError("/secret/path"),
+            subprocess.TimeoutExpired("/secret/path", 1),
+        ):
+            with self.subTest(error=type(error).__name__):
+                code, result, text = self.run_main(error)
+                self.assertEqual(code, 1)
+                self.assertEqual(result["verdict"], "BLOCK")
+                self.assertEqual(result["block"], [{"reason": type(error).__name__}])
+                self.assertNotIn("/secret/path", text)
 
     def test_refuses_to_run_inside_an_issue_checkout(self) -> None:
         args = merge_check.parser().parse_args(

@@ -5,9 +5,7 @@ Covers: tools/qualify.py
 `tools/qualify.py` runs the queue, claim, worker, review and publish path end
 to end: `local` against fakes, `live` against Codex and GitHub on an
 operator-named disposable repository. It deletes nothing. `local --entry CMD`
-substitutes an installed `ballast` command for the default; that option is not
-yet tested ([#297](https://github.com/Hugo-Grellier/ballast/issues/297)), so no
-scenario describes it.
+substitutes an installed `ballast` command for the default.
 
 ### Requirement: Local end-to-end run
 Local mode SHALL drive every helper through the `ballast` command, by default
@@ -29,6 +27,11 @@ published PR awaiting review.
 - WHEN the implementation adds anything other than the artifact, commits, or the review does not end with `Verdict: approve`
 - THEN the run exits 1 before publication
 - Test: tests/test_qualify.py::LocalModeTests::test_wrong_work_or_rejected_review_fails_before_publication
+
+#### Scenario: Named entry command
+- WHEN local qualification runs with `--entry CMD`
+- THEN every helper step runs through CMD instead of `tools/cli.py`, and the run completes as with the default
+- Test: tests/test_qualify.py::LocalModeTests::test_entry_option_drives_helpers_through_the_named_command
 
 ### Requirement: Live safety
 Live mode SHALL run only with `--confirm-disposable` on a repository named

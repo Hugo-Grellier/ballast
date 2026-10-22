@@ -26,6 +26,12 @@ be `BLOCK`. Every reason SHALL carry what would raise the verdict.
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_unexpected_errors_and_git_timeouts_block
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_main_reports_spec_errors_as_block
 
+#### Scenario: Command refusal output
+- WHEN the command fails with a fixed-reason error, or with any other operating-system, subprocess, attribute or type error
+- THEN it prints a `BLOCK` verdict whose only reason is the fixed reason, or only the exception type name, and exits 1
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_main_prints_a_fixed_reason
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_main_prints_only_the_exception_type
+
 ### Requirement: MERGE
 The check SHALL return `MERGE` for an R0 PR that meets the ADR-0026 conditions,
 changes no path a `Covers:` glob matches and only adds spec entries, and for an
@@ -246,6 +252,16 @@ a covered path or modifying or removing a spec entry.
 - WHEN the verdict is `HUMAN`
 - THEN the output lists the risky paths, the approved spec and the review findings given with `--finding`
 - Test: tests/test_merge_check.py::MergeVerdictTests::test_handoff_lists_paths_spec_and_findings
+
+#### Scenario: Dependency branch from a human author
+- WHEN the head branch starts with `dependabot/` or `renovate/` and the author is not a bot
+- THEN the verdict is `HUMAN`
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_dependency_branch_from_a_human_author_needs_a_human
+
+#### Scenario: Author without a bot flag
+- WHEN the PR author has no `is_bot` field, or it is not `false`
+- THEN the verdict is `HUMAN`
+- Test: tests/test_merge_check.py::MergeVerdictTests::test_author_without_is_bot_needs_a_human
 
 ### Requirement: Merge command
 The check SHALL merge only on `MERGE` and only with `--merge`, squash and

@@ -362,6 +362,28 @@ class DeltaHashTests(unittest.TestCase):
             with self.subTest(case=label), self.assertRaises(spec_check.SpecError):
                 spec_check.parse_delta(text)
 
+    def test_delta_hash_command_prints_the_hash(self) -> None:
+        self.repo.write("delta.md", DELTA_ADDED)
+        code, out, err = self.repo.main(
+            "--delta-hash", str(self.repo.root / "delta.md")
+        )
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.strip(), self.doc_hash(DELTA_ADDED))
+
+    def test_delta_hash_command_exits_2_on_a_malformed_document(self) -> None:
+        duplicate = (
+            DELTA_ADDED + "\n#### Added Scenario: Free slot\n- WHEN a\n- THEN b\n"
+        )
+        self.repo.write("delta.md", duplicate)
+        code, out, err = self.repo.main(
+            "--delta-hash", str(self.repo.root / "delta.md")
+        )
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn(
+            "duplicate delta entry: Added Scenario: Free slot in docs/specs/queue.md",
+            err,
+        )
+
     def test_heading_inside_a_code_fence_in_a_delta(self) -> None:
         fenced = DELTA_ADDED.replace(
             "- THEN the issue waits\n", "- THEN the issue waits\n```\n## Risk\n```\n"

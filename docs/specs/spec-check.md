@@ -182,3 +182,13 @@ and `Covers:` lines.
 - WHEN a delta entry body holds a fenced `##` line
 - THEN it stays part of the entry text
 - Test: tests/test_spec_check.py::DeltaHashTests::test_heading_inside_a_code_fence_in_a_delta
+
+#### Scenario: Delta hash command
+- WHEN `--delta-hash FILE` names a valid delta document
+- THEN the command prints its hash and exits 0
+- Test: tests/test_spec_check.py::DeltaHashTests::test_delta_hash_command_prints_the_hash
+
+#### Scenario: Malformed delta document on the command line
+- WHEN `--delta-hash FILE` names a malformed delta document
+- THEN the command prints the defect to stderr, prints no hash, and exits 2
+- Test: tests/test_spec_check.py::DeltaHashTests::test_delta_hash_command_exits_2_on_a_malformed_document
