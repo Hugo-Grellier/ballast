@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.2.0](https://github.com/Hugo-Grellier/ballast/compare/v2.1.0...v2.2.0) (2026-10-22)
+
+
+### Features
+
+* **admission:** require an approved spec delta before an R1/R2 implement dispatch ([#291](https://github.com/Hugo-Grellier/ballast/issues/291)) ([03de61e](https://github.com/Hugo-Grellier/ballast/commit/03de61e4851d934bc556245075c8e7d16c613ef1))
+* **coordinate:** record coordinator-direct implementation and review as tracked executions ([#250](https://github.com/Hugo-Grellier/ballast/issues/250)) ([a57eb9d](https://github.com/Hugo-Grellier/ballast/commit/a57eb9d2a99e5ee5ff34f58a6b192e0e8b453b40))
+* **merge:** MERGE / HUMAN / BLOCK verdict replaces the blanket human merge ([#300](https://github.com/Hugo-Grellier/ballast/issues/300)) ([5e51a22](https://github.com/Hugo-Grellier/ballast/commit/5e51a22e09edac2f73476272b425094bee1a4a9c))
+* **policy:** merge R0 PRs once an independent review and CI approve the exact head ([#252](https://github.com/Hugo-Grellier/ballast/issues/252)) ([61f4d71](https://github.com/Hugo-Grellier/ballast/commit/61f4d71261f79859c947913bd892e8f1c371f20c))
+* **qualification:** scripted local and live qualification without automated deletion ([#259](https://github.com/Hugo-Grellier/ballast/issues/259)) ([e1399df](https://github.com/Hugo-Grellier/ballast/commit/e1399dfce7bfec3256cba1ca65603f0b10be6ff8))
+* **queue:** close a finished queue so the clone can start a new one ([#253](https://github.com/Hugo-Grellier/ballast/issues/253)) ([d6ee394](https://github.com/Hugo-Grellier/ballast/commit/d6ee3941c2ebef19b7d74d85459a144aabaff910))
+* **queue:** stack PRs for overlapping leaf issues with a recorded merge order ([#276](https://github.com/Hugo-Grellier/ballast/issues/276)) ([9234bbf](https://github.com/Hugo-Grellier/ballast/commit/9234bbfd9a177a8463032910de50d0e1fa8c5f21))
+* **review:** fall back to a recorded coordinator review after a Codex quota pause ([#284](https://github.com/Hugo-Grellier/ballast/issues/284)) ([c126a87](https://github.com/Hugo-Grellier/ballast/commit/c126a87a55e2ade98e60ed20f8759e86964c0c10))
+* run the helpers from a pinned tag and copy the workflow docs into adopters ([#286](https://github.com/Hugo-Grellier/ballast/issues/286)) ([d2f41e2](https://github.com/Hugo-Grellier/ballast/commit/d2f41e2173c9271803090b466b34dabef5a02460))
+* **specs:** check a PR's spec change against the approved delta and its scenario tests ([#299](https://github.com/Hugo-Grellier/ballast/issues/299)) ([a87ba98](https://github.com/Hugo-Grellier/ballast/commit/a87ba98c59486904185b24037dedd6943790e103))
+* **specs:** living spec format and a scenario-to-test checker in CI ([#285](https://github.com/Hugo-Grellier/ballast/issues/285)) ([9d35827](https://github.com/Hugo-Grellier/ballast/commit/9d358274021b1297c67bde18cc3f7e0af5602bb6))
+* **tools:** check PR bodies against the PR template locally and in CI ([#243](https://github.com/Hugo-Grellier/ballast/issues/243)) ([700c468](https://github.com/Hugo-Grellier/ballast/commit/700c468d003ecf0016b3967759ea344c9d6cb9cb))
+* **worker:** give each worker a private scratch dir for TMPDIR and the uv cache ([#287](https://github.com/Hugo-Grellier/ballast/issues/287)) ([4fe173a](https://github.com/Hugo-Grellier/ballast/commit/4fe173a0424c0a714a6fba459c6dc845efb6fb2a))
+
+
+### Bug Fixes
+
+* **admission:** let a coordinator close a finished queue left by an ended coordinator ([#282](https://github.com/Hugo-Grellier/ballast/issues/282)) ([c36092b](https://github.com/Hugo-Grellier/ballast/commit/c36092bb6dda1f63ff8b47d3799325c4c1789150))
+* **admission:** let the queue coordinator stop a claim stranded under another coordinator ([#238](https://github.com/Hugo-Grellier/ballast/issues/238)) ([0edee07](https://github.com/Hugo-Grellier/ballast/commit/0edee07ba81a28db9568f5e95e5ccfe4ec787ad9))
+* **admission:** refund an attempt the operator cancelled ([#280](https://github.com/Hugo-Grellier/ballast/issues/280)) ([b0717de](https://github.com/Hugo-Grellier/ballast/commit/b0717de77720877b84b9b99e9d45b662f8bb0a41))
+* **dashboard:** keep dependency selection within budget under GitHub latency ([#244](https://github.com/Hugo-Grellier/ballast/issues/244)) ([508bb45](https://github.com/Hugo-Grellier/ballast/commit/508bb45ed76fb04c55ef7193b649d2e34bc89c5c))
+* **progress:** reject remaining secret and path shapes in public summaries ([#245](https://github.com/Hugo-Grellier/ballast/issues/245)) ([348c948](https://github.com/Hugo-Grellier/ballast/commit/348c9484ca270ef714e426ae7b0880f5878f63b0))
+* **queue:** refuse missing parent objects and retire settled claims ([#289](https://github.com/Hugo-Grellier/ballast/issues/289)) ([9cb56da](https://github.com/Hugo-Grellier/ballast/commit/9cb56dac27d5e021754bd1d82568fb0a9164877a))
+* **worker:** keep the Codex client out of group-wide signals so stops settle cleanly ([#246](https://github.com/Hugo-Grellier/ballast/issues/246)) ([bce49d4](https://github.com/Hugo-Grellier/ballast/commit/bce49d42c2e2697331e56d674dad442d571220b8))
+* **worker:** settle a cancelled worker once a surviving tool command exits ([#278](https://github.com/Hugo-Grellier/ballast/issues/278)) ([65d04ed](https://github.com/Hugo-Grellier/ballast/commit/65d04edc65fa11e070e968a816965d08dd3f0243))
+* **worktree:** refuse . and .. as repository owner or name ([#237](https://github.com/Hugo-Grellier/ballast/issues/237)) ([e6f4df7](https://github.com/Hugo-Grellier/ballast/commit/e6f4df74e7d4413e454c1854ff5e1583db4c4b35))
+* **worktree:** scrub inherited GIT_* variables from helper Git calls ([#262](https://github.com/Hugo-Grellier/ballast/issues/262)) ([d0c0de0](https://github.com/Hugo-Grellier/ballast/commit/d0c0de0727a0a0555cd80fe3fb1805bdc2225edd))
+
+
+### Documentation
+
+* **adr:** ADR-0027 spec approval, living specs and a computed merge verdict ([#271](https://github.com/Hugo-Grellier/ballast/issues/271)) ([392205d](https://github.com/Hugo-Grellier/ballast/commit/392205d31247bdebe8395c22db072dcf8b56b3eb))
+* **pair-review:** define repair-round scope, nonblocking findings and CI evidence ([#247](https://github.com/Hugo-Grellier/ballast/issues/247)) ([130c7fe](https://github.com/Hugo-Grellier/ballast/commit/130c7fe4b17e05c0b9d0bbf03e6b7fd166dbc073))
+* **review:** define how check evidence reaches read-only review workers ([#277](https://github.com/Hugo-Grellier/ballast/issues/277)) ([fa6d614](https://github.com/Hugo-Grellier/ballast/commit/fa6d6143cf3effd11530777fe0410454ac72287d))
+* **specs:** bootstrap living specs from current behavior ([#298](https://github.com/Hugo-Grellier/ballast/issues/298)) ([2bc2ed7](https://github.com/Hugo-Grellier/ballast/commit/2bc2ed701ef8738a20c4df3533cf8ea63c45daea))
+* **templates:** adopter spec gate, migration guide and project/workflow slot ([#303](https://github.com/Hugo-Grellier/ballast/issues/303)) ([ca31508](https://github.com/Hugo-Grellier/ballast/commit/ca3150840b937c1000f28ac6d06ab3bc106c91b3))
+* **workers:** forbid clone-wide git state such as stash in issue worktrees ([#261](https://github.com/Hugo-Grellier/ballast/issues/261)) ([6231dc6](https://github.com/Hugo-Grellier/ballast/commit/6231dc68fa0ae0731604b319ee297396544b8b8c))
+* **workflow:** guidance for dispatching agent-native subagents as workers ([#236](https://github.com/Hugo-Grellier/ballast/issues/236)) ([26b646e](https://github.com/Hugo-Grellier/ballast/commit/26b646eb0c0f5fd1f5c740a87f48bbadb64b96a3))
+* **workflow:** record R2 human approvals durably and link them from the PR ([#251](https://github.com/Hugo-Grellier/ballast/issues/251)) ([6314f94](https://github.com/Hugo-Grellier/ballast/commit/6314f9405d52fc19a5838e02f59ec012ab951756))
+
 ## [2.1.0](https://github.com/Hugo-Grellier/ballast/compare/v2.0.0...v2.1.0) (2026-10-15)
 
 
