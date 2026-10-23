@@ -16,7 +16,7 @@ requires = ["uv_build>=0.13.1,<0.14"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["ruff==0.17.0"]
+dev = ["ruff==0.17.1"]
 
 [tool.uv]
 # The gate never installs the package; only `uvx --from` builds it.
